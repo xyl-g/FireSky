@@ -1,0 +1,37 @@
+[project]
+name = "firesky"
+version = "0.1.0"
+license = { text = "GPL-3.0-only" }
+classifiers = [
+    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Rust",
+]
+description = "firesky: standalone burning-sunset prediction engine (GFS cloud columns, ray-traced sky scoring, regional forecasts, satellite nowcast, FastAPI backend + minimal web UI)"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26",
+    "requests>=2.31",
+    "astral>=3.2",
+    "eccodes>=1.6",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "pyyaml>=6.0",
+    "pillow>=10.0",
+    "httpx>=0.27",
+    "h5py>=3.10",
+    "redis>=5.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+# CAMS 气溶胶下载（ADS 注册 + API key，见 README「数据源与注册」）
+# CAMS aerosol downloads (ADS registration + API key, see README "Data sources & registration")
+cams = ["cdsapi>=0.7"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

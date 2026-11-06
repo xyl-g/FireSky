@@ -1,0 +1,24 @@
+# firesky 容器内默认配置（覆盖缓存目录到持久卷 /data）。
+# 挂载卷后无需修改；自定义副本可用 FIRESKY_CONFIG 指向。
+
+server:
+  host: 0.0.0.0
+  port: 8765
+  workers: null
+  aerosol_source: cams
+  report_dir: /data/reports/web
+  gfs_cache_dir: /data/cache/firesky/gfs
+  ecmwf_cache_dir: /data/cache/firesky/ecmwf
+  cams_cache_dir: /data/cams
+  map_cache_dir: /data/cache/firesky/map-frames
+  regional_cache_dir: /data/cache/firesky/regional-forecasts
+  point_cache_dir: /data/cache/firesky/point-forecasts
+  satellite_cache_dir: /data/cache/firesky/himawari-hsd
+  satellite_hcai_cache_dir: /data/cache/firesky/himawari-hcai
+  satellite_warmup_token: null
+  forecast_cache_seconds: 300
+
+logging:
+  level: INFO
+  dir: /data/logs
+  app_name: firesky
