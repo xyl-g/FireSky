@@ -1,0 +1,10 @@
+__pycache__/
+*.egg-info/
+.venv/
+target/
+.cache/
+*.dylib
+logs/
+reports/
+.DS_Store
+etc/

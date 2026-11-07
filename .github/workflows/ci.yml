@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  python:
+    name: pytest（引擎不变量 + 后端契约）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: 安装依赖（含 nowcast/ec extras）
+        run: pip install -e ".[dev,cams,nowcast,ec]"
+      - name: 构建原生评分器
+        run: ./scripts/build_native_variants.sh
+      - name: pytest
+        run: python -m pytest tests/ -q
+
+  rust:
+    name: cargo test（native 契约）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: native
+      - name: cargo test
+        working-directory: native
+        run: cargo test --release --locked
+
+  frontend:
+    name: svelte-check + build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: npm ci
+        working-directory: frontend
+        run: npm ci --no-audit --no-fund
+      - name: svelte-check
+        working-directory: frontend
+        run: npm run check
+      - name: build
+        working-directory: frontend
+        run: npm run build
+
+  docker:
+    name: docker build（三阶段镜像）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: 构建镜像（不推送）
+        run: docker build -f docker/Dockerfile -t firesky:ci .
