@@ -33,6 +33,7 @@ An independent, self-contained burning-sunset prediction stack: **prediction eng
 - **实况 nowcast**：向日葵 9 号卫星（HSD 分段）云柱反演 + 天气雷达对流修正
 - **后端服务**：FastAPI 异步 job + SSE + gzip + 持久缓存（点/区域/地图帧/卫星）
 - **最小前端**：`/forecast`（点/区域预测）、`/now`（实况）、`/outlook`（形势图）、`/admin`（管理控制台）
+- **桌面应用**：PySide6 本地单机（`desktop/app.py`），与 Web 服务共用预测核心
 
 ## 架构与物理原理
 
