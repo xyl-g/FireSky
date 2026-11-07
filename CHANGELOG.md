@@ -34,7 +34,12 @@ contract endpoint.
 - 精简代码库：移除未接入服务路径的模块与前端组件，收敛公开 payload
   字段到实际产出范围
 - 新增 GitHub Actions CI（pytest / cargo test / svelte-check / docker
-  build）；DEPLOY 补实况预热 cron 示例与 token 步骤
+  build / macOS+Windows 桌面打包）；DEPLOY 补实况预热 cron 示例与
+  token 步骤
+- **PySide6 桌面应用**（`desktop/app.py`）：本地单机形态，与 Web 服务
+  共用同一预测核心路径（数值一致）；观测点表单/常用城市/进度日志/
+  峰值档位卡片/逐五分钟质量曲线与台账；CI 自动出 macOS dmg 与
+  Windows exe 目录
 
 ## v0.1.0 (2026-11-07)
 
