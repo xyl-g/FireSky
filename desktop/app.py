@@ -1,185 +1,528 @@
-"""FireSky 桌面应用（PySide6）· 四标签工作台 v2。
+"""FireSky 桌面应用（PySide6）· 暮光玻璃 v4。
 
-与 Web 服务共用同一个预测核心：桌面端直接调用 ``firesky.web_server``
-的权威装配路径（run_forecast_payload / run_and_cache_national_forecast_payload /
-nowcast_payload / handle_data_*），与 HTTP API 数值完全一致，不经过任何
-HTTP 一跳；引擎层零改动。
+与 Web 服务共用同一个预测核心：直接调用 firesky.web_server 的权威装配路径
+（run_forecast_payload / run_and_cache_national_forecast_payload /
+nowcast_payload / handle_data_*），与 HTTP API 数值一致，引擎层零改动。
 
-标签页：
-1. 单点预测 —— 观测点收藏 + 表单 + 峰值档位卡 + 质量曲线 + 台账（desktop/ui_point.py）
-2. 地图选点 —— QWebEngineView + Leaflet + QWebChannel 回传经纬度 +
-   Copernicus DEM 海拔查询（desktop/ui_map.py；WebEngine 缺失时降级手输）
-3. 区域预测 —— 区域多选 + 网格间距 + 区域批处理 + 排名台账（desktop/ui_regional.py）
-4. 实况 nowcast —— 卫星实况四指标卡 + 台账（desktop/ui_nowcast.py）
-5. 数据源 —— ADS Key / GFS·EC·卫星下载 / 缓存维护（desktop/ui_datasource.py）
+v4 信息架构：
+- 一级导航 4 项：单点预测 / 区域预测 / 实况观测 / 数据与缓存
+- 地图选点不再是独立页面，而是单点预测与实况观测共用的能力：
+  SpotStore（全局唯一观测点）+ 内嵌小地图 + 共用大地图选点浮层
+- 亮色暖白 / 暗色深暮蓝双主题，半透明玻璃卡片 + 背景霞光晕染
 
-主题：暖沙亮色 / 暗色 QSS + ☾/☀ 切换（QSettings 记忆，desktop/theme.py）。
-
-运行：``python desktop/app.py``（需 ``pip install -e ".[dev,cams,nowcast,ec]"``）。
-打包：见 ``desktop/FireSky.spec``（PyInstaller，macOS/Windows）。
+运行：python desktop/app.py
 """
 
 from __future__ import annotations
 
+import os
 import sys
+from datetime import datetime
 from pathlib import Path
 
-# 允许 ``python desktop/app.py`` 直接运行（把仓库根目录加入 sys.path）。
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QKeySequence
+from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
+from PySide6.QtGui import (
+    QAction,
+    QColor,
+    QFont,
+    QKeySequence,
+    QLinearGradient,
+    QPainter,
+    QPen,
+    QRadialGradient,
+)
 from PySide6.QtWidgets import (
     QApplication,
+    QFrame,
     QHBoxLayout,
-    QLabel,
     QMainWindow,
     QPushButton,
-    QStatusBar,
-    QTabWidget,
+    QScrollArea,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from desktop import theme
+from desktop import theme, widgets
 from desktop.ui_datasource import DataSourceTab
-from desktop.ui_map import MapPickerTab
+from desktop.ui_map import MapPickerDialog
 from desktop.ui_nowcast import NowcastTab
 from desktop.ui_point import PointForecastTab
 from desktop.ui_regional import RegionalForecastTab
+from desktop.widgets import GlassCard, SpotStore, Toast
+
+try:  # 地图控件依赖 QtWebEngine；未安装时仅跳过 Key 刷新广播
+    from desktop.web_map import FireSkyMap
+except Exception:  # noqa: BLE001
+    FireSkyMap = None  # type: ignore[assignment]
 
 WINDOW_TITLE = "FireSky — 火烧云本地预测工作台"
+
+PAGES = [
+    ("forecast", "单点预测", "在地图上选一个地点，找到霞光最盛的时刻。", "01", "sun"),
+    ("regional", "区域预测", "比较不同区域的火烧云潜力，发现最佳观测目的地。", "02", "grid"),
+    ("nowcast", "实况观测", "沿用当前观测点，融合卫星与雷达校准正在发生的天空。", "03", "target"),
+    ("sources", "数据与缓存", "管理数值模式、气溶胶与卫星数据。", "04", "stack"),
+]
+
+
+class AppShell(QWidget):
+    """主画布：渐变底色 + 两处霞光晕染（玻璃质感的背景层）。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("appShell")
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        p = theme.palette()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        base = QLinearGradient(0, 0, self.width(), self.height())
+        base.setColorAt(0, QColor(p["canvas"]))
+        base.setColorAt(1, QColor(p["canvas_alt"]))
+        painter.fillRect(self.rect(), base)
+
+        for cx, cy, radius, key, alpha_key in (
+            (self.width() * 0.02, -self.height() * 0.18, max(self.width(), 700) * 0.62,
+             "glow", "glow_a"),
+            (self.width() * 1.02, self.height() * 1.12, max(self.width(), 700) * 0.66,
+             "glow_alt", "glow_alt_a"),
+        ):
+            color = QColor(p[key])
+            color.setAlpha(p[alpha_key])
+            transparent = QColor(color)
+            transparent.setAlpha(0)
+            glow = QRadialGradient(QPointF(cx, cy), radius)
+            glow.setColorAt(0, color)
+            glow.setColorAt(1, transparent)
+            painter.fillRect(self.rect(), glow)
+
+
+class BrandMark(QFrame):
+    """品牌标记：朝霞渐变圆角方块 + 太阳与地平线。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(39, 39)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        grad = QLinearGradient(rect.topLeft(), rect.bottomRight())
+        grad.setColorAt(0, QColor("#ffc066"))
+        grad.setColorAt(0.52, QColor("#ef7b48"))
+        grad.setColorAt(1, QColor("#d94e43"))
+        painter.setBrush(grad)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.drawRoundedRect(rect, 13, 13)
+        painter.setBrush(QColor("#ffffff"))
+        painter.drawEllipse(QPointF(19.5, 17.0), 5.0, 5.0)
+        horizon_pen = QPen(QColor("#ffffff"), 1.6)
+        horizon_pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        painter.setPen(horizon_pen)
+        painter.drawLine(QPointF(11, 26), QPointF(28, 26))
+        painter.drawLine(QPointF(14, 30), QPointF(25, 30))
+        for x, y in ((19.5, 7), (8, 11), (31, 11)):
+            painter.drawLine(QPointF(x, y), QPointF(x, y + 2.2))
+
+
+def _draw_nav_icon(painter: QPainter, key: str, cx: float, cy: float,
+                   color: QColor) -> None:
+    pen = QPen(color, 1.5)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    if key == "sun":
+        painter.drawEllipse(QPointF(cx, cy), 4.2, 4.2)
+        for dx, dy in ((0, -8), (0, 8), (-8, 0), (8, 0),
+                       (-6, -6), (6, -6), (-6, 6), (6, 6)):
+            painter.drawLine(QPointF(cx + dx * 0.72, cy + dy * 0.72),
+                             QPointF(cx + dx, cy + dy))
+    elif key == "grid":
+        painter.drawRoundedRect(QRectF(cx - 8, cy - 7, 16, 14), 2, 2)
+        painter.drawLine(QPointF(cx, cy - 7), QPointF(cx, cy + 7))
+        painter.drawLine(QPointF(cx - 8, cy), QPointF(cx + 8, cy))
+    elif key == "target":
+        painter.drawEllipse(QPointF(cx, cy), 7.6, 7.6)
+        painter.drawEllipse(QPointF(cx, cy), 2.8, 2.8)
+        painter.drawLine(QPointF(cx - 10, cy), QPointF(cx - 7, cy))
+        painter.drawLine(QPointF(cx + 7, cy), QPointF(cx + 10, cy))
+    else:  # stack
+        for offset in (-5, 0, 5):
+            painter.drawLine(QPointF(cx - 8, cy + offset),
+                             QPointF(cx + 8, cy + offset))
+        painter.drawEllipse(QPointF(cx, cy - 5), 8, 3)
+
+
+class NavButton(QPushButton):
+    """自绘侧栏导航项：图标 + 标题 + 快捷键 + 选中高亮条。"""
+
+    def __init__(self, icon: str, text: str, shortcut: str,
+                 parent: QWidget | None = None) -> None:
+        super().__init__(text, parent)
+        self.setObjectName("navBtn")
+        self._icon = icon
+        self._label = text
+        self._shortcut = shortcut
+        self.setFixedHeight(43)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setProperty("active", "false")
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        p = theme.palette()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        active = self.property("active") == "true"
+        hovered = self.underMouse()
+        rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+        if active or hovered:
+            fill = QColor(p["accent"] if active else p["glass"])
+            fill.setAlpha(30 if active else 110)
+            painter.setBrush(fill)
+            edge = QColor(p["accent"] if active else p["line_rgb"])
+            edge.setAlpha(56 if active else p["border_a"])
+            painter.setPen(QPen(edge, 1))
+            painter.drawRoundedRect(rect, 12, 12)
+        if active:
+            painter.setBrush(QColor(p["accent"]))
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.drawRoundedRect(QRectF(0, self.height() / 2 - 10, 3, 20), 2, 2)
+
+        color = QColor(p["accent"] if active else p["ink3"])
+        _draw_nav_icon(painter, self._icon, 26, self.height() / 2, color)
+        font = QFont()
+        font.setPointSize(12)
+        font.setWeight(QFont.Weight.DemiBold if active else QFont.Weight.Normal)
+        painter.setFont(font)
+        painter.setPen(QColor(p["accent"] if active else (p["ink"] if hovered else p["ink3"])))
+        painter.drawText(QRectF(44, 0, self.width() - 90, self.height()),
+                         Qt.AlignmentFlag.AlignVCenter, self._label)
+        small = QFont()
+        small.setPointSize(9)
+        painter.setFont(small)
+        painter.setPen(QColor(p["faint"]))
+        painter.drawText(QRectF(self.width() - 44, 0, 34, self.height()),
+                         Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
+                         self._shortcut)
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(WINDOW_TITLE)
-        self.resize(1240, 820)
+        self.resize(1440, 900)
+        self.setMinimumSize(1120, 720)
 
-        central = QWidget()
-        root = QVBoxLayout(central)
-        root.setContentsMargins(12, 8, 12, 6)
-        root.setSpacing(6)
+        self.spot_store = SpotStore()
+        self._map_dialog: MapPickerDialog | None = None
+        self._nav_buttons: list[NavButton] = []
+        self._theme_buttons: dict[str, QPushButton] = {}
 
-        # ── 标题栏（品牌 + 主题切换）──
-        title_row = QHBoxLayout()
-        sun_badge = QLabel("☀")
-        sun_badge.setStyleSheet(
-            "background: qlineargradient(x1:0,y1:0,x2:1,y2:1,"
-            "stop:0 #f2a24b, stop:1 #d95d2c); color: #fff;"
-            "border-radius: 7px; font-size: 13px;"
-            "min-width: 24px; min-height: 24px; max-width: 24px; max-height: 24px;"
-            "qproperty-alignment: AlignCenter;"
+        shell = AppShell()
+        root = QHBoxLayout(shell)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(self._build_sidebar())
+
+        main = QWidget()
+        main_l = QVBoxLayout(main)
+        main_l.setContentsMargins(0, 0, 0, 0)
+        main_l.setSpacing(0)
+        main_l.addWidget(self._build_topbar())
+
+        self.stack = QStackedWidget()
+        self.stack.setFrameShape(QFrame.Shape.NoFrame)
+        main_l.addWidget(self.stack, 1)
+        root.addWidget(main, 1)
+        self.setCentralWidget(shell)
+        self._shell = shell
+
+        # ── 四个工作页面 ──
+        self.point_tab = PointForecastTab(
+            self.spot_store, on_pick_map=self.open_map_picker
         )
-        title_row.addWidget(sun_badge)
-        brand = QLabel("FireSky")
-        brand.setStyleSheet("font-weight: 700; font-size: 14px;")
-        title_row.addWidget(brand)
-        brand_sub = theme_palette_label("本地预测工作台 · 与 Web 共用预测核心")
-        title_row.addWidget(brand_sub)
-        title_row.addStretch(1)
-        self.theme_button = QPushButton("☾ 夜间")
-        self.theme_button.setObjectName("themeBtn")
-        self.theme_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.theme_button.clicked.connect(self._toggle_theme)
-        title_row.addWidget(self.theme_button)
-        root.addLayout(title_row)
-
-        # ── 四标签 ──
-        self.tabs = QTabWidget()
-        self.tabs.setDocumentMode(True)
-        root.addWidget(self.tabs, 1)
-
-        self.point_tab = PointForecastTab()
-        self.map_tab = MapPickerTab(self.point_tab)
         self.regional_tab = RegionalForecastTab()
-        self.nowcast_tab = NowcastTab()
-        self.datasource_tab = DataSourceTab(self.point_tab)
+        self.nowcast_tab = NowcastTab(
+            self.spot_store, on_pick_map=self.open_map_picker
+        )
+        self.datasource_tab = DataSourceTab(self.spot_store)
+        self.datasource_tab.mapSettingsChanged.connect(self._on_map_settings_changed)
+        for page in (
+            self.point_tab, self.regional_tab, self.nowcast_tab, self.datasource_tab
+        ):
+            self.stack.addWidget(self._wrap_page(page))
 
-        self.tabs.addTab(self.point_tab, "单点预测")
-        self.tabs.addTab(self.map_tab, "地图选点")
-        self.tabs.addTab(self.regional_tab, "区域预测")
-        self.tabs.addTab(self.nowcast_tab, "实况 nowcast")
-        self.tabs.addTab(self.datasource_tab, "数据源")
+        self._toast = Toast(shell)
+        self._select_page(0)
+        self.spot_store.changed.connect(self._on_spot_changed)
 
-        # 地图选点 → 单点预测联动跳转
-        self._bridge_map_to_point()
-
-        # ── 状态栏 ──
-        status = QStatusBar()
-        status_label = QLabel("数据源：GFS/EC 免 Key · CAMS 需 ADS Key（数据源标签配置）· 实况需 Himawari 帧")
-        status.addWidget(status_label)
-        self.setStatusBar(status)
-
-        # 快捷键 Ctrl+1..5 切换标签
-        for index in range(5):
+        # 快捷键 Ctrl+1..4
+        for index in range(len(PAGES)):
             action = QAction(self)
             action.setShortcut(QKeySequence(f"Ctrl+{index + 1}"))
             action.triggered.connect(
-                lambda _=False, i=index: self.tabs.setCurrentIndex(i)
+                lambda _=False, i=index: self._select_page(i)
             )
             self.addAction(action)
 
-        self.setCentralWidget(central)
+    # ── 外壳 ──
+    def _build_sidebar(self) -> QWidget:
+        sidebar = QWidget()
+        sidebar.setFixedWidth(224)
+        sidebar.setObjectName("sidebar")
+        layout = QVBoxLayout(sidebar)
+        layout.setContentsMargins(15, 24, 15, 16)
+        layout.setSpacing(0)
 
-    def _bridge_map_to_point(self) -> None:
-        """地图选点完成 → 自动切到单点标签（观测点已落址）。"""
-        # MapPickerTab 的选点已直接写入 point_tab；此处仅在状态栏提示。
-        bridge = getattr(self.map_tab, "_bridge", None)
-        if bridge is not None:
-            bridge.mapClicked.connect(self._on_map_picked)
+        brand_row = QHBoxLayout()
+        brand_row.setSpacing(11)
+        brand_row.addWidget(BrandMark())
+        brand_text = QVBoxLayout()
+        brand_text.setSpacing(1)
+        brand_text.addWidget(widgets.role_label("FireSky", "h2"))
+        edition = widgets.role_label("DESKTOP", "hint")
+        edition.setStyleSheet("letter-spacing: 2px;")
+        brand_text.addWidget(edition)
+        brand_row.addLayout(brand_text)
+        brand_row.addStretch(1)
+        layout.addLayout(brand_row)
+        layout.addSpacing(30)
 
-    def _on_map_picked(self, lat: float, lon: float) -> None:
-        self.statusBar().showMessage(
-            f"已选点 {lat:.4f}, {lon:.4f} → 观测点已创建（单点预测标签）", 6000
+        label = widgets.role_label("观测工作台", "hint")
+        label.setStyleSheet("letter-spacing: 2px; font-size: 10px; font-weight: 650;")
+        layout.addWidget(label)
+        layout.addSpacing(9)
+        for index, (_, title, _, _, icon) in enumerate(PAGES):
+            button = NavButton(icon, title, f"⌘{index + 1}")
+            button.clicked.connect(lambda _=False, i=index: self._select_page(i))
+            layout.addWidget(button)
+            self._nav_buttons.append(button)
+        layout.addStretch(1)
+
+        engine = GlassCard(radius=15)
+        engine_l = QVBoxLayout(engine)
+        engine_l.setContentsMargins(13, 12, 13, 12)
+        engine_l.setSpacing(6)
+        head = QHBoxLayout()
+        head.setSpacing(7)
+        dot = widgets.role_label("●", "hint")
+        dot.setStyleSheet(f"color: {theme.palette()['ok']}; font-size: 11px;")
+        head.addWidget(dot)
+        head.addWidget(widgets.role_label("本地预测引擎", "h2"))
+        head.addStretch(1)
+        engine_l.addLayout(head)
+        engine_l.addWidget(widgets.role_label("已连接 · 数据不离开本机", "hint"))
+        engine_l.addWidget(widgets.role_label("Engine 2026.11.04", "hint"))
+        layout.addWidget(engine)
+        layout.addSpacing(12)
+
+        switch = QFrame()
+        switch.setFrameShape(QFrame.Shape.NoFrame)
+        switch.setProperty("plain", "true")
+        switch_l = QHBoxLayout(switch)
+        switch_l.setContentsMargins(4, 4, 4, 4)
+        switch_l.setSpacing(3)
+        for value, text in (("light", "☀  浅色"), ("dark", "☾  深色")):
+            button = QPushButton(text)
+            button.setObjectName("themeBtn")
+            button.setProperty("active", "false")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _=False, v=value: self._set_theme(v == "dark"))
+            switch_l.addWidget(button, 1)
+            self._theme_buttons[value] = button
+        layout.addWidget(switch)
+        return sidebar
+
+    def _build_topbar(self) -> QWidget:
+        bar = QWidget()
+        bar.setFixedHeight(105)
+        root = QHBoxLayout(bar)
+        root.setContentsMargins(30, 20, 30, 16)
+        root.setSpacing(16)
+
+        left = QVBoxLayout()
+        left.setSpacing(4)
+        self._eyebrow = widgets.role_label("", "eyebrow")
+        self._title = widgets.role_label("", "h1")
+        self._subtitle = widgets.role_label("", "subtitle")
+        left.addWidget(self._eyebrow)
+        left.addWidget(self._title)
+        left.addWidget(self._subtitle)
+        root.addLayout(left, 1)
+
+        right = QVBoxLayout()
+        right.setSpacing(0)
+        pills = QHBoxLayout()
+        pills.setSpacing(10)
+        self._local_pill = widgets.chip("●  本地计算", "ok")
+        weekday_cn = "一二三四五六日"[datetime.now().weekday()]
+        self._date_pill = widgets.chip(
+            f"{datetime.now().strftime('%m月%d日')} · 周{weekday_cn}"
+        )
+        pills.addWidget(self._local_pill)
+        pills.addWidget(self._date_pill)
+        right.addLayout(pills)
+        right.addStretch(1)
+        root.addLayout(right)
+        return bar
+
+    def _wrap_page(self, page: QWidget) -> QScrollArea:
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setStyleSheet("QScrollArea { background: transparent; }")
+        area.viewport().setAutoFillBackground(False)
+        area.viewport().setStyleSheet("background: transparent;")
+        area.setWidget(page)
+        return area
+
+    # ── 页面切换 ──
+    def _select_page(self, index: int) -> None:
+        self.stack.setCurrentIndex(index)
+        key, title, subtitle, number, _ = PAGES[index]
+        self._eyebrow.setText(f"ATMOSPHERIC OBSERVATORY / {number}")
+        self._title.setText(title)
+        self._subtitle.setText(subtitle)
+        for i, button in enumerate(self._nav_buttons):
+            button.setProperty("active", "true" if i == index else "false")
+            theme.repolish(button)
+        area = self.stack.widget(index)
+        if isinstance(area, QScrollArea):
+            area.verticalScrollBar().setValue(0)
+
+    # ── 共享观测点 ──
+    def open_map_picker(self) -> None:
+        if self._map_dialog is None:
+            self._map_dialog = MapPickerDialog(self.spot_store, self)
+            self._map_dialog.spotConfirmed.connect(self._set_spot)
+            self._map_dialog.configureKeyRequested.connect(self._open_map_settings)
+        self._map_dialog.open_for(self.spot_store.location())
+
+    def _open_map_settings(self) -> None:
+        """浮层里点「配置天地图 Key」→ 收起浮层并跳到地图服务设置。"""
+        if self._map_dialog is not None:
+            self._map_dialog.hide()
+        for index, page in enumerate(PAGES):
+            if page[0] == "sources":
+                self._select_page(index)
+                break
+        self.datasource_tab.focus_map_key()
+
+    def _on_map_settings_changed(self) -> None:
+        """设置页改了 Key / 底图源：所有已存在的地图实例立即生效。"""
+        if FireSkyMap is not None:
+            for view in self.findChildren(FireSkyMap):
+                view.refresh_key()
+        if self._map_dialog is not None:
+            self._map_dialog.on_key_changed()
+
+    def _set_spot(self, loc) -> None:
+        # changed 信号统一驱动各页面同步与 Toast，避免重复提示
+        self.spot_store.set_location(loc)
+
+    def _on_spot_changed(self, loc) -> None:
+        self._toast.show_message(
+            f"观测点已更新为「{loc.name}」· 单点预测与实况观测已同步"
         )
 
     # ── 主题 ──
-    def _toggle_theme(self) -> None:
+    def _set_theme(self, dark: bool) -> None:
         app = QApplication.instance()
         if app is None:
             return
-        dark = not theme.is_dark()
         theme.apply_theme(app, dark)
-        self.theme_button.setText("☀ 日间" if dark else "☾ 夜间")
-        self._repaint_results()
-
-    def _repaint_results(self) -> None:
-        """主题切换后重绘自绘控件（曲线用主题色）。"""
-        self.point_tab.curve.update()
+        for value, button in self._theme_buttons.items():
+            active = (value == "dark") == dark
+            button.setProperty("active", "true" if active else "false")
+            theme.repolish(button)
+        for button in self._nav_buttons:
+            theme.repolish(button)
+        for widget in self.findChildren(QWidget):
+            if isinstance(widget, (GlassCard, widgets.MiniMap, widgets.QualityCurve)):
+                widget.update()
+            if hasattr(widget, "on_theme_changed"):
+                widget.on_theme_changed()
+        self._shell.update()
+        self._toast.update()
+        self._local_pill.setProperty("tone", "ok")
+        theme.repolish(self._local_pill)
+        theme.repolish(self._date_pill)
 
     def _restore_theme(self) -> None:
-        app = QApplication.instance()
-        if app is None:
-            return
-        dark = theme.load_theme_preference()
-        theme.apply_theme(app, dark)
-        self.theme_button.setText("☀ 日间" if dark else "☾ 夜间")
+        self._set_theme(theme.load_theme_preference())
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        super().resizeEvent(event)
+        if self._toast.isVisible():
+            self._toast.move(
+                max(8, self._shell.width() - self._toast.width() - 26),
+                max(8, self._shell.height() - self._toast.height() - 24),
+            )
 
     def closeEvent(self, event) -> None:  # noqa: N802 - Qt 命名
-        self.point_tab.shutdown()
-        self.regional_tab.shutdown()
-        self.nowcast_tab.shutdown()
-        self.datasource_tab.shutdown()
+        for tab in (self.point_tab, self.regional_tab, self.nowcast_tab,
+                    self.datasource_tab):
+            tab.shutdown()
+        if self._map_dialog is not None:
+            self._map_dialog.shutdown()
         event.accept()
 
 
-def theme_palette_label(text: str) -> QLabel:
-    label = QLabel(text)
-    label.setProperty("role", "ink2")
-    return label
+def _ensure_writable_cwd() -> None:
+    """保证工作目录可写。
+
+    从 Finder 双击 .app 启动时，进程 cwd 是 ``/``（macOS 只读根卷），而预测
+    核心与缓存层大量使用相对路径 ``.cache/...``，任何写入都会抛
+    ``[Errno 30] Read-only file system: '.cache'``。从终端启动则继承终端
+    目录、恰好可写，所以开发时不会暴露。
+
+    这里先用探针文件实测当前目录能否写入：能写就保持原样（开发态行为不变、
+    已有项目内缓存继续命中），不能写就切到配置目录，缓存自然落到
+    ``~/.firesky-desktop/.cache``。
+    """
+    fallback = Path.home() / ".firesky-desktop"
+    try:
+        cwd = Path.cwd()
+        probe = cwd / f".firesky-write-probe-{os.getpid()}"
+        probe.touch()
+        probe.unlink()
+        return
+    except OSError:
+        pass
+    try:
+        fallback.mkdir(parents=True, exist_ok=True)
+        os.chdir(fallback)
+    except OSError:
+        pass
 
 
 def main() -> int:
+    _ensure_writable_cwd()
     app = QApplication(sys.argv)
     app.setApplicationName("FireSky")
     app.setOrganizationName("FireSky")
     window = MainWindow()
     window._restore_theme()
     window.show()
+
+    # 打包自检：设置 FIRESKY_SNAPSHOT=<png 路径> 时，等界面（含 WebEngine 地图）
+    # 渲染完成后抓图并退出，用于验证 .app 产物里的地图是否真的加载出来。
+    snapshot = (os.environ.get("FIRESKY_SNAPSHOT") or "").strip()
+    if snapshot:
+        def _capture() -> None:
+            try:
+                window.grab().save(snapshot)
+            finally:
+                app.quit()
+
+        QTimer.singleShot(9000, _capture)
+
     return app.exec()
 
 

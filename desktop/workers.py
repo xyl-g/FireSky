@@ -25,6 +25,7 @@ class WorkerBase(QThread):
     progress = Signal(dict)
     finished_ok = Signal(object)
     failed = Signal(str)
+    cancelled = Signal()  # 取消落地：UI 复位控件，避免界面卡死
 
     def __init__(self, parent: Any | None = None) -> None:
         super().__init__(parent)
@@ -34,25 +35,35 @@ class WorkerBase(QThread):
         self._cancelled = True
 
     @property
-    def cancelled(self) -> bool:
+    def is_cancelled(self) -> bool:
         return self._cancelled
 
     def emit_progress(self, event: dict) -> None:
-        if not self._cancelled:
-            self.progress.emit(event)
+        if self._cancelled:
+            # 与引擎 HTTP 路径 ForecastJob.progress 一致：取消后向权威路径
+            # 抛 ForecastCancelled，让引擎在下一个回调检查点停止。
+            from firesky.web_server import ForecastCancelled
+
+            raise ForecastCancelled("计算已取消")
+        self.progress.emit(event)
 
     def run(self) -> None:  # noqa: D102 - Qt 命名
         try:
             result = self.execute()
         except CancelledError:
+            self.cancelled.emit()
             return
         except Exception as exc:  # noqa: BLE001 - 界面层统一兜底
             if self._cancelled:
+                # 取消触发的引擎异常（ForecastCancelled 等）按取消收尾，
+                # 不作为失败弹窗。
+                self.cancelled.emit()
                 return
             traceback.print_exc()
             self.failed.emit(str(exc) or exc.__class__.__name__)
             return
         if self._cancelled:
+            self.cancelled.emit()
             return
         self.finished_ok.emit(result)
 
@@ -75,33 +86,52 @@ class ForecastWorker(WorkerBase):
         self._nowcast = bool(nowcast)
 
     def execute(self) -> dict:
-        from firesky.web_server import WebServerConfig, nowcast_payload, run_forecast_payload
+        from firesky.web_server import (
+            ForecastCancelled,
+            WebServerConfig,
+            nowcast_payload,
+            run_forecast_payload,
+        )
 
         config = WebServerConfig()
         payload = nowcast_payload(self._payload) if self._nowcast else dict(self._payload)
-        return run_forecast_payload(
-            payload,
-            config,
-            progress_callback=self.emit_progress,
-        )
+        try:
+            return run_forecast_payload(
+                payload,
+                config,
+                progress_callback=self.emit_progress,
+            )
+        except ForecastCancelled:
+            raise CancelledError("预测已取消")
 
 
 class RegionalForecastWorker(WorkerBase):
-    """区域预测：run_national_forecast_payload（regions + spacing_deg 契约）。"""
+    """区域预测：run_national_forecast_payload（regions + spacing_deg 契约）。
+
+    引擎的区域批处理在每点完成/进度回调处检查取消（emit_progress 抛
+    ForecastCancelled），多区域长时间批处理也能即时停止。
+    """
 
     def __init__(self, payload: dict) -> None:
         super().__init__()
         self._payload = dict(payload)
 
     def execute(self) -> dict:
-        from firesky.web_server import WebServerConfig, run_and_cache_national_forecast_payload
+        from firesky.web_server import (
+            ForecastCancelled,
+            WebServerConfig,
+            run_and_cache_national_forecast_payload,
+        )
 
         config = WebServerConfig()
-        return run_and_cache_national_forecast_payload(
-            self._payload,
-            config,
-            progress_callback=self.emit_progress,
-        )
+        try:
+            return run_and_cache_national_forecast_payload(
+                self._payload,
+                config,
+                progress_callback=self.emit_progress,
+            )
+        except ForecastCancelled:
+            raise CancelledError("区域计算已取消")
 
 
 class DataFetchWorker(WorkerBase):
@@ -154,9 +184,13 @@ class SatelliteWarmupWorker(WorkerBase):
 
     桌面端本地可信：WebServerConfig(satellite_warmup_token=...) 仅是 Web
     API 的管理令牌校验入口，直接函数调用不经过 require_satellite_warmup_access。
+
+    默认半径取 900 km，与实况评分读取 HSD 紧凑缓存的默认搜索半径一致
+    （web_server nowcast 路径 radius_default=900.0）；半径参与缓存文件名，
+    键不匹配会让预热对实况 fail-closed 毫无帮助。
     """
 
-    def __init__(self, lat: float, lon: float, radius_km: float = 200.0) -> None:
+    def __init__(self, lat: float, lon: float, radius_km: float = 900.0) -> None:
         super().__init__()
         self._lat = float(lat)
         self._lon = float(lon)

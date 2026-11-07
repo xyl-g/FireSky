@@ -35,7 +35,19 @@ hiddenimports = [
     "firesky.config",
     "jinja2",           # fastapi template dependencies pulled lazily
     "anyio._backends._asyncio",
+    # 地图选点控件（QWebEngine + 本地 Leaflet）
+    "desktop.web_map",
+    "PySide6.QtWebEngineWidgets",
+    "PySide6.QtWebEngineCore",
+    "PySide6.QtWebChannel",
 ]
+
+# 地图页面与本地 Leaflet 资源：QWebEngine 用 file:// 加载，必须随包分发到
+# desktop/assets，与 web_map.ASSETS_DIR 的相对路径保持一致。
+map_assets = REPO / "desktop" / "assets"
+extra_datas = []
+if map_assets.is_dir():
+    extra_datas.append((str(map_assets), "desktop/assets"))
 
 # Rust scorer: publish the CPU variant next to the app so
 # FIRESKY_NATIVE_LIBRARY_PATH can point at it deterministically.
@@ -57,7 +69,7 @@ a = Analysis(
     [str(REPO / "desktop" / "app.py")],
     pathex=[str(REPO / "src"), str(REPO / "desktop")],
     binaries=native_binaries,
-    datas=[],
+    datas=extra_datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
@@ -98,3 +110,24 @@ coll = COLLECT(
     upx=False,
     name="FireSky",
 )
+
+# macOS 需要 .app 包才能双击启动（有 Dock 图标、不弹终端）。
+# QtWebEngine 的 QtWebEngineProcess.app / Resources 由 PyInstaller 的
+# Qt hook 自动收进 Frameworks，BUNDLE 只负责外层包结构。
+if sys.platform == "darwin":
+    app = BUNDLE(
+        coll,
+        name="FireSky.app",
+        icon=None,
+        bundle_identifier="cn.firesky.desktop",
+        info_plist={
+            "CFBundleName": "FireSky",
+            "CFBundleDisplayName": "FireSky",
+            "CFBundleShortVersionString": "0.1.1",
+            "CFBundleVersion": "0.1.1",
+            "NSHighResolutionCapable": True,
+            "LSMinimumSystemVersion": "12.0",
+            "LSApplicationCategoryType": "public.app-category.weather",
+            "NSHumanReadableCopyright": "Open source · non-commercial",
+        },
+    )

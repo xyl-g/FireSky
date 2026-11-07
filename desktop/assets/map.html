@@ -1,0 +1,592 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>FireSky · 地图选点</title>
+<link rel="stylesheet" href="leaflet/leaflet.css" />
+<style>
+  :root {
+    --fs-glass: rgba(255, 253, 248, .80);
+    --fs-glass-strong: rgba(255, 253, 248, .93);
+    --fs-border: rgba(126, 92, 62, .22);
+    --fs-ink: #2c2620;
+    --fs-ink2: #6d6259;
+    --fs-ink3: #948a80;
+    --fs-accent: #e2683f;
+    --fs-accent-2: #f0a94c;
+    --fs-shadow: 0 8px 26px rgba(92, 58, 30, .16), 0 2px 6px rgba(92, 58, 30, .10);
+    --fs-highlight: inset 0 1px 0 rgba(255,255,255,.95), inset 0 -1px 0 rgba(214,186,150,.28);
+    --fs-map-tint: none;
+    /* 影像用压暗降饱和；矢量/地形是浅色底图，需要反相才像暗色主题 */
+    --fs-map-tint-img: brightness(.62) saturate(.78) contrast(1.06);
+  }
+  html.dark {
+    --fs-glass: rgba(28, 33, 46, .82);
+    --fs-glass-strong: rgba(26, 31, 44, .94);
+    --fs-border: rgba(210, 220, 240, .18);
+    --fs-ink: #f1eee9;
+    --fs-ink2: #b9bec9;
+    --fs-ink3: #8b93a3;
+    --fs-accent: #f7a35c;
+    --fs-accent-2: #ffc874;
+    --fs-shadow: 0 10px 30px rgba(0,0,0,.38), 0 2px 8px rgba(0,0,0,.24);
+    --fs-highlight: inset 0 1px 0 rgba(255,255,255,.09), inset 0 -1px 0 rgba(0,0,0,.28);
+    --fs-map-tint: brightness(.74) saturate(.78) contrast(1.06) hue-rotate(178deg) invert(.86);
+    --fs-map-tint-img: brightness(.56) saturate(.72) contrast(1.08);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #e9e4da; }
+  html.dark body { background: #171b27; }
+  body { font-family: "PingFang SC", "Microsoft YaHei", -apple-system, system-ui, sans-serif; }
+  #map { position: absolute; inset: 0; }
+  .leaflet-container { background: #dfe4e3; font-family: inherit; }
+  html.dark .leaflet-container { background: #232a35; }
+
+  /* 底图色调：暗色下对瓦片做整体调色，保持地形可读 */
+  #map.tint-dark .leaflet-tile-pane { filter: var(--fs-map-tint); }
+  #map.tint-dark-img .leaflet-tile-pane { filter: var(--fs-map-tint-img); }
+  #map.tint-muted .leaflet-tile-pane { filter: saturate(.62) brightness(1.04) contrast(.94); }
+  html.dark #map.tint-muted .leaflet-tile-pane { filter: saturate(.62) brightness(.86) contrast(1.02); }
+
+  /* 观测点标记 */
+  .fs-marker { position: relative; width: 30px; height: 30px; }
+  .fs-marker .halo {
+    position: absolute; left: 50%; top: 50%; width: 34px; height: 34px;
+    transform: translate(-50%, -50%); border-radius: 50%;
+    background: radial-gradient(circle, rgba(242,124,66,.30), rgba(242,124,66,0) 70%);
+  }
+  .fs-marker .drop {
+    position: absolute; left: 50%; top: 3px; width: 18px; height: 18px;
+    transform: translate(-50%,0) rotate(45deg); border-radius: 50% 50% 50% 4px;
+    background: linear-gradient(140deg, #ffc169, #e2683f);
+    border: 2px solid rgba(255,255,255,.95);
+    box-shadow: 0 3px 10px rgba(120,50,20,.42);
+  }
+  .fs-marker .core {
+    position: absolute; left: 50%; top: 9px; width: 5px; height: 5px;
+    transform: translate(-50%,0); background: #fff; border-radius: 50%;
+  }
+  .fs-marker .ring {
+    position: absolute; left: 50%; top: 26px; width: 9px; height: 3px;
+    transform: translate(-50%,0); border-radius: 50%;
+    background: rgba(60,40,30,.28); filter: blur(1px);
+  }
+
+  /* 玻璃浮层 */
+  .fs-panel {
+    position: absolute; z-index: 800; color: var(--fs-ink);
+    background: var(--fs-glass); backdrop-filter: blur(18px) saturate(140%);
+    -webkit-backdrop-filter: blur(18px) saturate(140%);
+    border: 1px solid var(--fs-border); border-radius: 12px;
+    box-shadow: var(--fs-shadow), var(--fs-highlight);
+  }
+  .fs-layers { top: 14px; right: 14px; width: 202px; padding: 10px; }
+  .fs-layers h4 {
+    margin: 0 0 8px; font-size: 11px; font-weight: 650; letter-spacing: .06em;
+    color: var(--fs-ink3); text-transform: uppercase;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .fs-layers h4 span { font-weight: 500; letter-spacing: 0; text-transform: none; }
+  .fs-seg { display: flex; gap: 3px; padding: 3px; border-radius: 9px; background: rgba(120,100,80,.09); }
+  .fs-seg + .fs-seg { margin-top: 4px; }
+  html.dark .fs-seg { background: rgba(255,255,255,.06); }
+  .fs-seg button {
+    flex: 1; padding: 6px 2px; border: 0; border-radius: 7px; cursor: pointer;
+    background: transparent; color: var(--fs-ink2); font-size: 11px; font-family: inherit;
+    transition: background .18s, color .18s;
+  }
+  .fs-seg button.on {
+    background: var(--fs-glass-strong); color: var(--fs-accent); font-weight: 650;
+    box-shadow: 0 1px 5px rgba(92,58,30,.13), inset 0 1px 0 rgba(255,255,255,.7);
+  }
+  html.dark .fs-seg button.on { box-shadow: 0 1px 5px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.08); }
+  .fs-seg button[disabled] { opacity: .38; cursor: not-allowed; }
+  .fs-hint { margin: 8px 2px 1px; font-size: 10.5px; line-height: 1.6; color: var(--fs-ink3); }
+  .fs-hint b { color: var(--fs-ink2); font-weight: 600; }
+  .fs-warn {
+    margin: 7px 0 0; padding: 5px 7px; border-radius: 7px; font-size: 10px;
+    line-height: 1.55; color: #a2551f; background: rgba(226,104,63,.10);
+    border: 1px solid rgba(226,104,63,.20);
+  }
+  html.dark .fs-warn { color: #f0b083; background: rgba(247,163,92,.10); border-color: rgba(247,163,92,.22); }
+  .fs-warn[hidden] { display: none; }
+
+  .fs-status {
+    left: 14px; bottom: 14px; padding: 8px 12px; font-size: 11px;
+    color: var(--fs-ink2); line-height: 1.55; max-width: 340px;
+  }
+  .fs-status b { color: var(--fs-ink); font-weight: 650; font-variant-numeric: tabular-nums; }
+  .fs-status .dot { color: var(--fs-accent); }
+  .fs-coord { font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 10.5px; }
+
+  /* 顶部提示条 */
+  .fs-toast {
+    left: 50%; top: 14px; transform: translateX(-50%);
+    padding: 7px 14px; font-size: 11.5px; color: var(--fs-ink);
+    opacity: 0; transition: opacity .3s; pointer-events: none; white-space: nowrap;
+  }
+  .fs-toast.show { opacity: 1; }
+
+  /* Key 未配置引导 */
+  .fs-key {
+    position: absolute; inset: 0; z-index: 900; display: none;
+    align-items: center; justify-content: center;
+    background: linear-gradient(130deg, rgba(238,232,220,.72), rgba(226,216,202,.72));
+  }
+  html.dark .fs-key { background: linear-gradient(130deg, rgba(22,26,38,.76), rgba(30,36,50,.76)); }
+  .fs-key.show { display: flex; }
+  .fs-key-card {
+    max-width: 430px; padding: 22px 24px; text-align: left;
+    color: var(--fs-ink); background: var(--fs-glass-strong);
+    backdrop-filter: blur(22px) saturate(140%);
+    -webkit-backdrop-filter: blur(22px) saturate(140%);
+    border: 1px solid var(--fs-border); border-radius: 16px;
+    box-shadow: var(--fs-shadow), var(--fs-highlight);
+  }
+  .fs-key-card h3 { margin: 0 0 8px; font-size: 16px; font-weight: 700; }
+  .fs-key-card p { margin: 0 0 9px; font-size: 12px; line-height: 1.7; color: var(--fs-ink2); }
+  .fs-key-card code {
+    display: block; padding: 9px 11px; margin: 10px 0; font-size: 10.5px;
+    font-family: "JetBrains Mono", ui-monospace, monospace; line-height: 1.6;
+    border-radius: 8px; color: var(--fs-accent);
+    background: rgba(226,104,63,.09); border: 1px solid rgba(226,104,63,.18);
+    word-break: break-all;
+  }
+  .fs-key-card .steps { padding-left: 16px; margin: 6px 0 0; }
+  .fs-key-card .steps li { font-size: 11.5px; line-height: 1.9; color: var(--fs-ink2); }
+  .fs-key-card .alt {
+    margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--fs-border);
+    display: flex; align-items: center; gap: 10px;
+  }
+  .fs-key-card .alt p { margin: 0; flex: 1; font-size: 11px; }
+  .fs-key-card .alt button {
+    flex: 0 0 auto; padding: 7px 13px; border-radius: 8px; cursor: pointer;
+    border: 1px solid rgba(226,104,63,.32); background: rgba(226,104,63,.10);
+    color: var(--fs-accent); font-size: 11.5px; font-family: inherit; font-weight: 600;
+  }
+  .fs-key-card .alt button:hover { background: rgba(226,104,63,.18); }
+
+  /* Leaflet 控件本地化 */
+  .leaflet-control-zoom { border: 1px solid var(--fs-border) !important; border-radius: 10px !important; overflow: hidden; box-shadow: var(--fs-shadow) !important; }
+  .leaflet-control-zoom a {
+    background: var(--fs-glass) !important; color: var(--fs-ink) !important;
+    width: 30px !important; height: 30px !important; line-height: 30px !important;
+    font-size: 17px !important; border-bottom-color: var(--fs-border) !important;
+    backdrop-filter: blur(12px);
+  }
+  .leaflet-control-zoom a:hover { background: var(--fs-glass-strong) !important; color: var(--fs-accent) !important; }
+  .leaflet-control-attribution {
+    background: var(--fs-glass) !important; color: var(--fs-ink3) !important;
+    font-size: 9.5px !important; border-radius: 7px 0 0 0;
+    backdrop-filter: blur(10px);
+  }
+  .leaflet-control-attribution a { color: var(--fs-accent) !important; }
+  .leaflet-control-scale-line {
+    background: var(--fs-glass) !important; border-color: var(--fs-ink2) !important;
+    color: var(--fs-ink2) !important; font-size: 10px !important;
+  }
+
+  /* 小地图模式（单点预测页的内嵌卡片，高约 148px）：
+     只保留底图 + 观测点标记 + 点击落点，浮层面板与缩放控件全部隐藏。
+     署名必须保留 —— 天地图 / Esri 的使用条款要求。 */
+  html.mini .fs-layers,
+  html.mini .fs-status,
+  html.mini .leaflet-control-zoom,
+  html.mini .leaflet-control-scale { display: none !important; }
+  html.mini .leaflet-control-attribution {
+    font-size: 8.5px !important; padding: 1px 5px !important;
+    border-radius: 6px 0 0 0; opacity: .82;
+  }
+  html.mini .fs-toast {
+    left: 10px; bottom: 10px; font-size: 10px; padding: 5px 9px;
+  }
+  /* 小地图里的 Key 引导只留标题与「先用 Esri」，长说明在浮层/设置页看 */
+  html.mini .fs-key { padding: 10px; }
+  html.mini .fs-key-card { padding: 12px 14px; border-radius: 12px; max-width: none; }
+  html.mini .fs-key-card h3 { margin: 0 0 6px; font-size: 12px; }
+  html.mini .fs-key-card p,
+  html.mini .fs-key-card code,
+  html.mini .fs-key-card .steps,
+  html.mini .fs-key-card .alt p { display: none; }
+  html.mini .fs-key-card .alt { margin-top: 0; padding-top: 0; border-top: 0; }
+  html.mini .fs-key-card .alt button { padding: 5px 11px; font-size: 11px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="fs-panel fs-layers" id="layers">
+  <h4>底图 <span id="layerHint">天地图 · 影像</span></h4>
+  <div class="fs-seg" id="sourceSeg">
+    <button data-source="tianditu" class="on">天地图</button>
+    <button data-source="esri">Esri</button>
+  </div>
+  <div class="fs-seg" id="basemapSeg">
+    <button data-base="imagery" class="on">影像</button>
+    <button data-base="vector">矢量</button>
+    <button data-base="terrain">地形</button>
+  </div>
+  <p class="fs-hint"><b>单击地图</b>落点 · 拖动标记微调<br />仅用于选点，不叠加预报数据</p>
+  <p class="fs-warn" id="esriWarn" hidden>Esri 底图仅限中国境外使用，境内请使用天地图。</p>
+</div>
+
+<div class="fs-panel fs-status" id="status">
+  <span class="dot">●</span> <b id="spotName">杭州</b> · <span class="fs-coord" id="coord">30.2741°N, 120.1551°E</span><br />
+  <span id="statusLine">单击地图放置观测点 · 可拖动标记微调</span>
+</div>
+
+<div class="fs-panel fs-toast" id="toast"></div>
+
+<div class="fs-key" id="keyGate">
+  <div class="fs-key-card">
+    <h3>需要配置天地图 Key</h3>
+    <p>桌面端默认使用<strong>天地图</strong>作为底图（合规白名单内的国内地图源）。天地图要求每个应用使用自己的开发者 Key，本程序不会内置任何可用 Key。</p>
+    <code>~/.firesky-desktop/config.json → "tianditu_key": "你的 Key"</code>
+    <ol class="steps">
+      <li>访问 <b>console.tianditu.gov.cn</b> 注册并创建「浏览器端」应用，获取 Key。</li>
+      <li>在桌面端「数据与缓存 → 地图服务」中填入 Key，或设置环境变量 <b>FIRESKY_TIANDITU_KEY</b>。</li>
+      <li>配置后重启地图，影像 / 矢量 / 地形底图即可加载。</li>
+    </ol>
+    <div class="alt">
+      <p>只是想先看看地图？Esri 底图免 Key，可立即使用（仅限中国境外）。</p>
+      <button id="useEsri">先用 Esri</button>
+    </div>
+  </div>
+</div>
+
+<script src="leaflet/leaflet.js"></script>
+<script>
+/* 桌面端地图定位：仅用于「选点」——底图 + 观测点标记 + 点击/拖动落点。
+   云场热力、采样格点、预报结果叠加等一律不做，结果展示由 Qt 原生页面承担。
+
+   双源设计
+   --------
+   tianditu（默认）  天地图，境内合规底图，需要用户自有 Key；
+                    境外区域仅有影像且分辨率有限，maxNativeZoom 动态降级。
+   esri              Esri ArcGIS Online 基础底图，免 Key，仅限中国境外使用。
+   天地图与 Esri 均为 CGCS2000 / WGS84 体系，切换无坐标偏移。
+
+   天地图 Key 由桌面端运行时注入（环境变量或本机配置），源码中不含任何有效 Key。 */
+window.FIRESKY_TDT_KEY = window.FIRESKY_TDT_KEY || '';
+
+/* ── 源与底图类型定义 ─────────────────────────────────────────────────── */
+
+var CHINA_BBOX = { west: 73.4, east: 135.2, south: 3.5, north: 53.7 };
+
+function inChina(lat, lon) {
+  return lon >= CHINA_BBOX.west && lon <= CHINA_BBOX.east &&
+         lat >= CHINA_BBOX.south && lat <= CHINA_BBOX.north;
+}
+
+var TDT_SUBDOMAINS = ['0','1','2','3','4','5','6','7'];
+var TDT_ATTR = '&copy; <a href="https://www.tianditu.gov.cn/" target="_blank">天地图</a>';
+var ESRI_ATTR = 'Powered by <a href="https://www.esri.com/" target="_blank">Esri</a>' +
+                ' · Esri, Maxar, Earthstar Geographics';
+
+var TDT_TYPES = {
+  imagery: [['img_w', 1], ['cia_w', 2]],
+  vector:  [['vec_w', 1], ['cva_w', 2]],
+  terrain: [['ter_w', 1], ['cta_w', 2]]
+};
+
+var ESRI_TYPES = {
+  imagery: { path: 'World_Imagery',    maxNative: 19 },
+  vector:  { path: 'World_Street_Map', maxNative: 19 },
+  terrain: { path: 'World_Topo_Map',   maxNative: 19 }
+};
+
+var SOURCE_LABEL = { tianditu: '天地图', esri: 'Esri' };
+var BASE_LABEL = { imagery: '影像', vector: '矢量', terrain: '地形' };
+
+var map = L.map('map', {
+  center: [30.2741, 120.1551], zoom: 9,
+  minZoom: 0, maxZoom: 18,
+  zoomControl: true, scrollWheelZoom: true,
+  attributionControl: true
+});
+map.attributionControl.setPrefix('');
+L.control.scale({ imperial: false, maxWidth: 110, position: 'bottomright' }).addTo(map);
+
+/* 瓦片加载失败上报：Key 无效（403）或断网时让 Python 侧能看到。
+   用计数节流，避免断网时每个瓦片都打一条 console。 */
+var tileErrorCount = 0, tileErrorLast = 0;
+map.on('tileerror', function (event) {
+  tileErrorCount += 1;
+  var now = Date.now();
+  if (now - tileErrorLast < 2000) return;
+  tileErrorLast = now;
+  console.log('FIRESKY_TILEERROR:' + tileErrorCount);
+});
+
+/* 未捕获异常兜底：不让单次 Leaflet RangeError 静默吞掉后续调用。 */
+window.onerror = function (message) {
+  console.log('FIRESKY_JSERROR:' + message);
+  return false;
+};
+
+var activeBase = null;
+var source = 'tianditu';
+var baseName = 'imagery';
+var marker = null;
+var dark = false, muted = true;
+var lastInChina = null;
+
+/* ── 瓦片图层构造 ─────────────────────────────────────────────────────── */
+
+function tdtLayer(type, zIndex, maxNative) {
+  return L.tileLayer(
+    'https://t{s}.tianditu.gov.cn/DataServer?T=' + type +
+    '&x={x}&y={y}&l={z}&tk=' + encodeURIComponent(window.FIRESKY_TDT_KEY),
+    {
+      subdomains: TDT_SUBDOMAINS,
+      maxZoom: 18,
+      maxNativeZoom: maxNative || 18,
+      zIndex: zIndex,
+      attribution: TDT_ATTR
+    }
+  );
+}
+
+function esriLayer(type) {
+  var cfg = ESRI_TYPES[type] || ESRI_TYPES.imagery;
+  return L.tileLayer(
+    'https://server.arcgisonline.com/ArcGIS/rest/services/' +
+    cfg.path + '/MapServer/tile/{z}/{y}/{x}',
+    {
+      maxZoom: 19,
+      maxNativeZoom: cfg.maxNative,
+      zIndex: 1,
+      attribution: ESRI_ATTR
+    }
+  );
+}
+
+function applyTint() {
+  var el = document.getElementById('map');
+  el.classList.remove('tint-dark', 'tint-dark-img', 'tint-muted');
+  if (!dark) {
+    if (muted) el.classList.add('tint-muted');
+    return;
+  }
+  // 卫星影像反相会变成刺眼的浅灰白，只压暗；矢量/地形是浅色底图，反相才够暗
+  el.classList.add(baseName === 'imagery' ? 'tint-dark-img' : 'tint-dark');
+}
+
+/* ── 底图装配 ─────────────────────────────────────────────────────────── */
+
+function needsKey() {
+  return source === 'tianditu' && !window.FIRESKY_TDT_KEY;
+}
+
+function buildLayers() {
+  if (source === 'esri') {
+    return [esriLayer(baseName)];
+  }
+  /* 天地图境外影像分辨率有限：z14 之后返回空白占位瓦片，
+     用 maxNativeZoom 让 Leaflet 复用 z14 瓦片放大，避免放大即白屏。 */
+  var center = map.getCenter();
+  var maxNative = inChina(center.lat, center.lng) ? 18 : 14;
+  return (TDT_TYPES[baseName] || TDT_TYPES.imagery).map(function (pair) {
+    return tdtLayer(pair[0], pair[1], maxNative);
+  });
+}
+
+function selectBase(name) {
+  if (name) baseName = name;
+  if (activeBase) { map.removeLayer(activeBase); activeBase = null; }
+
+  /* 天地图的矢量 / 地形数据只覆盖中国境内，境外请求返回空白占位瓦片。
+     境外时锁定影像底图，避免用户看到一片空白。 */
+  var center = map.getCenter();
+  var overseasTdt = (source === 'tianditu') && !inChina(center.lat, center.lng);
+  if (overseasTdt && baseName !== 'imagery') baseName = 'imagery';
+
+  var blocked = needsKey();
+  document.getElementById('keyGate').classList.toggle('show', blocked);
+  if (blocked) {
+    syncControls();
+    return;
+  }
+
+  var layers = buildLayers();
+  activeBase = L.layerGroup(layers).addTo(map);
+  layers.forEach(function (l) { l.bringToBack(); });
+
+  muted = (baseName !== 'imagery');
+  applyTint();
+  lastInChina = inChina(center.lat, center.lng);
+  syncControls();
+}
+
+function syncControls() {
+  var center = map.getCenter();
+  var overseasTdt = (source === 'tianditu') && !inChina(center.lat, center.lng);
+
+  document.querySelectorAll('#sourceSeg button').forEach(function (b) {
+    b.classList.toggle('on', b.dataset.source === source);
+  });
+  document.querySelectorAll('#basemapSeg button').forEach(function (b) {
+    b.classList.toggle('on', b.dataset.base === baseName);
+    // 境外天地图无矢量 / 地形数据，禁用而不是让用户点了看白屏
+    b.disabled = overseasTdt && b.dataset.base !== 'imagery';
+  });
+  document.getElementById('layerHint').textContent =
+    SOURCE_LABEL[source] + ' · ' + BASE_LABEL[baseName];
+  document.getElementById('esriWarn').hidden = (source !== 'esri');
+
+  if (source === 'tianditu' && !window.FIRESKY_TDT_KEY) {
+    setStatus('未配置天地图 Key · 可切换到 Esri 底图继续选点');
+  } else if (overseasTdt) {
+    setStatus('境外天地图仅提供影像（约 9.5m）· 需要街道图请切到 Esri');
+  } else if (source === 'esri') {
+    setStatus('Esri 底图（境外使用）· 单击地图放置观测点');
+  } else {
+    setStatus('单击地图放置观测点 · 可拖动标记微调');
+  }
+}
+
+function setSource(name) {
+  if (!SOURCE_LABEL[name] || name === source) {
+    if (name === source) selectBase(baseName);
+    return;
+  }
+  source = name;
+  selectBase(baseName);
+  console.log('FIRESKY_SOURCE:' + source);
+}
+
+/* ── 观测点标记 ───────────────────────────────────────────────────────── */
+
+function markerIcon() {
+  return L.divIcon({
+    className: '', iconSize: [30, 30], iconAnchor: [15, 27],
+    html: '<div class="fs-marker"><div class="halo"></div><div class="drop"></div>' +
+          '<div class="core"></div><div class="ring"></div></div>'
+  });
+}
+
+function setMarker(lat, lon) {
+  var ll = [lat, lon];
+  if (!marker) {
+    marker = L.marker(ll, { icon: markerIcon(), draggable: true, zIndexOffset: 1000 }).addTo(map);
+    marker.on('dragend', function () {
+      var p = marker.getLatLng();
+      emitPick(p.lat, p.lng);
+    });
+  } else {
+    marker.setLatLng(ll);
+  }
+  document.getElementById('coord').textContent =
+    Math.abs(lat).toFixed(4) + '°' + (lat >= 0 ? 'N' : 'S') + ', ' +
+    Math.abs(lon).toFixed(4) + '°' + (lon >= 0 ? 'E' : 'W');
+}
+
+function emitPick(lat, lon) {
+  setMarker(lat, lon);
+  // console 桥：Python 侧 QWebEnginePage.javaScriptConsoleMessage 解析此前缀
+  console.log('FIRESKY_PICK:' + JSON.stringify({ lat: lat, lon: lon }));
+  toast('已选点 · ' + lat.toFixed(3) + ', ' + lon.toFixed(3));
+}
+
+map.on('click', function (e) { emitPick(e.latlng.lat, e.latlng.lng); });
+
+/* 跨越中国范围时重建天地图图层，切换 maxNativeZoom */
+map.on('moveend', function () {
+  if (source !== 'tianditu' || needsKey()) return;
+  var c = map.getCenter();
+  var nowIn = inChina(c.lat, c.lng);
+  if (lastInChina !== null && nowIn !== lastInChina) {
+    selectBase(baseName);
+  } else {
+    setStatus('');
+  }
+});
+
+var toastTimer = null;
+function toast(text) {
+  var el = document.getElementById('toast');
+  el.textContent = text; el.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(function () { el.classList.remove('show'); }, 2200);
+}
+
+var baseStatus = '单击地图放置观测点 · 可拖动标记微调';
+function setStatus(text) {
+  if (text) baseStatus = text;
+  document.getElementById('statusLine').textContent = baseStatus;
+}
+
+/* ── 控件 ─────────────────────────────────────────────────────────────── */
+document.querySelectorAll('#sourceSeg button').forEach(function (b) {
+  b.addEventListener('click', function () { setSource(b.dataset.source); });
+});
+document.querySelectorAll('#basemapSeg button').forEach(function (b) {
+  b.addEventListener('click', function () {
+    selectBase(b.dataset.base);
+    console.log('FIRESKY_BASE:' + b.dataset.base);
+  });
+});
+document.getElementById('useEsri').addEventListener('click', function () {
+  setSource('esri');
+});
+
+/* ── Python → JS API ─────────────────────────────────────────────────── */
+var mini = false;
+
+/* 小地图模式：单点预测页的内嵌卡片使用。隐藏浮层控件与缩放按钮，
+   关闭滚轮缩放（滚轮应交给外层页面滚动），保留点击落点与拖动标记。 */
+window.fsSetMini = function (on) {
+  mini = !!on;
+  document.documentElement.classList.toggle('mini', mini);
+  if (mini) { map.scrollWheelZoom.disable(); } else { map.scrollWheelZoom.enable(); }
+  map.invalidateSize({ animate: false });
+};
+
+window.fsInit = function (key, isDark, initialSource, isMini) {
+  window.FIRESKY_TDT_KEY = key || '';
+  window.FIRESKY_INITED = true;
+  dark = !!isDark;
+  document.documentElement.classList.toggle('dark', dark);
+  if (initialSource && SOURCE_LABEL[initialSource]) source = initialSource;
+  applyTint();
+  /* 已有标记时不要重置到默认中心：重新注入 Key 会再次调用 fsInit，
+     若在这里无条件 setMarker 会把用户刚选的观测点弹回杭州。 */
+  if (!marker) setMarker(30.2741, 120.1551);
+  window.fsSetMini(!!isMini);
+  selectBase(baseName);
+};
+window.fsSetTheme = function (isDark) {
+  dark = !!isDark;
+  document.documentElement.classList.toggle('dark', dark);
+  applyTint();
+};
+window.fsSetSource = function (name) { setSource(name); };
+window.fsSetView = function (lat, lon, zoom, name) {
+  setMarker(lat, lon);
+  // zoom 钳制到 map 支持范围：越界值 Leaflet 会抛 RangeError 并中断本次调用
+  var z = Math.max(map.getMinZoom(), Math.min(map.getMaxZoom(), Number(zoom) || map.getZoom()));
+  map.setView([lat, lon], z, { animate: true });
+  if (name) document.getElementById('spotName').textContent = name;
+};
+window.fsSetName = function (name, status) {
+  document.getElementById('spotName').textContent = name || '观测点';
+  if (status) setStatus(status);
+};
+window.fsSetBase = function (name) { selectBase(name); };
+window.fsFitBounds = function (west, south, east, north) {
+  map.fitBounds([[south, west], [north, east]], { padding: [24, 24] });
+};
+window.fsInvalidate = function () { map.invalidateSize({ animate: false }); };
+
+/* 直接用浏览器打开原型时没有 fsInit，这里兜底完成首次渲染：
+   未配置 Key 则展示申请引导，并可一键切到 Esri 源继续选点。
+   QWebEngine 会在 loadFinished 后立即调用 fsInit，故延迟执行避免重复渲染。 */
+setTimeout(function () {
+  if (!window.FIRESKY_INITED) selectBase(baseName);
+}, 250);
+
+console.log('FIRESKY_READY');
+</script>
+</body>
+</html>
