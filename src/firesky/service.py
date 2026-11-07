@@ -769,6 +769,20 @@ class ForecastService:
             event['details'] = details
         self.progress_callback(event)
 
+def nowcast_core_indexes(
+    assessments: Sequence[TimeStepAssessment],
+    anchor_utc: datetime,
+) -> List[int]:
+    """Return the event-centered nowcast steps used for the headline verdict."""
+    core = [
+        index
+        for index, step in enumerate(assessments)
+        if abs((step.valid_time_utc - anchor_utc).total_seconds())
+        <= NOWCAST_CORE_WINDOW_MINUTES * 60.0
+    ]
+    return core or list(range(len(assessments)))
+
+
 def nowcast_duration_is_qualified(
     nowcast: NowcastAdjustment,
     assessments: Sequence[TimeStepAssessment],

@@ -383,6 +383,9 @@ def calibrated_only_nowcast_adjustment(
     if sample_coverage <= 0.0:
         # fail-closed：整个视图没有任何可用校准列（数据缺口，非晴空）。
         return None
+    # v4 覆盖率语义："有校准评分" = 至少存在一个可用采样列（coverage > 0）。
+    # 能走到这里说明视图可发布，指标不按缺测回填。
+    has_calibrated_scoring = sample_coverage > 0.0
     calibrated_quality = merge_retrieval_quality(item.retrieval_quality for item in column_sets)
     source_kind, source_label, image_channel, profile_bands = _satellite_frame_contract(frame)
     # The compact frame is an observation, not a projected field.  Attach it

@@ -1,0 +1,398 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>FireSky 桌面应用 · 设计稿 v2</title>
+<style>
+  :root {
+    --canvas: #f2ecdf; --card: #fbf7f0; --border: #e3d6c2;
+    --ink: #2a2118; --ink2: #7a6a55; --accent: #d96c2c; --ok: #2e7d5b;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: #d8d2c4; font-family: "PingFang SC","Microsoft YaHei",sans-serif; color: var(--ink);
+         display: flex; flex-direction: column; align-items: center; padding: 24px 16px 50px; gap: 16px; }
+  h1 { font-size: 19px; color: #4a3d2e; }
+  p.note { color:#6a5c48; font-size:13px; max-width:1120px; line-height:1.7; }
+  .win { width: 1180px; height: 780px; background: var(--canvas); border-radius: 10px;
+         box-shadow: 0 24px 60px rgba(40,30,15,.35); overflow: hidden; display: flex; flex-direction: column;
+         border: 1px solid #b8ab94; }
+  .titlebar { height: 44px; background: linear-gradient(100deg,#f7e8d2,#f3ddc0); border-bottom: 1px solid var(--border);
+              display: flex; align-items: center; padding: 0 14px; gap: 10px; flex-shrink: 0; }
+  .sun { width: 24px; height: 24px; border-radius: 7px; background: linear-gradient(135deg,#f2a24b,#d95d2c);
+         display:flex; align-items:center; justify-content:center; color:#fff; font-size:13px; }
+  .brand { font-weight: 700; font-size: 14px; } .brand small { color: var(--ink2); font-weight: 400; margin-left: 8px; font-size: 12px; }
+  .tabs { display: flex; gap: 4px; margin-left: 18px; }
+  .tab { padding: 6px 18px; border-radius: 8px; font-size: 13px; color: var(--ink2); font-weight: 600; }
+  .tab.on { background: #fff; color: var(--ink); box-shadow: 0 1px 4px rgba(120,90,50,.15); }
+  .titlebar .sp { flex: 1; }
+  .tbtn { width: 28px; height: 28px; border-radius: 7px; border: 1px solid var(--border); background: rgba(255,255,255,.5);
+          display:flex; align-items:center; justify-content:center; font-size: 13px; color: var(--ink2); }
+  .body { flex: 1; display: flex; min-height: 0; }
+  .rail { width: 250px; border-right: 1px solid var(--border); background: rgba(255,252,246,.6);
+          display: flex; flex-direction: column; padding: 12px; gap: 8px; overflow-y: auto; }
+  .rail h5 { font-size: 11px; color: var(--ink2); letter-spacing: .5px; }
+  .city { padding: 6px 10px; border-radius: 8px; font-size: 12.5px; color: var(--ink2);
+          display: flex; justify-content: space-between; }
+  .city.on { background: #fff; color: var(--ink); font-weight: 600; box-shadow: 0 1px 4px rgba(120,90,50,.12); border: 1px solid var(--border); }
+  .field label { font-size: 11px; color: var(--ink2); font-weight: 600; display:block; margin-bottom: 3px; }
+  .inp { height: 30px; border: 1px solid var(--border); border-radius: 8px; background: #fff;
+         padding: 0 10px; font-size: 12.5px; display: flex; align-items: center; justify-content: space-between; }
+  .inp .dim { color:#9a8d78; font-size: 11px; }
+  .inp.auto { color: var(--ok); font-weight: 600; }
+  .seg { display: flex; background: #efe6d4; border-radius: 8px; padding: 3px; gap: 2px; }
+  .seg div { flex: 1; text-align: center; font-size: 12px; padding: 5px 0; border-radius: 6px; color: var(--ink2); }
+  .seg div.on { background: #fff; color: var(--ink); font-weight: 600; }
+  .runbtn { height: 38px; border-radius: 10px; background: linear-gradient(100deg,#ec8a3c,#d95d2c);
+            color: #fff; font-size: 13.5px; font-weight: 700; letter-spacing: 2px;
+            display: flex; align-items: center; justify-content: center; box-shadow: 0 3px 10px rgba(200,90,30,.35); margin-top: 4px; }
+  .prog .bar { height: 5px; background: #e8dcc6; border-radius: 4px; }
+  .prog .bar i { display: block; height: 100%; width: 42%; background: linear-gradient(90deg,#ec8a3c,#d95d2c); border-radius: 4px; }
+  .prog .txt { font-size: 11px; color: var(--ink2); margin-top: 4px; }
+  .datasrc { border-top: 1px solid var(--border); padding-top: 8px; margin-top: auto; }
+  .srcrow { display: flex; align-items: center; justify-content: space-between; font-size: 11.5px; padding: 3px 2px; color: var(--ink2); }
+  .srcrow b { color: var(--ink); font-weight: 600; }
+  .pill { font-size: 10px; padding: 2px 8px; border-radius: 10px; font-weight: 600; }
+  .pill.ok { background: #e2efe4; color: var(--ok); } .pill.warn { background: #f6e8d8; color: #b07020; }
+  .setbtn { margin-top: 6px; text-align: center; border: 1px solid var(--border); border-radius: 8px; padding: 6px;
+            font-size: 12px; color: var(--ink2); background: rgba(255,255,255,.5); }
+  .main { flex: 1; display: flex; flex-direction: column; padding: 12px 14px; gap: 10px; min-width: 0; }
+  .headrow { display: flex; align-items: baseline; gap: 10px; }
+  .headrow .loc { font-size: 16px; font-weight: 700; }
+  .headrow .meta { font-size: 12px; color: var(--ink2); }
+  .headrow .models { margin-left: auto; display: flex; background: #efe6d4; border-radius: 8px; padding: 3px; gap: 2px; }
+  .headrow .models div { font-size: 12px; padding: 4px 14px; border-radius: 6px; color: var(--ink2); }
+  .headrow .models div.on { background: #fff; color: var(--ink); font-weight: 700; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; }
+  .result { padding: 14px 20px; display: flex; align-items: center; gap: 22px; position: relative; overflow: hidden; }
+  .result::before { content:""; position:absolute; left:0; top:0; bottom:0; width:5px; background: linear-gradient(180deg,#ec8a3c,#b03024); }
+  .big { font-size: 38px; font-weight: 800; color: #c0451e; line-height: 1; }
+  .big small { font-size: 15px; color: var(--ink2); font-weight: 500; }
+  .lvl { font-size: 14px; font-weight: 700; color: #b0451e; margin-top: 3px; }
+  .facts { display: flex; gap: 20px; flex: 1; }
+  .fact .k { font-size: 11px; color: var(--ink2); } .fact .v { font-size: 13.5px; font-weight: 600; margin-top: 3px; }
+  .badge { text-align: right; font-size: 11px; color: var(--ink2); }
+  .curve { padding: 10px 14px 6px; }
+  .curve h4 { font-size: 12px; color: var(--ink2); margin-bottom: 5px; }
+  .map { position: relative; background: #dde8df; border-radius: 12px; overflow: hidden; flex: 1; }
+  .map svg { display: block; width: 100%; height: 100%; }
+  .mapcross { position: absolute; left: 58%; top: 42%; transform: translate(-50%,-100%); text-align: center; }
+  .pin { width: 14px; height: 14px; border-radius: 50% 50% 50% 0; background: #d95d2c; transform: rotate(-45deg);
+         box-shadow: 0 2px 6px rgba(0,0,0,.3); margin: 0 auto; }
+  .mapprofile { position: absolute; right: 10px; top: 10px; background: rgba(255,255,255,.94); border: 1px solid var(--border);
+                border-radius: 10px; padding: 10px 12px; width: 220px; }
+  .mapprofile h5 { font-size: 11px; color: var(--ink2); margin-bottom: 5px; }
+  .mapfoot { position: absolute; left: 10px; bottom: 10px; background: rgba(255,255,255,.94); border: 1px solid var(--border);
+             border-radius: 8px; padding: 6px 10px; font-size: 11px; color: var(--ink2); }
+  .nowrow { display: flex; gap: 10px; }
+  .nowcard { flex: 1; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .nowcard h5 { font-size: 11px; color: var(--ink2); margin-bottom: 6px; }
+  .nowcard .v { font-size: 22px; font-weight: 800; }
+  .nowcard .s { font-size: 11px; color: var(--ink2); margin-top: 3px; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .regcard { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .regcard h5 { font-size: 12px; margin-bottom: 8px; }
+  .chk { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chk span { font-size: 12px; border: 1px solid var(--border); border-radius: 8px; padding: 5px 12px; color: var(--ink2); }
+  .chk span.on { background: #fff; color: var(--ink); font-weight: 600; border-color: #cbb998; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  thead th { text-align: left; padding: 7px 12px; background: #f3ead9; font-size: 11px; color: var(--ink2);
+             border-bottom: 1px solid var(--border); }
+  tbody td { padding: 5px 12px; border-bottom: 1px solid #f0e8d8; font-variant-numeric: tabular-nums; }
+  .lv { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+  .lv i { width: 9px; height: 9px; border-radius: 50%; }
+  .ok-ic { color: var(--ok); font-weight: 700; }
+  .best td { background: #fdf3e4; }
+  .tag { font-size: 10px; background: #ec8a3c; color: #fff; border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
+</style>
+</head>
+<body>
+<h1>FireSky 桌面应用 · 设计稿 v2（三标签工作台 · 功能对齐 Web 全量）</h1>
+
+<!-- ══ 单点标签页 ══ -->
+<div class="win">
+  <div class="titlebar">
+    <div class="sun">☀</div><div class="brand">FireSky <small>本地预测工作台</small></div>
+    <div class="tabs">
+      <div class="tab on">单点预测</div><div class="tab">区域预测</div><div class="tab">实况 nowcast</div><div class="tab">数据源</div>
+    </div>
+    <div class="sp"></div><div class="tbtn">☾</div><div class="tbtn">—</div><div class="tbtn">□</div><div class="tbtn">×</div>
+  </div>
+  <div class="body">
+    <div class="rail">
+      <h5>观测点（点击加载 · 地图选点自动落址）</h5>
+      <div class="city on"><span>★ 杭州</span><span>30.27, 120.16</span></div>
+      <div class="city"><span>北京</span><span>39.90, 116.41</span></div>
+      <div class="city"><span>拉萨</span><span>29.65, 91.17</span></div>
+      <div class="inp" style="justify-content:center; color:var(--ink2)">＋ 地图点选新观测点</div>
+      <div class="field" style="margin-top:6px"><label>名称</label><div class="inp">杭州</div></div>
+      <div class="field"><label>纬度</label><div class="inp">30.2741</div></div>
+      <div class="field"><label>经度</label><div class="inp">120.1551</div></div>
+      <div class="field"><label>海拔 (m) — DEM 自动获取</label>
+        <div class="inp auto">8 m&nbsp;<span class="dim">· Copernicus DEM 已查询</span></div>
+      </div>
+      <div class="field"><label>现象 / 日期</label>
+        <div class="seg"><div>朝霞</div><div class="on">晚霞</div></div>
+        <div class="inp" style="margin-top:4px">2026-11-08 <span class="dim">▼</span></div>
+      </div>
+      <div class="runbtn">获取预测</div>
+      <div class="prog"><div class="bar"><i></i></div><div class="txt">正在预取 GFS f036… 42%</div></div>
+      <div class="datasrc">
+        <h5 style="margin-bottom:5px">数据源</h5>
+        <div class="srcrow"><span><b>GFS</b></span><span class="pill ok">就绪 · 00Z</span></div>
+        <div class="srcrow"><span><b>EC</b></span><span class="pill ok">就绪 · 12Z</span></div>
+        <div class="srcrow"><span><b>CAMS</b></span><span class="pill warn">需要 Key</span></div>
+        <div class="setbtn">⚙ 数据源设置（Key / 下载 / 缓存清理）</div>
+      </div>
+    </div>
+    <div class="main">
+      <div class="headrow">
+        <div class="loc">杭州</div><div class="meta">晚霞 · 2026-11-08 · Asia/Shanghai · 海拔 8 m (DEM)</div>
+        <div class="models"><div class="on">GFS</div><div>EC</div></div>
+      </div>
+      <div class="card result">
+        <div><div class="big">2.31 <small>/ 2.5</small></div><div class="lvl">典型大烧</div></div>
+        <div class="facts">
+          <div class="fact"><div class="k">峰值时刻</div><div class="v">17:42</div></div>
+          <div class="fact"><div class="k">最佳窗口</div><div class="v">17:30 – 17:55</div></div>
+          <div class="fact"><div class="k">可烧云量</div><div class="v">0.42</div></div>
+          <div class="fact"><div class="k">云属（代理）</div><div class="v">高积云</div></div>
+          <div class="fact"><div class="k">AOD 550</div><div class="v">0.31</div></div>
+        </div>
+        <div class="badge">GFS 00Z · 置信 0.76</div>
+      </div>
+      <div class="card curve">
+        <h4>逐五分钟质量曲线（档位色带底衬 · 0–2.5）</h4>
+        <svg viewBox="0 0 660 132" preserveAspectRatio="none">
+          <defs><linearGradient id="b" x1="0" y1="1" x2="0" y2="0">
+            <stop offset="0" stop-color="#c9c2b2"/><stop offset=".25" stop-color="#e5d9a8"/>
+            <stop offset=".5" stop-color="#eda45c"/><stop offset=".75" stop-color="#d95d3c"/>
+            <stop offset="1" stop-color="#8f1622"/></linearGradient></defs>
+          <rect x="46" y="6" width="600" height="114" rx="6" fill="url(#b)" opacity=".26"/>
+          <polyline points="46,122 88,120 130,117 172,112 214,104 256,92 298,76 340,58 382,38 424,24 466,20 508,28 550,48 592,82 646,112"
+            fill="none" stroke="#c0451e" stroke-width="2.5"/>
+          <circle cx="466" cy="20" r="4.5" fill="#c0451e"/>
+          <text x="466" y="12" font-size="11" fill="#8a2c18" text-anchor="middle" font-weight="700">峰值 2.31 · 17:42</text>
+        </svg>
+      </div>
+      <div class="card" style="overflow:hidden">
+        <table>
+          <thead><tr><th>时刻</th><th>质量</th><th>档位</th><th>可烧</th><th>云底 AGL</th><th>AOD</th><th>太阳仰角</th></tr></thead>
+          <tbody>
+            <tr class="best"><td>17:42 <span class="tag">峰值</span></td><td>2.310</td><td><span class="lv"><i style="background:#c0451e"></i>典型大烧</span></td><td class="ok-ic">✓</td><td>1.2 km</td><td>0.31</td><td>4.2°</td></tr>
+            <tr><td>17:47</td><td>2.240</td><td><span class="lv"><i style="background:#c0451e"></i>典型大烧</span></td><td class="ok-ic">✓</td><td>1.2 km</td><td>0.31</td><td>2.9°</td></tr>
+            <tr><td>17:52</td><td>1.980</td><td><span class="lv"><i style="background:#d95d3c"></i>优质大烧</span></td><td class="ok-ic">✓</td><td>1.3 km</td><td>0.31</td><td>1.5°</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="note"><b>单点标签</b>：观测点收藏 + <b>地图点选</b>（右图“地图选点”模式，点地图任意位置自动落址）；<b>海拔不手输</b>——选点后自动查 Copernicus DEM 并显示“8 m · 已查询”，也可手动覆盖；其余同 v1。</p>
+
+<!-- ══ 区域预测标签页 ══ -->
+<div class="win">
+  <div class="titlebar">
+    <div class="sun">☀</div><div class="brand">FireSky</div>
+    <div class="tabs">
+      <div class="tab">单点预测</div><div class="tab on">区域预测</div><div class="tab">实况 nowcast</div><div class="tab">数据源</div>
+    </div>
+    <div class="sp"></div><div class="tbtn">☾</div><div class="tbtn">—</div><div class="tbtn">□</div><div class="tbtn">×</div>
+  </div>
+  <div class="body">
+    <div class="rail">
+      <h5>计算区域（可多选）</h5>
+      <div class="chk" style="flex-direction:column">
+        <span class="on">◈ 中国东部（默认）</span><span>◈ 华北</span><span>◈ 华南</span>
+        <span>◈ 西南</span><span>◈ 东北</span><span>自定义 bbox</span>
+      </div>
+      <div class="field" style="margin-top:4px"><label>现象 / 目标日期</label>
+        <div class="seg"><div>朝霞</div><div class="on">晚霞</div></div>
+        <div class="inp" style="margin-top:4px">2026-11-08 <span class="dim">▼</span></div>
+      </div>
+      <div class="field"><label>网格间距</label><div class="inp">0.25° <span class="dim">▼</span></div></div>
+      <div class="runbtn">提交区域计算</div>
+      <div class="prog"><div class="bar"><i></i></div><div class="txt">区域批处理 4557 点 · 62%</div></div>
+      <div class="datasrc">
+        <h5 style="margin-bottom:5px">运行队列</h5>
+        <div class="srcrow"><span>national-08h</span><span class="pill ok">done</span></div>
+        <div class="srcrow"><span>national-08c</span><span class="pill warn">running</span></div>
+        <div class="setbtn">查看历史结果 / 取消任务</div>
+      </div>
+    </div>
+    <div class="main">
+      <div class="headrow"><div class="loc">中国东部 · 晚霞</div><div class="meta">2026-11-08 · 4557 观测点 · 0.25°</div>
+        <div class="models"><div class="on">GFS</div><div>EC</div></div></div>
+      <div class="map" style="min-height:300px">
+        <svg viewBox="0 0 900 300" preserveAspectRatio="xMidYMid slice">
+          <rect width="900" height="300" fill="#e8e0cd"/>
+          <path d="M120,60 Q240,40 380,70 T640,60 T860,90 L860,300 L120,300 Z" fill="#d3cdb8"/>
+          <path d="M300,110 Q420,95 560,120 T780,115" fill="none" stroke="#9fb8c9" stroke-width="26" opacity=".7"/>
+          <g>
+            <circle cx="380" cy="140" r="7" fill="#8f1622" opacity=".9"/><circle cx="430" cy="150" r="6" fill="#c0451e"/>
+            <circle cx="470" cy="135" r="6.5" fill="#d95d3c"/><circle cx="520" cy="150" r="5" fill="#ec8a3c"/>
+            <circle cx="560" cy="140" r="6" fill="#c0451e"/><circle cx="610" cy="155" r="5" fill="#e5b45c"/>
+            <circle cx="350" cy="170" r="5" fill="#ec8a3c"/><circle cx="420" cy="185" r="4.5" fill="#e5b45c"/>
+            <circle cx="500" cy="175" r="5.5" fill="#d95d3c"/><circle cx="580" cy="180" r="4" fill="#c9c2b2"/>
+            <circle cx="640" cy="165" r="4" fill="#c9c2b2"/><circle cx="300" cy="150" r="4" fill="#e5d9a8"/>
+          </g>
+          <text x="380" y="125" font-size="11" fill="#5a4a38">上海 2.31</text>
+          <text x="560" y="128" font-size="11" fill="#5a4a38">杭州 2.31</text>
+        </svg>
+        <div class="mapprofile"><h5>地图图例</h5>
+          <div class="srcrow"><span class="lv"><i style="width:9px;height:9px;border-radius:50%;background:#8f1622"></i>世纪大烧</span></div>
+          <div class="srcrow"><span class="lv"><i style="width:9px;height:9px;border-radius:50%;background:#c0451e"></i>典型大烧</span></div>
+          <div class="srcrow"><span class="lv"><i style="width:9px;height:9px;border-radius:50%;background:#d95d3c"></i>优质大烧</span></div>
+          <div class="srcrow"><span class="lv"><i style="width:9px;height:9px;border-radius:50%;background:#ec8a3c"></i>中等烧到大烧</span></div>
+          <div class="srcrow"><span class="lv"><i style="width:9px;height:9px;border-radius:50%;background:#e5d9a8"></i>微烧</span></div>
+        </div>
+        <div class="mapfoot">点击观测点气泡 → 查看该点台账 · 底图天地图</div>
+      </div>
+      <div class="card" style="overflow:hidden">
+        <table>
+          <thead><tr><th>观测点</th><th>峰值</th><th>档位</th><th>峰值时刻</th><th>时长</th><th>AOD</th></tr></thead>
+          <tbody>
+            <tr class="best"><td>上海</td><td>2.310</td><td><span class="lv"><i style="background:#c0451e"></i>典型大烧</span></td><td>17:42</td><td>35 min</td><td>0.31</td></tr>
+            <tr><td>杭州</td><td>2.310</td><td><span class="lv"><i style="background:#c0451e"></i>典型大烧</span></td><td>17:42</td><td>35 min</td><td>0.31</td></tr>
+            <tr><td>苏州</td><td>1.980</td><td><span class="lv"><i style="background:#d95d3c"></i>优质大烧</span></td><td>17:44</td><td>30 min</td><td>0.30</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="note"><b>区域预测标签</b>：区域多选（与 Web 一致）、网格间距、异步 job 队列（运行中/已完成/取消）、
+结果为<b>地图气泡（按档位配色）+ 排名台账</b>，点击气泡查看该点详情——对应 Web 版区域地图帧+摘要。</p>
+
+<!-- ══ 实况标签页 ══ -->
+<div class="win">
+  <div class="titlebar">
+    <div class="sun">☀</div><div class="brand">FireSky</div>
+    <div class="tabs">
+      <div class="tab">单点预测</div><div class="tab">区域预测</div><div class="tab on">实况 nowcast</div><div class="tab">数据源</div>
+    </div>
+    <div class="sp"></div><div class="tbtn">☾</div><div class="tbtn">—</div><div class="tbtn">□</div><div class="tbtn">×</div>
+  </div>
+  <div class="body">
+    <div class="rail">
+      <h5>观测点</h5>
+      <div class="city on"><span>★ 杭州</span><span>30.27, 120.16</span></div>
+      <div class="field"><label>现象</label>
+        <div class="seg"><div>朝霞</div><div class="on">晚霞</div></div>
+      </div>
+      <div class="field"><label>事件日期</label><div class="inp">今天 11-07 <span class="dim">▼</span></div></div>
+      <div class="runbtn">获取实况预测</div>
+      <div class="prog"><div class="bar"><i style="width:70%"></i></div><div class="txt">Himawari HSD 校准扫描读取… 70%</div></div>
+      <div class="datasrc">
+        <h5 style="margin-bottom:5px">数据源</h5>
+        <div class="srcrow"><span><b>Himawari HSD</b></span><span class="pill ok">21:50Z 就绪</span></div>
+        <div class="srcrow"><span><b>雷达</b> RainViewer</span><span class="pill ok">有覆盖</span></div>
+        <div class="srcrow"><span><b>CAMS</b></span><span class="pill ok">就绪</span></div>
+        <div class="setbtn">⚙ 数据源设置</div>
+      </div>
+    </div>
+    <div class="main">
+      <div class="headrow"><div class="loc">杭州 · 实况</div><div class="meta">卫星观测 2026-11-07 21:50Z · 覆盖率 71%</div>
+        <div class="models"><div class="on">HSD+B07/13/15</div></div></div>
+      <div class="nowrow">
+        <div class="nowcard"><h5>实况峰值</h5><div class="v" style="color:#c0451e">1.42</div><div class="s">中等烧到大烧 · 17:42</div></div>
+        <div class="nowcard"><h5>对流顶棚</h5><div class="v">86</div><div class="s">雷达回波 8% · 路径阻塞低</div></div>
+        <div class="nowcard"><h5>采样覆盖率</h5><div class="v">71%</div><div class="s">部分拂晓样本模糊，已披露</div></div>
+        <div class="nowcard"><h5>太阳入射光路</h5><div class="v">12 / 100</div><div class="s">36 样本 · 挡光风险低</div></div>
+      </div>
+      <div class="grid2">
+        <div class="card curve">
+          <h4>实况质量时间轴（±30 分钟 · 五分钟步）</h4>
+          <svg viewBox="0 0 660 120" preserveAspectRatio="none">
+            <rect x="46" y="6" width="600" height="102" rx="6" fill="#fbf7f0"/>
+            <polyline points="46,96 120,88 194,74 268,52 342,32 416,24 490,34 564,58 646,88"
+              fill="none" stroke="#c0451e" stroke-width="2.5"/>
+            <circle cx="416" cy="24" r="4.5" fill="#c0451e"/>
+            <text x="416" y="16" font-size="11" fill="#8a2c18" text-anchor="middle" font-weight="700">1.42</text>
+            <line x1="46" y1="114" x2="646" y2="114" stroke="#b8a888"/>
+            <text x="46" y="110" font-size="10" fill="#7a6a55">-30m</text>
+            <text x="330" y="110" font-size="10" fill="#7a6a55" text-anchor="middle">事件</text>
+            <text x="646" y="110" font-size="10" fill="#7a6a55" text-anchor="end">+30m</text>
+          </svg>
+        </div>
+        <div class="card curve">
+          <h4>太阳方向实况大气剖面（卫星云柱 + GFS 垂直先验）</h4>
+          <svg viewBox="0 0 660 120" preserveAspectRatio="none">
+            <rect x="46" y="6" width="600" height="102" rx="6" fill="#fbf7f0"/>
+            <rect x="120" y="30" width="180" height="24" rx="4" fill="#d95d3c" opacity=".75"/>
+            <rect x="330" y="52" width="150" height="18" rx="4" fill="#ec8a3c" opacity=".7"/>
+            <text x="124" y="46" font-size="11" fill="#fff">目标云层 2.1–4.8 km</text>
+            <text x="334" y="66" font-size="11" fill="#fff">中云残片 3.4–4.1 km</text>
+            <line x1="46" y1="100" x2="646" y2="100" stroke="#8a7a5c"/>
+            <text x="46" y="96" font-size="10" fill="#7a6a55">观测者</text>
+            <text x="646" y="96" font-size="10" fill="#7a6a55" text-anchor="end">目标 100 km</text>
+            <text x="346" y="18" font-size="10" fill="#7a6a55" text-anchor="middle">沿光路距离 →</text>
+          </svg>
+        </div>
+      </div>
+      <div class="card" style="overflow:hidden">
+        <table>
+          <thead><tr><th>时刻</th><th>质量</th><th>档位</th><th>可烧</th><th>雷达约束</th><th>云相</th></tr></thead>
+          <tbody>
+            <tr class="best"><td>17:42 <span class="tag">峰值</span></td><td>1.420</td><td><span class="lv"><i style="background:#ec8a3c"></i>中等烧到大烧</span></td><td class="ok-ic">✓</td><td>上限 86/100</td><td>冰水混合</td></tr>
+            <tr><td>17:37</td><td>1.180</td><td><span class="lv"><i style="background:#ec8a3c"></i>中等烧到大烧</span></td><td class="ok-ic">✓</td><td>上限 86/100</td><td>过冷水</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="note"><b>实况标签</b>：四张指标卡（实况峰值/对流顶棚/<b>采样覆盖率</b>/光路几何）+ 时间轴 + <b>太阳方向大气剖面</b>（对应 Web 版
+SatelliteVerticalProfile）+ 台账。卫星/雷达/CAMS 数据源状态独立显示；±4h 窗口外给出引导文案。</p>
+
+<!-- ══ 数据源标签页 ══ -->
+<div class="win" style="height:560px">
+  <div class="titlebar">
+    <div class="sun">☀</div><div class="brand">FireSky</div>
+    <div class="tabs">
+      <div class="tab">单点预测</div><div class="tab">区域预测</div><div class="tab">实况 nowcast</div><div class="tab on">数据源</div>
+    </div>
+    <div class="sp"></div><div class="tbtn">☾</div><div class="tbtn">—</div><div class="tbtn">□</div><div class="tbtn">×</div>
+  </div>
+  <div class="body">
+    <div class="main" style="padding:20px 26px; gap:14px">
+      <div class="headrow"><div class="loc">数据源设置</div>
+        <div class="meta">所有密钥保存在本机应用配置（Keychain/DPAPI 加密可选），不写入仓库</div></div>
+      <div class="regcard">
+        <h5>CAMS · Copernicus ADS（气溶胶 · 必需）</h5>
+        <div class="grid2">
+          <div class="field"><label>ADS API Key</label><div class="inp">••••••••••••••••••（已保存）<span class="dim">显示</span></div></div>
+          <div class="field"><label>状态</label><div class="inp auto" style="color:var(--ok)">✓ 已验证 · 队列 2 分钟</div></div>
+        </div>
+        <div class="chk" style="margin-top:8px"><span class="on">自动预取事件窗口</span><span>下载后严格校验</span><span class="on">批量合并请求</span></div>
+      </div>
+      <div class="regcard">
+        <h5>GFS · NOMADS（主模式 · 免 Key）</h5>
+        <div class="chk"><span class="on">启动时检查最新周期</span><span class="on">自动下载当日时效</span><span>下载线程 4</span></div>
+        <div class="srcrow" style="margin-top:6px"><span>本地 2026-11-06 00Z · 76 文件 · 缺失时效 18</span><span class="pill warn">有更新 00Z</span></div>
+      </div>
+      <div class="regcard">
+        <h5>ECMWF · Open Data（第二模式 · 免 Key）</h5>
+        <div class="chk"><span class="on">随 EC 单点请求下载</span><span>保留时效 3 天</span></div>
+      </div>
+      <div class="regcard">
+        <h5>Himawari / 雷达（实况标签 · 免 Key）</h5>
+        <div class="chk"><span>启动时预热最新扫描</span><span class="on">事件 ±4h 自动预热</span><span>足迹 900km</span></div>
+        <div class="srcrow" style="margin-top:6px"><span>HSD 缓存 65 MB · 10 帧（每帧 10–40s 下载）</span><span class="pill ok">就绪</span></div>
+      </div>
+      <div class="regcard">
+        <h5>缓存维护</h5>
+        <div class="srcrow"><span>总占用 <b>2.1 GB</b>（GFS 1.9 · CAMS 71M · HSD 65M · EC 96M）</span>
+          <span class="pill warn">保留 3 天</span></div>
+        <div class="chk" style="margin-top:6px"><span>一键清理过期缓存</span><span>导出诊断包</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<p class="note"><b>数据源标签</b>：ADS Key 应用内配置（写入本机应用配置，不再要求 ~/.cdsapirc）；每源独立
+「自动下载/预热」开关与状态行；缓存占用与一键清理。首次启动引导：填 Key → 下载当日数据 → 开始预测。</p>
+</body>
+</html>
