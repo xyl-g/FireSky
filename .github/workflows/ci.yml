@@ -56,6 +56,45 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+
+  desktop:
+    name: desktop bundle (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: FireSky-macos
+          - os: windows-latest
+            artifact: FireSky-windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: 安装模型核心依赖（桌面版不含 nowcast/卫星栈）
+        run: pip install -e ".[dev,cams,ec]" PySide6 pyinstaller
+      - name: 构建原生评分器
+        run: ./scripts/build_native_variants.sh
+        shell: bash
+      - name: PyInstaller 打包
+        run: pyinstaller desktop/FireSky.spec --noconfirm
+      - name: macOS → dmg
+        if: runner.os == 'macOS'
+        run: |
+          cd dist
+          hdiutil create -volname FireSky -srcfolder FireSky -ov -format UDZO FireSky-macos.dmg
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/FireSky-macos.dmg
+            dist/FireSky/
+
   docker:
     name: docker build（三阶段镜像）
     runs-on: ubuntu-latest

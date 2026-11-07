@@ -37,6 +37,7 @@ minimal SvelteKit frontend**. The physics follows the methodology of the
 - **Backend service**: FastAPI async jobs + SSE + gzip + persistent caches
   (point / regional / map frames / satellite).
 - **Minimal frontend**: `/forecast`, `/now`, `/outlook`, `/admin`.
+- **Desktop app**: PySide6 local single-machine (`desktop/app.py`), sharing the prediction core with the web service.
 
 ## Architecture & physics
 
@@ -231,6 +232,27 @@ cd frontend && npm run check && npm run build # 0 errors
 - After changing `native/src/*.rs`, rebuild with
   `./scripts/build_native_variants.sh` before running pytest — otherwise pytest
   loads the stale dylib and reports misleading results.
+
+## Desktop app (local, single-machine)
+
+The PySide6 desktop app shares the same prediction core as the web service
+(identical numbers, no HTTP hop):
+
+```bash
+# run from source
+.venv/bin/python desktop/app.py
+
+# bundle
+pip install pyinstaller
+pyinstaller desktop/FireSky.spec --noconfirm
+# macOS: cd dist && hdiutil create -volname FireSky -srcfolder FireSky -ov -format UDZO FireSky.dmg
+```
+
+UI: observer form (with city presets), date/phenomenon/model pickers,
+progress log, peak-level card, five-minute quality curve and ledger table.
+The CI `desktop` job bundles macOS/Windows artifacts automatically
+(unsigned: right-click → Open on first macOS launch; accept the
+SmartScreen prompt on Windows).
 
 ## Repository layout
 

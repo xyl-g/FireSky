@@ -219,6 +219,26 @@ cd frontend && npm run check && npm run build # 0 errors
 - 改动 `native/src/*.rs` 后先 `./scripts/build_native_variants.sh` 再跑 pytest
   （否则 pytest 用的是旧 dylib，会误判）。
 
+## 桌面应用（本地单机）
+
+不想部署服务的话，可以直接用 PySide6 桌面应用（与 Web 服务共用同一条
+预测核心路径，数值完全一致）：
+
+```bash
+# 开发运行
+.venv/bin/python desktop/app.py
+
+# 打包（macOS 出 .app 目录 / Windows 出 exe 目录）
+pip install pyinstaller
+pyinstaller desktop/FireSky.spec --noconfirm
+# macOS：cd dist && hdiutil create -volname FireSky -srcfolder FireSky -ov -format UDZO FireSky.dmg
+```
+
+界面：观测点表单（含常用城市）、日期/现象/模式选择、进度日志、峰值
+档位卡片、逐五分钟质量曲线与台账表。CI 的 `desktop` job 在
+macOS/Windows 上自动打包并上传产物（未签名：macOS 首开需右键→打开，
+Windows SmartScreen 提示后选「仍要运行」）。
+
 ## 目录结构
 
 ```
