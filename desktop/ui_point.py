@@ -1,10 +1,15 @@
-"""FireSky 桌面应用 · 单点预测页（v4 暮光玻璃）。
+"""FireSky 桌面应用 · 单点预测页（v5）。
 
-布局：左栏「观测点（内嵌选点地图 + 收藏）」+「观测参数」，右栏
-「峰值卡 + 四指标 + 质量曲线 + 逐五分钟台账」。
+布局：
+- 左栏「观测点」：地名搜索（回车落点）+ 内嵌选点地图（单击即选点）
+  + 收藏列表 + 观测点摘要（海拔/时区 chip）+「⚙ 打开设置」
+- 左栏「观测参数」：日期 / 现象 / 模式 / 坐标微调 / 运行日志
+- 右栏「结果」：峰值卡 + 关键指标网格 + 质量曲线 + 云属与色彩诊断 +
+  边界与时间窗 + 逐五分钟台账（12 列）
 
-地图选点已并入本页：内嵌小地图点击即写入 SpotStore，大地图浮层由
-MainWindow 统一唤起；实况观测订阅同一状态。预测仍走
+地图选点内嵌在本页固定区域（不再是弹窗展开）；地名搜索走引擎
+search_location_fast（Nominatim，带缓存），海拔走引擎 fetch_point_metadata
+（Open-Meteo / SRTM，与评分同口径）。预测仍走
 web_server.run_forecast_payload 权威路径，业务逻辑未改动。
 """
 
@@ -14,6 +19,7 @@ import math
 
 from datetime import date as date_type
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -27,12 +33,14 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
+    QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -42,6 +50,15 @@ from PySide6.QtWidgets import (
 )
 
 from desktop import theme, widgets
+from desktop.theme import (
+    BOUNDARY_STABILITY_LABELS,
+    COLOR_DIAGNOSIS_LABELS,
+    GENUS_LABELS,
+    PRESSURE_FAMILY_LABELS,
+    REGIME_LABELS,
+    TREND_LABELS,
+    label_for,
+)
 from desktop.widgets import (
     GlassCard,
     Location,
@@ -55,14 +72,21 @@ from desktop.widgets import (
     load_locations,
     save_locations,
 )
-from desktop.workers import ElevationQueryWorker, ForecastWorker, WorkerBase
+from desktop.workers import (
+    ElevationQueryWorker,
+    ForecastWorker,
+    LocationSearchWorker,
+    WorkerBase,
+)
 
-# 地图控件首选 QWebEngine + 天地图/Esri 真底图；若 QtWebEngine 未安装，
+# 地图控件首选 QWebEngine + OSM/天地图/Esri 真底图；若 QtWebEngine 未安装，
 # 降级到纯自绘示意底图，保证预测主流程不被地图拖死。
 try:  # noqa: SIM105 - 需要区分"未安装"与"正常"
     from desktop.web_map import FireSkyMap
 except Exception:  # noqa: BLE001
     FireSkyMap = None  # type: ignore[assignment]
+
+MAP_PICK_ZOOM = 13  # 内嵌选点地图落点/定位后的缩放级别（街区块可辨识）
 
 
 class PointForecastTab(QWidget):
@@ -76,12 +100,13 @@ class PointForecastTab(QWidget):
         self._locations: list[Location] = load_locations()
         self._worker: ForecastWorker | None = None
         self._elev_worker: ElevationQueryWorker | None = None
+        self._search_worker: LocationSearchWorker | None = None
         self._syncing = False
         self._build_ui()
         self._reload_location_list()
         self._apply_spot(self._store.location())
         self._store.changed.connect(self._on_spot_changed)
-        self._log("提示：内嵌地图单击落点，或使用「展开地图选点」精确定位。")
+        self._log("提示：地图上单击落点，或在上方搜索地名（如「西湖」）直接定位。")
 
     # ── UI ────────────────────────────────────────────────────────────────
     def _build_ui(self) -> None:
@@ -96,18 +121,28 @@ class PointForecastTab(QWidget):
         rail_l.setSpacing(14)
         rail_l.addWidget(self._build_spot_card())
         rail_l.addWidget(self._build_params_card())
+        rail_l.addWidget(self._build_source_summary())
         rail_l.addStretch(1)
         root.addWidget(rail)
 
-        results = QWidget()
-        results_l = QVBoxLayout(results)
+        results = QScrollArea()
+        results.setWidgetResizable(True)
+        results.setFrameShape(QFrame.Shape.NoFrame)
+        results.setStyleSheet("QScrollArea { background: transparent; }")
+        results.viewport().setAutoFillBackground(False)
+        results.viewport().setStyleSheet("background: transparent;")
+        results_content = QWidget()
+        results_l = QVBoxLayout(results_content)
         results_l.setContentsMargins(0, 0, 0, 0)
         results_l.setSpacing(14)
         results_l.addWidget(self._build_hero())
         results_l.addLayout(self._build_metrics())
         results_l.addWidget(self._build_chart_card())
+        results_l.addWidget(self._build_genus_card())
+        results_l.addWidget(self._build_boundary_card())
         results_l.addWidget(self._build_table_card())
         results_l.addStretch(1)
+        results.setWidget(results_content)
         root.addWidget(results, 1)
 
     def _build_spot_card(self) -> GlassCard:
@@ -127,21 +162,45 @@ class PointForecastTab(QWidget):
         layout.addLayout(head)
         layout.addSpacing(9)
 
+        # 地名搜索框：回车 / 按钮 → 引擎 search_location_fast → 直接落点
+        search_row = QHBoxLayout()
+        search_row.setSpacing(6)
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("搜索地名，如「西湖」或「杭州 西湖」")
+        self.search_edit.returnPressed.connect(self._on_search)
+        self.search_edit.clearButtonEnabled = True
+        search_row.addWidget(self.search_edit, 1)
+        self.search_btn = QPushButton("搜索")
+        self.search_btn.setObjectName("pickBtn")
+        self.search_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.search_btn.clicked.connect(self._on_search)
+        search_row.addWidget(self.search_btn)
+        layout.addLayout(search_row)
+        self._search_status = widgets.role_label("", "hint")
+        self._search_status.setWordWrap(True)
+        self._search_status.setVisible(False)
+        layout.addWidget(self._search_status)
+        layout.addSpacing(8)
+
         self._spot_views = QStackedWidget()
         map_page = QWidget()
         map_l = QVBoxLayout(map_page)
         map_l.setContentsMargins(0, 0, 0, 0)
+        map_l.setSpacing(4)
         self._mini_map = FireSkyMap(mini=True) if FireSkyMap is not None else MiniMap()
-        self._mini_map.setFixedHeight(148)
+        self._mini_map.setFixedHeight(300)
         self._mini_map.picked.connect(self._on_mini_map_picked)
         map_l.addWidget(self._mini_map)
+        map_hint = widgets.role_label("单击地图落点 · 拖动标记微调 · 滚轮缩放（悬停地图时）", "hint")
+        map_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        map_l.addWidget(map_hint)
         self._spot_views.addWidget(map_page)
 
         fav_page = QWidget()
         fav_l = QVBoxLayout(fav_page)
         fav_l.setContentsMargins(0, 0, 0, 0)
         self.location_list = QListWidget()
-        self.location_list.setFixedHeight(148)
+        self.location_list.setFixedHeight(300)
         self.location_list.itemClicked.connect(self._on_location_clicked)
         fav_l.addWidget(self.location_list)
         self._spot_views.addWidget(fav_page)
@@ -179,13 +238,86 @@ class PointForecastTab(QWidget):
         foot.setSpacing(8)
         foot.addWidget(widgets.chip("●  与实况观测共用", "ok"))
         foot.addStretch(1)
-        expand = QPushButton("⤢  展开地图选点")
-        expand.setObjectName("ghostBtn")
-        expand.setCursor(Qt.CursorShape.PointingHandCursor)
-        expand.clicked.connect(self._open_map_picker)
-        foot.addWidget(expand)
+        if self._on_pick_map is not None:
+            expand = QPushButton("⤢  展开大地图")
+            expand.setObjectName("ghostBtn")
+            expand.clicked.connect(self._open_map_picker)
+            foot.addWidget(expand)
         layout.addLayout(foot)
         return card
+
+    def _build_source_summary(self) -> QWidget:
+        """左栏底部：数据源就绪态 pill 摘要 +「⚙ 打开设置」按钮。"""
+        card = GlassCard(radius=14)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(13, 11, 13, 11)
+        layout.setSpacing(7)
+
+        head = QHBoxLayout()
+        head.setSpacing(7)
+        dot = widgets.role_label("●", "hint")
+        dot.setStyleSheet(f"color: {theme.palette()['ok']}; font-size: 11px;")
+        head.addWidget(dot)
+        head.addWidget(widgets.role_label("数据源", "h2"))
+        head.addStretch(1)
+        layout.addLayout(head)
+
+        pills_row = QHBoxLayout()
+        pills_row.setSpacing(5)
+        self._source_pills: dict[str, widgets.QLabel] = {}
+        for key, text in (("gfs", "GFS"), ("ec", "EC"), ("cams", "CAMS")):
+            pill = widgets.chip(f"○ {text}")
+            pill.setToolTip(f"{text} 本地缓存状态；点击「⚙ 打开设置」下载或检查。")
+            pills_row.addWidget(pill)
+            self._source_pills[key] = pill
+        pills_row.addStretch(1)
+        layout.addLayout(pills_row)
+
+        settings_btn = QPushButton("⚙  打开设置")
+        settings_btn.setObjectName("ghostBtn")
+        settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        settings_btn.clicked.connect(self._emit_open_settings)
+        layout.addWidget(settings_btn)
+        return card
+
+    def _emit_open_settings(self) -> None:
+        window = self.window()
+        if window is not None and hasattr(window, "open_settings"):
+            window.open_settings()
+
+    def refresh_source_summary(self, status: dict | None = None) -> None:
+        """数据源 pill：按 .cache 目录有无近期数据目录显示就绪态。
+
+        status 为 None 时本地扫描缓存目录（毫秒级）；下载页完成后由主窗口
+        转发 dataStatusChanged 触发重扫。
+        """
+        import time as _time
+
+        cache = {"gfs": ".cache/gfs", "ec": ".cache/ecmwf", "cams": ".cache/cams"}
+        ready: dict[str, bool] = {}
+        for key, rel in cache.items():
+            path = Path(rel)
+            has_data = False
+            if path.is_dir():
+                # 只看第一层子目录（日期目录），避免全量递归大缓存
+                try:
+                    cutoff = _time.time() - 4 * 86400
+                    for child in path.iterdir():
+                        if child.is_dir() and child.stat().st_mtime >= cutoff:
+                            has_data = True
+                            break
+                except OSError:
+                    has_data = False
+            ready[key] = has_data
+        for key, pill in self._source_pills.items():
+            label = pill.text().split(" ", 1)[-1]
+            if ready.get(key):
+                pill.setText(f"●  {label}")
+                pill.setProperty("tone", "ok")
+            else:
+                pill.setText(f"○  {label}")
+                pill.setProperty("tone", "")
+            theme.repolish(pill)
 
     def _build_params_card(self) -> GlassCard:
         card = GlassCard()
@@ -327,6 +459,11 @@ class PointForecastTab(QWidget):
         self.progress.setVisible(False)
         layout.addWidget(self.progress)
 
+        self.progress_stage = widgets.role_label("", "hint")
+        self.progress_stage.setWordWrap(True)
+        self.progress_stage.setVisible(False)
+        layout.addWidget(self.progress_stage)
+
         self.log_view = QTextEdit()
         self.log_view.setProperty("role", "log")
         self.log_view.setReadOnly(True)
@@ -415,27 +552,34 @@ class PointForecastTab(QWidget):
                 )
                 self._sunline_inactive.append(bar)
             sunline.addWidget(bar, 1)
-        sunline.addWidget(widgets.role_label("25 min", "hint"))
+        self._sunline_label = widgets.role_label("", "hint")
+        sunline.addWidget(self._sunline_label)
         right.addLayout(sunline)
         right.addStretch(1)
         layout.addLayout(right, 1)
         return card
 
-    def _build_metrics(self) -> QHBoxLayout:
-        row = QHBoxLayout()
-        row.setSpacing(10)
+    def _build_metrics(self) -> QGridLayout:
+        """关键指标网格：4 列 × 2 行（全部来自 quality_components / 顶层）。"""
+        grid = QGridLayout()
+        grid.setSpacing(10)
         self._metric_cards: dict[str, MetricCard] = {}
-        for key, title, sub in (
-            ("burnable", "可烧云量", "中高云条件"),
-            ("duration", "有效持续", "完整观赏窗口"),
-            ("aod", "AOD 550", "大气通透度"),
-            ("genus", "主要云属", "云底高度"),
-        ):
+        metrics = (
+            ("burnable", "有效可烧云量", "前向可烧云占视野比例"),
+            ("material", "云质厚度", "云体材质负载（光学厚度代理）"),
+            ("brightness", "亮度色彩", "霞光亮度与色彩评分"),
+            ("aod", "AOD 550", "气溶胶光学厚度 · 通透度"),
+            ("incoming", "入射受光", "太阳入射照亮云体的因子"),
+            ("contrast", "返程对比度", "观测者视线大气对比因子"),
+            ("duration", "持续时长", "核心观赏窗口 · 分钟"),
+            ("confidence", "置信度", "引擎结果置信评分"),
+        )
+        for index, (key, title, sub) in enumerate(metrics):
             card = MetricCard(title)
             card.set_sub(sub)
-            row.addWidget(card, 1)
+            grid.addWidget(card, index // 4, index % 4)
             self._metric_cards[key] = card
-        return row
+        return grid
 
     def _build_chart_card(self) -> GlassCard:
         card = GlassCard()
@@ -456,6 +600,123 @@ class PointForecastTab(QWidget):
         layout.addWidget(self.curve)
         return card
 
+    def _build_genus_card(self) -> GlassCard:
+        """云属与色彩诊断卡。"""
+        card = GlassCard()
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(17, 15, 17, 15)
+        layout.setSpacing(8)
+        head = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(3)
+        titles.addWidget(widgets.section_title("云属与色彩诊断"))
+        titles.addWidget(widgets.role_label(
+            "压力族 + 相态 + 几何代理的云属推断 · 色彩诊断不改变质量分", "hint"
+        ))
+        head.addLayout(titles)
+        head.addStretch(1)
+        self._genus_status_chip = widgets.chip("预测后显示")
+        head.addWidget(self._genus_status_chip)
+        layout.addLayout(head)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(7)
+        self._genus_main = widgets.role_label("—", "metric")
+        self._genus_main.setStyleSheet(f"color: {theme.palette()['faint']};")
+        self._genus_affinity = widgets.role_label("", "hint")
+        self._genus_affinity.setWordWrap(True)
+        self._genus_confidence = widgets.role_label("", "ink3")
+        self._genus_candidates = widgets.role_label("", "ink2")
+        self._genus_candidates.setWordWrap(True)
+        self._color_value = widgets.role_label("—", "metric")
+        self._color_value.setStyleSheet(f"color: {theme.palette()['faint']};")
+        self._color_confidence = widgets.role_label("", "ink3")
+        self._regime_value = widgets.role_label("—", "metric")
+        self._regime_value.setStyleSheet(f"color: {theme.palette()['faint']};")
+        self._family_value = widgets.role_label("", "ink2")
+        self._phase_value = widgets.role_label("", "ink2")
+
+        grid.addWidget(widgets.role_label("主要云属（模型代理）", "ink3"), 0, 0)
+        grid.addWidget(self._genus_main, 1, 0)
+        grid.addWidget(self._genus_confidence, 2, 0)
+        grid.addWidget(self._genus_candidates, 3, 0)
+        grid.addWidget(self._genus_affinity, 4, 0)
+
+        grid.addWidget(widgets.role_label("预期霞光颜色", "ink3"), 0, 1)
+        grid.addWidget(self._color_value, 1, 1)
+        grid.addWidget(self._color_confidence, 2, 1)
+        grid.addWidget(self._phase_value, 3, 1)
+
+        grid.addWidget(widgets.role_label("主导云场结构", "ink3"), 0, 2)
+        grid.addWidget(self._regime_value, 1, 2)
+        grid.addWidget(self._family_value, 2, 2)
+        layout.addLayout(grid)
+        return card
+
+    def _build_boundary_card(self) -> GlassCard:
+        """边界与时间窗卡：boundary_uncertainty + timing_window + 演变趋势。"""
+        card = GlassCard()
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(17, 15, 17, 15)
+        layout.setSpacing(8)
+        head = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(3)
+        titles.addWidget(widgets.section_title("边界与时间窗"))
+        titles.addWidget(widgets.role_label(
+            "目标云边界位置敏感度 · 质量曲线插值时间窗 · 云演变趋势", "hint"
+        ))
+        head.addLayout(titles)
+        head.addStretch(1)
+        self._boundary_stability_chip = widgets.chip("预测后显示")
+        head.addWidget(self._boundary_stability_chip)
+        layout.addLayout(head)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(18)
+        grid.setVerticalSpacing(7)
+        self._boundary_rows: dict[str, list[QWidget]] = {}
+        boundary_items = (
+            ("range", "可能位置"),
+            ("width", "位置跨度"),
+            ("impact", "判断影响"),
+        )
+        for col, (key, title) in enumerate(boundary_items):
+            value = widgets.role_label("—", "metric")
+            value.setStyleSheet(f"color: {theme.palette()['faint']};")
+            note = widgets.role_label("", "ink2")
+            note.setWordWrap(True)
+            grid.addWidget(widgets.role_label(title, "ink3"), 0, col)
+            grid.addWidget(value, 1, col)
+            grid.addWidget(note, 2, col)
+            self._boundary_rows[key] = [value, note]
+
+        time_items = (
+            ("start", "窗口开始"),
+            ("peak", "窗口峰值"),
+            ("end", "窗口结束"),
+            ("duration", "窗口时长"),
+        )
+        self._timing_rows: dict[str, QLabel] = {}
+        for col, (key, title) in enumerate(time_items):
+            label = QLabel("—")
+            label.setProperty("role", "ink2")
+            grid.addWidget(widgets.role_label(title, "ink3"), 3, col)
+            grid.addWidget(label, 4, col)
+            self._timing_rows[key] = label
+        layout.addLayout(grid)
+
+        trend_row = QHBoxLayout()
+        trend_row.setSpacing(10)
+        self._trend_value = widgets.role_label("—", "ink2")
+        self._trend_note = widgets.role_label("", "hint")
+        trend_row.addWidget(widgets.role_label("云演变趋势", "ink3"))
+        trend_row.addWidget(self._trend_value)
+        trend_row.addWidget(self._trend_note, 1)
+        layout.addLayout(trend_row)
+        return card
+
     def _build_table_card(self) -> GlassCard:
         card = GlassCard()
         layout = QVBoxLayout(card)
@@ -465,21 +726,26 @@ class PointForecastTab(QWidget):
         head.setContentsMargins(17, 14, 17, 10)
         titles = QVBoxLayout()
         titles.setSpacing(3)
-        titles.addWidget(widgets.section_title("逐时详情"))
-        titles.addWidget(widgets.role_label("物理指标与霞光质量台账", "hint"))
+        titles.addWidget(widgets.section_title("逐五分钟台账"))
+        titles.addWidget(widgets.role_label(
+            "物理指标与霞光质量 · 双向滚动查看全部时刻", "hint"
+        ))
         head.addLayout(titles)
         head.addStretch(1)
-        detail = QPushButton("查看全部 →")
+        detail = QPushButton("查看运行日志 →")
         detail.setObjectName("ghostBtn")
         detail.clicked.connect(self._toggle_log)
         head.addWidget(detail)
         layout.addLayout(head)
 
-        self.table = QTableWidget(0, 7)
+        self.table = QTableWidget(0, 12)
         self.table.setHorizontalHeaderLabels(
-            ["时刻", "质量", "档位", "可烧", "云底 AGL", "AOD", "太阳仰角"]
+            ["时刻", "质量", "档位", "强度", "范围", "鲜艳度", "可见度",
+             "可烧云量", "太阳仰角", "太阳方位", "AOD", "云属"]
         )
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
         self.table.horizontalHeader().setSectionResizeMode(
             0, QHeaderView.ResizeMode.ResizeToContents
         )
@@ -487,7 +753,8 @@ class PointForecastTab(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
-        self.table.setMinimumHeight(150)
+        self.table.setMinimumHeight(220)
+        self.table.setMaximumHeight(320)
         layout.addWidget(self.table, 1)
         return card
 
@@ -584,10 +851,69 @@ class PointForecastTab(QWidget):
     def _sync_mini_map(self, loc: Location) -> None:
         """共享观测点 → 内嵌地图；兼容 MiniMap 降级实现。"""
         if FireSkyMap is not None and isinstance(self._mini_map, FireSkyMap):
-            self._mini_map.set_view(loc.lat, loc.lon, 8, loc.name)
+            self._mini_map.set_view(loc.lat, loc.lon, MAP_PICK_ZOOM, loc.name)
         else:
             self._mini_map.set_location(loc)  # type: ignore[attr-defined]
 
+    # ── 地名搜索 ──────────────────────────────────────────────────────────
+    def _on_search(self) -> None:
+        query = self.search_edit.text().strip()
+        if not query:
+            return
+        if self._search_worker is not None and self._search_worker.isRunning():
+            self._search_worker.cancel()
+            self._search_worker.wait(15000)
+        self.search_btn.setEnabled(False)
+        self._search_status.setVisible(True)
+        self._search_status.setText(f"正在搜索「{query}」…")
+        worker = LocationSearchWorker(query)
+        worker.setParent(self)
+        worker.finished_ok.connect(self._on_search_done)
+        worker.failed.connect(self._on_search_failed)
+        worker.start()
+        self._search_worker = worker
+
+    def _on_search_done(self, result: object) -> None:
+        self.search_btn.setEnabled(True)
+        if not isinstance(result, dict):
+            return
+        lat = float(result.get("lat") or 0.0)
+        lon = float(result.get("lon") or 0.0)
+        display = str(result.get("display_name") or result.get("name") or "观测点")
+        name = str(result.get("name") or display.split(",")[0].strip() or "观测点")
+        elevation = result.get("elevation_m")
+        timezone_name = result.get("timezone_name")
+        loc = Location(
+            name=name[:60],
+            lat=round(lat, 4),
+            lon=round(lon, 4),
+            elevation_m=(
+                float(elevation) if elevation is not None
+                else Location.UNQUERIED_ELEVATION_M
+            ),
+            timezone_name=str(timezone_name) if timezone_name
+            else widgets.timezone_for_point(lat, lon),
+            elevation_source="dem" if elevation is not None else "manual",
+        )
+        self._store.set_location(loc)
+        self._spot_tabs.set_index(0, emit=False)
+        self._spot_views.setCurrentIndex(0)
+        if loc.elevation_m <= Location.UNQUERIED_ELEVATION_M:
+            self._search_status.setText(f"已定位 {display} · 正在补齐 DEM 海拔…")
+            self._log(f"地名搜索命中：{display} → {loc.coord_text()} · 正在查询海拔…")
+            self._query_elevation(lat, lon)
+        else:
+            self._search_status.setText(
+                f"已定位 {display} · 海拔 {loc.elevation_m:.0f} m"
+            )
+            self._log(f"地名搜索命中：{display} → {loc.coord_text()} · "
+                      f"海拔 {loc.elevation_m:.0f} m（含元数据）")
+
+    def _on_search_failed(self, message: str) -> None:
+        self.search_btn.setEnabled(True)
+        self._search_status.setText(f"未找到该地名：{message[:120]}")
+
+    # ── 地图落点 + 海拔 ───────────────────────────────────────────────────
     def _on_mini_map_picked(self, lat: float, lon: float) -> None:
         loc = Location(
             name="自定义观测点", lat=lat, lon=lon,
@@ -601,7 +927,7 @@ class PointForecastTab(QWidget):
 
     def _query_elevation(self, lat: float, lon: float) -> None:
         if self._elev_worker is not None and self._elev_worker.isRunning():
-            # 旧 worker 的 urlopen 无法中断，先等它退出再替换，
+            # 旧 worker 的网络请求无法中断，先等它退出再替换，
             # 否则被丢弃的 QThread 在退出时析构运行中线程会崩进程。
             self._elev_worker.cancel()
             self._elev_worker.wait(30000)
@@ -633,6 +959,10 @@ class PointForecastTab(QWidget):
             return
         current.elevation_m = elevation
         current.elevation_source = "dem"
+        tz = str(result.get("timezone_name") or "").strip()
+        if tz and current.timezone_name != tz:
+            current.timezone_name = tz
+            self._log(f"时区按引擎权威查询更新为 {tz}")
         self._store.set_location(current)
         self._log(f"海拔已补齐 {current.elevation_m:.0f} m"
                   f"（{result.get('dataset') or 'DEM'}）")
@@ -747,7 +1077,8 @@ class PointForecastTab(QWidget):
         }
         self._start_worker(ForecastWorker(payload))
         self._log(f"创建预测任务：{loc.name} {payload['target_date']} "
-                  f"{payload['phenomenon']} {payload['model_source']}")
+                  f"{payload['phenomenon']} {payload['model_source']} · "
+                  f"数据未缓存时将自动下载 GFS/CAMS")
 
     def _start_worker(self, worker: ForecastWorker) -> None:
         self._worker = worker
@@ -760,6 +1091,8 @@ class PointForecastTab(QWidget):
         self.cancel_button.setVisible(True)
         self.progress.setVisible(True)
         self.progress.setValue(2)
+        self.progress_stage.setVisible(True)
+        self.progress_stage.setText("阶段一 · 准备数据（GFS/CAMS 缓存未命中时自动下载）")
         worker.start()
 
     def _cancel(self) -> None:
@@ -775,19 +1108,31 @@ class PointForecastTab(QWidget):
         self.cancel_button.setVisible(False)
         self.progress.setValue(0)
         self.progress.setVisible(False)
+        self.progress_stage.setVisible(False)
         self._log("预测已取消。")
 
     def _log(self, message: str) -> None:
         stamp = datetime.now().strftime("%H:%M:%S")
         self.log_view.append(f"[{stamp}] {message}")
 
+    _STAGE_LABELS = {
+        "download": "阶段一 · 准备数据",
+        "score": "阶段二 · 评分计算",
+        "prepare": "阶段一 · 准备数据",
+        "cache": "阶段二 · 评分计算",
+    }
+
     def _on_progress(self, event: dict) -> None:
         percent = int(event.get("percent") or 0)
         message = str(event.get("message") or "")
+        stage = str(event.get("stage") or "")
         self.progress.setValue(max(2, min(100, percent)))
         if message:
             self._log(message)
             self.progress.setToolTip(message)
+        stage_label = self._STAGE_LABELS.get(stage)
+        if stage_label and self.progress_stage.isVisible():
+            self.progress_stage.setText(f"{stage_label} · {percent}%")
 
     def _on_done(self, result: object) -> None:
         if not isinstance(result, dict):
@@ -799,11 +1144,13 @@ class PointForecastTab(QWidget):
         self.cancel_button.setVisible(False)
         self.progress.setValue(100)
         self.progress.setVisible(False)
+        self.progress_stage.setVisible(False)
         self.render_result(result)
         self._log(f"完成：周期 {result.get('cycle_time_utc', '')}")
 
+    # ── 结果渲染 ──────────────────────────────────────────────────────────
     def render_result(self, result: dict) -> None:
-        """把单点扁平 payload 渲染到峰值卡 + 指标 + 曲线 + 台账。"""
+        """把单点扁平 payload 渲染到峰值卡 + 指标网格 + 曲线 + 诊断卡 + 台账。"""
         level = str(result.get("quality_level") or "无明显火烧云")
         peak = float(result.get("peak_quality_index") or 0.0)
         color = theme.level_color(level)
@@ -817,15 +1164,16 @@ class PointForecastTab(QWidget):
         self._hero_badge.setProperty("tone", "accent")
         theme.repolish(self._hero_badge)
 
+        components = result.get("quality_components") or {}
         confidence = result.get("confidence_score")
         self._hero_caption.setText(
-            f"峰值质量指数 · 置信度 "
-            f"{float(confidence):.0%}" if confidence is not None
+            f"峰值质量指数 · 置信度 {float(confidence):.0%}"
+            if confidence is not None
             else "峰值质量指数 · 运行预测后显示"
         )
         best_time = widgets.local_time_label(result.get("best_time_local"))
         self._peak_time.setText(best_time)
-        # 推荐窗口与引擎 timing_window 联动（质量曲线插值窗口），缺省回退 ±25 分钟。
+
         timing_window = result.get("timing_window") or {}
         window_minutes = timing_window.get("duration_minutes")
         window_text = (
@@ -836,39 +1184,47 @@ class PointForecastTab(QWidget):
         )
         self._peak_window.setText(window_text)
 
-        genus = result.get("cloud_genus_proxy")
-        genus_label = genus.get("label") if isinstance(genus, dict) else genus
-        # 引擎把可烧云量 / AOD 放在 quality_components 嵌套层（与 Web 前端
-        # MetricsGrid 同口径），顶层无这两个键。
-        components = result.get("quality_components") or {}
+        # 关键指标网格（Web MetricsGrid 同口径）
+        def pct(value) -> str:
+            if value is None:
+                return "—"
+            try:
+                return f"{float(value) * 100:.0f}%"
+            except (TypeError, ValueError):
+                return str(value)
+
+        def frac(value) -> str:
+            if value is None:
+                return "—"
+            try:
+                return f"{float(value):.2f}"
+            except (TypeError, ValueError):
+                return str(value)
+
         burnable = components.get(
             "burnable_cloud_coverage_effective",
             result.get("burnable_cloud_coverage_effective"),
         )
-        burnable_text = (
-            f"{float(burnable) * 100:.0f}%" if burnable is not None
-            and float(burnable) <= 1.0 else fmt(burnable, "{:.0f}%")
+        self._metric_cards["burnable"].set_value(pct(burnable))
+        self._metric_cards["material"].set_value(frac(components.get("cloud_material")))
+        self._metric_cards["brightness"].set_value(frac(components.get("brightness_color")))
+        aod = components.get("quality_aod550", result.get("quality_aod550"))
+        self._metric_cards["aod"].set_value(fmt(aod, "{:.2f}"))
+        self._metric_cards["incoming"].set_value(
+            frac(components.get("incoming_aod_illumination_factor"))
         )
-        self._metric_cards["burnable"].set_value(burnable_text)
-        # 「有效持续」用引擎权威口径：duration_minutes（核心窗口时长），
-        # 区域点 payload 键名为 burnable_duration_minutes，不做自造口径。
+        self._metric_cards["contrast"].set_value(
+            frac(components.get("observer_aod_contrast_factor"))
+        )
         duration = result.get("duration_minutes")
         if duration is None:
             duration = components.get("duration_minutes")
-        self._metric_cards["duration"].set_value(
-            fmt(duration, "{:.0f}"),
+        self._metric_cards["duration"].set_value(fmt(duration, "{:.0f}"))
+        self._metric_cards["confidence"].set_value(
+            pct(confidence) if confidence is not None else "—"
         )
-        self._metric_cards["duration"].set_sub("核心观赏窗口 · 分钟")
-        aod = components.get("quality_aod550", result.get("quality_aod550"))
-        self._metric_cards["aod"].set_value(fmt(aod, "{:.2f}"))
-        genus_card = self._metric_cards["genus"]
-        genus_card.value_label.setText(str(genus_label or "—"))
-        genus_card.value_label.setStyleSheet("font-size: 16px;")
-        base = widgets.format_agl_meters(
-            result.get("dominant_burnable_cloud_base_agl_mean_m")
-        )
-        genus_card.set_sub(f"云底约 {base}")
 
+        # 曲线 + 峰值行
         steps = result.get("steps") or []
         curve_steps = [
             (
@@ -879,15 +1235,192 @@ class PointForecastTab(QWidget):
             for s in steps
         ]
         self.curve.set_steps(curve_steps)
-
-        # 峰值行与峰值卡同口径：valid 且 physically_burnable 里取最大，
-        # 与引擎 best_index 选择一致，避免「质量最高步不可烧」时错位。
         valid_pairs = [
             (i, v) for i, (_, v, ok) in enumerate(curve_steps)
             if ok and steps[i].get("physically_burnable")
         ]
         best_index = max(valid_pairs, key=lambda pair: pair[1])[0] if valid_pairs else None
+        if best_index is not None and timing_window.get("duration_minutes"):
+            self._sunline_label.setText(f"{float(timing_window['duration_minutes']):.0f} min")
 
+        self._render_genus_card(result, best_index)
+        self._render_boundary_card(result)
+        self._render_table(steps, best_index)
+
+    def _render_genus_card(self, result: dict, best_index: int | None) -> None:
+        """云属与色彩诊断卡。"""
+        genus = result.get("cloud_genus_proxy")
+        if isinstance(genus, dict) and genus:
+            genus_label = label_for(GENUS_LABELS, genus.get("label"), "—")
+            self._genus_main.setText(genus_label)
+            self._genus_main.setStyleSheet("")
+            status = str(genus.get("status") or "")
+            confidence = genus.get("confidence")
+            conf_text = (
+                f"置信度 {float(confidence):.0%}" if confidence is not None else ""
+            )
+            self._genus_confidence.setText(
+                " · ".join(filter(None, (conf_text, status)))
+                or "推断完成"
+            )
+            candidates = genus.get("candidate_scores") or {}
+            if candidates:
+                ranked = sorted(
+                    candidates.items(), key=lambda kv: -float(kv[1] or 0.0)
+                )[:3]
+                text = "候选：" + " · ".join(
+                    f"{label_for(GENUS_LABELS, key)} {float(value):.0%}"
+                    for key, value in ranked
+                )
+                self._genus_candidates.setText(text)
+            else:
+                self._genus_candidates.setText("")
+            compatible = genus.get("compatible_genera") or []
+            if compatible:
+                self._genus_candidates.setText(
+                    (self._genus_candidates.text() + " ｜ 兼容："
+                     + " / ".join(label_for(GENUS_LABELS, g) for g in compatible)).strip(" ｜")
+                )
+            self._genus_affinity.setText(
+                theme.GENUS_BURN_AFFINITY.get(str(genus.get("label") or ""), "")
+            )
+            self._genus_status_chip.setText(
+                "云属推断 · 代理" if status == "proxy" else "云属推断"
+            )
+            self._genus_status_chip.setProperty("tone", "accent")
+            theme.repolish(self._genus_status_chip)
+        else:
+            self._genus_main.setText("—")
+            self._genus_confidence.setText("")
+            self._genus_candidates.setText("")
+            self._genus_affinity.setText("")
+
+        color_diag = result.get("color_diagnosis")
+        steps_list = result.get("steps") or []
+        step_color = (
+            steps_list[best_index].get("color_diagnosis")
+            if best_index is not None and best_index < len(steps_list) else None
+        )
+        color_payload = (
+            color_diag if isinstance(color_diag, dict) and color_diag
+            else step_color if isinstance(step_color, dict) and step_color
+            else None
+        )
+        if isinstance(color_payload, dict) and color_payload:
+            self._color_value.setText(
+                label_for(COLOR_DIAGNOSIS_LABELS, color_payload.get("type"), "未知")
+            )
+            self._color_value.setStyleSheet("")
+            color_confidence = color_payload.get("confidence")
+            self._color_confidence.setText(
+                f"置信度 {float(color_confidence):.0%}"
+                if color_confidence is not None else ""
+            )
+            phase = color_payload.get("cloud_phase") or result.get(
+                "dominant_burnable_cloud_phase"
+            )
+            self._phase_value.setText(
+                "云相态：" + label_for(theme.CLOUD_PHASE_LABELS, phase, "—")
+            )
+        else:
+            self._color_value.setText("—")
+            self._color_confidence.setText("")
+            self._phase_value.setText("")
+
+        regime = result.get("selected_regime")
+        self._regime_value.setText(
+            label_for(REGIME_LABELS, regime, "无可烧目标云")
+            if result.get("dominant_burnable_pressure_family")
+            else "无可烧目标云"
+        )
+        self._regime_value.setStyleSheet("")
+        self._family_value.setText(
+            "压力族：" + label_for(
+                PRESSURE_FAMILY_LABELS, result.get("dominant_burnable_pressure_family"), "—"
+            ) if result.get("dominant_burnable_pressure_family") else ""
+        )
+
+    def _render_boundary_card(self, result: dict) -> None:
+        """边界与时间窗卡。"""
+        boundary = result.get("boundary_uncertainty")
+        if isinstance(boundary, dict) and boundary:
+            lower = boundary.get("lower_distance_km")
+            upper = boundary.get("upper_distance_km")
+            width = boundary.get("width_km")
+            rows = self._boundary_rows
+            if lower is not None and upper is not None:
+                rows["range"][0].setText(f"{float(lower):.0f}–{float(upper):.0f} km")
+                rows["range"][0].setStyleSheet("")
+            if width is not None:
+                rows["width"][0].setText(f"{float(width):.0f} km")
+                rows["width"][0].setStyleSheet("")
+            stable = bool(boundary.get("classification_stable"))
+            rows["impact"][0].setText(
+                "边界移动不改变结论" if stable else "边界移动可能改变结论"
+            )
+            rows["impact"][0].setStyleSheet("")
+            flip = boundary.get("nearest_flip_displacement_km")
+            extra = (
+                f"移动约 {float(flip):.0f} km 可改变结论" if flip is not None else ""
+            )
+            rows["impact"][1].setText(extra)
+            source = str(boundary.get("source") or "")
+            rows["range"][1].setText(
+                "多个候选目标给出的边界位置范围"
+                if source == "target-candidate-envelope"
+                else "模式从有云到晴空的过渡位置范围"
+            )
+            self._boundary_stability_chip.setText(
+                label_for(BOUNDARY_STABILITY_LABELS, stable)
+            )
+            self._boundary_stability_chip.setProperty(
+                "tone", "ok" if stable else "accent"
+            )
+            theme.repolish(self._boundary_stability_chip)
+        else:
+            for key in ("range", "width", "impact"):
+                self._boundary_rows[key][0].setText("—")
+                self._boundary_rows[key][1].setText("")
+            self._boundary_stability_chip.setText("无边界敏感度数据")
+            self._boundary_stability_chip.setProperty("tone", "")
+            theme.repolish(self._boundary_stability_chip)
+
+        timing = result.get("timing_window")
+        if isinstance(timing, dict) and timing:
+            self._timing_rows["start"].setText(
+                widgets.local_time_label(timing.get("start_time_local"), True)
+            )
+            self._timing_rows["peak"].setText(
+                widgets.local_time_label(timing.get("peak_time_local"), True)
+            )
+            self._timing_rows["end"].setText(
+                widgets.local_time_label(timing.get("end_time_local"), True)
+            )
+            duration = timing.get("duration_minutes")
+            self._timing_rows["duration"].setText(
+                f"{float(duration):.0f} 分钟" if duration is not None else "—"
+            )
+        else:
+            for label in self._timing_rows.values():
+                label.setText("—")
+
+        evolution = result.get("cloud_evolution")
+        if isinstance(evolution, dict) and evolution:
+            trend = str(evolution.get("trend") or "unknown")
+            self._trend_value.setText(label_for(TREND_LABELS, trend, "演变未知"))
+            change = evolution.get("target_score_change")
+            note = (
+                f"目标评分变化 {float(change) * 100:+.1f}%"
+                if change is not None else ""
+            )
+            self._trend_note.setText(note)
+        else:
+            self._trend_value.setText("—")
+            self._trend_note.setText("")
+
+    def _render_table(self, steps: list, best_index: int | None) -> None:
+        """12 列台账：时刻/质量/档位/强度/范围/鲜艳度/可见度/可烧云量/
+        太阳仰角/太阳方位/AOD/云属——字段全部来自 steps。"""
         self.table.setRowCount(0)
         for index, s in enumerate(steps):
             row = self.table.rowCount()
@@ -904,18 +1437,38 @@ class PointForecastTab(QWidget):
             quality_item.setForeground(row_color)
             level_item = QTableWidgetItem(step_level)
             level_item.setForeground(row_color)
-            burnable_item = QTableWidgetItem(
-                "✓" if bool(s.get("physically_burnable")) else "×"
+            burnable_cov = s.get("burnable_cloud_coverage")
+            burnable_text = (
+                f"{float(burnable_cov) * 100:.0f}%"
+                if burnable_cov is not None else "—"
             )
+            burnable_item = QTableWidgetItem(burnable_text)
             if s.get("physically_burnable"):
                 burnable_item.setForeground(QColor(theme.palette()["ok"]))
-            for col, cell in enumerate((
-                QTableWidgetItem(stamp), quality_item, level_item, burnable_item,
-                QTableWidgetItem(widgets.format_agl_meters(
-                    s.get("dominant_burnable_cloud_base_agl_mean_m"))),
-                QTableWidgetItem(fmt(s.get("quality_aod550"), "{:.2f}")),
+            else:
+                burnable_item.setForeground(QColor(theme.palette()["faint"]))
+            genus_step = s.get("cloud_genus_proxy")
+            genus_text = (
+                label_for(GENUS_LABELS, genus_step.get("label"), "—")
+                if isinstance(genus_step, dict) and genus_step.get("label")
+                else label_for(GENUS_LABELS, s.get("dominant_burnable_pressure_family"),
+                               "—") if s.get("dominant_burnable_pressure_family") else "—"
+            )
+            cells = (
+                QTableWidgetItem(stamp),
+                quality_item,
+                level_item,
+                QTableWidgetItem(fmt(s.get("intensity_score"), "{:.2f}")),
+                QTableWidgetItem(fmt(s.get("extent_score"), "{:.2f}")),
+                QTableWidgetItem(fmt(s.get("vividness_score"), "{:.2f}")),
+                QTableWidgetItem(fmt(s.get("visibility_score"), "{:.2f}")),
+                burnable_item,
                 QTableWidgetItem(fmt(s.get("solar_elevation_deg"), "{:.1f}°")),
-            )):
+                QTableWidgetItem(fmt(s.get("solar_azimuth_deg"), "{:.1f}°")),
+                QTableWidgetItem(fmt(s.get("quality_aod550"), "{:.2f}")),
+                QTableWidgetItem(genus_text),
+            )
+            for col, cell in enumerate(cells):
                 self.table.setItem(row, col, cell)
 
     def _on_failed(self, message: str) -> None:
@@ -925,6 +1478,7 @@ class PointForecastTab(QWidget):
         self.cancel_button.setVisible(False)
         self.progress.setValue(0)
         self.progress.setVisible(False)
+        self.progress_stage.setVisible(False)
         self._log(f"失败：{message}")
         QMessageBox.warning(self, "预测失败", message)
 
@@ -942,7 +1496,7 @@ class PointForecastTab(QWidget):
         self.curve.update()
 
     def shutdown(self) -> None:
-        for worker in (self._worker, self._elev_worker):
+        for worker in (self._worker, self._elev_worker, self._search_worker):
             if worker is not None and worker.isRunning():
                 worker.cancel()
                 # 不带超时等待收尾：QThread 带析构运行中线程会 abort 进程。

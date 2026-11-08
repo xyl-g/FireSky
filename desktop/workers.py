@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import threading
 import traceback
 from typing import Any, Callable
 
@@ -78,14 +79,28 @@ class ForecastWorker(WorkerBase):
     nowcast=True 时先把 payload 交给 web_server.nowcast_payload 归一化
     （forecast_mode=nowcast / model_source=satellite / satellite_source=auto），
     之后仍走同一条 run_forecast_payload 装配路径。
+
+    引擎的 GFS/CAMS 下载都发生在 run_forecast_payload 内部（统一评分先
+    预取再评分），阶段一（数据准备）与阶段二（评分）由此通过 progress
+    事件的 stage 字段区分；下载期没有事件时由心跳兜底，如实反映
+    「正在下载/评分中」，不再出现「卡在 2% 数分钟无反馈」。
     """
+
+    #: 评分阶段占用的进度区间（下载用 2..SCORE_SPAN_START）
+    _SCORE_SPAN_START = 62
 
     def __init__(self, payload: dict, *, nowcast: bool = False) -> None:
         super().__init__()
         self._payload = dict(payload)
         self._nowcast = bool(nowcast)
+        self._last_event_at = 0.0
+        self._last_percent = 2
+        self._last_message = "正在准备预测数据…"
+        self._heartbeat_stop = threading.Event()
 
     def execute(self) -> dict:
+        import time
+
         from firesky.web_server import (
             ForecastCancelled,
             WebServerConfig,
@@ -95,14 +110,85 @@ class ForecastWorker(WorkerBase):
 
         config = WebServerConfig()
         payload = nowcast_payload(self._payload) if self._nowcast else dict(self._payload)
+
+        # 阶段一提示：引擎会在内部预取 GFS/CAMS（缓存未命中时下载数分钟），
+        # 明确告知用户「正在下载」，而不是停在低百分比无反馈。
+        self.progress.emit({
+            "stage": "prepare",
+            "percent": 2,
+            "message": "正在准备预测数据（GFS/CAMS 缓存未命中时自动下载）…",
+        })
+
+        self._heartbeat_stop.clear()
+        self._last_event_at = time.monotonic()
+
+        def heartbeat() -> None:
+            # 下载/评分内部超过 8 秒没有任何进度事件时，发一条心跳日志：
+            # 如实写「仍在下载/评分」，绝不伪造百分比。
+            while not self._heartbeat_stop.wait(8.0):
+                if self._cancelled:
+                    return
+                elapsed = int(time.monotonic() - self._last_event_at)
+                downloading = self._last_percent < self._SCORE_SPAN_START
+                self.progress.emit({
+                    "stage": "download" if downloading else "score",
+                    "percent": self._last_percent,
+                    "message": (
+                        f"仍在下载 {'GFS/CAMS'} 数据…（已进行 {elapsed}s，"
+                        "首次运行下载耗时可达数分钟）"
+                        if downloading
+                        else f"仍在评分计算…（已进行 {elapsed}s）"
+                    ),
+                })
+
+        thread = threading.Thread(target=heartbeat, daemon=True)
+        thread.start()
         try:
-            return run_forecast_payload(
+            result = run_forecast_payload(
                 payload,
                 config,
-                progress_callback=self.emit_progress,
+                progress_callback=self._on_engine_progress,
             )
         except ForecastCancelled:
-            raise CancelledError("预测已取消")
+            raise CancelledError("预测已取消") from None
+        finally:
+            self._heartbeat_stop.set()
+        return result
+
+    def _on_engine_progress(self, event: dict) -> None:
+        """引擎进度透传：阶段化 + 缓存命中/下载状态明确日志 + 百分比映射。
+
+        引擎事件：cache(2)/命中(99) → prefetch_gfs(4)/decode_gfs(9)/
+        prefetch_cams(12) → tensor(20) → cloud_field(42/54) → frames(55) →
+        diagnostics(70) → report(91)/finalize(99)。前段按「数据准备」
+        2–60%，评分段 62–100% 映射，与两阶段语义一致。
+        """
+        import time
+
+        stage = str(event.get("stage") or "")
+        raw_percent = int(event.get("percent") or 0)
+        message = str(event.get("message") or "")
+        if raw_percent >= 99 and stage == "cache":
+            # 命中单点持久缓存：明确写日志（阶段二直接开始）
+            message = "缓存命中，跳过下载（单点预测持久缓存）· 直接评分"
+            percent = 62
+        elif stage == "cache":
+            # 检查缓存阶段仍在「准备数据」区间
+            percent = max(2, raw_percent)
+        elif raw_percent <= 20:
+            percent = min(60, max(4, int(raw_percent * 3)))
+        else:
+            percent = max(
+                self._SCORE_SPAN_START,
+                min(100, raw_percent),
+            )
+        self._last_percent = percent
+        self._last_event_at = time.monotonic()
+        self.progress.emit({
+            "stage": "download" if percent < self._SCORE_SPAN_START else "score",
+            "percent": percent,
+            "message": message,
+        })
 
 
 class RegionalForecastWorker(WorkerBase):
@@ -237,13 +323,12 @@ class DataPruneWorker(WorkerBase):
 
 
 class ElevationQueryWorker(WorkerBase):
-    """Copernicus DEM 海拔查询（OpenTopoData REST，免费无 Key）。
+    """观测点海拔+时区查询：走引擎 fetch_point_metadata 权威路径。
 
-    首选 copernicus_glo_90_dsm；该公共实例当前未收录该数据集时自动回退
-    srtm90m（同为 90m DSM），并在结果里标注实际数据集。
+    引擎侧先查 Open-Meteo elevation/timezone（毫秒级），失败自动回退本地
+    SRTM 瓦片（高精度 DSM）。返回 (timezone_name, elevation_m)，与引擎
+    评分用的海拔口径一致，替代旧的 opentopodata 直连。
     """
-
-    _DATASETS = ("copernicus_glo_90_dsm", "srtm90m")
 
     def __init__(self, lat: float, lon: float) -> None:
         super().__init__()
@@ -251,36 +336,53 @@ class ElevationQueryWorker(WorkerBase):
         self._lon = float(lon)
 
     def execute(self) -> dict:
-        import json
-        from urllib.parse import quote
-        from urllib.request import Request, urlopen
+        from firesky.location import fetch_point_metadata
 
-        last_error = ""
-        for dataset in self._DATASETS:
-            if self._cancelled:
-                raise CancelledError("海拔查询已取消")
-            url = (
-                "https://api.opentopodata.org/v1/"
-                f"{dataset}?locations={quote(f'{self._lat},{self._lon}')}"
+        if self._cancelled:
+            raise CancelledError("海拔查询已取消")
+        try:
+            timezone_name, elevation_m = fetch_point_metadata(
+                self._lat, self._lon, 8
             )
-            request = Request(url, headers={"User-Agent": "FireSky-Desktop/2.0"})
-            try:
-                with urlopen(request, timeout=15) as response:
-                    body = json.loads(response.read().decode("utf-8"))
-                if body.get("status") == "OK":
-                    results = body.get("results") or []
-                    elevation = results[0].get("elevation") if results else None
-                    if elevation is not None:
-                        return {
-                            "elevation_m": float(elevation),
-                            "dataset": dataset,
-                            "lat": self._lat,
-                            "lon": self._lon,
-                        }
-                last_error = str(body.get("error") or body.get("status"))
-            except Exception as exc:  # noqa: BLE001
-                last_error = str(exc)
-        raise RuntimeError(f"Copernicus DEM 海拔查询失败：{last_error}")
+        except Exception as exc:  # noqa: BLE001 - 界面层统一提示
+            raise RuntimeError(f"DEM 海拔查询失败：{exc}") from exc
+        return {
+            "elevation_m": float(elevation_m),
+            "timezone_name": str(timezone_name),
+            "lat": self._lat,
+            "lon": self._lon,
+            "dataset": "SRTM/Open-Meteo DEM（引擎权威口径）",
+        }
+
+
+class LocationSearchWorker(WorkerBase):
+    """地名搜索：firesky.location.search_location_fast（Nominatim，带缓存）。
+
+    返回 LocationCandidate（name / lat / lon / display_name，可能附带
+    timezone_name / elevation_m）。海拔元数据缺失时由 UI 侧再用
+    ElevationQueryWorker 补齐。
+    """
+
+    def __init__(self, query: str, timeout_seconds: int = 6) -> None:
+        super().__init__()
+        self._query = str(query)
+        self._timeout = int(timeout_seconds)
+
+    def execute(self) -> dict:
+        from firesky.location import search_location_fast
+
+        if self._cancelled:
+            raise CancelledError("地名搜索已取消")
+        candidate = search_location_fast(self._query, self._timeout)
+        return {
+            "name": candidate.name,
+            "lat": float(candidate.lat),
+            "lon": float(candidate.lon),
+            "display_name": candidate.display_name,
+            "source": candidate.source,
+            "timezone_name": candidate.timezone_name,
+            "elevation_m": candidate.elevation_m,
+        }
 
 
 def format_level(level: str | None) -> str:

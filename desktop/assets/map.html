@@ -219,7 +219,8 @@
 <div class="fs-panel fs-layers" id="layers">
   <h4>底图 <span id="layerHint">天地图 · 影像</span></h4>
   <div class="fs-seg" id="sourceSeg">
-    <button data-source="tianditu" class="on">天地图</button>
+    <button data-source="osm" class="on">OSM</button>
+    <button data-source="tianditu">天地图</button>
     <button data-source="esri">Esri</button>
   </div>
   <div class="fs-seg" id="basemapSeg">
@@ -228,7 +229,8 @@
     <button data-base="terrain">地形</button>
   </div>
   <p class="fs-hint"><b>单击地图</b>落点 · 拖动标记微调<br />仅用于选点，不叠加预报数据</p>
-  <p class="fs-warn" id="esriWarn" hidden>Esri 底图仅限中国境外使用，境内请使用天地图。</p>
+  <p class="fs-warn" id="esriWarn" hidden>Esri 底图仅限中国境外使用，境内请使用 OpenStreetMap 或天地图。</p>
+  <p class="fs-warn" id="osmNote" hidden>选点默认 OSM；需要卫星影像选「天地图」（设置页配 Key）。</p>
 </div>
 
 <div class="fs-panel fs-status" id="status">
@@ -290,18 +292,21 @@ var TDT_TYPES = {
   terrain: [['ter_w', 1], ['cta_w', 2]]
 };
 
+/* OpenStreetMap：免 Key 通用底图，全球覆盖，选点默认源。 */
+var OSM_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a> contributors';
+
 var ESRI_TYPES = {
   imagery: { path: 'World_Imagery',    maxNative: 19 },
   vector:  { path: 'World_Street_Map', maxNative: 19 },
   terrain: { path: 'World_Topo_Map',   maxNative: 19 }
 };
 
-var SOURCE_LABEL = { tianditu: '天地图', esri: 'Esri' };
+var SOURCE_LABEL = { osm: 'OpenStreetMap', tianditu: '天地图', esri: 'Esri' };
 var BASE_LABEL = { imagery: '影像', vector: '矢量', terrain: '地形' };
 
 var map = L.map('map', {
-  center: [30.2741, 120.1551], zoom: 9,
-  minZoom: 0, maxZoom: 18,
+  center: [30.2741, 120.1551], zoom: 11,
+  minZoom: 0, maxZoom: 19,
   zoomControl: true, scrollWheelZoom: true,
   attributionControl: true
 });
@@ -348,6 +353,15 @@ function tdtLayer(type, zIndex, maxNative) {
   );
 }
 
+function osmLayer() {
+  return L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19,
+    maxNativeZoom: 19,
+    zIndex: 1,
+    attribution: OSM_ATTR
+  });
+}
+
 function esriLayer(type) {
   var cfg = ESRI_TYPES[type] || ESRI_TYPES.imagery;
   return L.tileLayer(
@@ -380,6 +394,9 @@ function needsKey() {
 }
 
 function buildLayers() {
+  if (source === 'osm') {
+    return [osmLayer()];
+  }
   if (source === 'esri') {
     return [esriLayer(baseName)];
   }
@@ -401,6 +418,7 @@ function selectBase(name) {
   var center = map.getCenter();
   var overseasTdt = (source === 'tianditu') && !inChina(center.lat, center.lng);
   if (overseasTdt && baseName !== 'imagery') baseName = 'imagery';
+  if (source !== 'tianditu') overseasTdt = false;
 
   var blocked = needsKey();
   document.getElementById('keyGate').classList.toggle('show', blocked);
@@ -431,14 +449,20 @@ function syncControls() {
     // 境外天地图无矢量 / 地形数据，禁用而不是让用户点了看白屏
     b.disabled = overseasTdt && b.dataset.base !== 'imagery';
   });
+  var layersPanel = document.querySelector('.fs-layers');
+  if (layersPanel) layersPanel.hidden = (source !== 'tianditu' && source !== 'esri');
   document.getElementById('layerHint').textContent =
-    SOURCE_LABEL[source] + ' · ' + BASE_LABEL[baseName];
+    SOURCE_LABEL[source] + (source === 'osm' ? '' : ' · ' + BASE_LABEL[baseName]);
   document.getElementById('esriWarn').hidden = (source !== 'esri');
+  var osmNote = document.getElementById('osmNote');
+  if (osmNote) osmNote.hidden = (source !== 'osm');
 
-  if (source === 'tianditu' && !window.FIRESKY_TDT_KEY) {
-    setStatus('未配置天地图 Key · 可切换到 Esri 底图继续选点');
+  if (source === 'osm') {
+    setStatus('OpenStreetMap 底图（免 Key）· 单击地图放置观测点');
+  } else if (source === 'tianditu' && !window.FIRESKY_TDT_KEY) {
+    setStatus('未配置天地图 Key · 可切换到 OpenStreetMap / Esri 底图继续选点');
   } else if (overseasTdt) {
-    setStatus('境外天地图仅提供影像（约 9.5m）· 需要街道图请切到 Esri');
+    setStatus('境外天地图仅提供影像（约 9.5m）· 需要街道图请切到 OpenStreetMap');
   } else if (source === 'esri') {
     setStatus('Esri 底图（境外使用）· 单击地图放置观测点');
   } else {

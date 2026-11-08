@@ -1,14 +1,15 @@
 """FireSky 桌面应用 · 共用地图选点浮层（v5）。
 
-地图选点不再是独立标签页：本浮层由「单点预测」与「实况观测」共同唤起，
-确认后的点位写入 SpotStore，两个页面同步更新。
+单点预测页已内嵌固定选点地图；本浮层只作为「展开大地图」精确定位使用，
+由「单点预测」与「实况观测」共同唤起，确认后的点位写入 SpotStore。
 
 底图
 ----
-使用 QWebEngine 内嵌本地 Leaflet（``assets/map.html``），双源：
+使用 QWebEngine 内嵌本地 Leaflet（``assets/map.html``），三源：
 
-* **天地图**（默认）—— 境内合规底图，影像 / 矢量 / 地形三种类型，
-  需要使用者自有的 Key（环境变量或「数据与缓存 → 地图服务」里填写）。
+* **OpenStreetMap**（默认）—— 免 Key，全球覆盖，选点即可用。
+* **天地图卫星** —— 境内合规底图，影像/矢量/地形，需要使用者自有的 Key
+  （环境变量或「设置 → 地图供应商」里填写）。
 * **Esri** —— 免 Key，仅供中国境外区域；境外天地图无矢量/地形数据，
   地图内部会自动锁定影像底图。
 
@@ -219,7 +220,7 @@ class MapPickerDialog(QDialog):
         ))
         footer_l.addStretch(1)
         self._attribution = widgets.role_label(
-            "境内用天地图（CGCS2000）· 境外用 Esri（Powered by Esri）", "hint"
+            "默认 OpenStreetMap · 境内卫星影像用天地图（CGCS2000，需 Key）· 境外 Esri", "hint"
         )
         footer_l.addWidget(self._attribution)
         return footer
@@ -235,22 +236,20 @@ class MapPickerDialog(QDialog):
             self._key_btn.setVisible(False)
             return
         label = SOURCE_LABELS.get(source, source)
+        ready = has_key or source in {"osm", "esri"}
         self._source_chip.setText(
-            f"●  {label} 底图" if has_key or source == "esri"
-            else "●  天地图 · 未配置 Key"
+            f"●  {label} 底图" if ready else "●  天地图 · 未配置 Key"
         )
-        self._source_chip.setProperty(
-            "tone", "ok" if (has_key or source == "esri") else "accent"
-        )
+        self._source_chip.setProperty("tone", "ok" if ready else "accent")
         theme.repolish(self._source_chip)
-        self._key_btn.setVisible(not has_key and source != "esri")
+        self._key_btn.setVisible(not has_key and source == "tianditu")
         # tooltip 与按钮可见性同步设置：可见时引导申请，隐藏时说明来源。
         if has_key:
             source_desc = tianditu_key_source() or "本机配置"
             self._key_btn.setToolTip(f"Key 来自 {source_desc}")
         else:
             self._key_btn.setToolTip("到 console.tianditu.gov.cn 申请「浏览器端」Key"
-                                     "，在「数据与缓存 → 地图服务」里填写")
+                                     "，在「设置 → 地图供应商」里填写")
 
     def _on_js_error(self, message: str) -> None:
         """页面脚本未捕获异常：提示条可见地暴露，避免静默丢错。"""
@@ -261,8 +260,8 @@ class MapPickerDialog(QDialog):
         if count >= 3:
             self._hint.setText(
                 f"底图瓦片加载失败（已失败 {count} 次）："
-                "若已配置天地图 Key，请到「数据与缓存 → 地图服务」检查 Key 是否有效；"
-                "境内可切 Esri 前请确认点位在境外。"
+                "若已配置天地图 Key，请到「设置 → 地图供应商」检查 Key 是否有效；"
+                "也可切回 OpenStreetMap 底图继续选点。"
             )
 
     def _request_key_config(self) -> None:

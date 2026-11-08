@@ -32,6 +32,87 @@ LEVEL_COLORS: dict[str, str] = {
 
 LEVEL_ORDER: list[str] = list(LEVEL_COLORS.keys())
 
+
+# ── 结果页中文映射（与 frontend MetricsGrid.svelte genusLabels/colorLabels/
+#    trendLabels/regimeLabels 同表，桌面端不做自造口径）──
+
+GENUS_LABELS: dict[str, str] = {
+    "cirrus": "卷云", "cirrocumulus": "卷积云", "cirrostratus": "卷层云",
+    "altocumulus": "高积云", "altostratus": "高层云", "nimbostratus": "雨层云",
+    "stratocumulus": "层积云", "stratus": "层云", "cumulus": "积云",
+    "cumulonimbus": "积雨云",
+}
+
+# 烧霞适配度排序取自 SunsetBot 火烧云教程（观测经验）：
+# 高层云 > 卷层云 > 卷云 ≈ 高积云 > 层积云（条件性）> 层云（不成霞）。
+GENUS_BURN_AFFINITY: dict[str, str] = {
+    "altostratus": "最佳烧霞云属（橘黄到红）",
+    "cirrostratus": "次佳（面积大、持续久）",
+    "cirrus": "常见且持久（金黄到红）",
+    "altocumulus": "壮观（橘黄到橘红）",
+    "cirrocumulus": "少见，偶伴冰晕",
+    "nimbostratus": "降水云 · 遮光风险高",
+    "stratocumulus": "条件性（云底高 + 大气极洁才有短时橘红）",
+    "cumulus": "对流云晚霞形态",
+    "cumulonimbus": "对流晚霞 / 云砧晚霞",
+    "stratus": "不成烧霞（可作云海陪衬）",
+}
+
+COLOR_DIAGNOSIS_LABELS: dict[str, str] = {
+    "golden": "金黄",
+    "orange_red": "橙红",
+    "deep_red": "深红",
+    "muted_glow": "闷烧",
+}
+
+TREND_LABELS: dict[str, str] = {
+    "forming": "正在生成",
+    "strengthening": "正在增强",
+    "steady": "基本稳定",
+    "weakening": "正在减弱",
+    "dissipating": "正在消散",
+    "unknown": "演变未知",
+}
+
+REGIME_LABELS: dict[str, str] = {
+    "local_deck": "本地云幕",
+    "distant_target": "远方目标云",
+    "remote_boundary": "远方云边界",
+    "cloud_hole": "云洞透光",
+    "convective": "对流厚云",
+    "horizon_blocked": "日出方向云幕遮挡",
+    "solar_incoming_blocked_field": "太阳入射受阻云场",
+    "clear": "晴空 / 无有效目标",
+    "invalid": "无有效场景",
+    "unknown": "未分类",
+}
+
+PRESSURE_FAMILY_LABELS: dict[str, str] = {
+    "high": "高云压力族",
+    "middle": "中云压力族",
+    "low": "低云压力族",
+}
+
+CLOUD_PHASE_LABELS: dict[str, str] = {
+    "ice": "冰相成分",
+    "mixed": "冰水混合成分",
+    "water": "液态水成分",
+    "unknown": "相态未知",
+}
+
+BOUNDARY_STABILITY_LABELS: dict[bool, str] = {
+    True: "可烧判断稳定",
+    False: "可烧判断敏感",
+}
+
+
+def label_for(mapping: dict, key, fallback: str = "—") -> str:
+    """通用中文映射：键缺失 / 值为空时回退，None 一律显示 fallback。"""
+    if key is None:
+        return fallback
+    text = str(key)
+    return mapping.get(text) or (text or fallback)
+
 _LEVEL_ALIAS: dict[str, str] = {
     "微烧": "微微烧",
     "小中": "小烧到中等烧",

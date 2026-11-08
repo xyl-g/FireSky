@@ -1,11 +1,12 @@
-"""FireSky 桌面应用 · 数据与缓存页（v4 暮光玻璃）。
+"""FireSky 桌面应用 · 设置页（v5，从主 UI 摘出的独立标签）。
 
 - CAMS ADS API Key：保存到 ~/.firesky-desktop/config.json，同步 ~/.cdsapirc
+- 地图供应商：OpenStreetMap（免 Key）/ 天地图卫星（需自有 Key）+
+  天地图 Key 输入，保存后所有已存在地图实例立即切换
 - GFS / EC / Himawari：检查最新周期、下载、卫星预热
 - 缓存占用显示与清理
 
-卫星预热取 SpotStore 当前观测点（与单点预测、实况观测共享），
-对应设计稿中「卫星足迹随观测点变化」。
+卫星预热取 SpotStore 当前观测点（与单点预测、实况观测共享）。
 """
 
 from __future__ import annotations
@@ -13,8 +14,9 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QComboBox,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -25,6 +27,7 @@ from PySide6.QtWidgets import (
     QTextEdit,
     QVBoxLayout,
     QWidget,
+    QDialog,
 )
 
 from desktop import theme, widgets
@@ -40,10 +43,12 @@ CDSAPIRC = Path.home() / ".cdsapirc"
 
 
 class DataSourceTab(QWidget):
-    """数据源设置与缓存维护。"""
+    """数据源设置与缓存维护（设置标签）。"""
 
-    # 地图 Key / 底图源变化：由主窗口广播给所有已存在的地图实例
+    # 地图 Key / 供应商变化：由主窗口广播给所有已存在的地图实例
     mapSettingsChanged = Signal()
+    # 任一数据源的缓存状态变化（下载完成等）：主窗口左栏状态摘要刷新
+    dataStatusChanged = Signal()
 
     def __init__(self, spot_store: SpotStore, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -200,10 +205,10 @@ class DataSourceTab(QWidget):
         return card
 
     def _map_card(self) -> GlassCard:
-        """地图底图服务：天地图 Key + 默认底图源。
+        """地图供应商设置：OSM（免 Key）/ 天地图卫星（需 Key）/ Esri。
 
-        天地图 Key 只写入本机配置，绝不进仓库；保存后立即推给所有地图
-        实例重新注入（无需重启）。Esri 免 Key，仅限中国境外使用。
+        天地图 Key 只写入本机配置，绝不进仓库；供应商或 Key 变化后立即
+        广播 mapSettingsChanged，所有已存在地图实例重新注入（无需重启）。
         """
         card = GlassCard()
         layout = QVBoxLayout(card)
@@ -222,47 +227,52 @@ class DataSourceTab(QWidget):
         head.addWidget(icon)
         titles = QVBoxLayout()
         titles.setSpacing(3)
-        titles.addWidget(widgets.section_title("地图服务 · 底图选点"))
+        titles.addWidget(widgets.section_title("地图供应商 · 选点底图"))
         titles.addWidget(widgets.role_label(
-            "天地图：境内合规底图（需自有 Key）· Esri：境外免 Key", "hint"
+            "OpenStreetMap 免 Key 全球可用 · 天地图卫星境内合规（需自有 Key）", "hint"
         ))
         head.addLayout(titles, 1)
         head.addWidget(widgets.chip("仅用于选点", "ok"))
         layout.addLayout(head)
 
-        row = QHBoxLayout()
-        row.setSpacing(8)
+        provider_row = QHBoxLayout()
+        provider_row.setSpacing(10)
+        provider_row.addWidget(widgets.role_label("供应商", "ink3"))
+        self.provider_combo = QComboBox()
+        self.provider_combo.addItem("OpenStreetMap（免 Key）", "osm")
+        self.provider_combo.addItem("天地图卫星（需 Key）", "tianditu")
+        self.provider_combo.addItem("Esri（境外，免 Key）", "esri")
+        self.provider_combo.setMinimumWidth(220)
+        self.provider_combo.currentIndexChanged.connect(self._on_provider_changed)
+        provider_row.addWidget(self.provider_combo)
+        provider_row.addStretch(1)
+        layout.addLayout(provider_row)
+
+        self.key_row = QWidget()
+        key_l = QHBoxLayout(self.key_row)
+        key_l.setContentsMargins(0, 0, 0, 0)
+        key_l.setSpacing(8)
         self.map_key_edit = QLineEdit()
         self.map_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         self.map_key_edit.setPlaceholderText("天地图 Key（console.tianditu.gov.cn 申请「浏览器端」应用）")
         self.map_key_edit.returnPressed.connect(self._save_map_key)
-        row.addWidget(self.map_key_edit, 1)
+        key_l.addWidget(self.map_key_edit, 1)
 
         show_btn = QPushButton("显示")
         show_btn.setObjectName("ghostBtn")
         show_btn.setCheckable(True)
         show_btn.toggled.connect(self._toggle_map_key_visibility)
-        row.addWidget(show_btn)
+        key_l.addWidget(show_btn)
 
         save_btn = QPushButton("保存并刷新地图")
         save_btn.setObjectName("ghostBtn")
         save_btn.clicked.connect(self._save_map_key)
-        row.addWidget(save_btn)
-        layout.addLayout(row)
+        key_l.addWidget(save_btn)
+        layout.addWidget(self.key_row)
 
         self.map_key_status = widgets.role_label("", "hint")
+        self.map_key_status.setWordWrap(True)
         layout.addWidget(self.map_key_status)
-
-        src_row = QHBoxLayout()
-        src_row.setSpacing(10)
-        src_row.addWidget(widgets.role_label("默认底图源", "hint"))
-        self.map_source_seg = widgets.SegmentedControl(["天地图", "Esri"])
-        self.map_source_seg.setFixedWidth(176)
-        self.map_source_seg.valueChanged.connect(self._on_map_source)
-        src_row.addWidget(self.map_source_seg)
-        self.map_source_hint = widgets.role_label("", "hint")
-        src_row.addWidget(self.map_source_hint, 1)
-        layout.addLayout(src_row)
         return card
 
     def _toggle_map_key_visibility(self, checked: bool) -> None:
@@ -278,34 +288,34 @@ class DataSourceTab(QWidget):
             self.map_key_edit.setText(key)
         source = web_map.tianditu_key_source()
         if source:
-            self.map_key_status.setText(f"✓ 已配置 · 来自{source}")
+            self.map_key_status.setText(f"✓ 天地图 Key 已配置 · 来自{source}")
         else:
             self.map_key_status.setText(
-                "未配置。地图会显示申请引导；也可先用 Esri 底图（仅限境外）。"
+                "未配置天地图 Key。默认 OpenStreetMap 底图可直接选点；"
+                "需要境内卫星影像时填写 Key。"
             )
-        self.map_source_seg.blockSignals(True)
-        self.map_source_seg.set_index(1 if web_map.map_source() == "esri" else 0,
-                                     emit=False)
-        self.map_source_seg.blockSignals(False)
-        self._refresh_map_source_hint()
+        source_name = web_map.map_source()
+        index = self.provider_combo.findData(source_name)
+        self.provider_combo.blockSignals(True)
+        self.provider_combo.setCurrentIndex(max(0, index))
+        self.provider_combo.blockSignals(False)
+        self._refresh_key_row_visibility()
 
-    def _refresh_map_source_hint(self) -> None:
-        if self.map_source_seg.index() == 1:
-            self.map_source_hint.setText(
-                "境外使用；Esri 境内无审图号，境内请切回天地图。"
-            )
-        else:
-            self.map_source_hint.setText(
-                "境内默认；影像 / 矢量 / 地形可选，境外仅影像可用。"
-            )
+    def _refresh_key_row_visibility(self) -> None:
+        self.key_row.setVisible(
+            self.provider_combo.currentData() == "tianditu"
+        )
 
-    def _on_map_source(self, index: int, _label: str) -> None:
+    def _on_provider_changed(self, _index: int) -> None:
         from desktop import web_map
 
-        web_map.set_map_source("esri" if index == 1 else "tianditu")
-        self._refresh_map_source_hint()
-        self._log("地图底图源已切换，所有地图实例重新加载。")
-        self.mapSettingsChanged.emit()
+        name = str(self.provider_combo.currentData() or "osm")
+        if name != web_map.map_source():
+            web_map.set_map_source(name)
+            self._log(f"地图供应商已切换为 {web_map.SOURCE_LABELS.get(name, name)}，"
+                      "所有地图实例重新加载。")
+            self.mapSettingsChanged.emit()
+        self._refresh_key_row_visibility()
 
     def _save_map_key(self) -> None:
         from desktop import web_map
@@ -326,7 +336,7 @@ class DataSourceTab(QWidget):
             self.map_key_status.setText(f"✓ 已保存并生效 · 来自{source}")
         else:
             self.map_key_status.setText(
-                "已清除本机 Key。地图会回到「未配置」引导，可先用 Esri 底图。"
+                "已清除本机 Key。地图回到 OpenStreetMap 等免 Key 底图继续可用。"
             )
         self._log("天地图 Key 已更新，地图实例重新注入。")
         self.mapSettingsChanged.emit()
@@ -520,6 +530,7 @@ class DataSourceTab(QWidget):
                     self._log(f"下载完成（含错误）：{errors[0]}")
                 else:
                     self._log(f"下载完成：{result.get('completed', 0)}/{result.get('total', 0)} 文件")
+            self.dataStatusChanged.emit()
             self._refresh_usage()
 
         def fail(message: str) -> None:
@@ -659,3 +670,24 @@ class DataSourceTab(QWidget):
                 # 下载/清理线程的 urlopen 无法中断，等它退出再析构窗口：
                 # 运行中的 QThread 被 GC 会让 Qt abort 进程。
                 worker.wait(300000)
+
+
+class SettingsDialog(QDialog):
+    """独立设置弹窗：宿主 DataSourceTab，配置改动实时生效。"""
+
+    def __init__(self, datasource_tab: DataSourceTab, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("FireSky · 设置")
+        self.setModal(False)  # 非模态：可边看主界面边改配置
+        self.resize(980, 760)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        # DataSourceTab 是完整可滚动页面，直接整体宿主；关闭不销毁保留状态
+        layout.addWidget(datasource_tab)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
+
+    def open(self) -> None:
+        """显示并置顶（重复调用只唤起已有窗口）。"""
+        self.show()
+        self.raise_()
+        self.activateWindow()

@@ -6,13 +6,17 @@
 **不叠加云场热力、采样格点或任何预报结果**。结果展示由 Qt 原生页面承担，
 因此代码里不存在 field / cloud / cells 之类的数据叠加接口。
 
-底图双源
+底图三源
 --------
-``tianditu``（默认）
+``osm``（默认）
+    **OpenStreetMap**。免 Key、全球覆盖的标准瓦片，作为选点默认底图；
+    中国境内无审图号，需要境内合规底图（卫星影像）时切换天地图。
+
+``tianditu``
     **天地图**（国家基础地理信息中心 / NASG）。境内公开地图服务的合规底图，
-    需要使用者自行申请 Key。境外区域仅有影像且分辨率有限（欧洲约 z14、
-    北美约 z16），因此按地图中心是否落在中国范围内动态设置
-    ``maxNativeZoom``，用低级别瓦片放大而不是请求空白占位瓦片。
+    需要使用者自行申请 Key。影像源境内 maxNativeZoom 18；境外区域仅有影像
+    且分辨率有限（欧洲约 z14、北美约 z16），按地图中心是否落在中国范围内
+    动态设置 ``maxNativeZoom``，用低级别瓦片放大而不是请求空白占位瓦片。
 
 ``esri``
     Esri ArcGIS Online 基础底图（World Imagery / Street / Topo），免 Key。
@@ -20,7 +24,7 @@
     有审图号的合规底图，Esri 等境外源在境内不具备该资格。本项目以开源、
     非商用方式分发，Esri 侧按其条款需保留 ``Powered by Esri`` 署名。
 
-天地图为 CGCS2000、Esri 为 WGS84，两者与业务层经纬度基本一致，切换无偏移。
+天地图为 CGCS2000、OSM / Esri 为 WGS84，与业务层经纬度基本一致，切换无偏移。
 
 Key 规则
 --------
@@ -34,7 +38,8 @@ Key 规则
    直接从源码运行、且前端 Key 恰好存在时作为便利回退；打包后的应用里
    该文件不存在，回退自动失效。
 
-未配置时地图展示申请引导，并可一键切到 Esri 源继续选点（免 Key）。
+未配置天地图 Key 时地图展示申请引导；默认 OSM 源免 Key 可直接选点，
+境内需要卫星影像时在设置页填写 Key 切天地图。
 """
 
 from __future__ import annotations
@@ -66,12 +71,17 @@ CONFIG_BASE = "map_base"
 
 SOURCE_TIANDITU = "tianditu"
 SOURCE_ESRI = "esri"
-SOURCES = (SOURCE_TIANDITU, SOURCE_ESRI)
-DEFAULT_SOURCE = SOURCE_TIANDITU
+SOURCE_OSM = "osm"
+SOURCES = (SOURCE_OSM, SOURCE_TIANDITU, SOURCE_ESRI)
+DEFAULT_SOURCE = SOURCE_OSM
 
 BASEMAPS = ("imagery", "vector", "terrain")
 BASEMAP_LABELS = {"imagery": "影像", "vector": "矢量", "terrain": "地形"}
-SOURCE_LABELS = {SOURCE_TIANDITU: "天地图", SOURCE_ESRI: "Esri"}
+SOURCE_LABELS = {
+    SOURCE_OSM: "OpenStreetMap",
+    SOURCE_TIANDITU: "天地图",
+    SOURCE_ESRI: "Esri",
+}
 
 # 显式占位符，仅用于 UI 提示；绝不写入可用 Key
 KEY_PLACEHOLDER = "请到天地图开放平台申请并替换此占位符"
@@ -313,8 +323,11 @@ class FireSkyMap(QWebEngineView):
 
     @staticmethod
     def _clamped_zoom(zoom: int) -> int:
-        """Leaflet 支持的 zoom 范围钳制：越界值会让 map.setView 抛 RangeError。"""
-        return max(0, min(18, int(zoom)))
+        """Leaflet 支持的 zoom 范围钳制：越界值会让 map.setView 抛 RangeError。
+
+        地图页面 maxZoom=19（OSM/Esri 原生 z19，天地图 maxNativeZoom 18）。
+        """
+        return max(0, min(19, int(zoom)))
 
     def _on_source_changed(self, name: str) -> None:
         if name not in SOURCES:
@@ -406,7 +419,12 @@ class FireSkyMap(QWebEngineView):
         return True
 
     def refresh_key(self) -> None:
-        """按当前生效的 Key 重新注入（环境变量或配置变化后调用）。"""
+        """按当前生效的 Key / 供应商重新注入（设置页变化后调用）。
+
+        供应商切换也走这里：重新注入 fsInit 会带着新的 source 重建图层，
+        Key 与源在一次注入里同时生效。
+        """
+        self._source = map_source()
         self._inject()
 
 

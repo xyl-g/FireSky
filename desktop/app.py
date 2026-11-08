@@ -1,13 +1,16 @@
-"""FireSky 桌面应用（PySide6）· 暮光玻璃 v4。
+"""FireSky 桌面应用（PySide6）· 暮光玻璃 v5。
 
 与 Web 服务共用同一个预测核心：直接调用 firesky.web_server 的权威装配路径
 （run_forecast_payload / run_and_cache_national_forecast_payload /
 nowcast_payload / handle_data_*），与 HTTP API 数值一致，引擎层零改动。
 
-v4 信息架构：
-- 一级导航 4 项：单点预测 / 区域预测 / 实况观测 / 数据与缓存
-- 地图选点不再是独立页面，而是单点预测与实况观测共用的能力：
-  SpotStore（全局唯一观测点）+ 内嵌小地图 + 共用大地图选点浮层
+v5 信息架构：
+- 一级导航 4 项：单点预测 / 区域预测 / 实况观测 / 设置
+- 单点预测：内嵌选点地图（单击落点）+ 地名搜索（search_location_fast），
+  结果页对齐 Web 端信息量（关键指标网格 / 云属色彩诊断 / 边界与时间窗 /
+  12 列台账）；预测前数据未缓存时自动下载（引擎预取透传 + 心跳日志）
+- 设置页：ADS Key / 地图供应商（OSM 默认 · 天地图卫星需 Key）/ 数据下载
+  与缓存，独立标签；主界面只保留一行数据源就绪态 pill + ⚙ 打开设置
 - 亮色暖白 / 暗色深暮蓝双主题，半透明玻璃卡片 + 背景霞光晕染
 
 运行：python desktop/app.py
@@ -38,6 +41,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
+    QMessageBox,
     QHBoxLayout,
     QMainWindow,
     QPushButton,
@@ -48,7 +52,7 @@ from PySide6.QtWidgets import (
 )
 
 from desktop import theme, widgets
-from desktop.ui_datasource import DataSourceTab
+from desktop.ui_datasource import DataSourceTab, SettingsDialog
 from desktop.ui_map import MapPickerDialog
 from desktop.ui_nowcast import NowcastTab
 from desktop.ui_point import PointForecastTab
@@ -66,7 +70,6 @@ PAGES = [
     ("forecast", "单点预测", "在地图上选一个地点，找到霞光最盛的时刻。", "01", "sun"),
     ("regional", "区域预测", "比较不同区域的火烧云潜力，发现最佳观测目的地。", "02", "grid"),
     ("nowcast", "实况观测", "沿用当前观测点，融合卫星与雷达校准正在发生的天空。", "03", "target"),
-    ("sources", "数据与缓存", "管理数值模式、气溶胶与卫星数据。", "04", "stack"),
 ]
 
 
@@ -253,16 +256,22 @@ class MainWindow(QMainWindow):
         )
         self.datasource_tab = DataSourceTab(self.spot_store)
         self.datasource_tab.mapSettingsChanged.connect(self._on_map_settings_changed)
-        for page in (
-            self.point_tab, self.regional_tab, self.nowcast_tab, self.datasource_tab
-        ):
+        self.datasource_tab.dataStatusChanged.connect(
+            self.point_tab.refresh_source_summary
+        )
+        for page in (self.point_tab, self.regional_tab, self.nowcast_tab):
             self.stack.addWidget(self._wrap_page(page))
+        # 设置 = 独立弹窗（macOS 菜单栏「设置… ⌘,」），不占主导航
+        self._settings_dialog: SettingsDialog | None = None
+
+        self._build_menu()
 
         self._toast = Toast(shell)
         self._select_page(0)
         self.spot_store.changed.connect(self._on_spot_changed)
+        self.point_tab.refresh_source_summary()
 
-        # 快捷键 Ctrl+1..4
+        # 快捷键 Ctrl+1..3
         for index in range(len(PAGES)):
             action = QAction(self)
             action.setShortcut(QKeySequence(f"Ctrl+{index + 1}"))
@@ -397,6 +406,35 @@ class MainWindow(QMainWindow):
             area.verticalScrollBar().setValue(0)
 
     # ── 共享观测点 ──
+    def _build_menu(self) -> None:
+        """macOS 顶部菜单栏：应用菜单含「设置… ⌘,」（Qt 自动归并到应用菜单）。"""
+        menu = self.menuBar()
+        app_menu = menu.addMenu("FireSky")
+        settings_action = app_menu.addAction("设置…")
+        settings_action.setMenuRole(QAction.MenuRole.PreferencesRole)
+        settings_action.setShortcut(QKeySequence("Ctrl+,"))
+        settings_action.triggered.connect(self.open_settings)
+        about_action = app_menu.addAction("关于 FireSky")
+        about_action.setMenuRole(QAction.MenuRole.AboutRole)
+        about_action.triggered.connect(self._show_about)
+
+    def _show_about(self) -> None:
+        from firesky.version import FIRESKY_ALGORITHM_VERSION
+
+        QMessageBox.about(
+            self,
+            "关于 FireSky",
+            "<b>FireSky 桌面工作台</b><br>火烧云本地预测<br><br>"
+            f"算法版本 {FIRESKY_ALGORITHM_VERSION}<br>"
+            "与 Web 服务共用同一预测核心。",
+        )
+
+    def open_settings(self) -> None:
+        """打开独立设置弹窗（单点页「⚙ 打开设置」/ 菜单栏「设置…⌘,」）。"""
+        if self._settings_dialog is None:
+            self._settings_dialog = SettingsDialog(self.datasource_tab, self)
+        self._settings_dialog.open()
+
     def open_map_picker(self) -> None:
         if self._map_dialog is None:
             self._map_dialog = MapPickerDialog(self.spot_store, self)
@@ -405,13 +443,10 @@ class MainWindow(QMainWindow):
         self._map_dialog.open_for(self.spot_store.location())
 
     def _open_map_settings(self) -> None:
-        """浮层里点「配置天地图 Key」→ 收起浮层并跳到地图服务设置。"""
+        """浮层里点「配置天地图 Key」→ 收起浮层并跳到设置页地图供应商组。"""
         if self._map_dialog is not None:
             self._map_dialog.hide()
-        for index, page in enumerate(PAGES):
-            if page[0] == "sources":
-                self._select_page(index)
-                break
+        self.open_settings()
         self.datasource_tab.focus_map_key()
 
     def _on_map_settings_changed(self) -> None:
