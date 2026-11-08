@@ -223,6 +223,7 @@ class FireSkyMap(QWebEngineView):
     baseChanged = Signal(str)
     sourceChanged = Signal(str)
     tileError = Signal(int)  # 瓦片连续失败（Key 无效 / 网络断开提示）
+    jsError = Signal(str)  # 页面 JS 未捕获异常（window.onerror 兜底上报）
 
     def __init__(self, *, dark: bool | None = None, source: str | None = None,
                  mini: bool = False, parent=None) -> None:

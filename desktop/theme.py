@@ -176,7 +176,7 @@ def _build_qss(p: dict) -> str:
     line = lambda a: _rgba(p["line_rgb"], a)  # noqa: E731
 
     return f"""
-* {{ font-family: "PingFang SC", "Microsoft YaHei", "Segoe UI", sans-serif; }}
+* {{ font-family: "PingFang SC", "Microsoft YaHei", sans-serif; }}
 QMainWindow, QDialog {{ background: {p['canvas']}; }}
 QWidget {{ color: {p['ink']}; font-size: 12px; }}
 QWidget#appShell {{ background: transparent; }}
