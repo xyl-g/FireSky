@@ -48,6 +48,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -257,8 +258,32 @@ class SpotStore(QObject):
 
 # ── 文本 / 卡片基座 ────────────────────────────────────────────────────────
 
-def role_label(text: str = "", role: str = "ink2") -> QLabel:
-    label = QLabel(text)
+class ElidedLabel(QLabel):
+    """单行动态名称按可用宽度省略，完整内容仍可悬停读取。"""
+
+    def __init__(self, text: str = "") -> None:
+        super().__init__()
+        self._full_text = text
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802 - Qt naming
+        self._full_text = text
+        self.setToolTip(text)
+        self._fit_text()
+
+    def _fit_text(self) -> None:
+        super().setText(self.fontMetrics().elidedText(
+            self._full_text, Qt.TextElideMode.ElideRight, max(0, self.contentsRect().width())
+        ))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt naming
+        super().resizeEvent(event)
+        self._fit_text()
+
+
+def role_label(text: str = "", role: str = "ink2", *, elide: bool = False) -> QLabel:
+    label = ElidedLabel(text) if elide else QLabel(text)
     label.setProperty("role", role)
     return label
 
@@ -346,15 +371,15 @@ def level_color_for(value: float) -> str:
 
 
 class GlassCard(QFrame):
-    """半透明玻璃卡片：渐变表面 + 1px 边框 + 顶部高光（Qt 无 backdrop-filter）。"""
+    """Translucent surface with a restrained refractive edge."""
 
-    def __init__(self, *, strong: bool = False, radius: int = 18,
+    def __init__(self, *, strong: bool = False, radius: int = 8,
                  parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setProperty("glass", "true")
         self._strong = bool(strong)
-        self._radius = int(radius)
+        self._radius = min(8, int(radius))
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt 命名
         p = theme.palette()
@@ -364,14 +389,16 @@ class GlassCard(QFrame):
 
         base = QColor(p["glass_strong"] if self._strong else p["glass"])
         alpha = p["glass_strong_a"] if self._strong else p["glass_a"]
-        grad = QLinearGradient(0, 0, 0, max(1, self.height()))
+        base.setAlpha(alpha)
+        gradient = QLinearGradient(rect.topLeft(), rect.bottomRight())
         top = QColor(base)
-        top.setAlpha(alpha)
+        top.setAlpha(min(245, alpha + 28))
         bottom = QColor(base)
-        bottom.setAlpha(max(0, alpha - 24))
-        grad.setColorAt(0, top)
-        grad.setColorAt(1, bottom)
-        painter.setBrush(grad)
+        bottom.setAlpha(max(60, alpha - 32))
+        gradient.setColorAt(0, top)
+        gradient.setColorAt(0.55, base)
+        gradient.setColorAt(1, bottom)
+        painter.setBrush(gradient)
 
         border = QColor(p["line_rgb"])
         border.setAlpha(p["border_a"])
@@ -386,6 +413,53 @@ class GlassCard(QFrame):
             QPointF(rect.left() + inset, rect.top() + 1),
             QPointF(rect.right() - inset, rect.top() + 1),
         )
+
+
+class ModelResultsBar(QWidget):
+    """Result navigation only; both models are always part of the request."""
+
+    modelChanged = Signal(str)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+        self.tabs = SegmentedControl(["GFS", "EC"])
+        self.tabs.setFixedWidth(230)
+        self.tabs.valueChanged.connect(
+            lambda index, _: self.modelChanged.emit(("gfs", "ec")[index])
+        )
+        layout.addWidget(self.tabs)
+        self.status = role_label("", "ink3", elide=True)
+        layout.addWidget(self.status, 1)
+        self.hide()
+
+    def set_results(self, results, errors):
+        self.show()
+        for index, model in enumerate(("gfs", "ec")):
+            button = self.tabs._buttons[index]
+            result = results.get(model)
+            available = result is not None
+            button.setEnabled(available)
+            score = result.get("peak_quality_index") if available else None
+            if score is None and available and "points" in result:
+                values = [p.get("peak_quality_index") for p in result["points"]]
+                score = max((v for v in values if v is not None), default=None)
+            button.setText(
+                f"{model.upper()} · {float(score):.2f}" if score is not None
+                else f"{model.upper()} · {'已完成' if available else '未完成'}"
+            )
+            button.setToolTip(errors.get(model) or f"查看 {model.upper()} 结果")
+        status = (
+            "；".join(f"{model.upper()} 未完成：{message}" for model, message in errors.items())
+            if errors else "双模式完成"
+        )
+        self.status.setText(status)
+        self.status.setToolTip(status)
+        model = "gfs" if "gfs" in results else "ec"
+        self.tabs.set_index(0 if model == "gfs" else 1, emit=False)
+        return model
 
 
 def make_card(sunken: bool = False) -> GlassCard:
@@ -437,7 +511,7 @@ class SegmentedControl(QFrame):
 
 
 class RunButton(QPushButton):
-    """渐变主操作按钮（自绘，避免 QSS 渐变在嵌套层级里失效）。"""
+    """跟随主题的主操作按钮，包含悬停、按下与键盘焦点反馈。"""
 
     def __init__(self, text: str, parent: QWidget | None = None) -> None:
         super().__init__(text, parent)
@@ -452,15 +526,18 @@ class RunButton(QPushButton):
         rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
         enabled = self.isEnabled()
         if enabled:
-            grad = QLinearGradient(rect.left(), 0, rect.right(), 0)
-            grad.setColorAt(0, QColor("#f3ad4e"))
-            grad.setColorAt(0.52, QColor("#ed7745"))
-            grad.setColorAt(1, QColor("#df5242"))
-            painter.setBrush(grad)
+            color = p["accent_pressed"] if self.isDown() else (
+                p["accent_hover"] if self.underMouse() else p["accent"]
+            )
+            painter.setBrush(QColor(color))
         else:
             painter.setBrush(QColor(p["border_strong"]))
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(rect, 12, 12)
+        painter.drawRoundedRect(rect, 8, 8)
+        if self.hasFocus():
+            painter.setPen(QPen(QColor(p["ink"]), 2, Qt.PenStyle.DashLine))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(rect.adjusted(4, 4, -4, -4), 4, 4)
         if enabled:
             highlight = QColor("#ffffff")
             highlight.setAlpha(80)
@@ -473,7 +550,8 @@ class RunButton(QPushButton):
         font.setPointSize(11)
         font.setWeight(QFont.Weight.DemiBold)
         painter.setFont(font)
-        painter.setPen(QColor("#ffffff" if enabled else p["faint"]))
+        text_color = p["canvas"] if theme.is_dark() else "#ffffff"
+        painter.setPen(QColor(text_color if enabled else p["faint"]))
         painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, self.text())
 
 

@@ -37,7 +37,7 @@ minimal SvelteKit frontend**. The physics follows the methodology of the
 - **Backend service**: FastAPI async jobs + SSE + gzip + persistent caches
   (point / regional / map frames / satellite).
 - **Minimal frontend**: `/forecast`, `/now`, `/outlook`, `/admin`.
-- **Desktop app**: PySide6 local single-machine (`desktop/app.py`), sharing the prediction core with the web service.
+- **Native desktop**: macOS SwiftUI/AppKit and Windows WinUI 3, sharing the Python/Rust engine. See [build instructions and migration status](apps/README.md). The PySide6 entry point remains available.
 
 ## Architecture & physics
 
@@ -242,10 +242,12 @@ The PySide6 desktop app shares the same prediction core as the web service
 # run from source
 .venv/bin/python desktop/app.py
 
-# bundle
+# bundle (macOS → FireSky.app, Windows → exe folder)
 pip install pyinstaller
 pyinstaller desktop/FireSky.spec --noconfirm
-# macOS: cd dist && hdiutil create -volname FireSky -srcfolder FireSky -ov -format UDZO FireSky.dmg
+
+# macOS dmg
+hdiutil create -volname FireSky -srcfolder dist/FireSky.app -ov -format UDZO FireSky.dmg
 ```
 
 UI: observer form (with city presets), date/phenomenon/model pickers,
@@ -253,6 +255,34 @@ progress log, peak-level card, five-minute quality curve and ledger table.
 The CI `desktop` job bundles macOS/Windows artifacts automatically
 (unsigned: right-click → Open on first macOS launch; accept the
 SmartScreen prompt on Windows).
+
+### Map basemaps and the Tianditu key
+
+The picker map is local Leaflet (`desktop/assets/`, shipped with the bundle)
+inside QWebEngine. Two basemap sources, **used for point picking only — no
+forecast layers are drawn on the map**:
+
+| Source | Valid area | Basemaps | Key |
+|---|---|---|---|
+| Tianditu (default) | Mainland China | imagery / vector / terrain | required |
+| Esri | Outside China only | imagery / streets / topo | keyless |
+
+Get a Tianditu key at [console.tianditu.gov.cn](https://console.tianditu.gov.cn)
+(application type: browser). Three ways to inject it, highest priority first:
+
+1. Environment variable `FIRESKY_TIANDITU_KEY`
+2. In-app: **Data & cache → Map service** → writes `~/.firesky-desktop/config.json`
+3. Source checkouts fall back to `frontend/src/lib/utils/constants.ts` (not bundled)
+
+**Neither the repository nor release artifacts ship a working key.** Without
+one the map shows a setup card and offers a one-click switch to Esri. Public use
+inside China must stay on Tianditu (Chinese map regulations require a licensed
+basemap); Esri is for locations outside China.
+
+> Size note: QtWebEngine dominates the bundle — the macOS `.app` is roughly
+> 640 MB (both architectures in WebEngineCore). For lighter distribution thin
+> the binaries to arm64 and prune locales / devtools paks, at the cost of Intel
+> Mac support.
 
 ## Repository layout
 

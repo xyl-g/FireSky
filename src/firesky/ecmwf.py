@@ -440,6 +440,12 @@ def ecmwf_artifact_available(
     """
     if source not in OPEN_DATA_SOURCE_URLS:
         raise ValueError(f"不支持的 ECMWF Open Data 数据源：{source}")
+    from firesky import rust_ecmwf_data
+    if rust_ecmwf_data.enabled():
+        try:
+            return rust_ecmwf_data.probe(source, init_time_utc, forecast_hour, timeout_seconds)
+        except RuntimeError as exc:
+            raise EcmwfArtifactProbeError(str(exc)) from exc
     index_status = _head_status(
         ecmwf_index_url(source, init_time_utc, forecast_hour),
         timeout=timeout_seconds,

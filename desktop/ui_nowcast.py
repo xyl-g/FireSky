@@ -12,12 +12,12 @@ from __future__ import annotations
 from datetime import date as date_type
 from datetime import datetime
 
-from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDateEdit,
-    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -32,6 +32,8 @@ from PySide6.QtWidgets import (
 )
 
 from desktop import theme, widgets
+from desktop.data_panel import ForecastDataPanel
+from desktop.profile_canvas import SatelliteProfileCanvas
 from desktop.ui_point import theme_and_level
 from desktop.widgets import (
     GlassCard,
@@ -46,77 +48,6 @@ from desktop.widgets import (
 from desktop.workers import ForecastWorker
 
 
-class ProfileArt(QFrame):
-    """太阳方向大气剖面示意（自绘，用于云相/云层可视化）。"""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setFrameShape(QFrame.Shape.NoFrame)
-        self.setMinimumHeight(190)
-        self._cloud_phase = "—"
-
-    def set_phase(self, text: str) -> None:
-        self._cloud_phase = text or "—"
-        self.update()
-
-    def paintEvent(self, event) -> None:  # noqa: N802 - Qt 命名
-        p = theme.palette()
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        grad = QLinearGradient(0, rect.top(), 0, rect.bottom())
-        sky = QColor("#6985a9")
-        sky.setAlpha(34 if not theme.is_dark() else 26)
-        warm = QColor(p["accent"])
-        warm.setAlpha(40)
-        grad.setColorAt(0, sky)
-        grad.setColorAt(0.68, warm)
-        grad.setColorAt(1, QColor(p["glass"]))
-        painter.setBrush(grad)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.drawRoundedRect(rect, 13, 13)
-
-        # 云层
-        for cx, cy, w, h, alpha in (
-            (0.48, 0.38, 0.62, 0.14, 150),
-            (0.62, 0.63, 0.38, 0.11, 90),
-        ):
-            cloud = QLinearGradient(rect.left(), 0, rect.right(), 0)
-            c1 = QColor(p["gold"])
-            c1.setAlpha(28)
-            c2 = QColor(p["accent"])
-            c2.setAlpha(alpha)
-            cloud.setColorAt(0, c1)
-            cloud.setColorAt(0.5, c2)
-            cloud.setColorAt(1, c1)
-            painter.setBrush(cloud)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.drawEllipse(
-                QPointF(rect.left() + rect.width() * cx, rect.top() + rect.height() * cy),
-                rect.width() * w / 2, rect.height() * h / 2,
-            )
-
-        # 地平线
-        line = QColor(p["line_rgb"])
-        line.setAlpha(p["border_strong_a"])
-        painter.setPen(QPen(line, 1))
-        horizon = rect.bottom() - 28
-        painter.drawLine(QPointF(rect.left() + 12, horizon),
-                         QPointF(rect.right() - 12, horizon))
-
-        font = QFont()
-        font.setPointSize(8)
-        painter.setFont(font)
-        painter.setPen(QColor(p["ink3"]))
-        for index, text in enumerate(("8 km", "6 km", "4 km", "2 km")):
-            y = rect.top() + 16 + index * (rect.height() - 62) / 3
-            painter.drawText(QPointF(rect.right() - 34, y), text)
-        painter.drawText(
-            QPointF(rect.left() + 13, rect.bottom() - 10),
-            f"观测者 ─────────  太阳方向 100 km · 云相 {self._cloud_phase}",
-        )
-
-
 class NowcastTab(QWidget):
     """实况 nowcast 工作台（共享观测点）。"""
 
@@ -126,7 +57,11 @@ class NowcastTab(QWidget):
         self._store = spot_store
         self._on_pick_map = on_pick_map
         self._worker: ForecastWorker | None = None
+        self._last_context = None
+        self._request_context = None
+        self._image_available = False
         self._build_ui()
+        self.date_edit.dateChanged.connect(self._update_context_state)
         self._apply_spot(self._store.location())
         self._store.changed.connect(self._on_spot_changed)
 
@@ -137,6 +72,10 @@ class NowcastTab(QWidget):
         root.setSpacing(14)
         root.addWidget(self._build_spot_strip())
         root.addWidget(self._build_filter_bar())
+        self.data_panel = ForecastDataPanel(self, nowcast=True)
+        self.data_panel.bind(self._payload_for_data)
+        self.data_panel.busyChanged.connect(self._on_data_busy)
+        root.addWidget(self.data_panel)
         root.addWidget(self.log_view)
         root.addLayout(self._build_metrics())
 
@@ -160,17 +99,29 @@ class NowcastTab(QWidget):
         chart_l.addWidget(self.curve)
         middle.addWidget(chart, 1)
 
+        # 雷达与数据源信息卡（与台账并列，字段缺失显示 —）
+        middle.addWidget(self._build_radar_card(), 1)
+        root.addLayout(middle)
+
+        # 卫星剖面（真数据自绘）：位于四指标卡与台账之间
         profile = GlassCard()
         profile_l = QVBoxLayout(profile)
-        profile_l.setContentsMargins(17, 15, 17, 15)
+        profile_l.setContentsMargins(17, 15, 17, 12)
         profile_l.setSpacing(8)
-        profile_l.addWidget(widgets.section_title("太阳方向大气剖面"))
-        self._profile_sub = widgets.role_label("卫星云柱 + GFS 垂直先验", "hint")
-        profile_l.addWidget(self._profile_sub)
-        self._profile = ProfileArt()
-        profile_l.addWidget(self._profile, 1)
-        middle.addWidget(profile, 1)
-        root.addLayout(middle)
+        profile_head = QHBoxLayout()
+        profile_titles = QVBoxLayout()
+        profile_titles.setSpacing(3)
+        profile_titles.addWidget(widgets.section_title("太阳方向实况大气剖面"))
+        self._profile_sub = widgets.role_label("校准卫星云柱 + 同周期 GFS 垂直先验", "hint")
+        profile_titles.addWidget(self._profile_sub)
+        profile_head.addLayout(profile_titles)
+        profile_head.addStretch(1)
+        self._profile_chip = widgets.chip("等待实况刷新")
+        profile_head.addWidget(self._profile_chip)
+        profile_l.addLayout(profile_head)
+        self._profile = SatelliteProfileCanvas()
+        profile_l.addWidget(self._profile)
+        root.addWidget(profile)
 
         table_card = GlassCard()
         table_l = QVBoxLayout(table_card)
@@ -225,13 +176,18 @@ class NowcastTab(QWidget):
         text.addWidget(self._strip_sub)
         layout.addLayout(text, 1)
 
-        self._satellite_badge = widgets.chip("●  卫星帧待获取", "ok")
-        layout.addWidget(self._satellite_badge)
+        self._satellite_badge = widgets.chip("卫星帧待获取")
+        self._satellite_badge.setFixedHeight(26)
+        layout.addWidget(self._satellite_badge, alignment=Qt.AlignmentFlag.AlignVCenter)
         pick = QPushButton("⌖  地图选点")
         pick.setObjectName("pickBtn")
         pick.setCursor(Qt.CursorShape.PointingHandCursor)
         pick.clicked.connect(self._open_map_picker)
         layout.addWidget(pick)
+        self.current_location_button = QPushButton("获取当前位置")
+        self.current_location_button.setObjectName("ghostBtn")
+        self.current_location_button.clicked.connect(self._request_current_location)
+        layout.addWidget(self.current_location_button)
         return strip
 
     def _build_filter_bar(self) -> GlassCard:
@@ -265,7 +221,6 @@ class NowcastTab(QWidget):
         self.date_edit.setFixedWidth(130)
         layout.addWidget(self.date_edit)
         layout.addStretch(1)
-        layout.addWidget(widgets.role_label("点位变更后自动重算实况台账", "hint"))
         self.run_button = RunButton("刷新实况")
         self.run_button.setFixedHeight(32)
         self.run_button.clicked.connect(self._run)
@@ -308,17 +263,101 @@ class NowcastTab(QWidget):
             self.metric_subs[key] = card
         return row
 
+    def _build_radar_card(self) -> GlassCard:
+        """雷达与数据源信息卡：radar_* 字段只读展示（缺失显示 —）。"""
+        card = GlassCard()
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(17, 15, 17, 15)
+        layout.setSpacing(8)
+        head = QHBoxLayout()
+        titles = QVBoxLayout()
+        titles.setSpacing(3)
+        titles.addWidget(widgets.section_title("雷达与数据源"))
+        titles.addWidget(widgets.role_label("天气雷达约束与实况数据来源明细", "hint"))
+        head.addLayout(titles)
+        head.addStretch(1)
+        layout.addLayout(head)
+
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(5)
+        self._radar_rows: dict[str, QLabel] = {}
+        items = (
+            ("radar_source", "雷达数据源"),
+            ("radar_valid_time_utc", "雷达观测时间"),
+            ("radar_max_dbz", "最大回波 dBZ"),
+            ("radar_local_precip_ratio", "本地降水比例"),
+            ("radar_path_precip_ratio", "光路降水比例"),
+            ("radar_reliability_score", "雷达可靠度"),
+            ("radar_convective_ratio", "对流比例"),
+        )
+        for index, (key, title) in enumerate(items):
+            row, col = index % 4, index // 4
+            value = QLabel("—")
+            value.setProperty("role", "ink2")
+            grid.addWidget(widgets.role_label(title, "ink3"), row, col * 2)
+            grid.addWidget(value, row, col * 2 + 1)
+            self._radar_rows[key] = value
+        layout.addLayout(grid)
+        layout.addStretch(1)
+        return card
+
+    def _render_radar_card(self, nowcast: dict) -> None:
+        """雷达字段：缺失一律显示 —，不臆造口径。"""
+
+        def text_for(key: str) -> str:
+            value = nowcast.get(key)
+            if value is None or value == "":
+                return "—"
+            if key == "radar_max_dbz":
+                return f"{float(value):.1f} dBZ"
+            if key in ("radar_local_precip_ratio", "radar_path_precip_ratio",
+                       "radar_convective_ratio", "radar_reliability_score"):
+                try:
+                    return f"{float(value) * 100:.0f}%"
+                except (TypeError, ValueError):
+                    return str(value)
+            if key == "radar_valid_time_utc":
+                return f"{str(value)[:16]}Z"
+            return str(value)
+
+        for key, label in self._radar_rows.items():
+            label.setText(text_for(key))
+
     # ── 共享观测点 ──
     def _apply_spot(self, loc: Location) -> None:
         self._strip_title.setText(f"{loc.name} · 实况观测")
         self._strip_sub.setText(
             f"{loc.coord_text()} · 海拔 {widgets.format_elevation_m(loc.elevation_m)} · "
             f"{loc.utc_offset_label().replace('时区 ', '')} · "
-            "向日葵 9 号 · 雷达已校准"
+            "向日葵 9 号"
         )
-        self._chart_sub.setText(f"{loc.name} · 事件前后 30 分钟 · 5 分钟步长")
-        self._profile_sub.setText(f"卫星云柱 + GFS 垂直先验 · {loc.name} 上空")
+        if self._last_context is None:
+            self._chart_sub.setText(f"{loc.name} · 事件前后 30 分钟 · 5 分钟步长")
+            self._profile_sub.setText(f"卫星云柱 + GFS 垂直先验 · {loc.name} 上空")
         self._strip_map.set_location(loc)
+        self._update_context_state()
+
+    def _context(self) -> tuple:
+        loc = self._store.location()
+        return (loc.name, loc.lat, loc.lon, loc.elevation_m, loc.timezone_name,
+                self.date_edit.date().toString("yyyy-MM-dd"),
+                "dawn" if self.dawn_btn.isChecked() else "dusk")
+
+    def _update_context_state(self, *_args) -> None:
+        current = self._context()
+        if self._worker is not None:
+            stale = self._request_context != current
+            text, tone = ("正在刷新旧参数", "warn") if stale else ("正在刷新", "accent")
+        elif self._last_context is not None and current != self._last_context:
+            text, tone = "参数已变更 · 请刷新", "warn"
+        elif self._last_context is not None:
+            text, tone = ("卫星帧已就绪", "ok") if self._image_available else ("无卫星帧数据", "warn")
+        else:
+            text, tone = "卫星帧待获取", ""
+        self._satellite_badge.setText(text)
+        self._satellite_badge.setProperty("tone", tone)
+        theme.repolish(self._satellite_badge)
 
     def _on_spot_changed(self, loc: Location) -> None:
         self._apply_spot(loc)
@@ -332,8 +371,28 @@ class NowcastTab(QWidget):
         for i, button in enumerate((self.dawn_btn, self.dusk_btn)):
             button.setProperty("active", "true" if i == index else "false")
             theme.repolish(button)
+        self._update_context_state()
 
     # ── 预测 ──
+    def _request_current_location(self):
+        window = self.window()
+        if hasattr(window, "request_current_location"):
+            window.request_current_location()
+
+    def _on_data_busy(self, busy):
+        self.run_button.setEnabled(not busy and self._worker is None)
+        self.cancel_button.setVisible(busy or self._worker is not None)
+        self.cancel_button.setEnabled(True)
+
+    def _payload_for_data(self):
+        loc = self._store.location()
+        return {
+            "name": loc.name, "lat": loc.lat, "lon": loc.lon,
+            "elevation_m": loc.elevation_m, "timezone_name": loc.timezone_name,
+            "target_date": self.date_edit.date().toPython().isoformat(),
+            "phenomenon": "dawn" if self.dawn_btn.isChecked() else "dusk", "workers": 1,
+        }
+
     def _log(self, message: str) -> None:
         stamp = datetime.now().strftime("%H:%M:%S")
         self.log_view.append(f"[{stamp}] {message}")
@@ -366,6 +425,14 @@ class NowcastTab(QWidget):
             "workers": 1,
         }
         self._log(f"创建实况任务：{loc.name} {target} {phenomenon}（卫星实况）")
+        context = self._context()
+        self.data_panel.begin(
+            payload, callback=self._start_forecast,
+            is_current=lambda: self._context() == context,
+        )
+
+    def _start_forecast(self, payload):
+        self._request_context = self._context()
         self._worker = ForecastWorker(payload, nowcast=True)
         self._worker.progress.connect(self._on_progress)
         self._worker.finished_ok.connect(self._on_done)
@@ -376,9 +443,11 @@ class NowcastTab(QWidget):
         self.cancel_button.setVisible(True)
         self.progress.setVisible(True)
         self.progress.setValue(2)
+        self._update_context_state()
         self._worker.start()
 
     def _cancel(self) -> None:
+        self.data_panel.cancel()
         if self._worker is not None:
             self._worker.cancel()
             self._log("已请求取消（引擎将在下一个进度检查点停止；取消后本次结果将被忽略）。")
@@ -402,6 +471,7 @@ class NowcastTab(QWidget):
         self.cancel_button.setVisible(False)
         self.progress.setValue(0)
         self.progress.setVisible(False)
+        self._update_context_state()
         self._log("实况刷新已取消。")
 
     def _on_done(self, result: object) -> None:
@@ -414,6 +484,7 @@ class NowcastTab(QWidget):
         if not isinstance(result, dict):
             self._on_failed("实况结果格式异常。")
             return
+        self._last_context = self._request_context
         self.render_result(result)
         self._log("实况完成。")
 
@@ -427,11 +498,14 @@ class NowcastTab(QWidget):
         peak_card.set_value(f"{peak:.2f}", color)
         best = widgets.local_time_label(result.get("best_time_local"))
         peak_card.set_sub(f"{level} · {best}")
-        has_image = bool(nowcast.get("image_valid_time_utc"))
-        self._satellite_badge.setText(
-            "●  卫星帧已就绪" if has_image else "●  无卫星帧数据"
-        )
-        theme.repolish(self._satellite_badge)
+        self._image_available = bool(nowcast.get("image_valid_time_utc"))
+        if self._last_context is None:
+            self._last_context = self._context()
+        context = self._last_context
+        caption = f"{context[0]} · {context[5]} {'朝霞' if context[6] == 'dawn' else '晚霞'}"
+        self._chart_sub.setText(caption)
+        self._profile_sub.setText(f"卫星云柱 + GFS 垂直先验 · {caption}")
+        self._update_context_state()
 
         ceiling = nowcast.get("convective_score_ceiling")
         ceiling_card = self.metric_cards["convective_score_ceiling"]
@@ -558,7 +632,22 @@ class NowcastTab(QWidget):
                 if col in (1, 2):
                     cell.setForeground(row_color)
                 self.table.setItem(row, col, cell)
-        self._profile.set_phase(phase_seen or "—")
+
+        # 卫星剖面 + 雷达与数据源卡（nowcast dict 缺字段时 Canvas/卡片自行显示 —/占位）
+        self._profile.set_data(nowcast.get("satellite_vertical_profile"))
+        self._render_radar_card(nowcast)
+        profile_status = nowcast.get("satellite_vertical_profile")
+        if isinstance(profile_status, dict) and profile_status.get("samples"):
+            status_text = str(profile_status.get("status") or "")
+            self._profile_chip.setText(
+                "剖面完整" if status_text == "available"
+                else "剖面部分未知" if status_text == "partial_unknown" else "剖面已更新"
+            )
+            self._profile_chip.setProperty("tone", "ok")
+        else:
+            self._profile_chip.setText("无剖面数据")
+            self._profile_chip.setProperty("tone", "")
+        theme.repolish(self._profile_chip)
 
     def _on_failed(self, message: str) -> None:
         self._worker = None
@@ -567,6 +656,11 @@ class NowcastTab(QWidget):
         self.cancel_button.setVisible(False)
         self.progress.setValue(0)
         self.progress.setVisible(False)
+        self._satellite_badge.setText(
+            "刷新失败 · 保留上次结果" if self._last_context else "刷新失败"
+        )
+        self._satellite_badge.setProperty("tone", "warn")
+        theme.repolish(self._satellite_badge)
         self._log(f"失败：{message}")
         # 引擎对「事件窗口外」明确提示改用模式预测；该场景预热/重试必然
         # 再失败，只有缺帧类错误才附加卫星预热引导。
@@ -579,17 +673,18 @@ class NowcastTab(QWidget):
             self.log_view.append(
                 "提示：实况依赖新鲜 Himawari HSD 帧（约每 10 分钟一帧）；"
                 "缺帧或 GFS 垂直先验未预热时引擎会 fail-closed。"
-                "可在数据与缓存页执行「卫星预热」后重试。"
+                "可在本页执行「预热卫星与数据」后重试。"
             )
 
     def on_theme_changed(self) -> None:
         self._strip_map.update()
-        self._profile.update()
+        self._profile.on_theme_changed()
         self.curve.update()
         for button in (self.dawn_btn, self.dusk_btn):
             theme.repolish(button)
 
     def shutdown(self) -> None:
+        self.data_panel.shutdown()
         if self._worker is not None and self._worker.isRunning():
             self._worker.cancel()
             # 必须等线程退出再析构：运行中的 QThread 被销毁会 abort 进程。

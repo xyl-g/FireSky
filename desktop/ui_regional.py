@@ -35,6 +35,8 @@ from PySide6.QtWidgets import (
 )
 
 from desktop import theme, widgets
+from desktop.data_panel import ForecastDataPanel
+from desktop.web_map import FireSkyMap
 from desktop.ui_point import theme_and_level
 from desktop.widgets import GlassCard, MetricCard, MiniMap, NumericItem, RunButton
 from desktop.workers import RegionalForecastWorker
@@ -65,6 +67,8 @@ class RegionalForecastTab(QWidget):
         super().__init__(parent)
         self._worker: RegionalForecastWorker | None = None
         self._cache_hit = False
+        self._model_results = {}
+        self._model_errors = {}
         self._build_ui()
 
     # ── UI ──
@@ -74,6 +78,13 @@ class RegionalForecastTab(QWidget):
         root.setSpacing(14)
         root.addWidget(self._build_region_card())
         root.addWidget(self._build_filter_bar())
+        self.data_panel = ForecastDataPanel(self, regional=True)
+        self.data_panel.bind(self._payload_for_data)
+        self.data_panel.busyChanged.connect(self._on_data_busy)
+        root.addWidget(self.data_panel)
+        self.model_results_bar = widgets.ModelResultsBar()
+        self.model_results_bar.modelChanged.connect(self._show_model_result)
+        root.addWidget(self.model_results_bar)
         root.addLayout(self._build_metrics())
 
         middle = QHBoxLayout()
@@ -85,15 +96,19 @@ class RegionalForecastTab(QWidget):
         map_head = QHBoxLayout()
         map_head.addWidget(widgets.section_title("区域质量分布"))
         map_head.addStretch(1)
-        map_head.addWidget(widgets.role_label("本地示意底图 · 不承载地理边界", "hint"))
+        self.grid_label = widgets.role_label("真实底图 · 0.25° × 0.25°", "hint")
+        map_head.addWidget(self.grid_label)
         map_l.addLayout(map_head)
-        self._regional_map = MiniMap(interactive=False, show_pin=False)
+        self._regional_map = FireSkyMap()
+        self._regional_map.set_grid([], spacing=0.25)
+        self._regional_map.fit_bounds(70, 5, 145, 55)
         self._regional_map.setMinimumHeight(300)
         map_l.addWidget(self._regional_map, 1)
         legend = QHBoxLayout()
         legend.setSpacing(12)
-        for text, color in (("无明显", "#9e9e9e"), ("小烧", "#d6b56a"),
-                            ("中等烧", "#ea7c2c"), ("大烧", "#c0261b")):
+        for text, color in (("<0.05", "#87929e"), ("0.05–0.4", "#d6b56a"),
+                            ("0.4–1.0", "#ea7c2c"), ("≥1.0", "#c0261b"),
+                            ("缺测", "#5c6470")):
             dot = widgets.role_label("●", "hint")
             dot.setStyleSheet(f"color: {color}; font-size: 12px;")
             legend.addWidget(dot)
@@ -110,7 +125,7 @@ class RegionalForecastTab(QWidget):
         rank_head.setContentsMargins(17, 14, 17, 10)
         titles = QVBoxLayout()
         titles.setSpacing(3)
-        titles.addWidget(widgets.section_title("观测点排行榜"))
+        titles.addWidget(widgets.section_title("观测点排行榜 · 前 2000"))
         self.meta_label = widgets.role_label("提交后显示区域 · 点数 · 周期 · 耗时", "hint")
         self.meta_label.setWordWrap(True)
         titles.addWidget(self.meta_label)
@@ -133,6 +148,7 @@ class RegionalForecastTab(QWidget):
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         self.table.setAlternatingRowColors(True)
         self.table.setMinimumHeight(300)
+        self.table.itemSelectionChanged.connect(self._select_map_cell)
         rank_l.addWidget(self.table, 1)
         middle.addWidget(rank, 1)
         root.addLayout(middle)
@@ -154,7 +170,7 @@ class RegionalForecastTab(QWidget):
         head = QHBoxLayout()
         head.addWidget(widgets.section_title("计算区域（可多选）"))
         head.addStretch(1)
-        head.addWidget(widgets.role_label("china 区域固定 0.25° 网格", "hint"))
+        head.addWidget(widgets.role_label("全部区域固定 0.25° 网格", "hint"))
         custom_toggle = QPushButton("✎  自定义 bbox")
         custom_toggle.setObjectName("ghostBtn")
         custom_toggle.clicked.connect(self._toggle_custom)
@@ -238,19 +254,16 @@ class RegionalForecastTab(QWidget):
         self.date_edit.setFixedWidth(128)
         layout.addWidget(self.date_edit)
 
-        self.model_combo = QComboBox()
-        self.model_combo.addItem("GFS", "gfs")
-        self.model_combo.addItem("EC", "ec")
-        self.model_combo.setFixedWidth(74)
-        layout.addWidget(self.model_combo)
-
         self.spacing_spin = QDoubleSpinBox()
-        self.spacing_spin.setRange(0.25, 10.0)
+        self.spacing_spin.setRange(0.25, 0.25)
         self.spacing_spin.setSingleStep(0.25)
-        self.spacing_spin.setValue(2.0)
+        self.spacing_spin.setValue(0.25)
+        self.spacing_spin.setReadOnly(True)
+        self.spacing_spin.setButtonSymbols(QDoubleSpinBox.ButtonSymbols.NoButtons)
         self.spacing_spin.setSuffix(" °")
         self.spacing_spin.setFixedWidth(80)
-        layout.addWidget(self.spacing_spin)
+        self.spacing_spin.hide()
+        layout.addWidget(widgets.chip("0.25°"))
 
         self.workers_spin = QSpinBox()
         self.workers_spin.setRange(1, 8)
@@ -326,6 +339,32 @@ class RegionalForecastTab(QWidget):
             codes.append("custom")
         return codes
 
+    def _payload_for_data(self) -> dict:
+        payload = {
+            "regions": self._selected_regions(),
+            "target_date": self.date_edit.date().toPython().isoformat(),
+            "phenomenon": "dawn" if self.dawn_btn.isChecked() else "dusk",
+            "model_source": "both",
+            "forecast_mode": "model", "satellite_source": "off",
+            "spacing_deg": 0.25, "workers": self.workers_spin.value(),
+        }
+        if self.custom_enable.isChecked():
+            payload["custom_bounds"] = {key: spin.value() for key, spin in self.custom_spins.items()}
+            payload["custom_timezone_name"] = self.custom_tz.currentText().strip()
+        return payload
+
+    def _on_data_busy(self, busy):
+        self.run_button.setEnabled(not busy and self._worker is None)
+        self.cancel_button.setEnabled(True)
+        self.cancel_button.setVisible(busy or self._worker is not None)
+
+    def _select_map_cell(self):
+        item = self.table.item(self.table.currentRow(), 0)
+        if item is not None:
+            point = item.data(Qt.ItemDataRole.UserRole)
+            if point:
+                self._regional_map.focus_grid_cell(point[0], point[1])
+
     def _run(self) -> None:
         if self._worker is not None and self._worker.isRunning():
             return
@@ -337,7 +376,7 @@ class RegionalForecastTab(QWidget):
             "regions": regions,
             "target_date": self.date_edit.date().toPython().isoformat(),
             "phenomenon": "dawn" if self.dawn_btn.isChecked() else "dusk",
-            "model_source": self.model_combo.currentData(),
+            "model_source": "both",
             "forecast_mode": "model",
             "satellite_source": "off",
             "spacing_deg": float(self.spacing_spin.value()),
@@ -363,18 +402,16 @@ class RegionalForecastTab(QWidget):
                 return
             payload["custom_bounds"] = bounds
             payload["custom_timezone_name"] = self.custom_tz.currentText().strip()
-        if "china" in regions and len(regions) > 1:
-            # china 是 0.25° 生产网格：引擎只对 china 单选放行该密度
-            # （36,685 点契约），与其他区域混选时 china 段会被当前 spacing
-            # 粗采样，同一「中国」在不同组合下密度差 60 倍 —— 直接拦截。
-            QMessageBox.warning(
-                self, "FireSky",
-                "「中国」区域按 0.25° 生产网格计算，不能与其他区域混选；\n"
-                "请单独勾选「中国」，或取消勾选「中国」后选择其它区域组合。",
-            )
-            return
-        if regions == ["china"]:
-            payload["spacing_deg"] = 0.25
+        payload["spacing_deg"] = 0.25
+        context = self._payload_for_data()
+        self.data_panel.begin(
+            payload, callback=self._start_forecast,
+            is_current=lambda: self._payload_for_data() == context,
+        )
+
+    def _start_forecast(self, payload):
+        regions = payload["regions"]
+        self._submitted_payload = self._payload_for_data()
         self._log(
             f"提交区域计算：{regions} {payload['target_date']} "
             f"{payload['phenomenon']} spacing={payload['spacing_deg']}°"
@@ -393,6 +430,7 @@ class RegionalForecastTab(QWidget):
         self._worker.start()
 
     def _cancel(self) -> None:
+        self.data_panel.cancel()
         if self._worker is not None:
             self._worker.cancel()
             self._log("已请求取消（引擎将在下一个进度检查点停止）。")
@@ -440,7 +478,22 @@ class RegionalForecastTab(QWidget):
         if not isinstance(result, dict):
             self._on_failed("区域结果格式异常。")
             return
-        self.render_result(result)
+        self._model_results = result.get("model_results", {})
+        self._model_errors = result.get("model_errors", {})
+        if self._model_results:
+            model = self.model_results_bar.set_results(self._model_results, self._model_errors)
+            self._show_model_result(model)
+            self.progress_label.setText("部分完成" if self._model_errors else "GFS / EC 已完成")
+        else:
+            self.model_results_bar.hide()
+            self.render_result(result)
+        for model, message in self._model_errors.items():
+            self._log(f"{model.upper()} 未完成：{message}")
+
+    def _show_model_result(self, model):
+        if model in self._model_results:
+            self.render_result(self._model_results[model])
+            self.meta_label.setText(f"{model.upper()} · {self.meta_label.text()}")
 
     def render_result(self, result: dict) -> None:
         regions = result.get("regions") or []
@@ -479,20 +532,14 @@ class RegionalForecastTab(QWidget):
             f"{float(total_seconds):.0f} s" if total_seconds is not None else "—"
         )
 
-        markers = [
-            (float(p.get("lat") or 0.0), float(p.get("lon") or 0.0),
-             float(p.get("peak_quality_index") or 0.0))
-            for p in points[:60]
-            if p.get("lat") is not None and p.get("lon") is not None
+        failed_points = [
+            {**item, "peak_quality_index": None} for item in result.get("errors") or []
+            if item.get("lat") is not None and item.get("lon") is not None
         ]
-        shown = self._regional_map.set_markers(markers)
-        if shown < len(markers):
-            # 示意底图只覆盖中国：境外点位不绘制（原来会被钳位堆到边缘，
-            # 用户会误把边缘气泡当真实位置）。
-            self._log(
-                f"示意底图仅覆盖中国范围：{len(markers) - shown} 个境外观测点"
-                "未在地图上绘制（排行表数值不受影响）。"
-            )
+        self._regional_map.set_grid(points + failed_points, spacing=0.25)
+        self.grid_label.setText(f"0.25° 网格 · {len(points)} 有值 / {len(failed_points)} 缺测")
+        if getattr(self, "_submitted_payload", None) != self._payload_for_data():
+            self.meta_label.setText(meta + " · 参数已变更（显示上次结果）")
 
         self.table.setSortingEnabled(False)
         self.table.setRowCount(0)
@@ -530,6 +577,9 @@ class RegionalForecastTab(QWidget):
                 aod_item,
             )):
                 self.table.setItem(row, col, cell)
+            self.table.item(row, 0).setData(
+                Qt.ItemDataRole.UserRole, (point.get("lat"), point.get("lon"))
+            )
         errors = result.get("errors") or []
         if errors:
             self._log(f"失败点 {len(errors)} 个；明细已写入运行日志。")
@@ -551,11 +601,12 @@ class RegionalForecastTab(QWidget):
         QMessageBox.warning(self, "区域预测失败", message)
 
     def on_theme_changed(self) -> None:
-        self._regional_map.update()
+        self._regional_map.set_theme(theme.is_dark())
         for button in (self.dawn_btn, self.dusk_btn):
             theme.repolish(button)
 
     def shutdown(self) -> None:
+        self.data_panel.shutdown()
         if self._worker is not None and self._worker.isRunning():
             self._worker.cancel()
             # 长批处理可能远超 2 秒：必须等线程真正退出再销毁窗口，

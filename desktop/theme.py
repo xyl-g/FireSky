@@ -1,11 +1,4 @@
-"""FireSky 桌面应用主题 · 暮光玻璃 v4。
-
-对应设计稿 desktop/design-mockup.html（v4）。两套调色板：
-- 亮色：暖白 #f2f0eb 画布 + 半透明白玻璃 + 朝霞橙强调
-- 暗色：深暮蓝 #111218 画布 + 半透明深灰玻璃 + 暖橙强调
-
-Qt 没有 backdrop-filter，玻璃质感由三层模拟：半透明表面（QSS rgba）、
-1px 顶部高光（GlassCard.paintEvent）、背景霞光晕染（AppShell.paintEvent）。
+"""FireSky 桌面应用主题：中性亮暗表面、暖红操作色与青绿就绪态。
 
 档位→颜色映射与 Web/引擎 fire_cloud_quality_level 的十个档位一致。
 """
@@ -144,25 +137,25 @@ def level_color(level: str | None) -> str:
 # *_a 为透明度 0–255，由 _rgba() 合成 QSS 的 rgba() 字符串。
 
 LIGHT_PALETTE: dict = {
-    "canvas": "#f2f0eb",
-    "canvas_alt": "#e9e5de",
+    "canvas": "#e2ecef",
+    "canvas_alt": "#f3e9e5",
     "glass": "#ffffff",
     "glass_strong": "#ffffff",
     "sidebar": "#ffffff",
-    "well": "#f4f1eb",
+    "well": "#f3f7f8",
     "card": "#ffffff",
-    "card_sunken": "#f4f1eb",
+    "card_sunken": "#f5f7f8",
     "card_strong": "#ffffff",
-    "border": "#e5ded3",
-    "border_strong": "#cfc5b6",
-    "line_rgb": "#4c3f31",
-    "ink": "#28262c",
-    "ink2": "#535059",
-    "ink3": "#858089",
-    "faint": "#aaa4aa",
-    "accent": "#df603b",
-    "accent_hover": "#f38a50",
-    "accent_pressed": "#c9502f",
+    "border": "#dce1e5",
+    "border_strong": "#bac3cb",
+    "line_rgb": "#33414e",
+    "ink": "#24343a",
+    "ink2": "#4c5965",
+    "ink3": "#62717e",
+    "faint": "#66737e",
+    "accent": "#bd513d",
+    "accent_hover": "#ce624b",
+    "accent_pressed": "#a54132",
     "accent_soft": "#fbeee8",
     "accent_line": "#e9b9a6",
     "sel_bg": "#f7e7dd",
@@ -179,29 +172,29 @@ LIGHT_PALETTE: dict = {
     "glow": "#ffb780",
     "glow_alt": "#ac9dd4",
     # alpha
-    "glass_a": 163, "glass_strong_a": 226, "sidebar_a": 122,
-    "well_a": 210, "border_a": 27, "border_strong_a": 43,
-    "highlight_a": 214, "chart_grid_a": 23, "scrim_a": 88,
+    "glass_a": 154, "glass_strong_a": 192, "sidebar_a": 100,
+    "well_a": 130, "border_a": 24, "border_strong_a": 47,
+    "highlight_a": 235, "chart_grid_a": 23, "scrim_a": 88,
     "glow_a": 86, "glow_alt_a": 48,
 }
 
 DARK_PALETTE: dict = {
-    "canvas": "#111218",
-    "canvas_alt": "#0b0c11",
-    "glass": "#1d1f28",
-    "glass_strong": "#21232d",
-    "sidebar": "#181a22",
-    "well": "#0d0f15",
-    "card": "#1d1f28",
-    "card_sunken": "#0d0f15",
-    "card_strong": "#21232d",
+    "canvas": "#16272a",
+    "canvas_alt": "#2e252b",
+    "glass": "#293638",
+    "glass_strong": "#344144",
+    "sidebar": "#202326",
+    "well": "#1b1e20",
+    "card": "#222629",
+    "card_sunken": "#1b1e20",
+    "card_strong": "#292e32",
     "border": "#2b2d36",
     "border_strong": "#3c3f4b",
     "line_rgb": "#ffffff",
-    "ink": "#f3efe8",
+    "ink": "#edf5f4",
     "ink2": "#d0cbd0",
     "ink3": "#9996a2",
-    "faint": "#6d6b77",
+    "faint": "#a5aab0",
     "accent": "#ff8c62",
     "accent_hover": "#ffab68",
     "accent_pressed": "#e87248",
@@ -221,9 +214,9 @@ DARK_PALETTE: dict = {
     "glow": "#98422f",
     "glow_alt": "#423e74",
     # alpha
-    "glass_a": 163, "glass_strong_a": 224, "sidebar_a": 158,
-    "well_a": 122, "border_a": 19, "border_strong_a": 33,
-    "highlight_a": 28, "chart_grid_a": 17, "scrim_a": 148,
+    "glass_a": 150, "glass_strong_a": 185, "sidebar_a": 108,
+    "well_a": 105, "border_a": 26, "border_strong_a": 48,
+    "highlight_a": 58, "chart_grid_a": 17, "scrim_a": 148,
     "glow_a": 64, "glow_alt_a": 50,
 }
 
@@ -261,18 +254,22 @@ def _build_qss(p: dict) -> str:
 QMainWindow, QDialog {{ background: {p['canvas']}; }}
 QWidget {{ color: {p['ink']}; font-size: 12px; }}
 QWidget#appShell {{ background: transparent; }}
+QWidget#sidebar {{
+    background: {_rgba(p['sidebar'], p['sidebar_a'])};
+    border-right: 1px solid {_rgba(p['highlight'], p['highlight_a'] // 2)};
+}}
 QLabel {{ background: transparent; }}
 QLabel[role="ink2"] {{ color: {p['ink2']}; font-size: 11px; }}
 QLabel[role="ink3"] {{ color: {p['ink3']}; font-size: 10px; }}
 QLabel[role="hint"] {{ color: {p['faint']}; font-size: 9px; }}
-QLabel[role="eyebrow"] {{ color: {p['accent']}; font-size: 9px; font-weight: 700; letter-spacing: 2px; }}
-QLabel[role="h1"] {{ font-size: 25px; font-weight: 700; letter-spacing: -1px; }}
+QLabel[role="eyebrow"] {{ color: {p['accent']}; font-size: 9px; font-weight: 700; letter-spacing: 0; }}
+QLabel[role="h1"] {{ font-size: 22px; font-weight: 700; letter-spacing: 0; }}
 QLabel[role="h2"] {{ font-size: 13px; font-weight: 680; }}
 QLabel[role="subtitle"] {{ color: {p['ink3']}; font-size: 11px; }}
 QLabel[role="cardTitle"] {{ font-size: 12px; color: {p['ink2']}; font-weight: 660; }}
 QLabel[role="metric"] {{ font-size: 21px; font-weight: 700; }}
-QLabel[role="heroScore"] {{ font-size: 52px; font-weight: 730; letter-spacing: -3px; }}
-QLabel[role="heroTime"] {{ font-size: 34px; font-weight: 680; letter-spacing: -1px; }}
+QLabel[role="heroScore"] {{ font-size: 38px; font-weight: 730; letter-spacing: 0; }}
+QLabel[role="heroTime"] {{ font-size: 28px; font-weight: 680; letter-spacing: 0; }}
 QLabel[role="chip"] {{
     background: {_rgba(p['well'], p['well_a'])}; border: 1px solid {line(p['border_a'])};
     border-radius: 8px; color: {p['ink3']}; font-size: 9px; padding: 4px 8px;
@@ -285,41 +282,44 @@ QLabel[role="chip"][tone="ok"] {{
     background: {_rgba(p['ok'], 26)}; border: 1px solid {_rgba(p['ok'], 60)};
     color: {p['ok']}; font-weight: 600;
 }}
+QLabel[role="chip"][tone="warn"] {{
+    background: {p['warn_soft']}; border: 1px solid {_rgba(p['warn'], 75)};
+    color: {p['warn']}; font-weight: 600;
+}}
 
 QFrame[glass="true"] {{ background: transparent; border: none; }}
 QFrame[plain="true"] {{
     background: {_rgba(p['well'], p['well_a'])}; border: 1px solid {line(p['border_a'])};
-    border-radius: 12px;
+    border-radius: 8px;
 }}
 QFrame[card="true"] {{
-    background: {g(150)}; border: 1px solid {line(p['border_a'])}; border-radius: 14px;
+    background: {g(150)}; border: 1px solid {line(p['border_a'])}; border-radius: 8px;
 }}
 QFrame[cardSunken="true"] {{
     background: {_rgba(p['well'], p['well_a'])};
-    border: 1px solid {line(p['border_a'])}; border-radius: 14px;
+    border: 1px solid {line(p['border_a'])}; border-radius: 8px;
 }}
 
 QPushButton {{
     background: {g(150)}; border: 1px solid {line(p['border_a'])};
-    border-radius: 10px; padding: 6px 12px; color: {p['ink']}; font-weight: 600;
+    border-radius: 8px; padding: 6px 12px; color: {p['ink']}; font-weight: 600;
 }}
 QPushButton:hover {{ border-color: {line(p['border_strong_a'])}; background: {gs(210)}; }}
 QPushButton:pressed {{ background: {_rgba(p['accent'], 30)}; }}
 QPushButton:disabled {{ color: {p['faint']}; border-color: {line(p['border_a'])}; }}
-QPushButton:focus {{ outline: none; }}
+QPushButton:focus {{ border: 1px solid {p['accent']}; }}
 
 QPushButton#runBtn {{
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-        stop:0 #f3ad4e, stop:0.52 #ed7745, stop:1 #df5242);
-    color: #ffffff; border: none; border-radius: 12px;
-    font-size: 12px; font-weight: 700; letter-spacing: 1px; padding: 10px 18px;
+    background: {p['accent']};
+    color: #ffffff; border: none; border-radius: 8px;
+    font-size: 12px; font-weight: 700; letter-spacing: 0; padding: 10px 18px;
 }}
 QPushButton#runBtn:hover {{ background: #f0954a; }}
 QPushButton#runBtn:pressed {{ background: #cd4b3b; }}
 QPushButton#runBtn:disabled {{ background: {_rgba(p['line_rgb'], 30)}; color: {p['ink3']}; }}
 
 QPushButton#navBtn {{
-    background: transparent; border: 1px solid transparent; border-radius: 12px;
+    background: transparent; border: 1px solid transparent; border-radius: 8px;
     color: {p['ink3']}; font-size: 12px; font-weight: 520;
     text-align: left; padding: 0 12px; min-height: 42px;
 }}
@@ -376,19 +376,11 @@ QComboBox:focus {{ border-color: {_rgba(p['accent'], 110)}; }}
 QLineEdit:disabled, QDoubleSpinBox:disabled, QSpinBox:disabled,
 QDateEdit:disabled, QComboBox:disabled {{ color: {p['faint']}; }}
 QComboBox::drop-down {{ border: none; width: 20px; }}
-QComboBox::down-arrow {{
-    image: none; border-left: 4px solid transparent; border-right: 4px solid transparent;
-    border-top: 5px solid {p['ink3']}; margin-right: 7px;
-}}
 QComboBox QAbstractItemView {{
     background: {p['card_strong']}; border: 1px solid {line(p['border_strong_a'])};
     selection-background-color: {p['sel_bg']}; selection-color: {p['ink']};
 }}
 QDateEdit::drop-down {{ border: none; width: 19px; }}
-QDateEdit::down-arrow {{
-    image: none; border-left: 4px solid transparent; border-right: 4px solid transparent;
-    border-top: 5px solid {p['ink3']}; margin-right: 6px;
-}}
 QDoubleSpinBox::up-button, QDoubleSpinBox::down-button,
 QSpinBox::up-button, QSpinBox::down-button {{ width: 14px; border: none; background: transparent; }}
 
@@ -404,9 +396,9 @@ QListWidget::item:selected {{
 }}
 QListWidget::item:hover:!selected {{ color: {p['ink']}; background: {g(120)}; }}
 
-QTableWidget, QTableView {{
-    background: {g(150)}; alternate-background-color: {_rgba(p['well'], 90)};
-    border: 1px solid {line(p['border_a'])}; border-radius: 12px;
+QTableWidget, QTableView, QTreeWidget {{
+    background: {g(120)}; alternate-background-color: {_rgba(p['well'], 70)};
+    border: 1px solid {_rgba(p['highlight'], p['highlight_a'])}; border-radius: 8px;
     gridline-color: {line(p['border_a'])}; color: {p['ink2']};
     selection-background-color: {p['sel_bg']}; selection-color: {p['ink']};
     outline: none;
@@ -418,6 +410,16 @@ QHeaderView::section {{
 }}
 QTableCornerButton::section {{ background: {_rgba(p['well'], p['well_a'])}; border: none; }}
 QTableWidget::item {{ padding: 3px 6px; }}
+QDialog#forecastDataDialog {{ background: {p['card']}; }}
+QLabel#dataReadiness {{ font-size: 14px; font-weight: 600; color: {p['ink']}; }}
+QLabel#dataSourceName {{ font-size: 14px; font-weight: 600; color: {p['ink']}; }}
+QLabel#dataSourceSymbol {{ background: {p['well']}; border-radius: 6px; }}
+QLabel#dataSourceStatus {{ font-size: 11px; font-weight: 550; color: {p['ink3']}; }}
+QLabel#dataSourceStatus[state="missing"], QLabel#dataSourceStatus[state="old"] {{ color: {p['accent']}; }}
+QLabel#dataSourceStatus[state="ready"] {{ color: {p['ok']}; }}
+QFrame#dataSourceSeparator {{ background: {line(p['border_a'])}; border: none; }}
+QPushButton#dataRefreshButton {{ border: none; background: transparent; padding: 0; border-radius: 5px; }}
+QPushButton#dataRefreshButton:hover {{ background: {p['well']}; }}
 
 QProgressBar {{
     background: {_rgba(p['well'], p['well_a'])}; border: 1px solid {line(p['border_a'])};
@@ -428,20 +430,23 @@ QProgressBar::chunk {{
     background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
         stop:0 #f3ad4e, stop:1 #df5242); border-radius: 4px;
 }}
+QProgressBar#dataPrepareProgress {{
+    background: {p['well']}; border: none; border-radius: 1px;
+    min-height: 3px; max-height: 3px;
+}}
+QProgressBar#dataPrepareProgress::chunk {{ background: {p['accent']}; border-radius: 1px; }}
 
 QTextEdit {{
     background: {_rgba(p['well'], p['well_a'])}; border: 1px solid {line(p['border_a'])};
-    border-radius: 12px; color: {p['ink3']}; font-size: 10px; padding: 6px;
+    border-radius: 8px; color: {p['ink3']}; font-size: 10px; padding: 6px;
 }}
 QTextEdit[role="log"] {{ font-family: "SF Mono", Menlo, Consolas, monospace; }}
 
 QCheckBox, QRadioButton {{ spacing: 7px; color: {p['ink2']}; font-size: 11px; }}
-QCheckBox::indicator {{
-    width: 15px; height: 15px; border: 1px solid {line(p['border_strong_a'])};
-    border-radius: 4px; background: {g(150)};
+QCheckBox::indicator:unchecked {{
+    width: 15px; height: 15px; border: 1px solid {line(90)};
+    border-radius: 4px; background: {g(100)};
 }}
-QCheckBox::indicator:checked {{ background: {p['accent']}; border-color: {p['accent']}; }}
-
 QScrollBar:vertical {{ background: transparent; width: 9px; margin: 2px; }}
 QScrollBar::handle:vertical {{
     background: {line(p['border_strong_a'])}; border-radius: 5px; min-height: 32px;
@@ -465,7 +470,13 @@ QMenu::item {{ padding: 5px 20px; }}
 QMenu::item:selected {{ background: {p['sel_bg']}; }}
 QSplitter::handle {{ background: transparent; }}
 QTabWidget::pane {{ border: none; background: transparent; }}
-QTabBar::tab {{ background: transparent; }}
+QTabBar::tab {{
+    background: transparent; color: {p['ink3']}; padding: 9px 14px;
+    border-bottom: 2px solid transparent;
+}}
+QTabBar::tab:selected {{ color: {p['accent']}; border-bottom-color: {p['accent']}; }}
+QTabBar::tab:focus {{ background: {p['sel_bg']}; }}
+QScrollArea, QScrollArea > QWidget > QWidget {{ background: transparent; }}
 """
 
 
@@ -473,6 +484,10 @@ def apply_theme(app: QApplication, dark: bool) -> None:
     global _current_dark
     _current_dark = bool(dark)
     app.setStyleSheet(_build_qss(palette()))
+    from desktop.icons import set_icon
+    for widget in app.allWidgets():
+        if widget.property("glyph"):
+            set_icon(widget, widget.property("glyph"))
     QSettings("FireSky", "FireSkyDesktop").setValue("theme/dark", _current_dark)
 
 

@@ -228,7 +228,6 @@
     <button data-base="vector">矢量</button>
     <button data-base="terrain">地形</button>
   </div>
-  <p class="fs-hint"><b>单击地图</b>落点 · 拖动标记微调<br />仅用于选点，不叠加预报数据</p>
   <p class="fs-warn" id="esriWarn" hidden>Esri 底图仅限中国境外使用，境内请使用 OpenStreetMap 或天地图。</p>
   <p class="fs-warn" id="osmNote" hidden>选点默认 OSM；需要卫星影像选「天地图」（设置页配 Key）。</p>
 </div>
@@ -513,7 +512,10 @@ function emitPick(lat, lon) {
   toast('已选点 · ' + lat.toFixed(3) + ', ' + lon.toFixed(3));
 }
 
-map.on('click', function (e) { emitPick(e.latlng.lat, e.latlng.lng); });
+map.on('click', function (e) {
+  if (gridMode) { inspectGrid(e.latlng); }
+  else { emitPick(e.latlng.lat, e.latlng.lng); }
+});
 
 /* 跨越中国范围时重建天地图图层，切换 maxNativeZoom */
 map.on('moveend', function () {
@@ -576,7 +578,7 @@ window.fsInit = function (key, isDark, initialSource, isMini) {
   applyTint();
   /* 已有标记时不要重置到默认中心：重新注入 Key 会再次调用 fsInit，
      若在这里无条件 setMarker 会把用户刚选的观测点弹回杭州。 */
-  if (!marker) setMarker(30.2741, 120.1551);
+  if (!marker && !gridMode) setMarker(30.2741, 120.1551);
   window.fsSetMini(!!isMini);
   selectBase(baseName);
 };
@@ -602,6 +604,97 @@ window.fsFitBounds = function (west, south, east, north) {
   map.fitBounds([[south, west], [north, east]], { padding: [24, 24] });
 };
 window.fsInvalidate = function () { map.invalidateSize({ animate: false }); };
+
+/* Viewport canvas keeps dense quarter-degree products out of the DOM.
+   Each cell uses the returned geographic centre; failed cells stay distinct. */
+var gridMode = false, gridCells = [], gridSpacing = .25, gridLayer = null;
+function gridColor(value) {
+  if (value === null) return '#5c6470';
+  if (value < .05) return '#87929e';
+  if (value < .4) return '#d6b56a';
+  if (value < 1) return '#ea7c2c';
+  return '#c0261b';
+}
+var ForecastGridLayer = L.Layer.extend({
+  onAdd: function (owner) {
+    this.owner = owner;
+    this.canvas = L.DomUtil.create('canvas', 'firesky-forecast-grid');
+    this.canvas.style.pointerEvents = 'none';
+    owner.getPanes().overlayPane.appendChild(this.canvas);
+    owner.on('moveend zoomend resize viewreset', this.draw, this);
+    this.draw();
+  },
+  onRemove: function (owner) {
+    owner.off('moveend zoomend resize viewreset', this.draw, this);
+    this.canvas.remove();
+  },
+  draw: function () {
+    var size = map.getSize(), ratio = window.devicePixelRatio || 1;
+    this.canvas.width = Math.round(size.x * ratio);
+    this.canvas.height = Math.round(size.y * ratio);
+    this.canvas.style.width = size.x + 'px';
+    this.canvas.style.height = size.y + 'px';
+    L.DomUtil.setPosition(this.canvas, map.containerPointToLayerPoint([0, 0]));
+    var ctx = this.canvas.getContext('2d');
+    ctx.scale(ratio, ratio);
+    var bounds = map.getBounds(), half = gridSpacing / 2, painted = 0;
+    for (var i = 0; i < gridCells.length; i++) {
+      var cell = gridCells[i], lat = cell[0], lon = cell[1];
+      if (lat + half < bounds.getSouth() || lat - half > bounds.getNorth() ||
+          lon + half < bounds.getWest() || lon - half > bounds.getEast()) continue;
+      var nw = map.latLngToContainerPoint([Math.min(85.05, lat + half), lon - half]);
+      var se = map.latLngToContainerPoint([Math.max(-85.05, lat - half), lon + half]);
+      var width = Math.max(1, se.x - nw.x), height = Math.max(1, se.y - nw.y);
+      ctx.globalAlpha = cell[2] === null ? .25 : .65;
+      ctx.fillStyle = gridColor(cell[2]);
+      ctx.fillRect(nw.x, nw.y, width, height);
+      if (width >= 5 && height >= 5) {
+        ctx.globalAlpha = .5;
+        ctx.strokeStyle = cell[2] === null ? '#f1f3f5' : '#ffffff';
+        ctx.lineWidth = .5;
+        ctx.strokeRect(nw.x, nw.y, width, height);
+        if (cell[2] === null) {
+          ctx.beginPath(); ctx.moveTo(nw.x, nw.y); ctx.lineTo(se.x, se.y); ctx.stroke();
+        }
+      }
+      painted++;
+    }
+    ctx.globalAlpha = 1;
+    window.FIRESKY_GRID_PAINTED = painted;
+  }
+});
+function inspectGrid(ll) {
+  var half = gridSpacing / 2;
+  for (var i = 0; i < gridCells.length; i++) {
+    var cell = gridCells[i];
+    if (Math.abs(cell[0] - ll.lat) <= half && Math.abs(cell[1] - ll.lng) <= half) {
+      var text = cell[0].toFixed(4) + ', ' + cell[1].toFixed(4) +
+        ' · ' + (cell[2] === null ? '缺测 / 计算失败' : '峰值 ' + cell[2].toFixed(3));
+      L.popup().setLatLng([cell[0], cell[1]]).setContent(text).openOn(map);
+      return;
+    }
+  }
+}
+window.fsSetGrid = function (cells, spacing) {
+  gridMode = true; gridCells = cells || []; gridSpacing = spacing || .25;
+  if (marker) { map.removeLayer(marker); marker = null; }
+  document.getElementById('status').hidden = true;
+  if (!gridLayer) gridLayer = new ForecastGridLayer().addTo(map);
+  if (gridCells.length) {
+    var south = 90, north = -90, west = 180, east = -180;
+    gridCells.forEach(function (c) {
+      south = Math.min(south, c[0]); north = Math.max(north, c[0]);
+      west = Math.min(west, c[1]); east = Math.max(east, c[1]);
+    });
+    map.fitBounds([[south - gridSpacing / 2, west - gridSpacing / 2],
+                   [north + gridSpacing / 2, east + gridSpacing / 2]], {padding: [18, 18]});
+  }
+  gridLayer.draw();
+};
+window.fsFocusGridCell = function (lat, lon) {
+  map.setView([lat, lon], Math.max(map.getZoom(), 8));
+  inspectGrid(L.latLng(lat, lon));
+};
 
 /* 直接用浏览器打开原型时没有 fsInit，这里兜底完成首次渲染：
    未配置 Key 则展示申请引导，并可一键切到 Esri 源继续选点。

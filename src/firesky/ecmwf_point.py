@@ -265,6 +265,15 @@ def choose_ecmwf_ifs_cycle_for_event(
     """
     if max_cycles < 1:
         raise ValueError("max_cycles must be positive")
+    from firesky import rust_ecmwf_data
+    if rust_ecmwf_data.enabled():
+        try:
+            return rust_ecmwf_data.choose_cycle(
+                reference_utc, evaluation_times, cache_dir=cache_dir, available=available_utc,
+                source=source, timeout=timeout_seconds, max_cycles=max_cycles,
+            )
+        except RuntimeError as exc:
+            raise EcmwfArtifactProbeError(str(exc)) from exc
     candidate = choose_ecmwf_ifs_cycle(
         reference_utc,
         available_utc=available_utc,

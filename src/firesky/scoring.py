@@ -42,6 +42,8 @@ from firesky.models import (
 from firesky.analysis_constants import MAX_ANALYSIS_RADIUS_KM
 from firesky.quality_core import duration_quality_factor
 from firesky.native_core import (
+    FIELD_COUNT,
+    FEATURE_ROW_V2_FIELD_COUNT,
     NativeFeatureBuffer,
     NativeFeatureList,
     NativeSnapshotFeatures,
@@ -97,14 +99,18 @@ class FeatureSpatialIndex:
             if isinstance(inherited_buffer, NativeFeatureBuffer) and inherited_buffer.length == len(features)
             else None
         )
-        # The native feature row predates the separate horizontal satellite
-        # probability and conditional vertical profile.  A native snapshot
-        # explicitly declares that it contains only legacy rows; any other
-        # sequence carrying an inherited buffer is unsafe unless it proves the
-        # same contract.  This prevents a new satellite field being silently
-        # dropped by the old 20-column layout.
+        # The legacy native feature row predates the separate horizontal
+        # satellite probability and conditional vertical profile.  A native
+        # snapshot declares its own contract (`has_satellite_probability`);
+        # any other sequence carrying an inherited buffer is unsafe unless it
+        # proves the same contract.  This prevents a new satellite field being
+        # silently dropped by the old 20-column layout.  Rows packed with the
+        # versioned assessment contract (`hsd-assessment-feature-row-v2`) do
+        # carry the probability columns, so they opt in through their buffer.
         if isinstance(features, NativeSnapshotFeatures):
-            self._has_satellite_probability = False
+            self._has_satellite_probability = bool(
+                getattr(features, "has_satellite_probability", False)
+            )
         elif isinstance(features, NativeFeatureList):
             self._has_satellite_probability = any(
                 feature.horizontal_cloud_probability is not None
@@ -121,7 +127,25 @@ class FeatureSpatialIndex:
             self._has_satellite_probability = bool(
                 getattr(features, "has_satellite_probability", True)
             )
-        self._native_scoring_enabled = True
+        # v2 rows carry the probability columns, the 2 m surface pair and an
+        # observer-elevation aware metrics ABI, so satellite features and
+        # elevated observers no longer force the Python path.  Legacy 20-field
+        # rows keep the old contract: no probability columns, sea-level
+        # geometry, elevation 0 only.
+        self._native_layout_v2 = (
+            self._native_buffer is not None
+            and int(getattr(self._native_buffer, "field_count", FIELD_COUNT))
+            == FEATURE_ROW_V2_FIELD_COUNT
+        )
+        # The path-clearance / boundary-context kernels still consume legacy
+        # 20-column rows (no probability columns, sea-level geometry).  Keep
+        # them off for v2 buffers until their own v2 ABI lands; the Python
+        # implementations remain the authoritative semantics there.
+        self._native_scoring_enabled = (
+            not self._native_layout_v2
+            and abs(self.observer_elevation_m) < 1e-6
+            and not self._has_satellite_probability
+        )
         self._positions: Dict[int, int] = {}
         self._cloud_presence: List[float] = []
         self._explicit_presence: List[float] = []
@@ -137,14 +161,14 @@ class FeatureSpatialIndex:
         self._native_by_pressure_bearing: Dict[int, np.ndarray] = {}
         self._native_distances: Dict[bool, Dict[int, np.ndarray]] = {False: {}, True: {}}
         self._native_pressure_distances: Dict[int, np.ndarray] = {}
-        # The native feature metrics use sea-level-relative geometry.  Keep
-        # elevated observer scoring on the Python path until the native API
-        # carries the observer height explicitly; otherwise a high plateau is
-        # silently treated as a sea-level station.
+        # The legacy feature metrics use sea-level-relative geometry, so keep
+        # elevated observer scoring on the Python path there; v2 metrics take
+        # the observer height explicitly.  The same split applies to satellite
+        # probability columns: v2 rows carry them, legacy rows cannot.
         self._native_mode = (
-            abs(self.observer_elevation_m) < 1e-6
-            and self._native_buffer is not None
-            and not self._has_satellite_probability
+            self._native_buffer is not None
+            and (self._native_layout_v2 or abs(self.observer_elevation_m) < 1e-6)
+            and (self._native_layout_v2 or not self._has_satellite_probability)
             and callable(getattr(features, "feature_at", None))
             and native_available()
         )
@@ -167,10 +191,6 @@ class FeatureSpatialIndex:
                 self._cloud_base = []
                 self._apparent_top = []
 
-        self._native_scoring_enabled = (
-            abs(self.observer_elevation_m) < 1e-6
-            and not self._has_satellite_probability
-        )
         self._positions = {id(feature): position for position, feature in enumerate(features)}
         for feature in features:
             fraction = cloud_fraction_score(feature)
@@ -294,8 +314,14 @@ class FeatureSpatialIndex:
 
     def _initialize_native(self, diagnostic_radius_km: float) -> None:
         assert self._native_buffer is not None
-        rows = self._native_buffer._storage.reshape((-1, 20))
-        metrics = native_feature_metrics(self._native_buffer, diagnostic_radius_km)
+        rows = self._native_buffer._storage.reshape(
+            (-1, int(getattr(self._native_buffer, "field_count", FIELD_COUNT)))
+        )
+        metrics = native_feature_metrics(
+            self._native_buffer,
+            diagnostic_radius_km,
+            self.observer_elevation_m,
+        )
         self._cloud_presence = metrics[:, 0]
         self._explicit_presence = metrics[:, 1]
         self._liquid_presence = metrics[:, 2]
@@ -471,6 +497,14 @@ class FeatureSpatialIndex:
         solar_elevation_deg: float,
         solar_azimuth_deg: float,
     ) -> Optional[List[tuple[GridCellFeature, float, float, float, float, float, float]]]:
+        if self._native_layout_v2:
+            # The candidate prefilter ABI still consumes legacy 20-column rows
+            # and scores feasibility against the fixed layer-depth table with
+            # sea-level sight geometry.  v2 buffers stay on the Python selector
+            # until the prefilter gains its own v2 kernel, so satellite
+            # probabilities and observer elevation cannot change selection
+            # silently.
+            return None
         if not self._native_mode or self._native_buffer is None or not native_available():
             return None
         try:
@@ -502,6 +536,11 @@ class FeatureSpatialIndex:
         self,
         solar_azimuth_deg: float,
     ) -> Optional[List[tuple[GridCellFeature, float, float]]]:
+        if self._native_layout_v2:
+            # Same reason as candidate_rows: the legacy boundary prefilter
+            # reads opacity from the 20-column layout and its output is
+            # trusted verbatim by the caller, so a v2 buffer must not reach it.
+            return None
         if not self._native_mode or self._native_buffer is None or not native_available():
             return None
         try:
@@ -1360,7 +1399,15 @@ def build_cloud_columns(
     feature_index: Optional[FeatureSpatialIndex] = None,
     max_distance_km: float = float("inf"),
 ) -> ColumnIndex:
-    if feature_index is not None and feature_index._native_mode:
+    if (
+        feature_index is not None
+        and feature_index._native_mode
+        and not feature_index._native_layout_v2
+    ):
+        # Native column aggregation consumes legacy 20-column rows only; a v2
+        # buffer handed to that ABI would be re-read at the wrong stride, so
+        # those columns keep the Python aggregation (which stays authoritative
+        # for satellite probability semantics anyway).
         try:
             return build_native_cloud_columns(snapshot, feature_index, max_distance_km)
         except Exception:

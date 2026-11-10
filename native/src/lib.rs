@@ -9,6 +9,22 @@ use std::collections::HashMap;
 use std::slice;
 
 mod national;
+pub use national::{
+    assess_batch_with_status, NationalAssessmentError, OUTPUT_FIELDS as NATIONAL_OUTPUT_FIELDS,
+};
+pub mod astronomy;
+pub mod cams;
+pub mod cloud;
+pub mod cloud_structure;
+pub mod derivation;
+pub mod empirical;
+pub mod gfs;
+pub mod observer_diagnostics;
+pub mod profile_diagnostics;
+pub mod quality;
+pub mod solar_time;
+pub mod spectral;
+pub mod timeline;
 
 const FIELD_COUNT: usize = 20;
 const EARTH_RADIUS_KM: f64 = 6371.0;
@@ -37,7 +53,7 @@ const SOURCE_DISTANCE: usize = 16;
 const SOURCE_BEARING: usize = 17;
 const VISIBILITY: usize = 18;
 const PRECIPITATION: usize = 19;
-const METRIC_COUNT: usize = 9;
+pub const METRIC_COUNT: usize = 9;
 const CANDIDATE_PREFILTER_FIELDS: usize = 7;
 const BOUNDARY_PREFILTER_FIELDS: usize = 3;
 const AGG_COLUMN_FIELDS: usize = 31;
@@ -47,6 +63,54 @@ pub const NATIVE_ABI_VERSION: u32 = 3;
 
 type Feature = [f64; FIELD_COUNT];
 type GridKey = (i32, i32, i32);
+
+/// Versioned assessment feature row (contract `hsd-assessment-feature-row-v2`):
+/// the legacy 20-column row extended with the 2 m surface pair that powers the
+/// surface-parcel LCL cloud-base first guess, the satellite footprint geometry
+/// and the satellite cloud-probability pair. Absent values travel as NaN;
+/// consumers must treat NaN as "unknown", never backfill it as 0. The legacy
+/// 20-column layout stays untouched; only the v2 row carries these columns.
+pub const FEATURE_ROW_V2_FIELD_COUNT: usize = 27;
+pub const FEATURE_ROW_V2_SURFACE_TEMPERATURE_K: usize = 20;
+pub const FEATURE_ROW_V2_SURFACE_DEWPOINT_K: usize = 21;
+pub const FEATURE_ROW_V2_FOOTPRINT_AZIMUTH_WIDTH_DEG: usize = 22;
+pub const FEATURE_ROW_V2_FOOTPRINT_NEAR_DISTANCE_KM: usize = 23;
+pub const FEATURE_ROW_V2_FOOTPRINT_FAR_DISTANCE_KM: usize = 24;
+pub const FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY: usize = 25;
+pub const FEATURE_ROW_V2_CLOUD_PROBABILITY_GIVEN_CLOUD: usize = 26;
+pub const FEATURE_ROW_V2_NAMES: [&str; FEATURE_ROW_V2_FIELD_COUNT] = [
+    "lat",
+    "lon",
+    "distance_km",
+    "bearing_deg",
+    "pressure_hpa",
+    "geopotential_height_m",
+    "rh_percent",
+    "temperature_k",
+    "omega_pa_s",
+    "u_ms",
+    "v_ms",
+    "cloud_fraction_percent",
+    "cloud_liquid_kg_kg",
+    "cloud_ice_kg_kg",
+    "source_lat",
+    "source_lon",
+    "source_distance_km",
+    "source_bearing_deg",
+    "surface_visibility_m",
+    "precip_rate_kg_m2_s",
+    "surface_temperature_k",
+    "surface_dewpoint_k",
+    "footprint_azimuth_width_deg",
+    "footprint_near_distance_km",
+    "footprint_far_distance_km",
+    "horizontal_cloud_probability",
+    "cloud_probability_given_cloud",
+];
+const FEATURE_ROW_V2_LCL_BASE_SPREAD_M_PER_K: f64 = 125.0;
+const FEATURE_ROW_V2_LCL_BASE_NEAR_FIELD_KM: f64 = 120.0;
+
+pub type FeatureRowV2 = [f64; FEATURE_ROW_V2_FIELD_COUNT];
 
 #[no_mangle]
 pub extern "C" fn firesky_native_abi_version() -> u32 {
@@ -72,15 +136,34 @@ fn normalize_lon(lon: f64) -> f64 {
     value
 }
 
-fn angular_difference(a: f64, b: f64) -> f64 {
+pub fn angular_difference(a: f64, b: f64) -> f64 {
     ((a - b + 180.0).rem_euclid(360.0) - 180.0).abs()
 }
 
 fn clamp01(value: f64) -> f64 {
-    value.clamp(0.0, 1.0)
+    py_clamp01(value)
 }
 
-fn solar_refraction_deg(geometric_elevation_deg: f64) -> f64 {
+/// `scoring.clamp(value, low, high)` semantics: `max(low, min(high, value))`.
+/// Python's `min(high, NaN)` returns `high`, so a NaN input clamps to the
+/// upper bound instead of propagating.
+pub fn py_clamp01(value: f64) -> f64 {
+    py_clamp(value, 0.0, 1.0)
+}
+
+pub fn py_clamp(value: f64, low: f64, high: f64) -> f64 {
+    if value.is_nan() {
+        return high;
+    }
+    let bounded = if value < high { value } else { high };
+    if bounded < low {
+        low
+    } else {
+        bounded
+    }
+}
+
+pub fn solar_refraction_deg(geometric_elevation_deg: f64) -> f64 {
     if !geometric_elevation_deg.is_finite() || geometric_elevation_deg >= 85.0 {
         return 0.0;
     }
@@ -101,13 +184,13 @@ fn solar_refraction_deg(geometric_elevation_deg: f64) -> f64 {
     arc_seconds / 3600.0
 }
 
-fn solar_illumination_elevation_deg(geometric_elevation_deg: f64) -> f64 {
+pub fn solar_illumination_elevation_deg(geometric_elevation_deg: f64) -> f64 {
     geometric_elevation_deg
         + solar_refraction_deg(geometric_elevation_deg)
         + SOLAR_SEMI_DIAMETER_DEG
 }
 
-fn condensate_presence(feature: &Feature) -> Option<f64> {
+fn condensate_presence(feature: &[f64]) -> Option<f64> {
     if feature[CLOUD_LIQUID].is_nan() && feature[CLOUD_ICE].is_nan() {
         return None;
     }
@@ -120,7 +203,7 @@ fn condensate_presence(feature: &Feature) -> Option<f64> {
     }
 }
 
-fn condensate_component(value: f64) -> f64 {
+pub fn condensate_component(value: f64) -> f64 {
     if value.is_nan() || value <= 0.0 {
         0.0
     } else {
@@ -128,7 +211,7 @@ fn condensate_component(value: f64) -> f64 {
     }
 }
 
-fn explicit_cloud_presence(feature: &Feature, condensate: Option<f64>) -> Option<f64> {
+fn explicit_cloud_presence(feature: &[f64], condensate: Option<f64>) -> Option<f64> {
     if feature[CLOUD_FRACTION].is_nan() {
         condensate
     } else {
@@ -140,7 +223,7 @@ fn explicit_cloud_presence(feature: &Feature, condensate: Option<f64>) -> Option
     }
 }
 
-fn cloud_presence(feature: &Feature) -> f64 {
+fn cloud_presence(feature: &[f64]) -> f64 {
     let rh_presence = clamp01((feature[RH] - 45.0) / 45.0);
     explicit_cloud_presence(feature, condensate_presence(feature))
         .map(clamp01)
@@ -153,7 +236,7 @@ fn pressure_level_index(pressure: i32) -> Option<usize> {
         .position(|value| *value == pressure)
 }
 
-fn source_or(feature: &Feature, field: usize, fallback: usize) -> f64 {
+fn source_or(feature: &[f64], field: usize, fallback: usize) -> f64 {
     if feature[field].is_nan() {
         feature[fallback]
     } else {
@@ -161,7 +244,7 @@ fn source_or(feature: &Feature, field: usize, fallback: usize) -> f64 {
     }
 }
 
-fn feature_cloud_opacity(feature: &Feature) -> f64 {
+fn feature_cloud_opacity(feature: &[f64]) -> f64 {
     let rh_opacity = clamp01((feature[RH] - 82.0) / 16.0);
     let condensate = condensate_presence(feature);
     let explicit = if feature[CLOUD_FRACTION].is_nan() {
@@ -185,7 +268,7 @@ fn feature_cloud_opacity(feature: &Feature) -> f64 {
         .unwrap_or(rh_opacity)
 }
 
-fn feature_blocker_opacity(feature: &Feature) -> f64 {
+fn feature_blocker_opacity(feature: &[f64]) -> f64 {
     if feature[CLOUD_FRACTION].is_nan() && condensate_presence(feature).is_none() {
         clamp01((feature[RH] - 88.0) / 10.0)
     } else {
@@ -193,7 +276,7 @@ fn feature_blocker_opacity(feature: &Feature) -> f64 {
     }
 }
 
-fn lightpath_opacity(feature: &Feature, blocker_opacity: f64) -> f64 {
+fn lightpath_opacity(feature: &[f64], blocker_opacity: f64) -> f64 {
     let layer_factor = if feature[PRESSURE] >= 700.0 {
         1.0
     } else if feature[PRESSURE] >= 500.0 {
@@ -204,18 +287,18 @@ fn lightpath_opacity(feature: &Feature, blocker_opacity: f64) -> f64 {
     clamp01(blocker_opacity * layer_factor)
 }
 
-fn curvature_drop_m(distance_km: f64) -> f64 {
+pub fn curvature_drop_m(distance_km: f64) -> f64 {
     distance_km * distance_km * 1000.0 / (2.0 * EARTH_RADIUS_KM)
 }
 
-fn apparent_cloud_elevation(distance_km: f64, cloud_height_m: f64) -> f64 {
+pub fn apparent_cloud_elevation(distance_km: f64, cloud_height_m: f64) -> f64 {
     let visible_height_m = cloud_height_m - curvature_drop_m(distance_km);
     visible_height_m
         .atan2((distance_km * 1000.0).max(1.0))
         .to_degrees()
 }
 
-fn estimated_cloud_base(feature: &Feature) -> f64 {
+pub fn estimated_cloud_base(feature: &[f64]) -> f64 {
     let layer_depth_m = match feature[PRESSURE].round() as i32 {
         200 => 2200.0,
         250 => 2000.0,
@@ -231,6 +314,130 @@ fn estimated_cloud_base(feature: &Feature) -> f64 {
         _ => 900.0,
     };
     (feature[HEIGHT] - layer_depth_m).max(0.0)
+}
+
+/// Horizontal satellite occupancy on a v2 row. NaN (unknown) means "not
+/// carried", which falls through to the model cloud-fraction path; an explicit
+/// 0.0 is a real probability and must never be backfilled from humidity.
+fn v2_horizontal_probability(feature: &FeatureRowV2) -> Option<f64> {
+    let value = feature[FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY];
+    if value.is_nan() {
+        None
+    } else {
+        Some(clamp01(value))
+    }
+}
+
+/// v2 cloud opacity. A carried horizontal probability is the complete
+/// footprint occupancy: <=0 stays a hard 0 (RH cannot revive it) and a
+/// non-zero probability keeps the RH optical-thickness blend. Rows without
+/// the probability column take the legacy fraction/condensate path verbatim.
+fn v2_feature_cloud_opacity(feature: &FeatureRowV2) -> f64 {
+    if let Some(probability) = v2_horizontal_probability(feature) {
+        if probability <= 0.0 {
+            return 0.0;
+        }
+        let rh_opacity = clamp01((feature[RH] - 82.0) / 16.0);
+        return clamp01(0.22 * rh_opacity + 0.78 * probability);
+    }
+    feature_cloud_opacity(feature)
+}
+
+fn v2_feature_blocker_opacity(feature: &FeatureRowV2) -> f64 {
+    if v2_horizontal_probability(feature).is_some() {
+        return v2_feature_cloud_opacity(feature);
+    }
+    feature_blocker_opacity(feature)
+}
+
+/// v2 cloud base with the surface-parcel LCL first guess
+/// (`base_agl = 125 m/K * (T - Td)` above the observer). Unknown or inverted
+/// spread, far field, and an LCL above the deck ceiling all keep the legacy
+/// layer-depth table, exactly like `scoring.estimated_cloud_base_m`.
+pub fn v2_estimated_cloud_base(feature: &FeatureRowV2, observer_elevation_m: f64) -> f64 {
+    let legacy_base_m = estimated_cloud_base(feature);
+    if feature[DISTANCE] > FEATURE_ROW_V2_LCL_BASE_NEAR_FIELD_KM {
+        return legacy_base_m;
+    }
+    let temperature_k = feature[FEATURE_ROW_V2_SURFACE_TEMPERATURE_K];
+    let dewpoint_k = feature[FEATURE_ROW_V2_SURFACE_DEWPOINT_K];
+    if temperature_k.is_nan() || dewpoint_k.is_nan() {
+        return legacy_base_m;
+    }
+    let spread_k = temperature_k - dewpoint_k;
+    if !spread_k.is_finite() || spread_k < 0.0 {
+        return legacy_base_m;
+    }
+    let ceiling_m = (feature[HEIGHT] - 100.0).max(0.0);
+    let lcl_base_m = observer_elevation_m + FEATURE_ROW_V2_LCL_BASE_SPREAD_M_PER_K * spread_k;
+    if lcl_base_m > ceiling_m {
+        return legacy_base_m;
+    }
+    lcl_base_m.clamp(0.0, ceiling_m)
+}
+
+pub fn v2_apparent_cloud_elevation(
+    distance_km: f64,
+    cloud_height_m: f64,
+    observer_elevation_m: f64,
+) -> f64 {
+    let visible_height_m = cloud_height_m - observer_elevation_m - curvature_drop_m(distance_km);
+    visible_height_m
+        .atan2((distance_km * 1000.0).max(1.0))
+        .to_degrees()
+}
+
+/// Per-feature assessment metrics for one `hsd-assessment-feature-row-v2` row.
+/// Same 9-column output layout as the legacy batch. Horizontal occupancy
+/// drives explicit presence and the opacity pair; presence follows the
+/// effective Python index semantics (`clamp(explicit) else RH`), matching
+/// `scoring.py`'s FeatureSpatialIndex loop where the conditional assignment is
+/// shadowed by the final `explicit` composition. The conditional profile still
+/// rides the row for the column-aggregation contract and the roundtrip. All
+/// values stay NaN-transparent (unknown never becomes 0).
+pub fn v2_feature_metrics_row(
+    feature: &FeatureRowV2,
+    diagnostic_radius_km: f64,
+    observer_elevation_m: f64,
+) -> [f64; METRIC_COUNT] {
+    let condensate = condensate_presence(feature);
+    let horizontal = v2_horizontal_probability(feature);
+    let explicit = match horizontal {
+        Some(probability) => Some(probability),
+        None => explicit_cloud_presence(feature, condensate),
+    };
+    let within_radius = feature[DISTANCE] <= diagnostic_radius_km;
+    let rh_presence = clamp01((feature[RH] - 45.0) / 45.0);
+    let presence = if !within_radius {
+        0.0
+    } else {
+        explicit.map(clamp01).unwrap_or(rh_presence)
+    };
+    let cloud_opacity = v2_feature_cloud_opacity(feature);
+    let blocker_opacity = v2_feature_blocker_opacity(feature);
+    [
+        presence,
+        if within_radius {
+            explicit.unwrap_or(0.0)
+        } else {
+            0.0
+        },
+        if within_radius {
+            condensate_component(feature[CLOUD_LIQUID])
+        } else {
+            0.0
+        },
+        if within_radius {
+            condensate_component(feature[CLOUD_ICE])
+        } else {
+            0.0
+        },
+        cloud_opacity,
+        blocker_opacity,
+        lightpath_opacity(feature, blocker_opacity),
+        v2_estimated_cloud_base(feature, observer_elevation_m),
+        v2_apparent_cloud_elevation(feature[DISTANCE], feature[HEIGHT], observer_elevation_m),
+    ]
 }
 
 fn sightline_height(target_distance_km: f64, target_height_m: f64, sample_distance_km: f64) -> f64 {
@@ -532,6 +739,49 @@ pub unsafe extern "C" fn firesky_feature_metrics_batch(
     features_len as isize
 }
 
+/// Calculate assessment metrics for each `hsd-assessment-feature-row-v2` row
+/// (27 columns) without materializing Python rows. Output layout per row is
+/// the same 9 metrics as `firesky_feature_metrics_batch`, but the surface/LCL
+/// cloud base and the apparent top are observer-elevation aware, and the
+/// satellite probability columns participate in presence/opacity. The legacy
+/// 20-column ABI keeps its sea-level, probability-free semantics unchanged.
+///
+/// # Safety
+///
+/// `features_ptr` must be valid for `features_len * FEATURE_ROW_V2_FIELD_COUNT`
+/// doubles and `output_ptr` for `output_capacity * METRIC_COUNT` doubles during
+/// this call.
+#[no_mangle]
+pub unsafe extern "C" fn firesky_feature_metrics_batch_v2(
+    features_ptr: *const f64,
+    features_len: usize,
+    diagnostic_radius_km: f64,
+    observer_elevation_m: f64,
+    output_ptr: *mut f64,
+    output_capacity: usize,
+) -> isize {
+    if features_ptr.is_null() || output_ptr.is_null() {
+        return -1;
+    }
+    if output_capacity < features_len {
+        return -2;
+    }
+    let values = slice::from_raw_parts(features_ptr, features_len * FEATURE_ROW_V2_FIELD_COUNT);
+    let features: &[FeatureRowV2] = slice::from_raw_parts(
+        values.as_ptr().cast::<FeatureRowV2>(),
+        features_len,
+    );
+    let output_values = slice::from_raw_parts_mut(output_ptr, output_capacity * METRIC_COUNT);
+    let output: &mut [[f64; METRIC_COUNT]] = slice::from_raw_parts_mut(
+        output_values.as_mut_ptr().cast::<[f64; METRIC_COUNT]>(),
+        output_capacity,
+    );
+    for (position, feature) in features.iter().enumerate() {
+        output[position] = v2_feature_metrics_row(feature, diagnostic_radius_km, observer_elevation_m);
+    }
+    features_len as isize
+}
+
 fn candidate_prefilter_row(
     feature: &Feature,
     position: usize,
@@ -764,7 +1014,7 @@ pub unsafe extern "C" fn firesky_cloud_columns_batch(
             .cast::<[f64; AGG_COLUMN_FIELDS]>(),
         output_capacity,
     );
-    let presences: Vec<f64> = features.iter().map(cloud_presence).collect();
+    let presences: Vec<f64> = features.iter().map(|feature| cloud_presence(feature)).collect();
 
     for (output_index, column) in columns.iter().enumerate() {
         let layer_indices: Vec<usize> = column.layers.iter().flatten().copied().collect();
@@ -960,7 +1210,7 @@ pub unsafe extern "C" fn firesky_cloud_columns_batch(
     columns.len() as isize
 }
 
-fn destination_point(lat: f64, lon: f64, bearing_deg: f64, distance_km: f64) -> (f64, f64) {
+pub fn destination_point(lat: f64, lon: f64, bearing_deg: f64, distance_km: f64) -> (f64, f64) {
     let angular_distance = distance_km / EARTH_RADIUS_KM;
     let bearing = bearing_deg.to_radians();
     let lat1 = lat.to_radians();
@@ -1525,13 +1775,13 @@ pub unsafe extern "C" fn firesky_path_clearance_batch(
     let candidate_indices = slice::from_raw_parts(candidate_indices_ptr, candidate_len);
     let output = slice::from_raw_parts_mut(output_ptr, candidate_len);
 
-    let blocker_opacities: Vec<f64> = features.iter().map(feature_blocker_opacity).collect();
+    let blocker_opacities: Vec<f64> = features.iter().map(|feature| feature_blocker_opacity(feature)).collect();
     let lightpath_opacities: Vec<f64> = features
         .iter()
         .zip(blocker_opacities.iter())
         .map(|(feature, opacity)| lightpath_opacity(feature, *opacity))
         .collect();
-    let cloud_bases: Vec<f64> = features.iter().map(estimated_cloud_base).collect();
+    let cloud_bases: Vec<f64> = features.iter().map(|feature| estimated_cloud_base(feature)).collect();
     let apparent_tops: Vec<f64> = features
         .iter()
         .map(|feature| apparent_cloud_elevation(feature[DISTANCE], feature[HEIGHT]))
@@ -1702,13 +1952,13 @@ pub unsafe extern "C" fn firesky_boundary_clearance_batch(
     let target_heights = slice::from_raw_parts(target_heights_ptr, target_len);
     let output = slice::from_raw_parts_mut(output_ptr, target_len);
 
-    let blocker_opacities: Vec<f64> = features.iter().map(feature_blocker_opacity).collect();
+    let blocker_opacities: Vec<f64> = features.iter().map(|feature| feature_blocker_opacity(feature)).collect();
     let lightpath_opacities: Vec<f64> = features
         .iter()
         .zip(blocker_opacities.iter())
         .map(|(feature, opacity)| lightpath_opacity(feature, *opacity))
         .collect();
-    let cloud_bases: Vec<f64> = features.iter().map(estimated_cloud_base).collect();
+    let cloud_bases: Vec<f64> = features.iter().map(|feature| estimated_cloud_base(feature)).collect();
     let apparent_tops: Vec<f64> = features
         .iter()
         .map(|feature| apparent_cloud_elevation(feature[DISTANCE], feature[HEIGHT]))
@@ -1870,8 +2120,8 @@ pub unsafe extern "C" fn firesky_boundary_context_batch(
     let output_values = slice::from_raw_parts_mut(output_ptr, target_len * 2);
     let output: &mut [[f64; 2]] =
         slice::from_raw_parts_mut(output_values.as_mut_ptr().cast::<[f64; 2]>(), target_len);
-    let cloud_opacities: Vec<f64> = features.iter().map(feature_cloud_opacity).collect();
-    let blocker_opacities: Vec<f64> = features.iter().map(feature_blocker_opacity).collect();
+    let cloud_opacities: Vec<f64> = features.iter().map(|feature| feature_cloud_opacity(feature)).collect();
+    let blocker_opacities: Vec<f64> = features.iter().map(|feature| feature_blocker_opacity(feature)).collect();
     // pressure_bins: pressure_level → bearing_bin(2°) → Vec<feature_index>
     let mut pressure_bins: HashMap<i32, [Vec<usize>; 180]> = HashMap::new();
     let mut blocker_bins: Vec<Vec<usize>> = (0..180).map(|_| Vec::new()).collect();
@@ -1970,7 +2220,7 @@ pub unsafe extern "C" fn firesky_boundary_context_batch(
     target_len as isize
 }
 
-pub(crate) fn aerosol_transmission_samples_impl(
+pub fn aerosol_transmission_samples_impl(
     aod550: f64,
     observer_aod550: f64,
     inflow_aod550: f64,
@@ -2366,7 +2616,7 @@ fn cloud_hole_rear_blocking_opt(
     max_risk
 }
 
-fn required_illumination_height_m(
+pub fn required_illumination_height_m(
     distance_km: f64,
     solar_elevation_deg: f64,
     sector_delta_deg: f64,
@@ -3192,5 +3442,201 @@ mod national_ffi_tests {
         };
         assert_eq!(audit, -2);
         assert_eq!(target_audit, -2);
+    }
+}
+
+#[cfg(test)]
+mod feature_row_v2_tests {
+    use super::*;
+
+    fn base_row() -> FeatureRowV2 {
+        let mut row = [f64::NAN; FEATURE_ROW_V2_FIELD_COUNT];
+        row[LAT] = 35.0;
+        row[LON] = 138.0;
+        row[DISTANCE] = 30.0;
+        row[BEARING] = 90.0;
+        row[PRESSURE] = 850.0;
+        row[HEIGHT] = 1500.0;
+        row[RH] = 70.0;
+        row
+    }
+
+    fn legacy_row(row: &FeatureRowV2) -> Feature {
+        let mut legacy = [f64::NAN; FIELD_COUNT];
+        legacy.copy_from_slice(&row[..FIELD_COUNT]);
+        legacy
+    }
+
+    #[test]
+    fn v2_row_contract_has_the_declared_field_names() {
+        assert_eq!(FEATURE_ROW_V2_FIELD_COUNT, FIELD_COUNT + 7);
+        assert_eq!(FEATURE_ROW_V2_NAMES.len(), FEATURE_ROW_V2_FIELD_COUNT);
+        assert_eq!(
+            FEATURE_ROW_V2_NAMES[FEATURE_ROW_V2_SURFACE_TEMPERATURE_K],
+            "surface_temperature_k"
+        );
+        assert_eq!(
+            FEATURE_ROW_V2_NAMES[FEATURE_ROW_V2_SURFACE_DEWPOINT_K],
+            "surface_dewpoint_k"
+        );
+        assert_eq!(
+            FEATURE_ROW_V2_NAMES[FEATURE_ROW_V2_FOOTPRINT_AZIMUTH_WIDTH_DEG],
+            "footprint_azimuth_width_deg"
+        );
+        assert_eq!(
+            FEATURE_ROW_V2_NAMES[FEATURE_ROW_V2_FOOTPRINT_NEAR_DISTANCE_KM],
+            "footprint_near_distance_km"
+        );
+        assert_eq!(
+            FEATURE_ROW_V2_NAMES[FEATURE_ROW_V2_FOOTPRINT_FAR_DISTANCE_KM],
+            "footprint_far_distance_km"
+        );
+        assert_eq!(
+            FEATURE_ROW_V2_NAMES[FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY],
+            "horizontal_cloud_probability"
+        );
+        assert_eq!(
+            FEATURE_ROW_V2_NAMES[FEATURE_ROW_V2_CLOUD_PROBABILITY_GIVEN_CLOUD],
+            "cloud_probability_given_cloud"
+        );
+    }
+
+    #[test]
+    fn horizontal_zero_is_a_hard_zero_not_a_humidity_fallback() {
+        let mut row = base_row();
+        row[FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY] = 0.0;
+        row[FEATURE_ROW_V2_CLOUD_PROBABILITY_GIVEN_CLOUD] = 0.6;
+        let metrics = v2_feature_metrics_row(&row, 500.0, 0.0);
+        // Presence/explicit follow the horizontal occupancy (the effective
+        // Python index semantics), and the opacity pair stays 0 even though
+        // RH=70% would score non-zero.
+        assert_eq!(metrics[0], 0.0);
+        assert_eq!(metrics[1], 0.0);
+        assert_eq!(metrics[4], 0.0);
+        assert_eq!(metrics[5], 0.0);
+        assert_eq!(metrics[6], 0.0);
+        assert!(metrics[0] != clamp01((row[RH] - 45.0) / 45.0));
+    }
+
+    #[test]
+    fn horizontal_without_conditional_falls_back_to_horizontal_presence() {
+        let mut row = base_row();
+        row[FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY] = 1.0;
+        let metrics = v2_feature_metrics_row(&row, 500.0, 0.0);
+        assert_eq!(metrics[0], 1.0);
+        assert_eq!(metrics[1], 1.0);
+        assert_eq!(metrics[4], 0.78); // 0.22 * 0.0 (rh=70) + 0.78 * 1.0
+        assert_eq!(metrics[5], 0.78);
+    }
+
+    #[test]
+    fn unknown_horizontal_stays_unknown_and_takes_the_fraction_path() {
+        let mut row = base_row();
+        row[CLOUD_FRACTION] = 40.0;
+        let metrics = v2_feature_metrics_row(&row, 500.0, 0.0);
+        // NaN horizontal must be "carried nowhere", not 0: presence/explicit
+        // come from the model fraction and opacity from the legacy blend.
+        assert_eq!(metrics[0], 0.4);
+        assert_eq!(metrics[1], 0.4);
+        assert_eq!(metrics[4], clamp01(0.22 * 0.0 + 0.78 * clamp01(0.4 * (0.35 + 0.65 * 0.5))));
+        assert_eq!(metrics[5], metrics[4]);
+    }
+
+    #[test]
+    fn unknown_fraction_and_condensate_fall_back_to_rh_presence() {
+        let row = base_row();
+        let metrics = v2_feature_metrics_row(&row, 500.0, 0.0);
+        assert_eq!(metrics[0], clamp01((row[RH] - 45.0) / 45.0));
+        assert_eq!(metrics[1], 0.0);
+        assert_eq!(metrics[2], 0.0);
+        assert_eq!(metrics[3], 0.0);
+        assert_eq!(metrics[4], clamp01((row[RH] - 82.0) / 16.0));
+        assert_eq!(metrics[5], clamp01((row[RH] - 88.0) / 10.0));
+    }
+
+    #[test]
+    fn v2_metrics_match_the_legacy_metrics_for_model_rows_at_sea_level() {
+        let mut row = base_row();
+        row[CLOUD_FRACTION] = 55.0;
+        row[CLOUD_LIQUID] = 1.0e-4;
+        let metrics = v2_feature_metrics_row(&row, 500.0, 0.0);
+        let legacy = legacy_row(&row);
+        let condensate = condensate_presence(&legacy);
+        let explicit = explicit_cloud_presence(&legacy, condensate);
+        let rh_presence = clamp01((legacy[RH] - 45.0) / 45.0);
+        let expected = [
+            explicit.map(clamp01).unwrap_or(rh_presence),
+            explicit.unwrap_or(0.0),
+            condensate_component(legacy[CLOUD_LIQUID]),
+            condensate_component(legacy[CLOUD_ICE]),
+            feature_cloud_opacity(&legacy),
+            feature_blocker_opacity(&legacy),
+            lightpath_opacity(&legacy, feature_blocker_opacity(&legacy)),
+            estimated_cloud_base(&legacy),
+            apparent_cloud_elevation(legacy[DISTANCE], legacy[HEIGHT]),
+        ];
+        assert_eq!(metrics, expected);
+    }
+
+    #[test]
+    fn surface_lcl_replaces_the_layer_depth_table_only_when_usable() {
+        let mut row = base_row();
+        row[FEATURE_ROW_V2_SURFACE_TEMPERATURE_K] = 290.0;
+        row[FEATURE_ROW_V2_SURFACE_DEWPOINT_K] = 288.5;
+        // Legacy table for 850 hPa: 1500 - 450 = 1050 m. LCL: 10 + 125 * 1.5.
+        assert_eq!(v2_estimated_cloud_base(&row, 10.0), 197.5);
+        assert_eq!(v2_estimated_cloud_base(&row, 0.0), 187.5);
+        assert_eq!(estimated_cloud_base(&row), 1050.0);
+        // Far field keeps the legacy table.
+        row[DISTANCE] = 400.0;
+        assert_eq!(v2_estimated_cloud_base(&row, 10.0), 1050.0);
+        row[DISTANCE] = 30.0;
+        // Inverted spread keeps the legacy table.
+        row[FEATURE_ROW_V2_SURFACE_DEWPOINT_K] = 296.0;
+        assert_eq!(v2_estimated_cloud_base(&row, 10.0), 1050.0);
+        // Unknown surface pair keeps the legacy table.
+        row[FEATURE_ROW_V2_SURFACE_TEMPERATURE_K] = f64::NAN;
+        row[FEATURE_ROW_V2_SURFACE_DEWPOINT_K] = 288.5;
+        assert_eq!(v2_estimated_cloud_base(&row, 10.0), 1050.0);
+        // An LCL above the deck ceiling keeps the legacy table.
+        row[FEATURE_ROW_V2_SURFACE_TEMPERATURE_K] = 295.0;
+        row[FEATURE_ROW_V2_SURFACE_DEWPOINT_K] = 283.0;
+        assert_eq!(v2_estimated_cloud_base(&row, 10.0), 1050.0);
+    }
+
+    #[test]
+    fn apparent_top_subtracts_the_observer_elevation() {
+        assert_eq!(
+            v2_apparent_cloud_elevation(30.0, 1500.0, 0.0),
+            apparent_cloud_elevation(30.0, 1500.0)
+        );
+        let sea_level = v2_apparent_cloud_elevation(30.0, 1500.0, 0.0);
+        let elevated = v2_apparent_cloud_elevation(30.0, 1500.0, 250.0);
+        assert!(elevated < sea_level);
+        assert_eq!(
+            elevated,
+            ((1500.0 - 250.0 - curvature_drop_m(30.0))
+                .atan2((30.0_f64 * 1000.0).max(1.0)))
+            .to_degrees()
+        );
+    }
+
+    #[test]
+    fn outside_the_diagnostic_radius_presence_gates_to_zero_but_opacity_stays() {
+        let mut row = base_row();
+        row[FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY] = 0.8;
+        row[FEATURE_ROW_V2_CLOUD_PROBABILITY_GIVEN_CLOUD] = 0.9;
+        row[CLOUD_LIQUID] = 1.0e-4;
+        let inside = v2_feature_metrics_row(&row, 500.0, 0.0);
+        let outside = v2_feature_metrics_row(&row, 10.0, 0.0);
+        assert_eq!(inside[0], 0.8);
+        assert_eq!(outside[0], 0.0);
+        assert_eq!(outside[1], 0.0);
+        assert_eq!(outside[2], 0.0);
+        assert_eq!(outside[3], 0.0);
+        assert_eq!(outside[4], inside[4]);
+        assert_eq!(outside[5], inside[5]);
+        assert_eq!(outside[7], inside[7]);
+        assert_eq!(outside[8], inside[8]);
     }
 }

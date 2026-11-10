@@ -16,7 +16,7 @@ NATIVE_RELEASE_DIR := native/target/release
 FRONTEND_BUILD_DIR := frontend/build
 
 .DEFAULT_GOAL := help
-.PHONY: help install native frontend build serve serve-frontend test check health contract docker-build up down prune clean
+.PHONY: help install native frontend build serve serve-frontend test check health contract docker-build up down prune clean desktop-macos
 
 help:
 	@echo "firesky — burning-sunset prediction engine"
@@ -24,6 +24,7 @@ help:
 	@echo "  make install    安装依赖（venv + pip[dev,cams,nowcast,ec]）并构建原生库与前端"
 	@echo "  make native     编译 Rust 光追评分器并发布 _cpu 变体"
 	@echo "  make frontend   npm ci + 构建 SvelteKit 前端到 frontend/build"
+	@echo "  make desktop-macos  构建 SwiftUI 原生开发版（复用本地 Python 环境）"
 	@echo "  make build      native + frontend"
 	@echo "  make serve      启动后端 uvicorn firesky.api:create_app (:8765)"
 	@echo "  make serve-frontend  前端开发模式（vite :5173，/api 代理到 8765）"
@@ -56,6 +57,9 @@ frontend:
 	cd frontend && npm ci --no-audit --no-fund && npm run build
 
 build: native frontend
+
+desktop-macos:
+	bash scripts/build_macos_native.sh
 
 # ── 运行 ─────────────────────────────────────────────────────────────────────
 serve:

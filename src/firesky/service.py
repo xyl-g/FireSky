@@ -3,12 +3,14 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import threading
 import time
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import numpy as np
@@ -25,6 +27,7 @@ from firesky.gfs import (
     GfsNomadsClient,
     LIGHTPATH_FETCH_RADIUS_KM,
     canonical_subset_bbox,
+    decoded_grid_cache_path,
     features_from_decoded_grid,
     choose_gfs_cycle,
     vectorized_distance_and_bearing,
@@ -67,6 +70,14 @@ HISTORICAL_HSD_LOOKAHEAD_MINUTES = 10.0
 ENVIRONMENT_INPUTS_TIMEOUT_SECONDS = 300.0
 
 
+def _native_gfs_prior_enabled() -> bool:
+    configured = os.environ.get("FIRESKY_GFS_PRIOR_BACKEND", "rust")
+    configured = configured.strip().lower()
+    if configured not in {"python", "rust"}:
+        raise ValueError("FIRESKY_GFS_PRIOR_BACKEND must be python or rust")
+    return configured == "rust"
+
+
 def _future_result_with_deadline(future, deadline: float):
     remaining = deadline - time.monotonic()
     if remaining <= 0.0:
@@ -96,7 +107,57 @@ class GfsNowcastVerticalPriorProvider:
         self._lock = threading.Lock()
 
     def for_request(self, request: ForecastRequest) -> Callable[[GeoPoint, datetime], VerticalPrior]:
-        return lambda point, valid_time: self._get(request, point, valid_time)
+        def provider(point, valid_time):
+            return self._get(request, point, valid_time)
+
+        provider.batch = lambda points, valid_time: self._batch(request, points, valid_time)
+        provider.native_retrieval_context = lambda valid_time: self.native_retrieval_context(
+            request, valid_time
+        )
+        return provider
+
+    def native_retrieval_context(
+        self,
+        request: ForecastRequest,
+        valid_time: datetime,
+    ) -> Optional[dict[str, Any]]:
+        """Return cache-only inputs for the unified calibrated-retrieval RPC."""
+        valid_time = valid_time.astimezone(timezone.utc)
+        cycle = choose_model_cycle("gfs", valid_time, request.gfs_cycle_override)
+        elapsed_hours = (valid_time - cycle).total_seconds() / 3600.0
+        if elapsed_hours < -1e-6:
+            raise ValueError("satellite time precedes selected GFS cycle")
+        left_hour = max(0, int(math.floor(elapsed_hours)))
+        right_hour = left_hour if abs(elapsed_hours - left_hour) < 1e-6 else left_hour + 1
+        left = self._snapshot(request, cycle, left_hour)
+        right = left if right_hour == left_hour else self._snapshot(request, cycle, right_hour)
+        left_cache = decoded_grid_cache_path(Path(left.cache_path))
+        right_cache = decoded_grid_cache_path(Path(right.cache_path))
+        if not (left_cache / "manifest.json").is_file() or not (
+            right_cache / "manifest.json"
+        ).is_file():
+            return None
+        fraction = 0.0 if right is left else clamp(elapsed_hours - left_hour)
+        grid_step_km = max(
+            1.0, float(getattr(self.client, "_res_grid_deg", 0.25)) * 111.2
+        )
+        local_radius_km = min(
+            max(float(request.radius_km), float(LIGHTPATH_FETCH_RADIUS_KM)),
+            max(35.0, 2.0 * grid_step_km),
+        )
+        return {
+            "cycle_time_utc": cycle,
+            "left_forecast_hour": left_hour,
+            "right_forecast_hour": right_hour,
+            "fraction": fraction,
+            "left_cache_path": left_cache,
+            "right_cache_path": right_cache,
+            "local_radius_km": local_radius_km,
+            "domain_hash": hashlib.sha256(
+                (left.source_url + "|" + right.source_url).encode()
+            ).hexdigest()[:16],
+            "resolution": self.client.resolution,
+        }
 
     def _get(self, request: ForecastRequest, point: GeoPoint, valid_time: datetime) -> VerticalPrior:
         valid_time = valid_time.astimezone(timezone.utc)
@@ -133,6 +194,23 @@ class GfsNowcastVerticalPriorProvider:
             f"{hashlib.sha256((left.source_url + '|' + right.source_url).encode()).hexdigest()[:16]}:"
             f"point={float(point.lat):+.5f},{float(point.lon):+.5f}"
         )
+        if _native_gfs_prior_enabled():
+            from firesky.rust_desktop_data import nowcast_gfs_prior
+
+            return nowcast_gfs_prior(
+                valid_time_utc=valid_time,
+                cycle_time_utc=cycle,
+                forecast_hour=left_hour,
+                source="gfs-interpolated-vertical-prior",
+                identity=identity,
+                terrain_left_asl_m=left_terrain,
+                terrain_right_asl_m=right_terrain,
+                target_lat=float(point.lat),
+                target_lon=float(point.lon),
+                fraction=fraction,
+                left_features=left_features,
+                right_features=right_features,
+            )
         return vertical_prior_from_features(
             valid_time_utc=valid_time,
             cycle_time_utc=cycle,
@@ -143,6 +221,273 @@ class GfsNowcastVerticalPriorProvider:
             features=features,
             target_lat=float(point.lat),
             target_lon=float(point.lon),
+        )
+
+    def _batch(
+        self,
+        request: ForecastRequest,
+        points: Sequence[GeoPoint],
+        valid_time: datetime,
+    ) -> list[Optional[VerticalPrior]]:
+        if not points:
+            return []
+        if not _native_gfs_prior_enabled():
+            result: list[Optional[VerticalPrior]] = []
+            for point in points:
+                try:
+                    result.append(self._get(request, point, valid_time))
+                except (RuntimeError, ValueError, KeyError, TypeError):
+                    result.append(None)
+            return result
+        valid_time = valid_time.astimezone(timezone.utc)
+        cycle = choose_model_cycle("gfs", valid_time, request.gfs_cycle_override)
+        elapsed_hours = (valid_time - cycle).total_seconds() / 3600.0
+        if elapsed_hours < -1e-6:
+            raise ValueError("satellite time precedes selected GFS cycle")
+        left_hour = max(0, int(math.floor(elapsed_hours)))
+        right_hour = left_hour if abs(elapsed_hours - left_hour) < 1e-6 else left_hour + 1
+        left = self._snapshot(request, cycle, left_hour)
+        right = left if right_hour == left_hour else self._snapshot(request, cycle, right_hour)
+        fraction = 0.0 if right is left else clamp(elapsed_hours - left_hour)
+        grid_step_km = max(
+            1.0, float(getattr(self.client, "_res_grid_deg", 0.25)) * 111.2
+        )
+        local_radius_km = min(
+            max(float(request.radius_km), float(LIGHTPATH_FETCH_RADIUS_KM)),
+            max(35.0, 2.0 * grid_step_km),
+        )
+        domain_hash = hashlib.sha256(
+            (left.source_url + "|" + right.source_url).encode()
+        ).hexdigest()[:16]
+        # The decoded-grid contract is the measured fast path: it reads each
+        # shared array once and avoids Python feature extraction per sample.
+        # If it is unavailable, keep the established feature-array fallback for
+        # older decoded caches, while preserving per-sample unknown semantics.
+        decoded = self._decoded_batch(
+            valid_time=valid_time,
+            cycle=cycle,
+            left_hour=left_hour,
+            right_hour=right_hour,
+            fraction=fraction,
+            local_radius_km=local_radius_km,
+            left=left,
+            right=right,
+            domain_hash=domain_hash,
+            points=points,
+        )
+        if decoded is not None:
+            return decoded
+        return self._feature_batch(
+            valid_time=valid_time,
+            cycle=cycle,
+            left_hour=left_hour,
+            right_hour=right_hour,
+            fraction=fraction,
+            local_radius_km=local_radius_km,
+            left=left,
+            right=right,
+            domain_hash=domain_hash,
+            points=points,
+        )
+
+    def _feature_batch(
+        self,
+        *,
+        valid_time: datetime,
+        cycle: datetime,
+        left_hour: int,
+        right_hour: int,
+        fraction: float,
+        local_radius_km: float,
+        left: _SharedGfsNowcastDomain,
+        right: _SharedGfsNowcastDomain,
+        domain_hash: str,
+        points: Sequence[GeoPoint],
+    ) -> list[Optional[VerticalPrior]]:
+        """Fallback for caches that do not expose a usable decoded sidecar."""
+        native_requests = []
+        shared_items = []
+        positions = []
+        for index, point in enumerate(points):
+            try:
+                left_features = features_from_decoded_grid(left.grid, point, local_radius_km)
+                right_features = (
+                    left_features
+                    if right is left
+                    else features_from_decoded_grid(right.grid, point, local_radius_km)
+                )
+                left_terrain = self._terrain_at(left, point)
+                right_terrain = left_terrain if right is left else self._terrain_at(right, point)
+                identity = (
+                    f"gfs-prior:{cycle:%Y%m%d%H}:f{left_hour:03d}-{right_hour:03d}:"
+                    f"{self.client.resolution}:domain={domain_hash}:"
+                    f"point={float(point.lat):+.5f},{float(point.lon):+.5f}"
+                )
+                native_requests.append(
+                    {
+                        "valid_time_utc": valid_time,
+                        "cycle_time_utc": cycle,
+                        "forecast_hour": left_hour,
+                        "source": "gfs-interpolated-vertical-prior",
+                        "identity": identity,
+                        "terrain_left_asl_m": left_terrain,
+                        "terrain_right_asl_m": right_terrain,
+                        "target_lat": float(point.lat),
+                        "target_lon": float(point.lon),
+                        "fraction": fraction,
+                        "left_features": left_features,
+                        "right_features": right_features,
+                    }
+                )
+                shared_items.append(
+                    (
+                        left_features,
+                        right_features,
+                        {
+                            "identity": identity,
+                            "terrain_left_asl_m": left_terrain,
+                            "terrain_right_asl_m": right_terrain,
+                            "target_lat": float(point.lat),
+                            "target_lon": float(point.lon),
+                        },
+                    )
+                )
+                positions.append(index)
+            except (RuntimeError, ValueError, KeyError, TypeError):
+                continue
+        result: list[Optional[VerticalPrior]] = [None] * len(points)
+        if native_requests:
+            from firesky.rust_desktop_data import (
+                nowcast_gfs_prior_shared_batch,
+                nowcast_gfs_priors,
+            )
+
+            def feature_key(feature: GridCellFeature) -> tuple[float, float, int]:
+                return (
+                    round(float(feature.lat), 5),
+                    round(float(feature.lon), 5),
+                    int(feature.pressure_hpa),
+                )
+
+            def old_batch() -> list[VerticalPrior]:
+                result: list[VerticalPrior] = []
+                chunk = []
+                feature_count = 0
+                for request_item in native_requests:
+                    item_count = len(request_item["left_features"]) + len(
+                        request_item["right_features"]
+                    )
+                    if chunk and (
+                        len(chunk) >= 128 or feature_count + item_count > 4_000
+                    ):
+                        result.extend(nowcast_gfs_priors(chunk))
+                        chunk = []
+                        feature_count = 0
+                    chunk.append(request_item)
+                    feature_count += item_count
+                if chunk:
+                    result.extend(nowcast_gfs_priors(chunk))
+                return result
+
+            shared_chunks = []
+            current_left: dict[tuple[float, float, int], GridCellFeature] = {}
+            current_right: dict[tuple[float, float, int], GridCellFeature] = {}
+            current_requests = []
+            shared_possible = True
+            for left_features, right_features, shared_request in shared_items:
+                left_map = {feature_key(item): item for item in left_features}
+                right_map = {feature_key(item): item for item in right_features}
+                if (
+                    left_map.keys() != right_map.keys()
+                    or len(left_map) > 2_400
+                    or len(right_map) > 2_400
+                ):
+                    shared_possible = False
+                    break
+                candidate_keys = set(current_left) | set(left_map)
+                if current_requests and (
+                    len(current_requests) >= 128 or len(candidate_keys) > 2_400
+                ):
+                    shared_chunks.append(
+                        (
+                            current_left,
+                            current_right,
+                            current_requests,
+                        )
+                    )
+                    current_left = {}
+                    current_right = {}
+                    current_requests = []
+                current_left.update(left_map)
+                current_right.update(right_map)
+                current_requests.append(shared_request)
+            if current_requests:
+                shared_chunks.append((current_left, current_right, current_requests))
+
+            if shared_possible:
+                native = []
+                for left_map, right_map, requests_chunk in shared_chunks:
+                    ordered_keys = sorted(left_map)
+                    native.extend(
+                        nowcast_gfs_prior_shared_batch(
+                            valid_time_utc=valid_time,
+                            cycle_time_utc=cycle,
+                            forecast_hour=left_hour,
+                            source="gfs-interpolated-vertical-prior",
+                            fraction=fraction,
+                            left_features=[left_map[key] for key in ordered_keys],
+                            right_features=[right_map[key] for key in ordered_keys],
+                            requests=requests_chunk,
+                        )
+                    )
+            else:
+                native = old_batch()
+            for index, prior in zip(positions, native, strict=True):
+                result[index] = prior
+        return result
+
+    def _decoded_batch(
+        self,
+        *,
+        valid_time: datetime,
+        cycle: datetime,
+        left_hour: int,
+        right_hour: int,
+        fraction: float,
+        local_radius_km: float,
+        left: _SharedGfsNowcastDomain,
+        right: _SharedGfsNowcastDomain,
+        domain_hash: str,
+        points: Sequence[GeoPoint],
+    ) -> list[VerticalPrior] | None:
+        """Use decoded-grid caches directly; return None for the legacy fallback."""
+        left_path = Path(left.cache_path)
+        right_path = Path(right.cache_path)
+        # ``load_decoded_subset`` returns the raw GRIB path. The derived cache
+        # directory is the sidecar consumed by the native reader.
+        left_cache = decoded_grid_cache_path(left_path)
+        right_cache = decoded_grid_cache_path(right_path)
+        if not (left_cache / "manifest.json").is_file() or not (
+            right_cache / "manifest.json"
+        ).is_file():
+            return None
+        from firesky.rust_desktop_data import nowcast_gfs_prior_decoded_batch
+
+        return list(
+            nowcast_gfs_prior_decoded_batch(
+                valid_time_utc=valid_time,
+                cycle_time_utc=cycle,
+                left_forecast_hour=left_hour,
+                right_forecast_hour=right_hour,
+                source="gfs-interpolated-vertical-prior",
+                fraction=fraction,
+                local_radius_km=local_radius_km,
+                left_cache_path=left_cache,
+                right_cache_path=right_cache,
+                domain_hash=domain_hash,
+                resolution=self.client.resolution,
+                points=points,
+            )
         )
 
     def _terrain_at(self, domain: _SharedGfsNowcastDomain, point: GeoPoint) -> float:
@@ -570,27 +915,10 @@ class ForecastService:
         )
         # Score only independent calibrated scans actually present in the event
         # window. A projected future cloud field remains one target-time sample.
-        base_assessments = [
-            satellite_nowcast_assessment(
-                request,
-                nowcast.observed_feature_times_by_offset[observed_offset],
-                nowcast,
-                aerosol,
-                offset_minutes=observed_offset,
-            )
-            for observed_offset in sorted(nowcast.observed_features_by_offset)
-        ]
-        constrained_results = []
-        for step in base_assessments:
-            constrained, diagnosed = apply_nowcast_observation_constraints(
-                step,
-                nowcast,
-                step.valid_time_utc,
-                path_azimuth_deg=step.solar_azimuth_deg,
-                observer_elevation_m=request.point.elevation_m,
-            )
-            constrained_results.append((constrained, diagnosed))
-        assessments = [result[0] for result in constrained_results]
+        base_assessments, diagnosed_nowcast = nowcast_observation_assessments(
+            request, nowcast, aerosol
+        )
+        assessments = base_assessments
         core_indexes = nowcast_core_indexes(assessments, anchor_utc)
         assessments, quality, best_index = apply_unified_event_quality(
             assessments,
@@ -619,11 +947,7 @@ class ForecastService:
                 ),
             )
         diagnostic = assessments[diagnostic_index] if diagnostic_index is not None else None
-        nowcast = (
-            constrained_results[diagnostic_index][1]
-            if diagnostic_index is not None
-            else constrained_results[0][1]
-        )
+        nowcast = diagnosed_nowcast
         geometric_blocking = nowcast_geometric_path_blocking_risk(diagnostic, nowcast)
         geometric_samples = (
             diagnostic.cross_section.samples_count
@@ -1014,6 +1338,125 @@ def satellite_nowcast_assessment(
     )
 
 
+def nowcast_observation_assessments(
+    request: ForecastRequest,
+    nowcast: NowcastAdjustment,
+    aerosol: AerosolReading,
+    *,
+    backend: Optional[str] = None,
+) -> tuple[List[TimeStepAssessment], NowcastAdjustment]:
+    """Score every calibrated scan and apply the radar constraints.
+
+    `backend="python"` scores each scan through satellite_nowcast_assessment
+    and applies apply_nowcast_observation_constraints per step.  `backend=
+    "rust"` issues one native batch call whose output already carries the
+    radar-constrained assessments (same field semantics); the nowcast-side
+    diagnosis still happens in Python for the first scan.  Returns the
+    constrained assessments and the diagnosed nowcast.
+    """
+    from firesky.rust_desktop_data import nowcast_assessment_backend
+
+    backend = backend or nowcast_assessment_backend()
+    offsets = sorted(nowcast.observed_features_by_offset)
+    if backend == "rust":
+        from firesky.rust_desktop_data import (
+            nowcast_assessment,
+            nowcast_assessment_as_model,
+        )
+
+        radar = {
+            "source": nowcast.radar_source,
+            "coverage_ratio": nowcast.radar_coverage_ratio,
+            "age_minutes": nowcast.radar_age_minutes,
+            "max_dbz": nowcast.radar_max_dbz,
+            "local_precip_ratio": nowcast.radar_local_precip_ratio,
+            "path_precip_ratio": nowcast.radar_path_precip_ratio,
+            "convective_ratio": nowcast.radar_convective_ratio,
+            "convective_risk": nowcast.radar_convective_risk,
+        }
+        scans = []
+        for offset in offsets:
+            source_time = nowcast.observed_feature_times_by_offset[offset].astimezone(
+                timezone.utc
+            )
+            column_sets = _cloud_column_sets_for_observation_time(nowcast, source_time)
+            solar = solar_snapshot(request.point, source_time, request.timezone_name)
+            scans.append({
+                "features": list(nowcast.observed_features_by_offset[offset]),
+                "valid_time_utc": source_time,
+                "forecast_hour": 0,
+                "solar_elevation_deg": solar.elevation_deg,
+                "solar_azimuth_deg": solar.azimuth_deg,
+                "radar": radar,
+                "satellite_material_evidence": (
+                    _satellite_retrieval_material_evidence_for_sets(column_sets)
+                ),
+            })
+        payload = nowcast_assessment(
+            scans=scans,
+            timezone_name=request.timezone_name,
+            aerosol=aerosol,
+            observer_elevation_m=request.point.elevation_m,
+            map_radius_km=request.radius_km,
+            include_map_cells=request.include_map_cells,
+        )
+        rebuilt = nowcast_assessment_as_model(payload, scans=scans)["assessments"]
+        # assess_satellite_snapshot wraps each step: cloud_source_times_utc and
+        # the two provenance reason lines come from the satellite wrapper.
+        assessments = []
+        for source_time, step in zip(
+            (nowcast.observed_feature_times_by_offset[offset].astimezone(timezone.utc) for offset in offsets),
+            rebuilt,
+            strict=True,
+        ):
+            assessments.append(
+                replace(
+                    step,
+                        cloud_source_times_utc=[source_time],
+                    # assess_satellite_snapshot does not carry the point-scorer
+                    # selected_* diagnostics; the batch contract mirrors that.
+                    selected_observer_path_aod550=None,
+                    selected_inflow_path_aod550=None,
+                    selected_aerosol_path_variability_score=0.0,
+                    reasons=[
+                        '云场来源：卫星反演标准云格点。',
+                        (
+                            f'云场来源时次：{source_time:%Y-%m-%d %H:%MZ}；'
+                            f'霞光评估时刻：{source_time:%Y-%m-%d %H:%MZ}。'
+                        ),
+                    ] + step.reasons,
+                )
+            )
+        return assessments, _diagnose_nowcast_radar(nowcast)
+    if backend != "python":
+        raise ValueError("nowcast assessment backend must be python or rust")
+    base_assessments = [
+        satellite_nowcast_assessment(
+            request,
+            nowcast.observed_feature_times_by_offset[observed_offset],
+            nowcast,
+            aerosol,
+            offset_minutes=observed_offset,
+        )
+        for observed_offset in offsets
+    ]
+    constrained_results = []
+    diagnosed_nowcast = nowcast
+    for index, step in enumerate(base_assessments):
+        constrained, diagnosed = apply_nowcast_observation_constraints(
+            step,
+            nowcast,
+            step.valid_time_utc,
+            path_azimuth_deg=step.solar_azimuth_deg,
+            observer_elevation_m=request.point.elevation_m,
+            diagnose_nowcast=index == 0,
+        )
+        if index == 0:
+            diagnosed_nowcast = diagnosed
+        constrained_results.append(constrained)
+    return constrained_results, diagnosed_nowcast
+
+
 def _cloud_column_sets_for_observation_time(
     nowcast: NowcastAdjustment,
     source_time: datetime,
@@ -1138,12 +1581,58 @@ def nowcast_geometric_path_blocking_risk(
     return clamp(0.65 * direct_blocking + 0.35 * geometric_blocking)
 
 
+def _nowcast_radar_reason(
+    radar_reliability: float,
+    convective_risk: float,
+    path_blocking_risk: float,
+    convective_ceiling: float,
+) -> str:
+    reason = (
+        f'雷达约束：可靠度 {radar_reliability * 100:.0f}/100，'
+        f'区域对流风险 {convective_risk * 100:.0f}/100，'
+        f'日落光路阻塞风险 {path_blocking_risk * 100:.0f}/100，'
+        f'最终分数上限 {convective_ceiling * 100:.0f}/100。'
+    )
+    if radar_reliability < 0.25:
+        reason += '覆盖或时效不足，不施加强约束，也不用无回波推断晴空。'
+    return reason
+
+
+def _diagnose_nowcast_radar(nowcast: NowcastAdjustment) -> NowcastAdjustment:
+    """Nowcast-side radar diagnosis (the `diagnose_nowcast` half of
+    apply_nowcast_observation_constraints), used when the assessment-side
+    radar constraints were already applied inside the native batch."""
+    radar_reliability, convective_risk = radar_effective_convective_risk(nowcast)
+    path_blocking_risk = radar_effective_path_blocking_risk(nowcast)
+    convective_ceiling = clamp(
+        1.0 - 0.88 * observation_ramp(path_blocking_risk, 0.18, 0.72),
+        low=0.12,
+    )
+    diagnostics = list(nowcast.summary)
+    if nowcast.radar_source is not None:
+        diagnostics.append(
+            _nowcast_radar_reason(
+                radar_reliability, convective_risk, path_blocking_risk, convective_ceiling
+            )
+        )
+    return replace(
+        nowcast,
+        radar_reliability_score=radar_reliability,
+        effective_convective_risk=convective_risk,
+        effective_path_blocking_risk=path_blocking_risk,
+        convective_score_ceiling=convective_ceiling,
+        summary=diagnostics,
+    )
+
+
 def apply_nowcast_observation_constraints(
     assessment: TimeStepAssessment,
     nowcast: NowcastAdjustment,
     anchor_utc: datetime,
     path_azimuth_deg: Optional[float] = None,
     observer_elevation_m: Optional[float] = None,
+    *,
+    diagnose_nowcast: bool = True,
 ) -> tuple[TimeStepAssessment, NowcastAdjustment]:
     radar_reliability, convective_risk = radar_effective_convective_risk(nowcast)
     path_blocking_risk = radar_effective_path_blocking_risk(nowcast)
@@ -1188,14 +1677,9 @@ def apply_nowcast_observation_constraints(
     reasons = list(assessment.reasons)
     diagnostics = list(nowcast.summary)
     if nowcast.radar_source is not None:
-        radar_reason = (
-            f'雷达约束：可靠度 {radar_reliability * 100:.0f}/100，'
-            f'区域对流风险 {convective_risk * 100:.0f}/100，'
-            f'日落光路阻塞风险 {path_blocking_risk * 100:.0f}/100，'
-            f'最终分数上限 {convective_ceiling * 100:.0f}/100。'
+        radar_reason = _nowcast_radar_reason(
+            radar_reliability, convective_risk, path_blocking_risk, convective_ceiling
         )
-        if radar_reliability < 0.25:
-            radar_reason += '覆盖或时效不足，不施加强约束，也不用无回波推断晴空。'
         reasons.append(radar_reason)
         diagnostics.append(radar_reason)
     score_ceiling = convective_ceiling
@@ -1219,13 +1703,17 @@ def apply_nowcast_observation_constraints(
         ),
         observation_score_ceiling=(score_ceiling if score_ceiling < 1.0 else None),
     )
-    diagnosed = replace(
-        nowcast,
-        radar_reliability_score=radar_reliability,
-        effective_convective_risk=convective_risk,
-        effective_path_blocking_risk=path_blocking_risk,
-        convective_score_ceiling=convective_ceiling,
-        summary=diagnostics,
+    diagnosed = (
+        replace(
+            nowcast,
+            radar_reliability_score=radar_reliability,
+            effective_convective_risk=convective_risk,
+            effective_path_blocking_risk=path_blocking_risk,
+            convective_score_ceiling=convective_ceiling,
+            summary=diagnostics,
+        )
+        if diagnose_nowcast
+        else nowcast
     )
     return constrained, diagnosed
 

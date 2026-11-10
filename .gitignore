@@ -8,3 +8,7 @@ logs/
 reports/
 .DS_Store
 etc/
+apps/macos/.build/
+apps/macos/.swiftpm/
+apps/windows/**/bin/
+apps/windows/**/obj/

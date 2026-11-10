@@ -40,6 +40,7 @@ hiddenimports = [
     "PySide6.QtWebEngineWidgets",
     "PySide6.QtWebEngineCore",
     "PySide6.QtWebChannel",
+    "PySide6.QtPositioning",
 ]
 
 # 地图页面与本地 Leaflet 资源：QWebEngine 用 file:// 加载，必须随包分发到
@@ -86,6 +87,18 @@ a = Analysis(
     noarchive=False,
 )
 
+# Some PySide wheels contain an extra Versions/Resources directory. The Qt
+# hook mistakes it for a framework version; keep resources beside the A binary.
+if sys.platform == "darwin":
+    misplaced = "PySide6/Qt/lib/QtWebEngineCore.framework/Versions/Resources/"
+    canonical = "PySide6/Qt/lib/QtWebEngineCore.framework/Versions/A/"
+    for toc in (a.binaries, a.datas):
+        toc[:] = [
+            (canonical + dest[len(misplaced):] if dest.startswith(misplaced) else dest,
+             source, kind)
+            for dest, source, kind in toc
+        ]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -118,7 +131,7 @@ if sys.platform == "darwin":
     app = BUNDLE(
         coll,
         name="FireSky.app",
-        icon=None,
+        icon=str(map_assets / "firesky.icns"),
         bundle_identifier="cn.firesky.desktop",
         info_plist={
             "CFBundleName": "FireSky",
@@ -126,6 +139,8 @@ if sys.platform == "darwin":
             "CFBundleShortVersionString": "0.1.1",
             "CFBundleVersion": "0.1.1",
             "NSHighResolutionCapable": True,
+            "NSLocationWhenInUseUsageDescription": "仅在您点击获取当前位置时定位，用于选择火烧云预测与实况观测地点。",
+            "NSLocationUsageDescription": "根据您主动请求的位置选择预测地点。",
             "LSMinimumSystemVersion": "12.0",
             "LSApplicationCategoryType": "public.app-category.weather",
             "NSHumanReadableCopyright": "Open source · non-commercial",

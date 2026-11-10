@@ -34,7 +34,9 @@ def _sha(path):
 
 
 def _identity(path, kwargs):
-    return {
+    from firesky.ecmwf_ifs import _ecmwf_decode_backend
+
+    identity = {
         "schema": SCHEMA, "path": str(path.resolve()), "raw_sha256": _sha(path),
         "sidecar_sha256": _sha(path.with_suffix(path.suffix + ".json")),
         "bbox": list(kwargs["bbox"]) if kwargs["bbox"] is not None else None,
@@ -45,6 +47,15 @@ def _identity(path, kwargs):
         "numpy_version": np.__version__, "eccodes_api_version": str(eccodes.codes_get_api_version()),
         "eccodes_python_version": importlib.metadata.version("eccodes"),
     }
+    if _ecmwf_decode_backend() == "rust":
+        from firesky.rust_grid import engine_binary
+        identity.update({
+            "decoder_backend": "rust-ec-basic-v1",
+            "rust_engine_sha256": _sha(engine_binary()),
+            "rust_bridge_sha256": _sha(Path(__file__).with_name("rust_ecmwf.py")),
+            "rust_transport_sha256": _sha(Path(__file__).with_name("tensor_bundle.py")),
+        })
+    return identity
 
 
 def _pack(tensor):

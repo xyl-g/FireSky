@@ -954,7 +954,6 @@ struct SolarPathCloudCacheKey {
     bearing_bits: u32,
 }
 
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct WindCacheKey {
     left: usize,
@@ -1726,17 +1725,13 @@ fn angular_cloud_footprint_with_radius(
     };
     let far_distance_km = (distance_km + footprint_radius_km).max(1.0);
     let near_distance_km = (distance_km - footprint_radius_km).max(1.0);
-    let remote_base_deg = apparent_elevation(far_distance_km, cloud_base_m).clamp(
-        VIEW_SUB_HORIZON_FLOOR_DEG,
-        VIEW_ELEVATION_BINS as f32,
-    );
+    let remote_base_deg = apparent_elevation(far_distance_km, cloud_base_m)
+        .clamp(VIEW_SUB_HORIZON_FLOOR_DEG, VIEW_ELEVATION_BINS as f32);
     let remote_top_deg = if contains_observer {
         VIEW_ELEVATION_BINS as f32
     } else {
-        apparent_elevation(near_distance_km, cloud_top_m).clamp(
-            VIEW_SUB_HORIZON_FLOOR_DEG,
-            VIEW_ELEVATION_BINS as f32,
-        )
+        apparent_elevation(near_distance_km, cloud_top_m)
+            .clamp(VIEW_SUB_HORIZON_FLOOR_DEG, VIEW_ELEVATION_BINS as f32)
     };
     let azimuth_bin_start = (((azimuth_start_deg + VIEW_AZIMUTH_HALF_DEG) / VIEW_AZIMUTH_BIN_DEG)
         .floor() as isize)
@@ -1787,18 +1782,13 @@ fn for_each_angular_cloud_cell_precomputed(
                 latitude_deg,
             )
             .unwrap_or(0.0);
-            apparent_elevation(exit_distance_km.max(0.001), cloud_base_m).clamp(
-                VIEW_SUB_HORIZON_FLOOR_DEG,
-                VIEW_ELEVATION_BINS as f32,
-            )
+            apparent_elevation(exit_distance_km.max(0.001), cloud_base_m)
+                .clamp(VIEW_SUB_HORIZON_FLOOR_DEG, VIEW_ELEVATION_BINS as f32)
         } else {
             footprint.remote_base_deg
         };
         let top = footprint.remote_top_deg;
-        if top <= base
-            || top <= VIEW_SUB_HORIZON_FLOOR_DEG
-            || base >= VIEW_ELEVATION_BINS as f32
-        {
+        if top <= base || top <= VIEW_SUB_HORIZON_FLOOR_DEG || base >= VIEW_ELEVATION_BINS as f32 {
             continue;
         }
         let elevation_start = base.floor().clamp(0.0, VIEW_ELEVATION_BINS as f32) as usize;
@@ -1812,8 +1802,7 @@ fn for_each_angular_cloud_cell_precomputed(
             } else {
                 bin_base
             };
-            let elevation_overlap =
-                (top.min(bin_base + 1.0) - base.max(bin_low)).clamp(0.0, 1.0);
+            let elevation_overlap = (top.min(bin_base + 1.0) - base.max(bin_low)).clamp(0.0, 1.0);
             let overlap = azimuth_overlap * elevation_overlap;
             if overlap <= 0.0 {
                 continue;
@@ -4043,11 +4032,7 @@ impl Batch<'_> {
                             }
                         });
                 }
-                (
-                    *key,
-                    cloud_layers,
-                    aerosol_paths,
-                )
+                (*key, cloud_layers, aerosol_paths)
             })
             .collect::<Vec<_>>();
         let mut keys = Vec::with_capacity(per_key.len());
@@ -5633,15 +5618,27 @@ impl Batch<'_> {
         scalar_field: usize,
     ) -> (CloudLayerSample, f32) {
         match layer {
-            HIGH => self.cloud_layer_sample_at_time_with_horizontal_and_scalar_impl::<
-                INCLUDE_SCALAR, HIGH,
-            >(time, horizontal, layer, scalar_field),
-            MID => self.cloud_layer_sample_at_time_with_horizontal_and_scalar_impl::<
-                INCLUDE_SCALAR, MID,
-            >(time, horizontal, layer, scalar_field),
-            _ => self.cloud_layer_sample_at_time_with_horizontal_and_scalar_impl::<
-                INCLUDE_SCALAR, LOW,
-            >(time, horizontal, layer, scalar_field),
+            HIGH => self
+                .cloud_layer_sample_at_time_with_horizontal_and_scalar_impl::<INCLUDE_SCALAR, HIGH>(
+                    time,
+                    horizontal,
+                    layer,
+                    scalar_field,
+                ),
+            MID => self
+                .cloud_layer_sample_at_time_with_horizontal_and_scalar_impl::<INCLUDE_SCALAR, MID>(
+                    time,
+                    horizontal,
+                    layer,
+                    scalar_field,
+                ),
+            _ => self
+                .cloud_layer_sample_at_time_with_horizontal_and_scalar_impl::<INCLUDE_SCALAR, LOW>(
+                    time,
+                    horizontal,
+                    layer,
+                    scalar_field,
+                ),
         }
     }
 
@@ -5885,7 +5882,11 @@ impl Batch<'_> {
         let right_present = right_sample.amount >= PRESENCE_FLOOR;
         if left_present != right_present {
             let take_right = weight >= clamp01(dither);
-            let chosen = if take_right { right_sample } else { left_sample };
+            let chosen = if take_right {
+                right_sample
+            } else {
+                left_sample
+            };
             if chosen.amount <= 0.0 {
                 return CloudLayerSample::default();
             }
@@ -6007,10 +6008,7 @@ impl Batch<'_> {
             .unwrap_or((CloudLayerSample::default(), 0.0));
         let scalar_weight = clamp01(weight);
         let dither = Self::blend_dither_threshold(
-            positions[0] * 13.0
-                + positions[1] * 7.0
-                + positions[2] * 17.0
-                + positions[3] * 5.0,
+            positions[0] * 13.0 + positions[1] * 7.0 + positions[2] * 17.0 + positions[3] * 5.0,
         );
         (
             Self::blend_cloud_layer_samples(left_sample, right_sample, weight, dither),
@@ -6310,11 +6308,23 @@ impl Batch<'_> {
         // original sum. Nonfinite inputs retain the two independent totals.
         if weight.is_finite() && horizontal.iter().all(|(_, value)| value.is_finite()) {
             self.cached_motion_cloud_layers_with_weights_impl::<true>(
-                buffers, left, right, weight, left_seconds, right_seconds, horizontal,
+                buffers,
+                left,
+                right,
+                weight,
+                left_seconds,
+                right_seconds,
+                horizontal,
             )
         } else {
             self.cached_motion_cloud_layers_with_weights_impl::<false>(
-                buffers, left, right, weight, left_seconds, right_seconds, horizontal,
+                buffers,
+                left,
+                right,
+                weight,
+                left_seconds,
+                right_seconds,
+                horizontal,
             )
         }
     }
@@ -6335,7 +6345,12 @@ impl Batch<'_> {
                 continue;
             }
             self.cache_motion_winds_for_cell_all_layers(
-                buffers, left, right, left_seconds, right_seconds, cell,
+                buffers,
+                left,
+                right,
+                left_seconds,
+                right_seconds,
+                cell,
             );
             let cache_base = cell * 3;
             for layer in 0..3 {
@@ -6358,12 +6373,19 @@ impl Batch<'_> {
                         buffers.motion_layer_cache[cache_index]
                     } else {
                         let positions = self.cached_motion_positions_for_cell(
-                            buffers, left, right, left_seconds, right_seconds, cell, layer,
+                            buffers,
+                            left,
+                            right,
+                            left_seconds,
+                            right_seconds,
+                            cell,
+                            layer,
                             buffers.motion_wind_cache[cache_index],
                         );
-                        let (value, body_risk) = self.motion_cloud_layer_sample_at_positions_with_scalars(
-                            left, right, weight, layer, positions,
-                        );
+                        let (value, body_risk) = self
+                            .motion_cloud_layer_sample_at_positions_with_scalars(
+                                left, right, weight, layer, positions,
+                            );
                         buffers.motion_layer_cache[cache_index] = value;
                         buffers.motion_layer_cache_generation[cache_index] =
                             buffers.layer_cache_current_generation;
@@ -6385,7 +6407,10 @@ impl Batch<'_> {
                     // Retain each field's corner order while placing its
                     // independent material sums in adjacent lanes.
                     let values = [
-                        cloud.opacity, cloud.material_quality, cloud.base_m, cloud.top_m,
+                        cloud.opacity,
+                        cloud.material_quality,
+                        cloud.base_m,
+                        cloud.top_m,
                     ];
                     for field in 0..4 {
                         material[layer][field] += cloud_weight * values[field];
@@ -6398,7 +6423,11 @@ impl Batch<'_> {
                 return CloudLayerSample::default();
             }
             CloudLayerSample {
-                amount: clamp01(if COMMON_AMOUNT { material_weight[layer] } else { amount[layer] }),
+                amount: clamp01(if COMMON_AMOUNT {
+                    material_weight[layer]
+                } else {
+                    amount[layer]
+                }),
                 opacity: clamp01(material[layer][0] / material_weight[layer]),
                 material_quality: clamp01(material[layer][1] / material_weight[layer]),
                 base_m: material[layer][2] / material_weight[layer],
@@ -6406,15 +6435,28 @@ impl Batch<'_> {
             }
         });
         if result.iter().all(|cloud: &CloudLayerSample| {
-            [cloud.amount, cloud.opacity, cloud.material_quality, cloud.base_m, cloud.top_m]
-                .iter().all(|value| value.is_finite())
+            [
+                cloud.amount,
+                cloud.opacity,
+                cloud.material_quality,
+                cloud.base_m,
+                cloud.top_m,
+            ]
+            .iter()
+            .all(|value| value.is_finite())
         }) {
             result
         } else {
             // NaN payload propagation depends on the original scalar shape.
             // Reuse its complete body on the same cache key, never sanitize it.
             self.cached_motion_cloud_layers_original_scalar_impl::<COMMON_AMOUNT>(
-                buffers, left, right, weight, left_seconds, right_seconds, horizontal,
+                buffers,
+                left,
+                right,
+                weight,
+                left_seconds,
+                right_seconds,
+                horizontal,
             )
         }
     }
@@ -7723,12 +7765,11 @@ impl Batch<'_> {
             } else {
                 1.0 - smooth_gate(ray_height_m, cloud.top_m, cloud.top_m + edge_softness)
             };
-            let target_extension_factor =
-                if target_extension_layer == Some(layer) {
-                    target_extension_factor
-                } else {
-                    1.0
-                };
+            let target_extension_factor = if target_extension_layer == Some(layer) {
+                target_extension_factor
+            } else {
+                1.0
+            };
             let blocker = cloud_blocking_factor(cloud, intersection, target_extension_factor);
             transmission *= 1.0 - blocker;
         }
@@ -7763,12 +7804,11 @@ impl Batch<'_> {
             } else {
                 1.0 - smooth_gate(ray_height_m, cloud.top_m, cloud.top_m + edge_softness)
             };
-            let target_extension_factor =
-                if target_extension_layer == Some(layer) {
-                    target_extension_factor
-                } else {
-                    1.0
-                };
+            let target_extension_factor = if target_extension_layer == Some(layer) {
+                target_extension_factor
+            } else {
+                1.0
+            };
             let blocker = cloud_blocking_factor_values(
                 cloud.amount,
                 cloud.opacity,
@@ -7809,12 +7849,11 @@ impl Batch<'_> {
             } else {
                 1.0 - smooth_gate(ray_height_m, cloud.top_m, cloud.top_m + edge_softness)
             };
-            let target_extension_factor =
-                if target_extension_layer == Some(layer) {
-                    target_extension_factor
-                } else {
-                    1.0
-                };
+            let target_extension_factor = if target_extension_layer == Some(layer) {
+                target_extension_factor
+            } else {
+                1.0
+            };
             let blocker = cloud_blocking_factor(cloud, intersection, target_extension_factor);
             transmission *= 1.0 - blocker;
         }
@@ -8081,10 +8120,10 @@ impl Batch<'_> {
                     1.0 - smooth_gate(ray_height_m, cloud.top_m, cloud.top_m + edge_softness)
                 };
                 let target_extension_factor = if target_extension_layers[0] == Some(blocker_layer) {
-                        target_extension_factors[0]
-                    } else {
-                        1.0
-                    };
+                    target_extension_factors[0]
+                } else {
+                    1.0
+                };
                 let blocker = cloud_blocking_factor(cloud, intersection, target_extension_factor);
                 transmission[0] *= 1.0 - blocker;
 
@@ -8097,10 +8136,10 @@ impl Batch<'_> {
                     1.0 - smooth_gate(ray_height_m, cloud.top_m, cloud.top_m + edge_softness)
                 };
                 let target_extension_factor = if target_extension_layers[1] == Some(blocker_layer) {
-                        target_extension_factors[1]
-                    } else {
-                        1.0
-                    };
+                    target_extension_factors[1]
+                } else {
+                    1.0
+                };
                 let blocker = cloud_blocking_factor(cloud, intersection, target_extension_factor);
                 transmission[1] *= 1.0 - blocker;
 
@@ -8113,10 +8152,10 @@ impl Batch<'_> {
                     1.0 - smooth_gate(ray_height_m, cloud.top_m, cloud.top_m + edge_softness)
                 };
                 let target_extension_factor = if target_extension_layers[2] == Some(blocker_layer) {
-                        target_extension_factors[2]
-                    } else {
-                        1.0
-                    };
+                    target_extension_factors[2]
+                } else {
+                    1.0
+                };
                 let blocker = cloud_blocking_factor(cloud, intersection, target_extension_factor);
                 transmission[2] *= 1.0 - blocker;
             }
@@ -8700,8 +8739,7 @@ impl Batch<'_> {
                             clouds[layer].top_m,
                         );
                         if target_deck_connected[layer] {
-                            if extensions[layer].amount < TARGET_DECK_HARD_CLEAR_AMOUNT
-                            {
+                            if extensions[layer].amount < TARGET_DECK_HARD_CLEAR_AMOUNT {
                                 // A real hole in the deck: break immediately.
                                 target_deck_connected[layer] = false;
                                 clear_gap_count[layer] += 1;
@@ -10699,7 +10737,8 @@ fn build_observer_work_canonical(
     observer_count: usize,
     step_count: usize,
 ) -> Vec<usize> {
-    if observer_count < 2 || std::env::var_os("FIRESKY_NATIVE_DISABLE_OBSERVER_WORK_REUSE").is_some()
+    if observer_count < 2
+        || std::env::var_os("FIRESKY_NATIVE_DISABLE_OBSERVER_WORK_REUSE").is_some()
     {
         return (0..observer_count).collect();
     }
@@ -10869,23 +10908,23 @@ fn assess_batch_internal(
     // cache and memory pressure enough to make the hot loop slower. Keep it
     // available for targeted comparison, but require an explicit opt-in so
     // the measured faster path is the default.
-    let observer_geometry_templates = if std::env::var_os("FIRESKY_NATIVE_ENABLE_GEOMETRY_TEMPLATES")
-        .is_some()
-        && std::env::var_os("FIRESKY_NATIVE_DISABLE_GEOMETRY_TEMPLATES").is_none()
-    {
-        ObserverGeometryTemplates::build(
-            observers,
-            observer_count,
-            rows,
-            cols,
-            lat0,
-            lon0,
-            spacing,
-            radius_km,
-        )
-    } else {
-        None
-    };
+    let observer_geometry_templates =
+        if std::env::var_os("FIRESKY_NATIVE_ENABLE_GEOMETRY_TEMPLATES").is_some()
+            && std::env::var_os("FIRESKY_NATIVE_DISABLE_GEOMETRY_TEMPLATES").is_none()
+        {
+            ObserverGeometryTemplates::build(
+                observers,
+                observer_count,
+                rows,
+                cols,
+                lat0,
+                lon0,
+                spacing,
+                radius_km,
+            )
+        } else {
+            None
+        };
     #[allow(unused_mut)]
     let mut batch = Batch {
         grid,
@@ -10964,8 +11003,7 @@ fn assess_batch_internal(
                     shared_solar_path_sample_sets.clone(),
                     solar_ray_diagnostics.clone(),
                 );
-                buffers.aerosol_interpolation_fast_path_safe =
-                    aerosol_interpolation_fast_path_safe;
+                buffers.aerosol_interpolation_fast_path_safe = aerosol_interpolation_fast_path_safe;
                 buffers
             },
             |buffers, (observer_index, rows)| {
@@ -10986,9 +11024,10 @@ fn assess_batch_internal(
                     let sample = &batch.samples[sample_start..sample_start + SAMPLE_FIELDS];
                     let duplicate_sample = duplicate_sample_cache_enabled
                         && previous_sample_valid
-                        && sample.iter().enumerate().all(|(index, value)| {
-                            value.to_bits() == previous_sample_bits[index]
-                        });
+                        && sample
+                            .iter()
+                            .enumerate()
+                            .all(|(index, value)| value.to_bits() == previous_sample_bits[index]);
                     if duplicate_sample {
                         rows[offset..offset + OUTPUT_FIELDS].copy_from_slice(&previous_output);
                         step_index += 1;
@@ -11199,10 +11238,27 @@ mod tests {
     #[test]
     fn material_lane_motion_blend_matches_original_scalar_bits() {
         let choices = [
-            -0.0, 0.0, -0.2, 0.05, 0.3, 0.75, 1.0, 1.2,
-            f32::from_bits(0x7fc00123), f32::from_bits(0xffc00456),
-            f32::INFINITY, f32::NEG_INFINITY, f32::MAX, -f32::MAX,
-            f32::from_bits(1), f32::MIN_POSITIVE, 1.25, 4_000.0, 10_000.0, -100.0, -800.0,
+            -0.0,
+            0.0,
+            -0.2,
+            0.05,
+            0.3,
+            0.75,
+            1.0,
+            1.2,
+            f32::from_bits(0x7fc00123),
+            f32::from_bits(0xffc00456),
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::MAX,
+            -f32::MAX,
+            f32::from_bits(1),
+            f32::MIN_POSITIVE,
+            1.25,
+            4_000.0,
+            10_000.0,
+            -100.0,
+            -800.0,
         ];
         let horizontals = [
             [(0, 0.125), (1, 0.25), (2, 0.5), (3, 0.125)],
@@ -11217,14 +11273,33 @@ mod tests {
         ];
         let grid = vec![0.0; 2 * 4 * GRID_FIELDS];
         let batch = Batch {
-            grid: &grid, aerosol_profiles: &[], time_count: 2, cell_count: 4,
-            observers: &[], samples: &[], step_count: 0, rows: 2, cols: 2,
-            lat0: 0.0, lon0: 0.0, spacing: 1.0, radius_km: 100.0,
+            grid: &grid,
+            aerosol_profiles: &[],
+            time_count: 2,
+            cell_count: 4,
+            observers: &[],
+            samples: &[],
+            step_count: 0,
+            rows: 2,
+            cols: 2,
+            lat0: 0.0,
+            lon0: 0.0,
+            spacing: 1.0,
+            radius_km: 100.0,
             observer_geometry_templates: None,
         };
-        let bits = |clouds: [CloudLayerSample; 3]| clouds.map(|cloud| {
-            [cloud.amount, cloud.opacity, cloud.material_quality, cloud.base_m, cloud.top_m].map(f32::to_bits)
-        });
+        let bits = |clouds: [CloudLayerSample; 3]| {
+            clouds.map(|cloud| {
+                [
+                    cloud.amount,
+                    cloud.opacity,
+                    cloud.material_quality,
+                    cloud.base_m,
+                    cloud.top_m,
+                ]
+                .map(f32::to_bits)
+            })
+        };
         let mut state = 0x64ba739du32;
         let mut buffers = SkyBuffers::new();
         let mut original_buffers = SkyBuffers::new();
@@ -11234,10 +11309,15 @@ mod tests {
                 state = state.wrapping_mul(1664525).wrapping_add(1013904223);
                 choices[(state >> 16) as usize % choices.len()]
             };
-            let clouds: [[CloudLayerSample; 3]; 4] = std::array::from_fn(|_| std::array::from_fn(|_| CloudLayerSample {
-                amount: value(), opacity: value(), material_quality: value(),
-                base_m: value(), top_m: value(),
-            }));
+            let clouds: [[CloudLayerSample; 3]; 4] = std::array::from_fn(|_| {
+                std::array::from_fn(|_| CloudLayerSample {
+                    amount: value(),
+                    opacity: value(),
+                    material_quality: value(),
+                    base_m: value(),
+                    top_m: value(),
+                })
+            });
             let weight = (scenario % 4) as f32 * 0.25;
             for current in [&mut buffers, &mut original_buffers] {
                 current.begin_layer_cache_for_sample(4, 0, 1, weight, 600.0, 900.0);
@@ -11257,17 +11337,39 @@ mod tests {
                 for _ in 0..2 {
                     let original = if common_amount {
                         batch.cached_motion_cloud_layers_original_scalar_impl::<true>(
-                            &mut original_buffers, 0, 1, weight, 600.0, 900.0, &horizontal,
+                            &mut original_buffers,
+                            0,
+                            1,
+                            weight,
+                            600.0,
+                            900.0,
+                            &horizontal,
                         )
                     } else {
                         batch.cached_motion_cloud_layers_original_scalar_impl::<false>(
-                            &mut original_buffers, 0, 1, weight, 600.0, 900.0, &horizontal,
+                            &mut original_buffers,
+                            0,
+                            1,
+                            weight,
+                            600.0,
+                            900.0,
+                            &horizontal,
                         )
                     };
                     let actual = batch.cached_motion_cloud_layers_with_weights(
-                        &mut buffers, 0, 1, weight, 600.0, 900.0, &horizontal,
+                        &mut buffers,
+                        0,
+                        1,
+                        weight,
+                        600.0,
+                        900.0,
+                        &horizontal,
                     );
-                    assert_eq!(bits(actual), bits(original), "scenario={scenario} horizontal={horizontal:?}");
+                    assert_eq!(
+                        bits(actual),
+                        bits(original),
+                        "scenario={scenario} horizontal={horizontal:?}"
+                    );
                     cases += 1;
                 }
             }
@@ -11278,12 +11380,33 @@ mod tests {
     #[test]
     fn common_motion_amount_preserves_original_bits_and_cache_state() {
         let choices = [
-            -0.0, 0.0, -0.2, 0.05, 0.3, 0.75, 1.0, 1.2,
-            f32::NAN, f32::INFINITY, f32::NEG_INFINITY,
-            f32::MAX, -f32::MAX, f32::from_bits(1),
+            -0.0,
+            0.0,
+            -0.2,
+            0.05,
+            0.3,
+            0.75,
+            1.0,
+            1.2,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            f32::MAX,
+            -f32::MAX,
+            f32::from_bits(1),
         ];
-        let weights = [-0.0, 0.0, 0.35, 1.0, -0.2, 1.2, f32::MAX, f32::NAN,
-                       f32::INFINITY, f32::NEG_INFINITY];
+        let weights = [
+            -0.0,
+            0.0,
+            0.35,
+            1.0,
+            -0.2,
+            1.2,
+            f32::MAX,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+        ];
         let horizontals = [
             [(0, 0.1), (1, 0.2), (2, 0.3), (3, 0.4)],
             [(0, 1.0), (1, 0.0), (2, -0.0), (3, -1.0)],
@@ -11294,10 +11417,18 @@ mod tests {
             [(0, f32::INFINITY), (1, 0.0), (2, 0.0), (3, 0.0)],
             [(4, 0.25), (0, 0.25), (1, 0.25), (2, 0.25)],
         ];
-        let bits = |layers: [CloudLayerSample; 3]| layers.map(|cloud| {
-            [cloud.amount, cloud.opacity, cloud.material_quality, cloud.base_m, cloud.top_m]
+        let bits = |layers: [CloudLayerSample; 3]| {
+            layers.map(|cloud| {
+                [
+                    cloud.amount,
+                    cloud.opacity,
+                    cloud.material_quality,
+                    cloud.base_m,
+                    cloud.top_m,
+                ]
                 .map(f32::to_bits)
-        });
+            })
+        };
         let mut state = 0x467bf591u32;
         let mut fast_cases = 0;
         let mut fallback_cases = 0;
@@ -11311,9 +11442,33 @@ mod tests {
                 for cell in 0..8 {
                     let offset = cell * GRID_FIELDS;
                     for (amount, opacity, material, base, top, u, v) in [
-                        (HIGH, HIGH_BLOCKER_OPACITY, HIGH_MATERIAL, HIGH_BASE, HIGH_TOP, HIGH_U, HIGH_V),
-                        (MID, MID_BLOCKER_OPACITY, MID_MATERIAL, MID_BASE, MID_TOP, MID_U, MID_V),
-                        (LOW, LOW_BLOCKER_OPACITY, LOW_MATERIAL, LOW_BASE, LOW_TOP, LOW_U, LOW_V),
+                        (
+                            HIGH,
+                            HIGH_BLOCKER_OPACITY,
+                            HIGH_MATERIAL,
+                            HIGH_BASE,
+                            HIGH_TOP,
+                            HIGH_U,
+                            HIGH_V,
+                        ),
+                        (
+                            MID,
+                            MID_BLOCKER_OPACITY,
+                            MID_MATERIAL,
+                            MID_BASE,
+                            MID_TOP,
+                            MID_U,
+                            MID_V,
+                        ),
+                        (
+                            LOW,
+                            LOW_BLOCKER_OPACITY,
+                            LOW_MATERIAL,
+                            LOW_BASE,
+                            LOW_TOP,
+                            LOW_U,
+                            LOW_V,
+                        ),
                     ] {
                         grid[offset + amount] = [0.0, 0.1, 0.4, 1.0][(cell + scenario) % 4];
                         grid[offset + opacity] = 0.2;
@@ -11326,9 +11481,19 @@ mod tests {
                 }
             }
             let batch = Batch {
-                grid: &grid, aerosol_profiles: &[], time_count: 2, cell_count: 4,
-                observers: &[], samples: &[], step_count: 0, rows: 2, cols: 2,
-                lat0: 0.0, lon0: 0.0, spacing: 1.0, radius_km: 100.0,
+                grid: &grid,
+                aerosol_profiles: &[],
+                time_count: 2,
+                cell_count: 4,
+                observers: &[],
+                samples: &[],
+                step_count: 0,
+                rows: 2,
+                cols: 2,
+                lat0: 0.0,
+                lon0: 0.0,
+                spacing: 1.0,
+                radius_km: 100.0,
                 observer_geometry_templates: None,
             };
             let mut actual_buffers = SkyBuffers::new();
@@ -11336,34 +11501,71 @@ mod tests {
             for weight in weights {
                 for (left_seconds, right_seconds) in [(0.0, 0.0), (600.0, 900.0)] {
                     for buffers in [&mut actual_buffers, &mut original_buffers] {
-                        buffers.begin_layer_cache_for_sample(4, 0, 1, weight, left_seconds, right_seconds);
+                        buffers.begin_layer_cache_for_sample(
+                            4,
+                            0,
+                            1,
+                            weight,
+                            left_seconds,
+                            right_seconds,
+                        );
                     }
                     for horizontal in &horizontals {
-                        if weight.is_finite() && horizontal.iter().all(|(_, value)| value.is_finite()) {
+                        if weight.is_finite()
+                            && horizontal.iter().all(|(_, value)| value.is_finite())
+                        {
                             fast_cases += 1;
                         } else {
                             fallback_cases += 1;
                         }
                         for _ in 0..2 {
                             let actual = batch.cached_motion_cloud_layers_with_weights(
-                                &mut actual_buffers, 0, 1, weight, left_seconds, right_seconds, horizontal,
+                                &mut actual_buffers,
+                                0,
+                                1,
+                                weight,
+                                left_seconds,
+                                right_seconds,
+                                horizontal,
                             );
-                            let original = batch.cached_motion_cloud_layers_with_weights_impl::<false>(
-                                &mut original_buffers, 0, 1, weight, left_seconds, right_seconds, horizontal,
-                            );
+                            let original = batch
+                                .cached_motion_cloud_layers_with_weights_impl::<false>(
+                                    &mut original_buffers,
+                                    0,
+                                    1,
+                                    weight,
+                                    left_seconds,
+                                    right_seconds,
+                                    horizontal,
+                                );
                             assert_eq!(bits(actual), bits(original),
                                 "scenario={scenario} weight={weight:?} seconds={left_seconds}/{right_seconds}");
                         }
                     }
-                    assert_eq!(actual_buffers.motion_scalar_cache_generation,
-                               original_buffers.motion_scalar_cache_generation);
                     assert_eq!(
-                        actual_buffers.motion_scalar_cache.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
-                        original_buffers.motion_scalar_cache.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+                        actual_buffers.motion_scalar_cache_generation,
+                        original_buffers.motion_scalar_cache_generation
                     );
-                    assert_eq!(actual_buffers.motion_state_cache, original_buffers.motion_state_cache);
-                    assert_eq!(actual_buffers.motion_layer_cache_generation,
-                               original_buffers.motion_layer_cache_generation);
+                    assert_eq!(
+                        actual_buffers
+                            .motion_scalar_cache
+                            .iter()
+                            .map(|value| value.to_bits())
+                            .collect::<Vec<_>>(),
+                        original_buffers
+                            .motion_scalar_cache
+                            .iter()
+                            .map(|value| value.to_bits())
+                            .collect::<Vec<_>>(),
+                    );
+                    assert_eq!(
+                        actual_buffers.motion_state_cache,
+                        original_buffers.motion_state_cache
+                    );
+                    assert_eq!(
+                        actual_buffers.motion_layer_cache_generation,
+                        original_buffers.motion_layer_cache_generation
+                    );
                 }
             }
         }
@@ -11373,8 +11575,17 @@ mod tests {
     #[test]
     fn specialized_horizontal_cloud_sampling_preserves_dynamic_bits() {
         let choices = [
-            -0.0, 0.0, -0.2, 0.05, 0.3, 0.75, 1.0, 1.2,
-            f32::NAN, f32::INFINITY, f32::NEG_INFINITY,
+            -0.0,
+            0.0,
+            -0.2,
+            0.05,
+            0.3,
+            0.75,
+            1.0,
+            1.2,
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
         ];
         let horizontals = [
             [(0, 0.1), (1, 0.2), (2, 0.3), (3, 0.4)],
@@ -11385,9 +11596,14 @@ mod tests {
         ];
         let bits = |(cloud, scalar): (CloudLayerSample, f32)| {
             [
-                cloud.amount, cloud.opacity, cloud.material_quality,
-                cloud.base_m, cloud.top_m, scalar,
-            ].map(f32::to_bits)
+                cloud.amount,
+                cloud.opacity,
+                cloud.material_quality,
+                cloud.base_m,
+                cloud.top_m,
+                scalar,
+            ]
+            .map(f32::to_bits)
         };
         let mut state = 0x742a5b3du32;
         for scenario in 0..128 {
@@ -11399,9 +11615,16 @@ mod tests {
             for cell in 0..8 {
                 let offset = cell * GRID_FIELDS;
                 let base = 300.0 + cell as f32 * 80.0;
-                let top = if scenario % 2 == 0 { base - 10.0 } else { base + 1_500.0 };
+                let top = if scenario % 2 == 0 {
+                    base - 10.0
+                } else {
+                    base + 1_500.0
+                };
                 for (base_field, top_field) in [
-                    (HIGH_BASE, HIGH_TOP), (MID_BASE, MID_TOP), (LOW_BASE, LOW_TOP), (BASE, TOP),
+                    (HIGH_BASE, HIGH_TOP),
+                    (MID_BASE, MID_TOP),
+                    (LOW_BASE, LOW_TOP),
+                    (BASE, TOP),
                 ] {
                     grid[offset + base_field] = base;
                     grid[offset + top_field] = top;
@@ -11413,7 +11636,13 @@ mod tests {
                     let offset = cell * GRID_FIELDS;
                     grid[offset + PRESSURE] = 550.0;
                     for (amount, opacity, material, base, top) in [
-                        (HIGH, HIGH_BLOCKER_OPACITY, HIGH_MATERIAL, HIGH_BASE, HIGH_TOP),
+                        (
+                            HIGH,
+                            HIGH_BLOCKER_OPACITY,
+                            HIGH_MATERIAL,
+                            HIGH_BASE,
+                            HIGH_TOP,
+                        ),
                         (MID, MID_BLOCKER_OPACITY, MID_MATERIAL, MID_BASE, MID_TOP),
                         (LOW, LOW_BLOCKER_OPACITY, LOW_MATERIAL, LOW_BASE, LOW_TOP),
                     ] {
@@ -11452,26 +11681,40 @@ mod tests {
                     for layer in 0..5 {
                         let actual = batch
                             .cloud_layer_sample_at_time_with_horizontal_and_scalar::<true>(
-                                time, horizontal, layer, HIGH_TARGET_BODY_RISK,
+                                time,
+                                horizontal,
+                                layer,
+                                HIGH_TARGET_BODY_RISK,
                             );
                         let reference = batch
                             .cloud_layer_sample_at_time_with_horizontal_and_scalar_impl::<true, 3>(
-                                time, horizontal, layer, HIGH_TARGET_BODY_RISK,
+                                time,
+                                horizontal,
+                                layer,
+                                HIGH_TARGET_BODY_RISK,
                             );
                         assert_eq!(
-                            bits(actual), bits(reference),
+                            bits(actual),
+                            bits(reference),
                             "scalar included, scenario={scenario} time={time} layer={layer}",
                         );
                         let actual = batch
                             .cloud_layer_sample_at_time_with_horizontal_and_scalar::<false>(
-                                time, horizontal, layer, HIGH_TARGET_BODY_RISK,
+                                time,
+                                horizontal,
+                                layer,
+                                HIGH_TARGET_BODY_RISK,
                             );
                         let reference = batch
                             .cloud_layer_sample_at_time_with_horizontal_and_scalar_impl::<false, 3>(
-                                time, horizontal, layer, HIGH_TARGET_BODY_RISK,
+                                time,
+                                horizontal,
+                                layer,
+                                HIGH_TARGET_BODY_RISK,
                             );
                         assert_eq!(
-                            bits(actual), bits(reference),
+                            bits(actual),
+                            bits(reference),
                             "scalar excluded, scenario={scenario} time={time} layer={layer}",
                         );
                     }
@@ -11996,10 +12239,16 @@ mod tests {
         // The exemption is full near the target, ramps linearly, and is gone
         // beyond the far cutoff so distant same-layer cells block normally.
         assert_eq!(target_extension_factor_at_distance(0.0), 0.20);
-        assert_eq!(target_extension_factor_at_distance(TARGET_SELF_SHIELD_NEAR_KM), 0.20);
+        assert_eq!(
+            target_extension_factor_at_distance(TARGET_SELF_SHIELD_NEAR_KM),
+            0.20
+        );
         let mid = 0.5 * (TARGET_SELF_SHIELD_NEAR_KM + TARGET_SELF_SHIELD_FAR_KM);
         assert_eq!(target_extension_factor_at_distance(mid), 0.60);
-        assert_eq!(target_extension_factor_at_distance(TARGET_SELF_SHIELD_FAR_KM), 1.0);
+        assert_eq!(
+            target_extension_factor_at_distance(TARGET_SELF_SHIELD_FAR_KM),
+            1.0
+        );
         assert_eq!(target_extension_factor_at_distance(400.0), 1.0);
         assert_eq!(target_extension_factor_at_distance(f32::NAN), 1.0);
     }
@@ -12082,7 +12331,8 @@ mod tests {
             grid[offset + TERRAIN_ELEVATION] = -100_000.0;
         }
         let batch = Batch {
-            grid: &grid, observer_geometry_templates: None,
+            grid: &grid,
+            observer_geometry_templates: None,
             aerosol_profiles: &[],
             time_count: 1,
             cell_count,
@@ -12177,7 +12427,6 @@ mod tests {
                     .to_bits()
             );
         }
-
 
         for layer in 0..3 {
             let mut single_buffers = SkyBuffers::new();
@@ -13168,13 +13417,9 @@ mod tests {
         };
         let top = AEROSOL_PROFILE_HEIGHTS_M[AEROSOL_PROFILE_LEVELS - 1];
         let above = column.vertical_optical_depth(4000.0, top, 4000.0);
-        let full = column.vertical_optical_depth(
-            AEROSOL_PROFILE_HEIGHTS_M[0],
-            top,
-            0.0,
-        );
-        let raw_fraction =
-            column.raw_integral(4000.0, top) / column.raw_integral(AEROSOL_PROFILE_HEIGHTS_M[0], top);
+        let full = column.vertical_optical_depth(AEROSOL_PROFILE_HEIGHTS_M[0], top, 0.0);
+        let raw_fraction = column.raw_integral(4000.0, top)
+            / column.raw_integral(AEROSOL_PROFILE_HEIGHTS_M[0], top);
         assert!(full == column.aod550 || (full - column.aod550).abs() < 1e-6);
         assert!(above < 0.5 * column.aod550, "above = {above}");
         assert!((above - column.aod550 * raw_fraction).abs() < 1e-5);
@@ -13594,32 +13839,53 @@ mod tests {
 
         let nan = f32::from_bits(0x7fc00123);
         let thicknesses = [
-            f32::NEG_INFINITY, -1.0, -0.0, 0.0,
+            f32::NEG_INFINITY,
+            -1.0,
+            -0.0,
+            0.0,
             f32::from_bits(MAX_SELF_SHIELD_TARGET_THICKNESS_M.to_bits() - 1),
             MAX_SELF_SHIELD_TARGET_THICKNESS_M,
             f32::from_bits(MAX_SELF_SHIELD_TARGET_THICKNESS_M.to_bits() + 1),
-            f32::INFINITY, nan,
+            f32::INFINITY,
+            nan,
         ];
         let amounts = [
-            f32::NEG_INFINITY, -0.2, -0.0, 0.0, 0.05, 0.1,
+            f32::NEG_INFINITY,
+            -0.2,
+            -0.0,
+            0.0,
+            0.05,
+            0.1,
             f32::from_bits(MAX_LAYERED_SELF_SHIELD_TARGET_AMOUNT.to_bits() - 1),
             MAX_LAYERED_SELF_SHIELD_TARGET_AMOUNT,
             f32::from_bits(MAX_LAYERED_SELF_SHIELD_TARGET_AMOUNT.to_bits() + 1),
-            1.0, f32::INFINITY, nan,
+            1.0,
+            f32::INFINITY,
+            nan,
         ];
         let risks = [-0.5, -0.0, 0.0, 0.19, 0.42, 0.6, 1.0, f32::INFINITY, nan];
         let adjacent_amounts = [
-            f32::NEG_INFINITY, -0.0, 0.0,
+            f32::NEG_INFINITY,
+            -0.0,
+            0.0,
             f32::from_bits(MIN_CONNECTED_TARGET_DECK_AMOUNT.to_bits() - 1),
             MIN_CONNECTED_TARGET_DECK_AMOUNT,
             f32::from_bits(MIN_CONNECTED_TARGET_DECK_AMOUNT.to_bits() + 1),
-            0.61, 0.75, 1.0, f32::INFINITY, nan,
+            0.61,
+            0.75,
+            1.0,
+            f32::INFINITY,
+            nan,
         ];
         let bounds = [
-            (4_000.0, 6_000.0), (8_000.0, 9_000.0),
-            (3_300.0, f32::from_bits(3_300.0f32.to_bits() - 1)), (3_300.0, 3_300.0),
-            (7_100.0, 8_000.0), (f32::from_bits(7_100.0f32.to_bits() + 1), 8_000.0),
-            (nan, f32::INFINITY), (f32::NEG_INFINITY, nan),
+            (4_000.0, 6_000.0),
+            (8_000.0, 9_000.0),
+            (3_300.0, f32::from_bits(3_300.0f32.to_bits() - 1)),
+            (3_300.0, 3_300.0),
+            (7_100.0, 8_000.0),
+            (f32::from_bits(7_100.0f32.to_bits() + 1), 8_000.0),
+            (nan, f32::INFINITY),
+            (f32::NEG_INFINITY, nan),
             (f32::NEG_INFINITY, f32::INFINITY),
         ];
         let mut cases = 0;
@@ -13630,7 +13896,9 @@ mod tests {
                         for adjacent_amount in adjacent_amounts {
                             for (base_m, top_m) in bounds {
                                 let adjacent = CloudLayerSample {
-                                    amount: adjacent_amount, base_m, top_m,
+                                    amount: adjacent_amount,
+                                    base_m,
+                                    top_m,
                                     ..CloudLayerSample::default()
                                 };
                                 let expected = original(layer, risk, thickness, amount, adjacent);
@@ -13638,9 +13906,16 @@ mod tests {
                                     layer, risk, 4_200.0, 6_200.0, thickness, amount, adjacent,
                                 );
                                 assert_eq!(actual.to_bits(), expected.to_bits());
-                                if !target_layer_self_shielding_needs_adjacent(layer, thickness, amount) {
+                                if !target_layer_self_shielding_needs_adjacent(
+                                    layer, thickness, amount,
+                                ) {
                                     let skipped = target_layer_self_shielding_risk(
-                                        layer, risk, 4_200.0, 6_200.0, thickness, amount,
+                                        layer,
+                                        risk,
+                                        4_200.0,
+                                        6_200.0,
+                                        thickness,
+                                        amount,
                                         CloudLayerSample::default(),
                                     );
                                     assert_eq!(skipped.to_bits(), expected.to_bits());

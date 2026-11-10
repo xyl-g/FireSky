@@ -1,0 +1,11 @@
+Astral 3.2
+Copyright 2009-2021, Simon Kennedy, sffjunkie+code@gmail.com
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+Upstream: https://github.com/sffjunkie/astral
+
+FireSky ports selected solar formulae from astral/sun.py, astral/julian.py
+and astral/__init__.py to native/src/astronomy.rs and engine/src/astronomy.rs.
+The port adds Rust types, input/resource bounds, a C ABI, IANA timezone
+handling, threshold/window orchestration and shared solar terms. It retains
+the reference's geometric-centre, refraction and second-resolution contracts.
+These are modified translations, not unmodified upstream source files.

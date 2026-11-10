@@ -1,0 +1,39 @@
+    :root { color-scheme: light; --ink:#182027; --muted:#667078; --line:#d8dde0; --paper:#f6f7f5; --white:#fff; --red:#d94b32; --amber:#e89320; --green:#287f6b; --blue:#3567a8; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; letter-spacing:0; }
+    header { background:#20282d; color:#fff; border-bottom:5px solid var(--amber); }
+    .wrap { width:min(1180px, calc(100% - 32px)); margin:0 auto; }
+    .head { min-height:230px; padding:34px 0 28px; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:28px; align-items:end; }
+    .eyebrow { color:#d6dcdf; font-size:13px; margin:0 0 12px; }
+    h1 { margin:0; font-size:clamp(30px,5vw,54px); line-height:1.08; font-weight:720; letter-spacing:0; }
+    .subtitle { margin:14px 0 0; color:#e7ebed; font-size:16px; line-height:1.7; }
+    .verdict { min-width:190px; padding-left:24px; border-left:1px solid #596268; }
+    .verdict strong { display:block; font-size:52px; line-height:1; color:#ffb13b; }
+    .verdict span { display:block; margin-top:8px; color:#e7ebed; }
+    main section { padding:30px 0; border-bottom:1px solid var(--line); }
+    h2 { margin:0 0 18px; font-size:20px; letter-spacing:0; }
+    .facts { display:flex; flex-wrap:wrap; gap:10px 24px; color:var(--muted); font-size:14px; }
+    .metrics { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; margin-top:22px; }
+    .metric { background:var(--white); border:1px solid var(--line); border-radius:6px; padding:15px; min-height:104px; }
+    .metric span { display:block; color:var(--muted); font-size:13px; }
+    .metric strong { display:block; margin-top:12px; font-size:29px; line-height:1; }
+    .metric.red strong { color:var(--red); } .metric.amber strong { color:#a75c00; } .metric.green strong { color:var(--green); } .metric.blue strong { color:var(--blue); }
+    .summary { display:grid; grid-template-columns:1fr 1fr; gap:12px 32px; margin:0; padding:0; list-style:none; }
+    .summary li { padding:0 0 12px 18px; border-bottom:1px solid var(--line); line-height:1.65; position:relative; }
+    .summary li::before { content:""; width:7px; height:7px; background:var(--amber); position:absolute; left:0; top:.62em; }
+    .chart-shell { background:var(--white); border:1px solid var(--line); border-radius:6px; padding:14px; overflow:hidden; }
+    .chart-shell svg { display:block; width:100%; height:auto; aspect-ratio:4 / 1.25; min-height:240px; }
+    .legend { display:flex; flex-wrap:wrap; gap:14px; margin:0 0 8px; font-size:13px; color:var(--muted); }
+    .legend i { display:inline-block; width:12px; height:3px; margin-right:6px; vertical-align:middle; }
+    .table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:6px; background:var(--white); }
+    table { width:100%; border-collapse:collapse; min-width:790px; font-variant-numeric:tabular-nums; }
+    th,td { padding:12px 14px; text-align:right; border-bottom:1px solid var(--line); white-space:nowrap; }
+    th:first-child,td:first-child { text-align:left; } th { background:#eef1f1; color:#4f5960; font-size:12px; } td { font-size:14px; }
+    tr.best td { background:#fff7e9; } tr:last-child td { border-bottom:0; }
+    .diagnostics { display:grid; gap:8px; }
+    details { background:var(--white); border:1px solid var(--line); border-radius:6px; }
+    summary { cursor:pointer; padding:14px 16px; font-weight:650; }
+    details ul { margin:0; padding:0 28px 16px 38px; color:#49535a; line-height:1.65; }
+    footer { padding:22px 0 34px; color:var(--muted); font-size:12px; }
+    @media (max-width:900px) { .metrics { grid-template-columns:repeat(3,1fr); } .summary { grid-template-columns:1fr; } }
+    @media (max-width:620px) { .wrap { width:min(100% - 20px,1180px); } .head { min-height:0; grid-template-columns:1fr; padding:24px 0; } .verdict { border-left:0; border-top:1px solid #596268; padding:18px 0 0; } .metrics { grid-template-columns:repeat(2,1fr); } .metric { min-height:94px; } .chart-shell { padding:8px; } main section { padding:24px 0; } }

@@ -64,6 +64,7 @@ from firesky.gfs import (
     PRESSURE_LEVELS,
     VARIABLES,
     _DecodedGfsGrid,
+    _gfs_decode_backend,
     bbox_contains,
     ensure_shared_decoded_grid_cache_capacity,
 )
@@ -1655,7 +1656,17 @@ def _coherent_sparse_upper_high_support(
     return np.where(coherent, values, 0.0).astype(np.float32)
 
 
+def _rust_cloud_enabled() -> bool:
+    backend = os.environ.get("FIRESKY_CLOUD_BACKEND", "python").strip().lower()
+    if backend not in {"python", "rust"}:
+        raise ValueError("FIRESKY_CLOUD_BACKEND must be python or rust")
+    return backend == "rust"
+
+
 def _presence(rh: np.ndarray, fraction: np.ndarray, liquid: np.ndarray, ice: np.ndarray) -> np.ndarray:
+    if _rust_cloud_enabled():
+        from firesky.cloud_native import optics
+        return optics(rh, fraction, liquid, ice)[0]
     total = np.maximum(np.nan_to_num(liquid, nan=0.0), 0.0) + np.maximum(np.nan_to_num(ice, nan=0.0), 0.0)
     condensate = np.where(total > 0.0, np.clip((np.log10(np.maximum(total, 1e-12)) + 8.0) / 3.0, 0.0, 1.0), 0.0)
     has_condensate = np.isfinite(liquid) | np.isfinite(ice)
@@ -1677,6 +1688,9 @@ def _blocker_opacity(
     ice: np.ndarray,
 ) -> np.ndarray:
     """Estimate actual light blocking without treating ordinary humidity as cloud."""
+    if _rust_cloud_enabled():
+        from firesky.cloud_native import optics
+        return optics(rh, fraction, liquid, ice)[1]
     rh_opacity = np.clip((np.nan_to_num(rh, nan=0.0) - 82.0) / 16.0, 0.0, 1.0)
     total = np.maximum(np.nan_to_num(liquid, nan=0.0), 0.0) + np.maximum(np.nan_to_num(ice, nan=0.0), 0.0)
     condensate = np.where(
@@ -1719,6 +1733,9 @@ def _effective_profile_cloud_fields(
     humidity remains a fallback only when the model has no fraction or
     condensate field for that level.
     """
+    if _rust_cloud_enabled():
+        from firesky.cloud_native import effective_profile
+        return effective_profile(profile)
     values = np.asarray(profile, dtype=np.float32)
     pressure = values[..., _PROFILE_PRESSURE]
     presence = np.clip(np.nan_to_num(values[..., _PROFILE_PRESENCE], nan=0.0), 0.0, 1.0)
@@ -1766,6 +1783,12 @@ def _resolved_family_body_deep_risks(
     family_top_m: tuple[np.ndarray, np.ndarray, np.ndarray],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Apply the legacy deep scalar to each resolved target cloud body."""
+    if _rust_cloud_enabled():
+        from firesky.cloud_native import body_risks
+        return body_risks(
+            target_amount, pressure_levels, aggregate_deep_risk, family_members,
+            family_amount, family_base_m, family_top_m,
+        )
     amount = np.clip(
         np.nan_to_num(np.asarray(target_amount, dtype=np.float32), nan=0.0),
         0.0,
@@ -2028,6 +2051,13 @@ def _vertical_cloud_structure(
     layers. The column material remains an internal connected-deep cap; the
     final three values are family-isolated material signals.
     """
+    if _rust_cloud_enabled():
+        from firesky.cloud_native import structure
+        return structure(
+            target_amount, pressure_levels, heights_m, liquid, ice, omega,
+            explicit_fields, aggregate_deep_risk, masks=_resolved_family_masks,
+            derive_layers=_derive_layer_materials,
+        )
     deep_structure = _vertical_cloud_deep_structure(
         target_amount,
         pressure_levels,
@@ -2264,6 +2294,13 @@ def _apply_connected_deep_material_cap(
     low_material: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Cap all participating layers only for a fully connected deep column."""
+    if _rust_cloud_enabled():
+        from firesky.cloud_native import connected_caps
+        return connected_caps(
+            cloud_material_class_code, column_cap,
+            high_amount, high_base, high_top, mid_amount, mid_base, mid_top,
+            low_amount, low_base, low_top, high_material, mid_material, low_material,
+        )
 
     def connected_families(
         first_amount: np.ndarray,
@@ -2311,6 +2348,10 @@ def derive_grid_layer_profiles(
     _prepared: _GridDerivationInputs | None = None,
 ) -> tuple[np.ndarray, tuple[int, ...]]:
     """Retain per-cell, per-pressure-level cloud inputs for later ray tracing."""
+    if _rust_cloud_enabled():
+        from firesky.cloud_native import derive_grid
+        _, profiles, levels = derive_grid(grid)
+        return profiles, levels
     prepared = (
         _prepared
         if _prepared is not None
@@ -2417,6 +2458,9 @@ def derive_grid_columns(
     *,
     _prepared: _GridDerivationInputs | None = None,
 ) -> np.ndarray:
+    if _rust_cloud_enabled():
+        from firesky.cloud_native import derive_grid
+        return derive_grid(grid)[0]
     prepared = (
         _prepared
         if _prepared is not None
@@ -3052,6 +3096,11 @@ def _regional_derivation_worker_count(grid_count: int) -> int:
 def _derive_grid_tensor_pair(
     grid: CanonicalRegionalGrid,
 ) -> tuple[np.ndarray, np.ndarray, tuple[int, ...]]:
+    if _rust_cloud_enabled() and any(
+        ("isobaricInhPa", level, "gh") in grid.fields for level in PRESSURE_LEVELS
+    ):
+        from firesky.cloud_native import derive_grid
+        return derive_grid(grid)
     try:
         prepared = _prepare_grid_derivation(grid)
     except RuntimeError as exc:
@@ -3228,7 +3277,7 @@ def _model_derived_cache_identity(
             "sidecar": sidecar_identity,
         })
     source = str(model_source).strip().lower()
-    return {
+    identity = {
         "format": _MODEL_DERIVED_CACHE_FORMAT,
         "algorithm": NATIONAL_BATCH_ALGORITHM,
         "model_source": source,
@@ -3239,6 +3288,32 @@ def _model_derived_cache_identity(
         "resolution": str(resolution),
         "sources": sources,
     }
+    identity.update(_experimental_derivation_backends(source))
+    return identity
+
+
+def _experimental_derivation_backends(model_source: str) -> dict[str, str]:
+    backends = {}
+    if _rust_cloud_enabled():
+        backends["cloud_optics_backend"] = "rust-f32-v3"
+    if str(model_source).strip().lower() == "gfs" and _gfs_decode_backend() == "rust":
+        backends["gfs_decoder_backend"] = "rust-grid-v2"
+    if str(model_source).strip().lower() == "ec":
+        from firesky.ecmwf_ifs import _ecmwf_decode_backend
+        if _ecmwf_decode_backend() == "rust":
+            backends["ecmwf_decoder_backend"] = "rust-ec-basic-v1"
+    return backends
+
+
+def _model_derived_cache_directory(first_path: Path, model_source: str) -> Path:
+    kind = "national-layer-profiles"
+    backends = _experimental_derivation_backends(model_source)
+    if backends:
+        suffix = hashlib.sha256(
+            json.dumps(backends, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()[:12]
+        kind = f"{kind}-{suffix}"
+    return derived_cache_dir(first_path.resolve(), kind)
 
 
 def _model_derived_cache_contract(model_source: str) -> str:
@@ -3262,7 +3337,7 @@ def _model_derived_cache_paths(
     digest = _model_derived_cache_digest(
         first_path, model_source=model_source, bbox=bbox
     )
-    directory = derived_cache_dir(first_path.resolve(), "national-layer-profiles")
+    directory = _model_derived_cache_directory(first_path, model_source)
     directory.mkdir(parents=True, exist_ok=True)
     profile_path = directory / (
         f"{digest}-{forecast_hour_count}x{profile_shape[0]}x"
@@ -3547,7 +3622,7 @@ def _load_existing_external_derived_cache(
         model_source=source,
         contract=contract,
     )
-    directory = derived_cache_dir(resolved_paths[0], "national-layer-profiles")
+    directory = _model_derived_cache_directory(resolved_paths[0], source)
     if not directory.is_dir():
         return None
     digest = _model_derived_cache_digest(
@@ -5317,6 +5392,9 @@ def prepare_solar_event_timeline(
     target_date: date,
     phenomenon: str,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    from firesky import rust_astronomy
+    if rust_astronomy.enabled():
+        return rust_astronomy.regional_timeline(points, target_date, phenomenon)
     point_count = len(points)
     offsets = np.asarray(national_event_offsets_minutes(phenomenon), dtype=np.float64)
     latitudes = np.asarray([point["lat"] for point in points], dtype=np.float64)
@@ -5419,6 +5497,9 @@ def prepare_solar_samples(
     cycle_utc: datetime,
     hours: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    from firesky import rust_astronomy
+    if rust_astronomy.enabled():
+        return rust_astronomy.regional_samples(points, target_date, phenomenon, cycle_utc, hours)
     (
         observers,
         elevation,
@@ -5657,6 +5738,10 @@ def _map_cams_optics_to_model_grid(
     target_lons: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Map one strict CAMS column tensor to the regular model grid."""
+    from firesky.aerosol import _cams_backend
+    if _cams_backend() == "rust":
+        from firesky.rust_cams import map_optics
+        return map_optics(optics, target_lats, target_lons)
     channels = np.concatenate(
         (optics.aod550[None, :], optics.aerext532_m_inv), axis=0
     )
@@ -5775,8 +5860,14 @@ def _apply_cams_aerosol_profiles(
                 f"CAMS full profile does not cover every model cell at {valid_time:%Y-%m-%d %H:%MZ}"
             )
         right_weight = np.float32(selection.right_weight)
-        mapped_aod = left_aod + (right_aod - left_aod) * right_weight
-        mapped_profile = left_profile + (right_profile - left_profile) * right_weight
+        from firesky.aerosol import _cams_backend
+        if _cams_backend() == "rust":
+            from firesky.rust_cams import blend
+            mapped_aod = blend(left_aod, right_aod, right_weight)
+            mapped_profile = blend(left_profile, right_profile, right_weight)
+        else:
+            mapped_aod = left_aod + (right_aod - left_aod) * right_weight
+            mapped_profile = left_profile + (right_profile - left_profile) * right_weight
         prepared.grid[time_index, covered, NATIONAL_GRID_AEROSOL_AOD550] = mapped_aod[covered]
         aerosol_profiles[time_index, covered] = mapped_profile[covered]
         covered_cells += int(np.count_nonzero(covered))
@@ -6692,6 +6783,19 @@ def fire_cloud_quality_from_assessments(
         )
         if core_indices.size:
             valid_indices = core_indices
+    if _native_nowcast_quality_enabled():
+        return _native_fire_cloud_quality_from_arrays(
+            steps,
+            aod550,
+            values,
+            samples,
+            offsets,
+            valid_indices,
+            burnable_gate,
+            score_ceiling,
+            apply_duration=apply_duration,
+            point_path_diagnostics=point_path_diagnostics,
+        )
     event = _fire_cloud_quality(
         values,
         samples,
@@ -6790,6 +6894,318 @@ def fire_cloud_quality_from_assessments(
         "quality_index": float(event["index"]),
         "quality_level": str(event["level"]),
         "quality_components": event["components"],
+        "duration_status": "estimated" if apply_duration else "unknown",
+        "best_index": best_index,
+        "steps": quality_steps,
+    }
+
+
+def _native_nowcast_quality_enabled() -> bool:
+    configured = os.environ.get("FIRESKY_NOWCAST_SCORING_BACKEND", "rust").strip().lower()
+    if configured not in {"python", "rust"}:
+        raise ValueError("FIRESKY_NOWCAST_SCORING_BACKEND must be python or rust")
+    return configured == "rust"
+
+
+def _native_fire_cloud_quality_from_arrays(
+    steps: Sequence[Any],
+    aod550: float,
+    values: np.ndarray,
+    samples: np.ndarray,
+    offsets: np.ndarray,
+    valid_indices: np.ndarray,
+    burnable_gate: np.ndarray,
+    score_ceiling: np.ndarray | None,
+    *,
+    apply_duration: bool,
+    point_path_diagnostics: Sequence[dict[str, float | None]],
+) -> dict[str, Any]:
+    """Run the canonical nowcast event and instant ledgers in Rust."""
+    from firesky.rust_desktop_data import score_nowcast_fields
+
+    count = len(steps)
+    rows = np.zeros((count, 18), dtype=np.float64)
+    rows[:, :8] = values[:, [
+        NATIONAL_VIEW_AMOUNT_OFFSET,
+        NATIONAL_BURN_AMOUNT_OFFSET,
+        NATIONAL_BURN_LOAD_OFFSET,
+        NATIONAL_MATERIAL_LOAD_OFFSET,
+        NATIONAL_INCOMING_AEROSOL_LOAD_OFFSET,
+        NATIONAL_INCOMING_BLOCK_OFFSET,
+        5,
+        4,
+    ]]
+    rows[:, 8] = offsets
+    rows[:, 9] = samples[:, 5]
+    rows[:, 10:15] = values[:, [
+        NATIONAL_LOCAL_VIEW_OFFSET,
+        NATIONAL_LOCAL_BURN_OFFSET,
+        NATIONAL_LOCAL_LOAD_OFFSET,
+        NATIONAL_LOCAL_MATERIAL_LOAD_OFFSET,
+        NATIONAL_LOCAL_INCOMING_AEROSOL_LOAD_OFFSET,
+    ]]
+    rows[:, 15] = burnable_gate.astype(np.float64)
+    rows[:, 16] = (
+        np.full(count, 2.5, dtype=np.float64)
+        if score_ceiling is None
+        else np.asarray(score_ceiling, dtype=np.float64)
+    )
+    valid_mask = np.zeros(count, dtype=bool)
+    valid_mask[valid_indices] = True
+    rows[:, 17] = valid_mask.astype(np.float64)
+    native = score_nowcast_fields(
+        rows.tolist(),
+        apply_duration=apply_duration,
+        local_columns=True,
+        score_ceiling=score_ceiling is not None,
+        radius_km=NATIONAL_ANALYSIS_RADIUS_KM,
+        parallel_instants=True,
+    )
+    event = native["event"]
+    event_components = dict(event["components"])
+    selected = values[valid_indices]
+    if selected.size:
+        effective_burn = np.clip(
+            selected[:, NATIONAL_BURN_AMOUNT_OFFSET], 0.0, 1.0
+        )
+        visibility_gate = selected[:, 5] >= MIN_OBSERVER_VISIBILITY_FOR_SCORE
+        effective_burn = np.where(
+            visibility_gate,
+            effective_burn,
+            0.0,
+        )
+        effective_burn = np.where(
+            burnable_gate[valid_indices],
+            effective_burn,
+            0.0,
+        )
+        incoming_block = np.clip(
+            selected[:, NATIONAL_INCOMING_BLOCK_OFFSET], 0.0, 1.0
+        )
+        view = np.clip(selected[:, NATIONAL_VIEW_AMOUNT_OFFSET], 0.0, 1.0)
+        blocker_ceiling = np.where(
+            incoming_block > 1e-9,
+            np.clip(view * (1.0 - incoming_block + NONBURNABLE_BLOCKER_TOLERANCE), 0.0, 1.0),
+            1.0,
+        )
+        effective_burn = np.minimum(effective_burn, blocker_ceiling)
+        peak = int(np.argmax(effective_burn))
+        active = effective_burn >= ACTIVE_CLOUD_THRESHOLD
+    else:
+        peak = 0
+        active = np.zeros(0, dtype=bool)
+        incoming_block = np.zeros(0, dtype=np.float64)
+    event_components.update({
+        **NATIONAL_CLOUD_OPTICS_METADATA,
+        "solar_incoming_block_risk_at_best_cloud": (
+            float(incoming_block[peak]) if incoming_block.size else 0.0
+        ),
+        "observer_return_optical_depth_mean": (
+            _active_time_mean(
+                np.maximum(
+                    selected[:, NATIONAL_OBSERVER_RETURN_OPTICAL_DEPTH_OFFSET],
+                    0.0,
+                ),
+                offsets[valid_indices],
+                active,
+            )
+            if np.any(active)
+            else 0.0
+        ),
+        "observer_return_transmission_mean": (
+            _active_time_mean(
+                np.clip(
+                    selected[:, NATIONAL_OBSERVER_RETURN_TRANSMISSION_OFFSET],
+                    0.0,
+                    1.0,
+                ),
+                offsets[valid_indices],
+                active,
+            )
+            if np.any(active)
+            else 0.0
+        ),
+        "observer_local_return_optical_depth_mean": (
+            _active_time_mean(
+                np.maximum(
+                    selected[:, NATIONAL_LOCAL_RETURN_OPTICAL_DEPTH_OFFSET],
+                    0.0,
+                ),
+                offsets[valid_indices],
+                active,
+            )
+            if np.any(active)
+            else 0.0
+        ),
+        "observer_local_return_transmission_mean": (
+            _active_time_mean(
+                np.clip(
+                    selected[:, NATIONAL_LOCAL_RETURN_TRANSMISSION_OFFSET],
+                    0.0,
+                    1.0,
+                ),
+                offsets[valid_indices],
+                active,
+            )
+            if np.any(active)
+            else 0.0
+        ),
+        "observer_return_model": (
+            "raw_beer_lambert_diagnostic; no cloud/sky radiance or perception mapping"
+        ),
+        "ground_area_view_amount_mean": float(np.mean(values[:, NATIONAL_GROUND_VIEW_OFFSET])),
+        "ground_area_burnable_amount_mean": float(np.mean(values[:, NATIONAL_GROUND_BURN_OFFSET])),
+        "ground_area_burnable_load_mean": float(np.mean(values[:, NATIONAL_GROUND_LOAD_OFFSET])),
+    })
+    for label, offset in (
+        ("high_view", NATIONAL_HIGH_VIEW_OFFSET),
+        ("mid_view", NATIONAL_MID_VIEW_OFFSET),
+        ("low_view", NATIONAL_LOW_VIEW_OFFSET),
+        ("high_burn", NATIONAL_HIGH_BURN_OFFSET),
+        ("mid_burn", NATIONAL_MID_BURN_OFFSET),
+        ("low_burn", NATIONAL_LOW_BURN_OFFSET),
+    ):
+        layer = np.clip(selected[:, offset], 0.0, 1.0) if selected.size else np.zeros(0)
+        event_components[f"forward_{label}_peak"] = float(np.max(layer)) if layer.size else 0.0
+        event_components[f"forward_{label}_mean"] = float(np.mean(layer)) if layer.size else 0.0
+    selected_paths = [point_path_diagnostics[int(index)] for index in valid_indices]
+    event_components.update({
+        "observer_path_aod550": (
+            float(np.mean([item["observer_path_aod550"] for item in selected_paths
+                           if item["observer_path_aod550"] is not None]))
+            if any(item["observer_path_aod550"] is not None for item in selected_paths)
+            else None
+        ),
+        "inflow_path_aod550": (
+            float(np.mean([item["inflow_path_aod550"] for item in selected_paths
+                           if item["inflow_path_aod550"] is not None]))
+            if any(item["inflow_path_aod550"] is not None for item in selected_paths)
+            else None
+        ),
+        "aerosol_path_variability": (
+            float(np.mean([item["aerosol_path_variability"] for item in selected_paths
+                           if item["aerosol_path_variability"] is not None]))
+            if any(item["aerosol_path_variability"] is not None for item in selected_paths)
+            else None
+        ),
+        "point_path_diagnostics_source": (
+            "scoring-selected-regime; event-window-valid-steps; diagnostic-only"
+        ),
+    })
+    quality_steps = []
+    projection_index = {
+        name: index
+        for index, name in enumerate(
+            [
+                "index",
+                "burnable_cloud_coverage_peak",
+                "forward_burnable_cloud_field_amount_peak",
+                "forward_burnable_cloud_load_peak",
+                "forward_burnable_cloud_material_load_peak",
+                "forward_burnable_cloud_incoming_aerosol_load_mean",
+                "forward_burnable_cloud_ratio_peak",
+                "brightness_color",
+                "cloud_material",
+                "quality_aod550",
+            ]
+        )
+    }
+    instant_index = {
+        name: index
+        for index, name in enumerate(
+            [
+                "index",
+                "pre_response_index",
+                "quality_response_scale",
+                "quality_response_exponent",
+                "quality_response_adjustment",
+                "physically_burnable",
+                "burnable_cloud_coverage",
+                "brightness_color",
+                "cloud_material",
+                "material_factor",
+                "material_adjustment",
+                "incoming_aod_illumination_factor",
+                "incoming_aod_adjustment",
+                "observer_aod_contrast_factor",
+                "observer_aod_adjustment",
+                "coverage_base_score",
+                "raw_quality_index",
+                "quality_aod550",
+                "local_aod550",
+            ]
+        )
+    }
+    for index in range(count):
+        projection = native["instant_event_projection"][index]
+        instant = native["instant"][index]
+        physically_burnable = bool(instant[instant_index["physically_burnable"]])
+        quality_steps.append({
+            "instant_quality_index": float(projection[projection_index["index"]]),
+            "instant_quality_level": fire_cloud_quality_level(
+                float(projection[projection_index["index"]])
+            ),
+            "physically_burnable": physically_burnable,
+            "observation_burnable": bool(burnable_gate[index]),
+            "burnable_cloud_coverage": float(
+                projection[projection_index["burnable_cloud_coverage_peak"]]
+            ),
+            "geometric_cloud_coverage": float(values[index, 3]),
+            "forward_view_cloud_field_amount": float(values[index, NATIONAL_VIEW_AMOUNT_OFFSET]),
+            "forward_burnable_cloud_field_amount": float(
+                projection[
+                    projection_index["forward_burnable_cloud_field_amount_peak"]
+                ]
+            ),
+            "observer_local_cloud_field_amount": float(values[index, NATIONAL_LOCAL_VIEW_OFFSET]),
+            "forward_burnable_cloud_load": float(
+                projection[projection_index["forward_burnable_cloud_load_peak"]]
+            ),
+            "forward_burnable_cloud_material_load": float(
+                projection[
+                    projection_index["forward_burnable_cloud_material_load_peak"]
+                ]
+            ),
+            "forward_burnable_cloud_incoming_aerosol_load": float(
+                projection[
+                    projection_index[
+                        "forward_burnable_cloud_incoming_aerosol_load_mean"
+                    ]
+                ]
+            ),
+            "solar_incoming_block_risk": float(values[index, NATIONAL_INCOMING_BLOCK_OFFSET]),
+            "forward_burnable_cloud_ratio": float(
+                projection[projection_index["forward_burnable_cloud_ratio_peak"]]
+            ),
+            "brightness_color": float(
+                projection[projection_index["brightness_color"]]
+            ),
+            "cloud_material_score": float(
+                projection[projection_index["cloud_material"]]
+            ),
+            "quality_aod550": float(
+                projection[projection_index["quality_aod550"]]
+            ),
+            "observer_return_transmission": (
+                float(getattr(steps[index], "observer_return_transmission"))
+                if getattr(steps[index], "observer_return_transmission", None) is not None
+                else None
+            ),
+            **point_path_diagnostics[index],
+        })
+    scored_indices = [int(index) for index in valid_indices]
+    best_index = max(
+        (
+            index for index in scored_indices
+            if quality_steps[index]["physically_burnable"]
+        ),
+        key=lambda index: quality_steps[index]["instant_quality_index"],
+        default=None,
+    )
+    return {
+        "quality_index": float(event["index"]),
+        "quality_level": fire_cloud_quality_level(float(event["index"])),
+        "quality_components": event_components,
         "duration_status": "estimated" if apply_duration else "unknown",
         "best_index": best_index,
         "steps": quality_steps,

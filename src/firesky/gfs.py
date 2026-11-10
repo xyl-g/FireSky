@@ -713,6 +713,11 @@ class GfsNomadsClient:
         contains fields that have a local request/parse contract; an absent
         message is surfaced by :func:`gfs_diagnostic_availability`.
         """
+        from firesky import rust_gfs_data
+        if rust_gfs_data.enabled():
+            return rust_gfs_data.build_url(
+                self, init_time_utc, forecast_hour, bbox, include_diagnostic_fields
+            )
         cycle = init_time_utc.astimezone(timezone.utc)
         product = self._res_product
         params: dict[str, str] = {
@@ -774,6 +779,9 @@ class GfsNomadsClient:
         forecast_hour: int | None = None,
         bbox: Tuple[float, float, float, float] | None = None,
     ) -> Path:
+        from firesky import rust_gfs_data
+        if rust_gfs_data.enabled():
+            return rust_gfs_data.download(self, url, init_time_utc, forecast_hour, bbox)
         digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:20]
         target_dir = (
             cycle_directory(self.cache_dir, init_time_utc, self.resolution, region=self.region)
@@ -983,6 +991,9 @@ class GfsNomadsClient:
         bbox: Tuple[float, float, float, float] | None,
         url: str | None = None,
     ) -> Path | None:
+        from firesky import rust_gfs_data
+        if rust_gfs_data.enabled():
+            return rust_gfs_data.find(self, init_time_utc, forecast_hour, bbox, url)
         required = (
             canonical_subset_bbox(bbox, self._res_grid_deg)
             if bbox is not None
@@ -1084,6 +1095,9 @@ class GfsNomadsClient:
             )
 
     def parse_snapshot(self, path: Path, observer: GeoPoint, radius_km: float) -> Sequence[GridCellFeature]:
+        if _gfs_decode_backend() == "rust":
+            from firesky.rust_grid import native_snapshot
+            return native_snapshot(path, observer, radius_km)
         if self.shared_decode_enabled:
             return native_features_from_decoded_grid(load_shared_decoded_grid(path), observer, radius_km)
         if not self.feature_cache_enabled:
@@ -1200,7 +1214,9 @@ class GfsNomadsClient:
 def load_shared_decoded_grid(path: Path) -> _DecodedGfsGrid:
     resolved = path.resolve()
     stat = resolved.stat()
-    key = (str(resolved), stat.st_size, stat.st_mtime_ns)
+    backend = _gfs_decode_backend()
+    identity = str(resolved) if backend == "python" else f"rust-grid-v2:{resolved}"
+    key = (identity, stat.st_size, stat.st_mtime_ns)
     while True:
         with _SHARED_GRID_LOCK:
             cached = _SHARED_GRID_CACHE.get(key)
@@ -1258,7 +1274,8 @@ def decoded_grid_cache_path(path: Path) -> Path:
     signature = hashlib.sha256(
         f"{resolved}:{stat.st_size}:{stat.st_mtime_ns}:v{_DECODED_GRID_CACHE_VERSION}".encode("utf-8")
     ).hexdigest()[:20]
-    return derived_cache_dir(resolved, "decoded") / f"{resolved.stem}-{signature}"
+    kind = "decoded" if _gfs_decode_backend() == "python" else "decoded-rust-grid-v2"
+    return derived_cache_dir(resolved, kind) / f"{resolved.stem}-{signature}"
 
 
 def load_mmap_decoded_grid(cache_path: Path) -> _DecodedGfsGrid:
@@ -1407,7 +1424,17 @@ def _decoded_values_with_bitmap(gid) -> np.ndarray:
     return decoded
 
 
+def _gfs_decode_backend() -> str:
+    backend = os.environ.get("FIRESKY_GFS_DECODE_BACKEND", "python").strip().lower()
+    if backend not in {"python", "rust"}:
+        raise ValueError("FIRESKY_GFS_DECODE_BACKEND must be python or rust")
+    return backend
+
+
 def decode_grib_grid(path: Path) -> _DecodedGfsGrid:
+    if _gfs_decode_backend() == "rust":
+        from firesky.rust_grid import decode_gfs_grid
+        return decode_gfs_grid(path)
     latitudes: np.ndarray | None = None
     longitudes: np.ndarray | None = None
     point_count: int | None = None

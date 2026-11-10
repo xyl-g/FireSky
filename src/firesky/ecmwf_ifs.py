@@ -203,6 +203,8 @@ ECMWF_IFS_FIELD_UNITS: Mapping[str, frozenset[str]] = MappingProxyType(
         ),
         "r": frozenset({"%"}),
         "t": frozenset({"K"}),
+        "2t": frozenset({"K"}),
+        "2d": frozenset({"K"}),
         "w": frozenset({"Pa s**-1", "Pa s-1", "Pa s^-1", "Pa/s"}),
         "u": frozenset({"m s**-1", "m s-1", "m s^-1", "m/s"}),
         "v": frozenset({"m s**-1", "m s-1", "m s^-1", "m/s"}),
@@ -553,9 +555,15 @@ def _canonical_key(
             return ("isobaricInhPa", level, "gh"), raw_short
         return None, raw_short
     if raw_type in _SURFACE_LEVEL_TYPES and level == 0:
-        if raw_short in {"z", "lnsp"}:
+        if raw_short in {"z", "lnsp", "2t", "2d"}:
             return ("surface", 0, raw_short), raw_short
         return None, raw_short
+    # ecCodes' standard definitions encode these surface-contract fields
+    # on diagnostic/model surfaces, not typeOfLevel=surface.
+    if raw_type == "heightAboveGround" and level == 2 and raw_short in {"2t", "2d"}:
+        return ("surface", 0, raw_short), raw_short
+    if raw_type in _MODEL_LEVEL_TYPES and level == 0 and raw_short == "lnsp":
+        return ("surface", 0, raw_short), raw_short
     if level == 0 and raw_short in ECMWF_IFS_PUBLIC_CLOUD_PARAMS:
         for parameter, aliases in _CLOUD_LEVEL_TYPE_ALIASES.items():
             if raw_short == parameter and raw_type in aliases:
@@ -1283,6 +1291,13 @@ def _raw_fields(
     return fields
 
 
+def _ecmwf_decode_backend() -> str:
+    backend = os.environ.get("FIRESKY_ECMWF_DECODE_BACKEND", "python").strip().lower()
+    if backend not in {"python", "rust"}:
+        raise ValueError("FIRESKY_ECMWF_DECODE_BACKEND must be python or rust")
+    return backend
+
+
 def decode_ecmwf_ifs_basic_tensor(
     path: Path | str,
     *,
@@ -1293,6 +1308,12 @@ def decode_ecmwf_ifs_basic_tensor(
 ) -> EcmwfIfsInputTensor:
     """Decode the runnable EC-only public/basic tensor."""
 
+    if _ecmwf_decode_backend() == "rust":
+        from firesky.rust_ecmwf import decode_basic_tensor
+        return decode_basic_tensor(
+            path, bbox=bbox, expected_cycle_utc=expected_cycle_utc,
+            expected_forecast_hour=expected_forecast_hour, resolution=resolution,
+        )
     capability = require_ecmwf_ifs_capability(
         path,
         expected_cycle_utc=expected_cycle_utc,
@@ -1391,6 +1412,13 @@ def decode_ecmwf_ifs_full_catalog_tensor(
 ) -> EcmwfIfsInputTensor:
     """Decode an externally obtained full-catalog/offline IFS bundle."""
 
+    if _ecmwf_decode_backend() == "rust":
+        from firesky.rust_ecmwf import decode_full_tensor
+        return decode_full_tensor(
+            path, bbox=bbox, expected_cycle_utc=expected_cycle_utc,
+            expected_forecast_hour=expected_forecast_hour, model_levels=model_levels,
+            resolution=resolution,
+        )
     levels = _normalise_model_levels(model_levels)
     capability = require_ecmwf_ifs_full_catalog_capability(
         path,
@@ -1722,6 +1750,9 @@ class EcmwfIfsAdapter:
         if cycle is None:
             raise ValueError("ECMWF IFS cycle is required")
         _validate_forecast_hour(forecast_hour)
+        from firesky import rust_ecmwf_data
+        if rust_ecmwf_data.enabled():
+            return rust_ecmwf_data.download(self, cycle, forecast_hour)
         target = _cache_path(self.cache_dir, cycle, forecast_hour)
         target.parent.mkdir(parents=True, exist_ok=True)
         lock_path = target.with_suffix(target.suffix + ".lock")

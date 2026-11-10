@@ -55,6 +55,7 @@ from firesky.satellite_cloud_column import (
     estimate_hsd_motion,
     plan_hsd_advection,
     retrieve_cloud_columns,
+    sample_calibrated_frame,
     vertical_prior_from_features,
 )
 
@@ -80,6 +81,21 @@ OBSERVED_FRAME_TOLERANCE_MINUTES = 6.0
 SATELLITE_OUTER_DISTANCE_STEP_KM = 80.0
 MIN_NOWCAST_CALIBRATED_SAMPLE_COVERAGE = 0.80
 SATELLITE_CACHE_LOCK_TIMEOUT_SECONDS = 300.0
+
+
+def _native_hsd_backend_enabled() -> bool:
+    """Apply the desktop backend selector to calibrated HSD retrieval."""
+    configured = os.environ.get("FIRESKY_HSD_BACKEND")
+    if configured is None:
+        configured = (
+            "rust"
+            if os.environ.get("FIRESKY_DESKTOP_DATA_BACKEND", "python")
+            .strip()
+            .lower()
+            == "rust"
+            else "python"
+        )
+    return configured.strip().lower() == "rust"
 
 
 @dataclass(frozen=True)
@@ -209,7 +225,19 @@ class JmaNowcastAnalyzer:
                 ))
                 calibrated_frame = calibrated_frames[0]
                 if len(calibrated_frames) >= 2:
-                    motion = estimate_hsd_motion(calibrated_frames[1], calibrated_frames[0])
+                    native_estimate = getattr(
+                        self.calibrated_provider, "estimate_motion", None
+                    )
+                    if callable(native_estimate):
+                        motion = native_estimate(
+                            calibrated_frames[1],
+                            calibrated_frames[0],
+                        )
+                    else:
+                        motion = estimate_hsd_motion(
+                            calibrated_frames[1],
+                            calibrated_frames[0],
+                        )
                 advection = plan_hsd_advection(calibrated_frames, target_time, motion)
         except Exception:
             _LOGGER.exception(
@@ -228,7 +256,11 @@ class JmaNowcastAnalyzer:
                 # the report at the observation time so the caller can display
                 # provenance without applying it to the distant event.
                 target_time = calibrated_frame.valid_time_utc
-            projected_frame = advect_hsd_frame(calibrated_frame, advection, motion)
+            native_advect = getattr(self.calibrated_provider, "advect", None)
+            if advection.applied and callable(native_advect):
+                projected_frame = native_advect(calibrated_frame, advection, motion)
+            else:
+                projected_frame = advect_hsd_frame(calibrated_frame, advection, motion)
             if projected_frame.valid_time_utc != calibrated_frame.valid_time_utc and advection.applied:
                 calibrated_frame = projected_frame
             elif (
@@ -285,6 +317,49 @@ def calibrated_only_nowcast_adjustment(
     single_historical_observation: bool = False,
 ) -> Optional[NowcastAdjustment]:
     """Build a model-assisted nowcast from one complete calibrated satellite source."""
+    native_context_provider = getattr(
+        vertical_prior_provider, "native_retrieval_context", None
+    )
+    if (
+        _native_hsd_backend_enabled()
+        and callable(native_context_provider)
+        and frame.native_manifest_path is not None
+        and frozenset(frame.bands) == _HSD_FRAME_BANDS
+        and all(
+            candidate.native_manifest_path is not None
+            and frozenset(candidate.bands) == _HSD_FRAME_BANDS
+            for candidate in (observation_frames or (frame,))
+        )
+    ):
+        from firesky.rust_desktop_data import nowcast_adjustment
+
+        try:
+            native_value = nowcast_adjustment(
+                target_time_utc=target_time,
+                timezone_name=request.timezone_name,
+                point=request.point,
+                azimuth_deg=azimuth_deg,
+                radius_km=float(request.radius_km),
+                display_frame=frame,
+                frames=observation_frames or (frame,),
+                retrieval_context_provider=native_context_provider,
+                source_times_utc=source_times_utc,
+                motion=motion,
+                advection=advection,
+                single_historical_observation=single_historical_observation,
+            )
+        except (KeyError, TypeError, ValueError) as exc:
+            # A cache/context prerequisite was unavailable before the native
+            # operation ran. Preserve the established Python fallback.
+            _LOGGER.warning(
+                "native calibrated nowcast adjustment unavailable; using Python fallback: %s",
+                exc,
+            )
+            native_value = None
+        if native_value is not None:
+            from firesky.rust_desktop_data import nowcast_adjustment_as_model
+
+            return nowcast_adjustment_as_model(native_value)
     # A provider may return the same scan more than once while a raw/compact
     # cache is being reconciled.  Keep one frame per canonical UTC timestamp;
     # the timeline contract cannot represent two independent observations at
@@ -303,7 +378,10 @@ def calibrated_only_nowcast_adjustment(
         in NOWCAST_TIME_OFFSETS_MINUTES
     ]
     if not scoring_frames:
-        scoring_frames = [frame]
+        # fail-closed：候选序列必须先有窗口内校准评分帧。 A stale display
+        # frame must not become a score merely because no other scan survived
+        # cache or timeline selection.
+        return None
     unique_frames = {
         candidate.valid_time_utc.astimezone(timezone.utc): candidate
         for candidate in scoring_frames
@@ -312,6 +390,7 @@ def calibrated_only_nowcast_adjustment(
     times: dict[int, datetime] = {}
     all_column_sets = []
     primary_column_sets = []
+    primary_metrics = None
     primary_features: list[GridCellFeature] = []
     primary_prior_samples: list[tuple[float, float, Optional[VerticalPrior]]] = []
     primary_distance = float("inf")
@@ -343,7 +422,34 @@ def calibrated_only_nowcast_adjustment(
             )
             return prior
 
-        features, column_sets = calibrated_satellite_cloud_retrieval(
+        batch_provider = getattr(vertical_prior_provider, "batch", None)
+        if callable(batch_provider):
+            def recording_batch_provider(
+                targets: Sequence[GeoPoint], valid_time: datetime
+            ) -> list[Optional[VerticalPrior]]:
+                values = batch_provider(targets, valid_time)
+                if len(values) != len(targets):
+                    raise RuntimeError("vertical prior batch returned the wrong number of samples")
+                for target, prior in zip(targets, values, strict=True):
+                    sample_key = (round(float(target.lat), 5), round(float(target.lon), 5))
+                    prior_samples_by_key[sample_key] = (
+                        prior if isinstance(prior, VerticalPrior) else None
+                    )
+                return values
+
+            recording_prior_provider.batch = recording_batch_provider
+        native_context_provider = getattr(
+            vertical_prior_provider, "native_retrieval_context", None
+        )
+        if callable(native_context_provider):
+            recording_prior_provider.native_retrieval_context = native_context_provider
+
+        (
+            features,
+            column_sets,
+            frame_prior_samples,
+            frame_metrics,
+        ) = calibrated_satellite_cloud_retrieval(
             candidate,
             request.point,
             azimuth_deg,
@@ -351,6 +457,8 @@ def calibrated_only_nowcast_adjustment(
             radius_km=float(request.radius_km),
             motion_dx_px_per_hour=motion_dx_for_retrieval,
             motion_dy_px_per_hour=motion_dy_for_retrieval,
+            return_metrics=True,
+            return_priors=True,
         )
         offset = int(round((candidate.valid_time_utc - target_time).total_seconds() / 300.0) * 5)
         if offset in times and times[offset] != candidate.valid_time_utc:
@@ -364,13 +472,15 @@ def calibrated_only_nowcast_adjustment(
         if distance < primary_distance:
             primary_distance = distance
             primary_column_sets = column_sets
+            primary_metrics = frame_metrics
             primary_features = features
-            primary_prior_samples = [
-                (lat, lon, prior)
-                for (lat, lon), prior in prior_samples_by_key.items()
-            ]
+            primary_prior_samples = frame_prior_samples
     column_sets = all_column_sets
-    metrics = calibrated_cloud_metrics(primary_column_sets, azimuth_deg)
+    metrics = (
+        primary_metrics
+        if primary_metrics is not None
+        else calibrated_cloud_metrics(primary_column_sets, azimuth_deg)
+    )
     expected_sample_count = len(
         satellite_sample_points(request.point, azimuth_deg, float(request.radius_km))
     )
@@ -822,7 +932,20 @@ def calibrated_satellite_cloud_retrieval(
     radius_km: float,
     motion_dx_px_per_hour: float = 0.0,
     motion_dy_px_per_hour: float = 0.0,
-) -> tuple[list[GridCellFeature], list[SatelliteCloudColumnSet]]:
+    return_metrics: bool = False,
+    return_priors: bool = False,
+) -> tuple[list[GridCellFeature], list[SatelliteCloudColumnSet]] | tuple[
+    list[GridCellFeature], list[SatelliteCloudColumnSet], Optional[dict[str, float]]
+] | tuple[
+    list[GridCellFeature],
+    list[SatelliteCloudColumnSet],
+    list[tuple[float, float, Optional[VerticalPrior]]],
+] | tuple[
+    list[GridCellFeature],
+    list[SatelliteCloudColumnSet],
+    list[tuple[float, float, Optional[VerticalPrior]]],
+    Optional[dict[str, float]],
+]:
     if radius_km <= 0.0:
         raise ValueError("calibrated satellite retrieval requires analysis radius")
     grouped: dict[str, list] = {}
@@ -870,55 +993,161 @@ def calibrated_satellite_cloud_retrieval(
 
     sample_points = satellite_sample_points(point, azimuth_deg, radius_km)
     sample_distances = tuple(sorted({float(distance) for _, distance in sample_points}))
-    for bearing_deg, distance_km in sample_points:
-        target = destination_point(point, bearing_deg, distance_km)
+    native_enabled = (
+        _native_hsd_backend_enabled()
+        and frame.native_manifest_path is not None
+        and frozenset(frame.bands) == _HSD_FRAME_BANDS
+    )
+    native_retrieval = None
+    native_context_provider = getattr(
+        vertical_prior_provider, "native_retrieval_context", None
+    )
+    if native_enabled and callable(native_context_provider):
         try:
-            prior = vertical_prior_provider(target, frame.valid_time_utc)
-            columns = retrieve_cloud_columns(
-                frame,
-                target,
-                distance_km,
-                bearing_deg,
-                prior,
+            retrieval_context = native_context_provider(frame.valid_time_utc)
+        except (RuntimeError, ValueError, KeyError, TypeError):
+            retrieval_context = None
+        if retrieval_context is not None:
+            from firesky.rust_desktop_data import nowcast_calibrated_retrieval
+
+            native_retrieval = nowcast_calibrated_retrieval(
+                frame=frame,
+                point=point,
+                azimuth_deg=azimuth_deg,
+                radius_km=radius_km,
+                retrieval_context=retrieval_context,
+                motion_dx_px_per_hour=motion_dx_px_per_hour,
+                motion_dy_px_per_hour=motion_dy_px_per_hour,
+                return_priors=True,
+            )
+    if native_retrieval is not None:
+        native_features, native_sets, native_priors, native_metrics = native_retrieval
+        if return_priors:
+            result = (native_features, native_sets, native_priors, native_metrics)
+        else:
+            result = (native_features, native_sets, native_metrics)
+        if not return_metrics:
+            return result[:-1]
+        return result
+
+    batch_prior_provider = getattr(vertical_prior_provider, "batch", None)
+    batch_priors: Optional[list[Optional[VerticalPrior]]] = None
+    if callable(batch_prior_provider):
+        targets = [
+            destination_point(point, bearing_deg, distance_km)
+            for bearing_deg, distance_km in sample_points
+        ]
+        try:
+            batch_priors = batch_prior_provider(targets, frame.valid_time_utc)
+        except (RuntimeError, ValueError, KeyError, TypeError):
+            # Preserve the established per-sample failure-to-unknown policy
+            # when a shared batch lookup cannot be prepared.
+            batch_priors = None
+        if batch_priors is not None and len(batch_priors) != len(targets):
+            raise RuntimeError("vertical prior batch returned the wrong number of samples")
+
+    prepared_samples = []
+    native_requests = []
+    prior_values: list[Optional[VerticalPrior]] = [None] * len(sample_points)
+
+    def add_unknown(
+        target: GeoPoint,
+        distance_km: float,
+        bearing_deg: float,
+        prior: Optional[VerticalPrior] = None,
+    ) -> None:
+        unknown_sets.append(
+            SatelliteCloudColumnSet(
+                schema_version=SATELLITE_CLOUD_COLUMN_SCHEMA_VERSION,
+                valid_time_utc=frame.valid_time_utc,
+                source=frame.source,
+                vertical_prior_identity=unknown_column(
+                    target, distance_km, bearing_deg, prior
+                ).vertical_prior_identity,
+                retrieval_quality="unknown",
+                low_cloud_state="unknown",
+                columns=(unknown_column(target, distance_km, bearing_deg, prior),),
                 motion_dx_px_per_hour=motion_dx_px_per_hour,
                 motion_dy_px_per_hour=motion_dy_px_per_hour,
             )
+        )
+
+    for sample_index, (bearing_deg, distance_km) in enumerate(sample_points):
+        target = destination_point(point, bearing_deg, distance_km)
+        try:
+            prior = (
+                batch_priors[sample_index]
+                if batch_priors is not None
+                else vertical_prior_provider(target, frame.valid_time_utc)
+            )
+            prior_values[sample_index] = prior
+            if prior is None:
+                raise RuntimeError("vertical prior batch returned an unknown sample")
+            sample = None
+            if native_enabled:
+                sampled = sample_calibrated_frame(frame, target.lat, target.lon)
+                sample = {
+                    "B07": float(sampled["B07"]),
+                    "B13": float(sampled["B13"]),
+                    "B15": float(sampled["B15"]),
+                }
         except (RuntimeError, ValueError, KeyError, TypeError):
             # A missing/mismatched prior is an unknown sample, never a clear
             # pixel and never a fixed-pressure fallback.
-            unknown_target = destination_point(point, bearing_deg, distance_km)
-            unknown_sets.append(
-                SatelliteCloudColumnSet(
-                    schema_version=SATELLITE_CLOUD_COLUMN_SCHEMA_VERSION,
-                    valid_time_utc=frame.valid_time_utc,
-                    source=frame.source,
-                    vertical_prior_identity=unknown_column(
-                        unknown_target, distance_km, bearing_deg
-                    ).vertical_prior_identity,
-                    retrieval_quality="unknown",
-                    low_cloud_state="unknown",
-                    columns=(unknown_column(unknown_target, distance_km, bearing_deg),),
+            add_unknown(target, distance_km, bearing_deg)
+            continue
+        native_index = None
+        if native_enabled:
+            native_index = len(native_requests)
+            native_requests.append(
+                {
+                    "lat": float(target.lat),
+                    "lon": float(target.lon),
+                    "distance_km": float(distance_km),
+                    "bearing_deg": float(bearing_deg),
+                    "sample": sample,
+                    "prior": prior,
+                    "motion_dx_px_per_hour": motion_dx_px_per_hour,
+                    "motion_dy_px_per_hour": motion_dy_px_per_hour,
+                }
+            )
+        prepared_samples.append(
+            (target, distance_km, bearing_deg, prior, sample, native_index)
+        )
+
+    native_columns = ()
+    native_metrics = None
+    if native_requests:
+        from firesky.rust_desktop_data import nowcast_hsd_retrieval
+
+        native_columns, native_metrics = nowcast_hsd_retrieval(
+            frame,
+            native_requests,
+            azimuth_deg=azimuth_deg,
+            include_metrics=True,
+        )
+
+    for target, distance_km, bearing_deg, prior, sample, native_index in prepared_samples:
+        try:
+            columns = (
+                native_columns[native_index]
+                if native_index is not None
+                else retrieve_cloud_columns(
+                    frame,
+                    target,
+                    distance_km,
+                    bearing_deg,
+                    prior,
+                    sample=sample,
                     motion_dx_px_per_hour=motion_dx_px_per_hour,
                     motion_dy_px_per_hour=motion_dy_px_per_hour,
                 )
             )
+        except (RuntimeError, ValueError, KeyError, TypeError):
+            add_unknown(target, distance_km, bearing_deg, prior)
             continue
         if not columns:
-            unknown_sets.append(
-                SatelliteCloudColumnSet(
-                    schema_version=SATELLITE_CLOUD_COLUMN_SCHEMA_VERSION,
-                    valid_time_utc=frame.valid_time_utc,
-                    source=frame.source,
-                    vertical_prior_identity=unknown_column(
-                        target, distance_km, bearing_deg, prior
-                    ).vertical_prior_identity,
-                    retrieval_quality="unknown",
-                    low_cloud_state="unknown",
-                    columns=(unknown_column(target, distance_km, bearing_deg, prior),),
-                    motion_dx_px_per_hour=motion_dx_px_per_hour,
-                    motion_dy_px_per_hour=motion_dy_px_per_hour,
-                )
-            )
+            add_unknown(target, distance_km, bearing_deg, prior)
             continue
         features.extend(
             cloud_columns_to_features(
@@ -932,8 +1161,7 @@ def calibrated_satellite_cloud_retrieval(
                 ),
             )
         )
-        if columns:
-            grouped.setdefault(prior.identity, []).extend(columns)
+        grouped.setdefault(prior.identity, []).extend(columns)
     sets: list[SatelliteCloudColumnSet] = []
     for prior_identity, columns in grouped.items():
         sets.append(
@@ -953,7 +1181,24 @@ def calibrated_satellite_cloud_retrieval(
                 motion_dy_px_per_hour=motion_dy_px_per_hour,
             )
         )
-    return features, sets + unknown_sets
+    result_sets = sets + unknown_sets
+    if return_priors:
+        prior_samples = [
+            (
+                float(destination_point(point, bearing_deg, distance_km).lat),
+                float(destination_point(point, bearing_deg, distance_km).lon),
+                prior,
+            )
+            for (bearing_deg, distance_km), prior in zip(
+                sample_points,
+                prior_values,
+                strict=True,
+            )
+        ]
+        return features, result_sets, prior_samples, native_metrics
+    if return_metrics:
+        return features, result_sets, native_metrics
+    return features, result_sets
 
 
 def satellite_sample_points(

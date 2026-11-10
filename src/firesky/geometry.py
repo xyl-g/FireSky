@@ -9,6 +9,7 @@ from astral import Observer
 from astral.sun import azimuth, elevation, sun
 
 from firesky.models import GeoPoint, GlowGeometryWindow, SolarSnapshot
+from firesky import rust_astronomy
 
 EARTH_RADIUS_KM = 6371.0
 # Mean apparent solar semi-diameter.  The refraction term is evaluated at the
@@ -104,6 +105,8 @@ def cloud_edge_geometry_score(
 
 
 def _solar_elevation_deg(point: GeoPoint, when_utc: datetime) -> float:
+    if rust_astronomy.enabled():
+        return rust_astronomy.position(point, when_utc)[0]
     # Scoring uses the geometric solar-centre elevation.  Atmospheric
     # refraction and the solar-disc radius are applied explicitly by the
     # light-path geometry (the same convention as the regional vector path).
@@ -124,6 +127,8 @@ def solar_elevation_crossing_utc(
     search_minutes: float = 90.0,
 ) -> datetime | None:
     """Find the dawn/dusk crossing of a solar-elevation threshold."""
+    if rust_astronomy.enabled():
+        return rust_astronomy.crossing(point, anchor_utc, target_elevation_deg, phenomenon, search_minutes)
     if phenomenon not in {"dawn", "dusk"}:
         raise ValueError("phenomenon must be dawn or dusk")
     anchor = anchor_utc.astimezone(timezone.utc)
@@ -152,6 +157,8 @@ def solar_elevation_crossing_utc(
 
 def solar_shadow_speed_km_per_min(point: GeoPoint, when_utc: datetime) -> float:
     """Speed of the tangent-light parabola vertex from the actual solar motion."""
+    if rust_astronomy.enabled():
+        return rust_astronomy.shadow_speed(point, when_utc)
     half_interval = timedelta(seconds=30)
     before = _solar_elevation_deg(point, when_utc - half_interval)
     after = _solar_elevation_deg(point, when_utc + half_interval)
@@ -174,6 +181,12 @@ def typical_deck_glow_window(
     observer column. The second is when the local cloud base enters or exits the
     Earth's shadow. Dawn traverses the same interval in reverse.
     """
+    if rust_astronomy.enabled():
+        return rust_astronomy.glow_window(
+            point, anchor_utc, timezone_name, phenomenon, kind="typical",
+            edge_distance_km=edge_distance_km, cloud_base_m=cloud_base_m,
+            observer_elevation_m=observer_elevation_m,
+        )
     observer_elevation = point.elevation_m if observer_elevation_m is None else observer_elevation_m
     relative_base_m = cloud_base_m - observer_elevation
     maximum_distance = cloud_edge_max_distance_km(cloud_base_m, observer_elevation)
@@ -226,6 +239,12 @@ def target_cloud_glow_window(
     regime: str,
 ) -> GlowGeometryWindow | None:
     """Solve the Earth-shadow interval across a remote target cloud's depth."""
+    if rust_astronomy.enabled():
+        return rust_astronomy.glow_window(
+            point, anchor_utc, timezone_name, phenomenon, kind="target",
+            target_distance_km=target_distance_km, cloud_base_m=cloud_base_m,
+            cloud_top_m=cloud_top_m, regime=regime,
+        )
     relative_base_km = max(0.0, cloud_base_m - point.elevation_m) / 1000.0
     relative_top_km = max(relative_base_km, cloud_top_m - point.elevation_m) / 1000.0
     if relative_top_km <= 0.0 or target_distance_km <= 0.0:
@@ -501,6 +520,8 @@ def observer_for(point: GeoPoint) -> Observer:
 
 
 def solar_event_time_local(target_date: date, point: GeoPoint, timezone_name: str, phenomenon: str) -> datetime:
+    if rust_astronomy.enabled():
+        return rust_astronomy.event(target_date, point, timezone_name, phenomenon)
     tzinfo = ZoneInfo(timezone_name)
     events = sun(observer_for(point), date=target_date, tzinfo=tzinfo)
     key = "sunrise" if phenomenon == "dawn" else "sunset"
@@ -510,6 +531,12 @@ def solar_event_time_local(target_date: date, point: GeoPoint, timezone_name: st
 def solar_snapshot(point: GeoPoint, when_utc: datetime, timezone_name: str) -> SolarSnapshot:
     tzinfo = ZoneInfo(timezone_name)
     when_local = when_utc.astimezone(tzinfo)
+    if rust_astronomy.enabled():
+        geometric_elevation, solar_azimuth = rust_astronomy.position(point, when_utc)
+        return SolarSnapshot(
+            valid_time_utc=when_utc, valid_time_local=when_local,
+            elevation_deg=geometric_elevation, azimuth_deg=solar_azimuth,
+        )
     obs = observer_for(point)
     return SolarSnapshot(
         valid_time_utc=when_utc,
@@ -524,6 +551,11 @@ def solar_snapshot(point: GeoPoint, when_utc: datetime, timezone_name: str) -> S
 
 
 def nearest_hour_offsets(init_utc: datetime, times_utc: Iterable[datetime]) -> List[int]:
+    if rust_astronomy.enabled():
+        return rust_astronomy.time_operation(
+            "nearest_hour_offsets", init=rust_astronomy._time(init_utc),
+            times=[rust_astronomy._time(value) for value in times_utc],
+        )["values"]
     offsets = set()
     for value in times_utc:
         hour = round((value - init_utc).total_seconds() / 3600.0)
@@ -535,6 +567,11 @@ def nearest_hour_offsets(init_utc: datetime, times_utc: Iterable[datetime]) -> L
 def choose_cycle(reference_utc: datetime, cycle_hours: Tuple[int, ...], availability_lag_hours: int) -> datetime:
     if reference_utc.tzinfo is None:
         raise ValueError("reference_utc must be timezone-aware")
+    if rust_astronomy.enabled():
+        return datetime.fromisoformat(rust_astronomy.time_operation(
+            "choose_cycle", reference=rust_astronomy._time(reference_utc),
+            cycle_hours=list(cycle_hours), availability_lag_hours=availability_lag_hours,
+        )["value"])
 
     adjusted = reference_utc.astimezone(timezone.utc) - timedelta(hours=availability_lag_hours)
     if cycle_hours and adjusted.hour < cycle_hours[0]:

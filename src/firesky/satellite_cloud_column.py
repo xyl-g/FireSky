@@ -16,6 +16,7 @@ import multiprocessing
 import os
 import re
 import shutil
+import stat
 import threading
 import time
 import urllib.parse
@@ -23,6 +24,7 @@ import urllib.request
 import warnings
 import xml.etree.ElementTree as ET
 import uuid
+from collections import OrderedDict
 from concurrent.futures import Future, ProcessPoolExecutor, ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -75,6 +77,9 @@ _HSD_UPSTREAM_FUTURES: dict[tuple[str, datetime, float, float, float], Future[An
 # background FIFO behind a slow scan.
 _HSD_BACKGROUND_FUTURES: dict[tuple[str, datetime, float, float, float], Future[Any]] = {}
 _HSD_UPSTREAM_FUTURE_LOCK = threading.Lock()
+_HSD_ADVECTION_CACHE_MAX_BYTES = 128 * 1024 * 1024
+_HSD_ADVECTION_CACHE_LOCK = threading.Lock()
+_HSD_ADVECTION_CACHE: OrderedDict[tuple[Any, ...], tuple[Any, Any, Any, int]] = OrderedDict()
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -262,6 +267,9 @@ class CalibratedSatelliteFrame:
     # Number of remote cache blocks fetched while preparing this compact
     # frame. fsspec's mmap miss counter is not an HTTP request counter.
     range_blocks: int = 0
+    # Native HSD consumers retain the validated tensor-bundle manifest so
+    # deterministic motion diagnostics can stay in the Rust engine.
+    native_manifest_path: Optional[Path] = None
 
     def __post_init__(self) -> None:
         if self.schema_version != SATELLITE_CALIBRATED_FRAME_SCHEMA_VERSION:
@@ -1379,6 +1387,247 @@ class HsdCompactCacheProvider:
         return self.fetch_series(
             reference_utc, point, radius_km=radius_km, count=count
         )
+
+
+_HSD_TENSOR_ARRAY_NAMES = (
+    "latitudes",
+    "longitudes",
+    "band_b07",
+    "band_b13",
+    "band_b15",
+)
+
+
+def _hsd_tensor_bundle_version(manifest_path: Path) -> Optional[tuple[tuple[Any, ...], ...]]:
+    paths = [manifest_path] + [
+        manifest_path.parent / f"{name}.npy"
+        for name in _HSD_TENSOR_ARRAY_NAMES
+    ]
+    identity: list[tuple[Any, ...]] = []
+    for path in paths:
+        try:
+            info = path.lstat()
+        except OSError:
+            return None
+        if not stat.S_ISREG(info.st_mode):
+            return None
+        identity.append((str(path), info.st_ino, info.st_size, info.st_mtime_ns))
+    return tuple(identity)
+
+
+def _hsd_advection_frame_bytes(frame: Any) -> int:
+    return sum(
+        int(getattr(array, "nbytes", 0))
+        for array in (
+            frame.latitudes,
+            frame.longitudes,
+            *frame.bands.values(),
+        )
+    )
+
+
+def _hsd_advection_cache_key(
+    frame: Any,
+    plan: Any,
+    motion: Any,
+) -> tuple[Any, ...]:
+    return (
+        str(frame.native_manifest_path),
+        plan.target_time_utc.isoformat(),
+        float(plan.horizon_hours).hex(),
+        float(plan.scale).hex(),
+        str(plan.motion_quality),
+        str(plan.reason),
+        float(motion.dx_px_per_hour).hex(),
+        float(motion.dy_px_per_hour).hex(),
+    )
+
+
+def _cached_hsd_advection(
+    key: tuple[Any, ...],
+    input_version: tuple[tuple[Any, ...], ...],
+) -> Optional[Any]:
+    with _HSD_ADVECTION_CACHE_LOCK:
+        entry = _HSD_ADVECTION_CACHE.get(key)
+        if entry is None:
+            return None
+        cached_input, cached_output, frame, _ = entry
+        output_path = getattr(frame, "native_manifest_path", None)
+        current_output = (
+            _hsd_tensor_bundle_version(output_path)
+            if output_path is not None
+            else None
+        )
+        if cached_input != input_version or current_output != cached_output:
+            _HSD_ADVECTION_CACHE.pop(key, None)
+            return None
+        _HSD_ADVECTION_CACHE.move_to_end(key)
+        return frame
+
+
+def _remember_hsd_advection(
+    key: tuple[Any, ...],
+    input_version: tuple[tuple[Any, ...], ...],
+    frame: Any,
+) -> None:
+    output_path = getattr(frame, "native_manifest_path", None)
+    output_version = (
+        _hsd_tensor_bundle_version(output_path)
+        if output_path is not None
+        else None
+    )
+    if output_version is None:
+        return
+    bytes_used = _hsd_advection_frame_bytes(frame)
+    if bytes_used > _HSD_ADVECTION_CACHE_MAX_BYTES:
+        return
+    with _HSD_ADVECTION_CACHE_LOCK:
+        old = _HSD_ADVECTION_CACHE.pop(key, None)
+        _HSD_ADVECTION_CACHE[key] = (
+            input_version,
+            output_version,
+            frame,
+            bytes_used,
+        )
+        total = sum(item[3] for item in _HSD_ADVECTION_CACHE.values())
+        while total > _HSD_ADVECTION_CACHE_MAX_BYTES and _HSD_ADVECTION_CACHE:
+            _, (_, _, _, removed) = _HSD_ADVECTION_CACHE.popitem(last=False)
+            total -= removed
+
+
+class RustHsdCompactCacheProvider:
+    """Read and decode compact HSD frames through the native Rust engine."""
+
+    def __init__(
+        self,
+        cache_dir: str | Path = DEFAULT_HSD_CACHE_DIR,
+        *,
+        max_age_minutes: float = 30.0,
+        allow_foreground: bool = False,
+    ) -> None:
+        if max_age_minutes <= 0.0:
+            raise ValueError("compact HSD cache age must be positive")
+        self.cache_dir = Path(cache_dir)
+        self.max_age_minutes = float(max_age_minutes)
+        # Native cache reads are deliberately cache-only. The remote provider
+        # remains the explicit warmup path and never runs from this adapter.
+        self.allow_foreground = bool(allow_foreground)
+
+    def fetch(
+        self,
+        reference_utc: datetime,
+        point: Any,
+        *,
+        radius_km: float,
+    ) -> Optional[CalibratedSatelliteFrame]:
+        frames = self.fetch_series(
+            reference_utc,
+            point,
+            radius_km=radius_km,
+            count=1,
+        )
+        return frames[0] if frames else None
+
+    def fetch_series(
+        self,
+        reference_utc: datetime,
+        point: Any,
+        *,
+        radius_km: float,
+        count: int = 2,
+    ) -> tuple[CalibratedSatelliteFrame, ...]:
+        _require_utc(reference_utc, "compact HSD cache reference time")
+        if isinstance(count, bool) or not 1 <= int(count) <= 4:
+            raise ValueError("compact HSD scan count must be between one and four")
+        from firesky.rust_desktop_data import nowcast_hsd_frames
+
+        return tuple(nowcast_hsd_frames(
+            self.cache_dir,
+            reference_time_utc=reference_utc.astimezone(timezone.utc).isoformat(),
+            lat=float(point.lat),
+            lon=float(point.lon),
+            radius_km=float(radius_km),
+            count=int(count),
+            max_age_minutes=self.max_age_minutes,
+        ))
+
+    def fetch_cached_series(
+        self,
+        reference_utc: datetime,
+        point: Any,
+        *,
+        radius_km: float,
+        count: int = 2,
+    ) -> tuple[CalibratedSatelliteFrame, ...]:
+        return self.fetch_series(
+            reference_utc,
+            point,
+            radius_km=radius_km,
+            count=count,
+        )
+
+    def prepare_series(
+        self,
+        reference_utc: datetime,
+        point: Any,
+        *,
+        radius_km: float,
+        count: int = 2,
+    ) -> tuple[CalibratedSatelliteFrame, ...]:
+        return self.fetch_series(
+            reference_utc,
+            point,
+            radius_km=radius_km,
+            count=count,
+        )
+
+    def estimate_motion(
+        self,
+        previous: CalibratedSatelliteFrame,
+        latest: CalibratedSatelliteFrame,
+        *,
+        min_overlap: float = 0.85,
+        min_correlation: float = 0.35,
+    ) -> HsdMotionEstimate:
+        if previous.native_manifest_path is None or latest.native_manifest_path is None:
+            raise ValueError("native HSD motion requires tensor-bundle manifests")
+        from firesky.rust_desktop_data import nowcast_hsd_motion
+
+        value = nowcast_hsd_motion(
+            previous.native_manifest_path,
+            latest.native_manifest_path,
+            min_overlap=min_overlap,
+            min_correlation=min_correlation,
+        )
+        return HsdMotionEstimate(**value)
+
+    def advect(
+        self,
+        frame: CalibratedSatelliteFrame,
+        plan: HsdAdvectionPlan,
+        motion: HsdMotionEstimate,
+    ) -> CalibratedSatelliteFrame:
+        if not plan.applied:
+            return frame
+        if frame.native_manifest_path is None:
+            raise ValueError("native HSD advection requires a tensor-bundle manifest")
+        input_version = _hsd_tensor_bundle_version(frame.native_manifest_path)
+        if input_version is None:
+            raise ValueError("native HSD advection input bundle is invalid")
+        key = _hsd_advection_cache_key(frame, plan, motion)
+        cached = _cached_hsd_advection(key, input_version)
+        if cached is not None:
+            return cached
+        from firesky.rust_desktop_data import nowcast_hsd_advection
+
+        projected = nowcast_hsd_advection(
+            frame,
+            plan,
+            motion,
+            output_dir=self.cache_dir.resolve() / ".rust-bundles",
+        )
+        _remember_hsd_advection(key, input_version, projected)
+        return projected
 
 
 class AutoHsdCompactCacheProvider:
@@ -3346,6 +3595,7 @@ __all__ = [
     "HsdCacheWarmer",
     "HsdCompactCache",
     "HsdCompactCacheProvider",
+    "RustHsdCompactCacheProvider",
     "AutoHsdCompactCacheProvider",
     "HsdMotionEstimate",
     "HsdAdvectionPlan",

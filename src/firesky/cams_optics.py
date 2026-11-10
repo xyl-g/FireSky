@@ -331,6 +331,10 @@ def load_cams_spectral_optics(path: Path) -> CamsSpectralOptics:
     The parser deliberately does not accept the compact cache schema.  This
     makes missing wavelength/phase diagnostics visible during an A/B run.
     """
+    from firesky.aerosol import _cams_backend
+    if _cams_backend() == "rust":
+        from firesky.rust_spectral import decode_spectral
+        return decode_spectral(path)
 
     latitudes: np.ndarray | None = None
     longitudes: np.ndarray | None = None
@@ -554,6 +558,10 @@ def nearest_cams_spectral_point(
     lon: float,
 ) -> CamsSpectralPoint:
     """Return a deterministic nearest grid point without spatial smoothing."""
+    from firesky.aerosol import _cams_backend
+    if _cams_backend() == "rust":
+        from firesky.rust_spectral import nearest
+        return nearest(optics, lat, lon)
 
     delta_lon = np.abs((optics.longitudes - float(lon) + 180.0) % 360.0 - 180.0)
     index = int(np.argmin(np.abs(optics.latitudes - float(lat)) + delta_lon))
@@ -572,6 +580,10 @@ def nearest_cams_spectral_point(
 
 
 def normalize_longitudes(values: np.ndarray) -> np.ndarray:
+    from firesky.aerosol import _cams_backend
+    if _cams_backend() == "rust":
+        from firesky.rust_spectral import normalize
+        return normalize(values)
     return (np.asarray(values, dtype=np.float64) + 180.0) % 360.0 - 180.0
 
 
@@ -582,6 +594,10 @@ def interpolate_log_aod(aod: Mapping[int, float], wavelength_nm: float) -> float
     extrapolation would manufacture aerosol spectral behavior not supplied by
     the model.
     """
+    from firesky.aerosol import _cams_backend
+    if _cams_backend() == "rust":
+        from firesky.rust_spectral import interpolate_aod
+        return interpolate_aod(aod, wavelength_nm)
 
     wavelength = float(wavelength_nm)
     if not math.isfinite(wavelength) or wavelength <= 0.0:
@@ -607,6 +623,10 @@ def interpolate_log_aod(aod: Mapping[int, float], wavelength_nm: float) -> float
 
 def angstrom_exponent(aod: Mapping[int, float], wavelength_a_nm: int = 440, wavelength_b_nm: int = 865) -> float:
     """Calculate the observed Angstrom exponent from two CAMS AOD fields."""
+    from firesky.aerosol import _cams_backend
+    if _cams_backend() == "rust":
+        from firesky.rust_spectral import scalar
+        return scalar(4, aod[wavelength_a_nm], aod[wavelength_b_nm], wavelength_a_nm, wavelength_b_nm)
 
     first = float(aod[wavelength_a_nm])
     second = float(aod[wavelength_b_nm])
@@ -621,6 +641,10 @@ def standard_pressure_height_m(pressure_hpa: float) -> float:
     This is only a geometry helper for integrating a CAMS extinction profile;
     production cloud geometry must continue to use model geopotential height.
     """
+    from firesky.aerosol import _cams_backend
+    if _cams_backend() == "rust":
+        from firesky.rust_spectral import scalar
+        return scalar(3, pressure_hpa)
 
     pressure = float(pressure_hpa)
     if not 0.0 < pressure <= 1013.25:
@@ -633,6 +657,10 @@ def integrate_pressure_level_extinction(
     pressure_levels_hpa: tuple[int, ...] = SPECTRAL_PRESSURE_LEVELS_HPA,
 ) -> float:
     """Integrate pressure-level extinction over standard-atmosphere height."""
+    from firesky.aerosol import _cams_backend
+    if _cams_backend() == "rust":
+        from firesky.rust_spectral import profile
+        return profile(extinction_m_inv, pressure_levels_hpa)
 
     values = np.asarray(extinction_m_inv, dtype=np.float64)
     levels = np.asarray(pressure_levels_hpa, dtype=np.float64)
@@ -659,6 +687,11 @@ def middle_layer_extinction_diagnostics(
     CAMS supplies ``aerext532`` in m^-1.  This function performs that unit
     conversion explicitly and does not turn the result into a forecast score.
     """
+    from firesky.aerosol import _cams_backend
+    if _cams_backend() == "rust":
+        from firesky.rust_spectral import profile
+        return profile(extinction_m_inv, pressure_levels_hpa,
+                       lower=lower_height_m, upper=upper_height_m)
 
     values = np.asarray(extinction_m_inv, dtype=np.float64)
     levels = np.asarray(pressure_levels_hpa, dtype=np.float64)
@@ -718,6 +751,10 @@ def middle_layer_extinction_diagnostics(
 
 def relative_airmass(solar_elevation_deg: float) -> float:
     """Kasten-Young relative optical air mass for a visible solar ray."""
+    from firesky.aerosol import _cams_backend
+    if _cams_backend() == "rust":
+        from firesky.rust_spectral import scalar
+        return scalar(0, solar_elevation_deg)
 
     elevation = float(solar_elevation_deg)
     if not math.isfinite(elevation) or elevation <= -5.0:
@@ -731,6 +768,10 @@ def relative_airmass(solar_elevation_deg: float) -> float:
 
 def direct_aerosol_transmission(aod: float, solar_elevation_deg: float) -> float:
     """Beer-Lambert direct transmission through an aerosol column."""
+    from firesky.aerosol import _cams_backend
+    if _cams_backend() == "rust":
+        from firesky.rust_spectral import scalar
+        return scalar(1, aod, solar_elevation_deg)
 
     optical_depth = max(0.0, float(aod))
     air_mass = relative_airmass(solar_elevation_deg)
@@ -746,6 +787,10 @@ def henyey_greenstein_phase_function(asymmetry_factor: float, scattering_angle_d
     full angle-resolved aerosol phase function.  This reconstruction is useful
     for diagnostics but must not be presented as an observed phase function.
     """
+    from firesky.aerosol import _cams_backend
+    if _cams_backend() == "rust":
+        from firesky.rust_spectral import scalar
+        return scalar(2, asymmetry_factor, scattering_angle_deg)
 
     g = max(-0.999, min(0.999, float(asymmetry_factor)))
     cosine = math.cos(math.radians(float(scattering_angle_deg)))

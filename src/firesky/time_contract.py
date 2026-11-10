@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from datetime import date, datetime, timedelta
 from typing import Any
+from firesky import rust_astronomy
 
 
 ISO_DATE_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -12,6 +13,8 @@ ZONED_ISO_DATETIME_PATTERN = re.compile(
 
 
 def parse_iso_date(value: Any, field: str) -> date:
+    if rust_astronomy.enabled():
+        return rust_astronomy.parse(value, field, "parse_date")
     if not isinstance(value, str) or ISO_DATE_PATTERN.fullmatch(value) is None:
         raise ValueError(f"{field} must be an ISO calendar date")
     try:
@@ -24,6 +27,8 @@ def parse_iso_date(value: Any, field: str) -> date:
 
 
 def parse_zoned_iso_datetime(value: Any, field: str) -> datetime:
+    if rust_astronomy.enabled():
+        return rust_astronomy.parse(value, field, "parse_zoned")
     if (
         not isinstance(value, str)
         or ZONED_ISO_DATETIME_PATTERN.fullmatch(value) is None
@@ -44,6 +49,8 @@ def parse_zoned_iso_datetime(value: Any, field: str) -> datetime:
 
 
 def parse_utc_iso_datetime(value: Any, field: str) -> datetime:
+    if rust_astronomy.enabled():
+        return rust_astronomy.parse(value, field, "parse_utc")
     parsed = parse_zoned_iso_datetime(value, field)
     if not value.endswith(("Z", "+00:00")) or parsed.utcoffset() != timedelta(0):
         raise ValueError(f"{field} must use UTC offset Z or +00:00")

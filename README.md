@@ -33,7 +33,7 @@ An independent, self-contained burning-sunset prediction stack: **prediction eng
 - **实况 nowcast**：向日葵 9 号卫星（HSD 分段）云柱反演 + 天气雷达对流修正
 - **后端服务**：FastAPI 异步 job + SSE + gzip + 持久缓存（点/区域/地图帧/卫星）
 - **最小前端**：`/forecast`（点/区域预测）、`/now`（实况）、`/outlook`（形势图）、`/admin`（管理控制台）
-- **桌面应用**：PySide6 本地单机（`desktop/app.py`），与 Web 服务共用预测核心
+- **原生桌面**：macOS SwiftUI/AppKit + Windows WinUI 3，共用 Python/Rust 引擎；[构建与迁移状态](apps/README.md)。PySide6 入口保留兼容。
 
 ## 架构与物理原理
 
@@ -191,16 +191,18 @@ print(result["points"][0]["peak"]["quality_level"])
 
 ## API 端点清单
 
+单点、区域、实况的请求参数、返回字段、数据边界与调用示例见 [预测接口与后端数据能力说明](docs/FORECAST_API.md)。
+
 | 端点 | 方法 | 说明 |
 |---|---|---|
 | `/api/v1/firesky/health` | GET | 健康检查 |
 | `/api/v1/firesky/forecasts/national/contract` | GET | 区域预测算法/缓存版本契约 |
 | `/api/v1/firesky/forecasts` | POST | 启动单点预测 job（异步） |
-| `/api/v1/firesky/forecasts/results/{job_id}` | GET | 取 job 结果（失败时以 400/500 返回错误） |
+| `/api/v1/firesky/forecasts/results/{job_id}` | GET | 取 job 结果（未完成为 404；一般任务失败为 500，GFS 输入不可用为 503） |
 | `/api/v1/firesky/forecasts/national` | POST | 启动区域预测 job |
 | `/api/v1/firesky/forecasts/nowcast` | POST | 启动 nowcast job（卫星+雷达） |
 | `/api/v1/firesky/map-frames` | GET | 地图帧（token + time） |
-| `/api/v1/firesky/forecasts/national/summary` | POST | 区域摘要（严格字段契约） |
+| `/api/v1/firesky/forecasts/national/summary` | GET | 区域摘要（严格字段契约） |
 | `/api/v1/firesky/points/metadata`、`/locations/search` | GET | 观测点元数据 / 地名搜索 |
 | `/api/v1/firesky/data/*` | POST/GET | 数据下载计划器（`data/fetch` 异步 job，`sources` 含 `gfs`/`ecmwf`/`cams`）+ 状态/清理 |
 | `/api/v1/firesky/cache/warmup` | POST | 热门城市预测缓存预热 |
@@ -229,16 +231,43 @@ cd frontend && npm run check && npm run build # 0 errors
 # 开发运行
 .venv/bin/python desktop/app.py
 
-# 打包（macOS 出 .app 目录 / Windows 出 exe 目录）
+# 打包（macOS 出 FireSky.app / Windows 出 exe 目录）
 pip install pyinstaller
 pyinstaller desktop/FireSky.spec --noconfirm
-# macOS：cd dist && hdiutil create -volname FireSky -srcfolder FireSky -ov -format UDZO FireSky.dmg
+
+# macOS 出 dmg（把 .app 装进磁盘镜像）
+hdiutil create -volname FireSky -srcfolder dist/FireSky.app -ov -format UDZO FireSky.dmg
 ```
 
 界面：观测点表单（含常用城市）、日期/现象/模式选择、进度日志、峰值
 档位卡片、逐五分钟质量曲线与台账表。CI 的 `desktop` job 在
 macOS/Windows 上自动打包并上传产物（未签名：macOS 首开需右键→打开，
 Windows SmartScreen 提示后选「仍要运行」）。
+
+### 地图底图与天地图 Key
+
+桌面端的选点地图是本地 Leaflet（`desktop/assets/`，随包分发）+ QWebEngine，
+双底图源，**地图只用于选点，不叠加任何预报结果**：
+
+| 底图源 | 适用区域 | 底图类型 | Key |
+|---|---|---|---|
+| 天地图（默认） | 中国境内 | 影像 / 矢量 / 地形 | 需自备 |
+| Esri | 仅中国境外 | 影像 / 街道 / 地形 | 免 Key |
+
+天地图 Key 在 [console.tianditu.gov.cn](https://console.tianditu.gov.cn) 申请，
+应用类型选「浏览器端」。注入方式三选一（优先级从高到低）：
+
+1. 环境变量 `FIRESKY_TIANDITU_KEY`
+2. 应用内「数据与缓存 → 地图服务」填入 → 写入 `~/.firesky-desktop/config.json`
+3. 源码运行时回退读取 `frontend/src/lib/utils/constants.ts`（打包版不含此文件）
+
+**仓库与发布产物都不内置可用 Key。** 未配置时地图显示申请引导，并可一键切到
+Esri 底图继续选点。境内公开使用须用天地图（《地图管理条例》要求有审图号的
+底图），Esri 仅限中国境外。
+
+> 体积提示：QtWebEngine 会显著撑大产物，macOS `.app` 约 640 MB（含双架构
+> WebEngineCore）；如需分发瘦身，可 `lipo -thin arm64` 并裁剪 locales /
+> devtools pak，代价是放弃 Intel Mac。
 
 ## 目录结构
 

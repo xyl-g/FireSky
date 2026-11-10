@@ -18,6 +18,49 @@ from firesky.models import CloudColumn, GridCellFeature
 
 
 FIELD_COUNT = 20
+# Contract `hsd-assessment-feature-row-v2`: the legacy 20-column feature row
+# extended with the 2 m surface pair (surface-parcel LCL cloud base), the
+# satellite footprint geometry and the satellite cloud-probability pair. The
+# layout must stay in lockstep with FEATURE_ROW_V2_* in native/src/lib.rs.
+# Absent values travel as NaN and are never backfilled as 0.
+FEATURE_ROW_V2_FIELD_COUNT = 27
+FEATURE_ROW_V2_CONTRACT = "hsd-assessment-feature-row-v2"
+FEATURE_ROW_V2_SURFACE_TEMPERATURE_K = 20
+FEATURE_ROW_V2_SURFACE_DEWPOINT_K = 21
+FEATURE_ROW_V2_FOOTPRINT_AZIMUTH_WIDTH_DEG = 22
+FEATURE_ROW_V2_FOOTPRINT_NEAR_DISTANCE_KM = 23
+FEATURE_ROW_V2_FOOTPRINT_FAR_DISTANCE_KM = 24
+FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY = 25
+FEATURE_ROW_V2_CLOUD_PROBABILITY_GIVEN_CLOUD = 26
+FEATURE_ROW_V2_NAMES: tuple[str, ...] = (
+    "lat",
+    "lon",
+    "distance_km",
+    "bearing_deg",
+    "pressure_hpa",
+    "geopotential_height_m",
+    "rh_percent",
+    "temperature_k",
+    "omega_pa_s",
+    "u_ms",
+    "v_ms",
+    "cloud_fraction_percent",
+    "cloud_liquid_kg_kg",
+    "cloud_ice_kg_kg",
+    "source_lat",
+    "source_lon",
+    "source_distance_km",
+    "source_bearing_deg",
+    "surface_visibility_m",
+    "precip_rate_kg_m2_s",
+    "surface_temperature_k",
+    "surface_dewpoint_k",
+    "footprint_azimuth_width_deg",
+    "footprint_near_distance_km",
+    "footprint_far_distance_km",
+    "horizontal_cloud_probability",
+    "cloud_probability_given_cloud",
+)
 METRIC_COUNT = 9
 CANDIDATE_PREFILTER_FIELDS = 7
 BOUNDARY_PREFILTER_FIELDS = 3
@@ -433,6 +476,19 @@ def _load_native_library():
                 ctypes.c_size_t,
             ]
             metrics_function.restype = ctypes.c_ssize_t
+            assessment_metrics_function = getattr(
+                library, "firesky_feature_metrics_batch_v2", None
+            )
+            if assessment_metrics_function is not None:
+                assessment_metrics_function.argtypes = [
+                    ctypes.POINTER(ctypes.c_double),
+                    ctypes.c_size_t,
+                    ctypes.c_double,
+                    ctypes.c_double,
+                    ctypes.POINTER(ctypes.c_double),
+                    ctypes.c_size_t,
+                ]
+                assessment_metrics_function.restype = ctypes.c_ssize_t
             gpu_available_function = getattr(library, "firesky_gpu_available", None)
             if gpu_available_function is not None:
                 gpu_available_function.argtypes = []
@@ -683,13 +739,25 @@ def native_status() -> dict[str, object]:
 
 
 class NativeFeatureBuffer:
+    """Buffer of legacy 20-column feature rows (`hsd-native-feature-row`).
+
+    Rows cannot carry satellite probability columns: `feature_to_row` refuses
+    them, so a legacy buffer proves the features it was built from carry none.
+    """
+
+    ROW_FIELD_COUNT = FIELD_COUNT
+    has_satellite_probability = False
+
     def __init__(self, features: Sequence[GridCellFeature]) -> None:
+        self.field_count = self.ROW_FIELD_COUNT
         self.length = len(features)
         if self.length:
             self._storage = np.fromiter(
-                chain.from_iterable(feature_to_row(feature) for feature in features),
+                chain.from_iterable(
+                    self.row_for_feature(feature) for feature in features
+                ),
                 dtype=np.float64,
-                count=self.length * FIELD_COUNT,
+                count=self.length * self.ROW_FIELD_COUNT,
             )
         else:
             self._storage = np.empty(1, dtype=np.float64)
@@ -697,11 +765,15 @@ class NativeFeatureBuffer:
         self._grid_index = None
         self._grid_index_lock = threading.Lock()
 
+    def row_for_feature(self, feature: GridCellFeature) -> tuple[float, ...]:
+        return feature_to_row(feature)
+
     @classmethod
     def from_ctypes(cls, storage, length: int) -> NativeFeatureBuffer:
         buffer = cls.__new__(cls)
+        buffer.field_count = cls.ROW_FIELD_COUNT
         buffer.length = length
-        buffer._storage = np.ctypeslib.as_array(storage)[: length * FIELD_COUNT]
+        buffer._storage = np.ctypeslib.as_array(storage)[: length * cls.ROW_FIELD_COUNT]
         buffer.values = ctypes.cast(storage, ctypes.POINTER(ctypes.c_double))
         buffer._grid_index = None
         buffer._grid_index_lock = threading.Lock()
@@ -710,17 +782,21 @@ class NativeFeatureBuffer:
     @classmethod
     def from_numpy(cls, rows: np.ndarray) -> NativeFeatureBuffer:
         values = np.asarray(rows, dtype=np.float64)
+        row_field_count = cls.ROW_FIELD_COUNT
         if values.ndim == 2:
-            if values.shape[1] != FIELD_COUNT:
-                raise ValueError(f"native feature rows must have {FIELD_COUNT} columns")
+            if values.shape[1] != row_field_count:
+                raise ValueError(f"native feature rows must have {row_field_count} columns")
             length = values.shape[0]
         elif values.ndim == 1:
-            if values.size % FIELD_COUNT != 0:
-                raise ValueError(f"native feature buffer size must be divisible by {FIELD_COUNT}")
-            length = values.size // FIELD_COUNT
+            if values.size % row_field_count != 0:
+                raise ValueError(
+                    f"native feature buffer size must be divisible by {row_field_count}"
+                )
+            length = values.size // row_field_count
         else:
             raise ValueError("native feature rows must be a one- or two-dimensional array")
         buffer = cls.__new__(cls)
+        buffer.field_count = row_field_count
         buffer.length = int(length)
         buffer._storage = (
             np.ascontiguousarray(values, dtype=np.float64).reshape(-1)
@@ -734,6 +810,11 @@ class NativeFeatureBuffer:
 
     def grid_index(self):
         if self._grid_index is None:
+            if self.field_count != FIELD_COUNT:
+                raise ValueError(
+                    "the native grid index consumes legacy 20-column rows; "
+                    f"{self.field_count}-column buffers need their own contract"
+                )
             with self._grid_index_lock:
                 if self._grid_index is None:
                     library = native_library()
@@ -744,6 +825,24 @@ class NativeFeatureBuffer:
                         raise RuntimeError("native grid-index creation failed")
                     self._grid_index = handle
         return self._grid_index
+
+
+class NativeAssessmentFeatureBuffer(NativeFeatureBuffer):
+    """Buffer of `hsd-assessment-feature-row-v2` rows (27 columns).
+
+    The v2 row extends the legacy 20 columns with the 2 m surface pair, the
+    satellite footprint geometry and `horizontal_cloud_probability` /
+    `cloud_probability_given_cloud` (None packed as NaN). Declaring
+    `has_satellite_probability=True` keeps these rows out of every legacy
+    20-column consumer so the probability columns cannot be dropped silently.
+    """
+
+    ROW_FIELD_COUNT = FEATURE_ROW_V2_FIELD_COUNT
+    has_satellite_probability = True
+    row_contract = FEATURE_ROW_V2_CONTRACT
+
+    def row_for_feature(self, feature: GridCellFeature) -> tuple[float, ...]:
+        return feature_to_row_v2(feature)
 
     def close(self) -> None:
         handle = getattr(self, "_grid_index", None)
@@ -766,12 +865,21 @@ class NativeFeatureList(list):
 class NativeSnapshotFeatures(Sequence[GridCellFeature]):
     """A native snapshot buffer that materializes Python feature objects only on demand."""
 
+    DECODE_FIELD_COUNT = FIELD_COUNT
+    has_satellite_probability = False
+
     def __init__(self, native_buffer: NativeFeatureBuffer) -> None:
+        buffer_field_count = int(getattr(native_buffer, "field_count", FIELD_COUNT))
+        if buffer_field_count != self.DECODE_FIELD_COUNT:
+            raise ValueError(
+                "snapshot features decode "
+                f"{self.DECODE_FIELD_COUNT}-column rows; got a {buffer_field_count}-column buffer"
+            )
         self.native_buffer = native_buffer
         # The legacy row layout cannot carry satellite horizontal/conditional
         # probabilities.  Keep this contract explicit so callers do not infer
         # safety merely from the presence of a native buffer.
-        self.has_satellite_probability = False
+        self.has_satellite_probability = type(self).has_satellite_probability
         self._materialized: Optional[list[GridCellFeature]] = None
         self._rows: dict[int, GridCellFeature] = {}
         self._materialize_lock = threading.Lock()
@@ -779,6 +887,10 @@ class NativeSnapshotFeatures(Sequence[GridCellFeature]):
     @property
     def is_materialized(self) -> bool:
         return self._materialized is not None
+
+    @staticmethod
+    def _decode_row(values, offset: int) -> GridCellFeature:
+        return row_to_feature(values, offset)
 
     def materialize(self) -> list[GridCellFeature]:
         if self._materialized is None:
@@ -789,7 +901,7 @@ class NativeSnapshotFeatures(Sequence[GridCellFeature]):
                     for index in range(self.native_buffer.length):
                         feature = self._rows.get(index)
                         if feature is None:
-                            feature = row_to_feature(values, index * FIELD_COUNT)
+                            feature = self._decode_row(values, index * self.DECODE_FIELD_COUNT)
                             self._rows[index] = feature
                         self._materialized.append(feature)
         return self._materialized
@@ -805,9 +917,9 @@ class NativeSnapshotFeatures(Sequence[GridCellFeature]):
         with self._materialize_lock:
             feature = self._rows.get(normalized)
             if feature is None:
-                feature = row_to_feature(
+                feature = self._decode_row(
                     self.native_buffer._storage,
-                    normalized * FIELD_COUNT,
+                    normalized * self.DECODE_FIELD_COUNT,
                 )
                 self._rows[normalized] = feature
             return feature
@@ -822,6 +934,23 @@ class NativeSnapshotFeatures(Sequence[GridCellFeature]):
 
     def __iter__(self):
         return iter(self.materialize())
+
+
+class NativeAssessmentSnapshotFeatures(NativeSnapshotFeatures):
+    """On-demand feature view over `hsd-assessment-feature-row-v2` rows.
+
+    Mirrors `NativeSnapshotFeatures` for the 27-column assessment layout: the
+    satellite probability columns survive decode (NaN -> None) and the declared
+    `has_satellite_probability=True` contract lets scoring route these
+    snapshots to the v2 native metrics instead of the Python path.
+    """
+
+    DECODE_FIELD_COUNT = FEATURE_ROW_V2_FIELD_COUNT
+    has_satellite_probability = True
+
+    @staticmethod
+    def _decode_row(values, offset: int) -> GridCellFeature:
+        return row_to_feature_v2(values, offset)
 
 
 def optional_value(value: Optional[float]) -> float:
@@ -898,6 +1027,90 @@ def row_to_feature(values, offset: int) -> GridCellFeature:
     )
 
 
+def feature_to_row_v2(feature: GridCellFeature) -> tuple[float, ...]:
+    """Pack one `hsd-assessment-feature-row-v2` row (27 columns).
+
+    Columns 0..19 keep the legacy `feature_to_row` semantics verbatim; the
+    seven v2 columns append the 2 m surface pair, the satellite footprint
+    geometry and the satellite probability pair. None packs as NaN and NaN
+    unpacks as None — unknown never becomes 0.
+    """
+    return (
+        feature.lat,
+        feature.lon,
+        feature.distance_km,
+        feature.bearing_deg,
+        float(feature.pressure_hpa),
+        feature.geopotential_height_m,
+        feature.rh_percent,
+        optional_value(feature.temperature_k),
+        optional_value(feature.omega_pa_s),
+        optional_value(feature.u_ms),
+        optional_value(feature.v_ms),
+        optional_value(feature.cloud_fraction_percent),
+        optional_value(feature.cloud_liquid_kg_kg),
+        optional_value(feature.cloud_ice_kg_kg),
+        optional_value(feature.source_lat),
+        optional_value(feature.source_lon),
+        optional_value(feature.source_distance_km),
+        optional_value(feature.source_bearing_deg),
+        optional_value(feature.surface_visibility_m),
+        optional_value(feature.precip_rate_kg_m2_s),
+        optional_value(feature.surface_temperature_k),
+        optional_value(feature.surface_dewpoint_k),
+        optional_value(feature.footprint_azimuth_width_deg),
+        optional_value(feature.footprint_near_distance_km),
+        optional_value(feature.footprint_far_distance_km),
+        optional_value(feature.horizontal_cloud_probability),
+        optional_value(feature.cloud_probability_given_cloud),
+    )
+
+
+def row_to_feature_v2(values, offset: int) -> GridCellFeature:
+    """Unpack one 27-column `hsd-assessment-feature-row-v2` row."""
+    surface_temperature = values[offset + FEATURE_ROW_V2_SURFACE_TEMPERATURE_K]
+    surface_dewpoint = values[offset + FEATURE_ROW_V2_SURFACE_DEWPOINT_K]
+    footprint_width = values[offset + FEATURE_ROW_V2_FOOTPRINT_AZIMUTH_WIDTH_DEG]
+    footprint_near = values[offset + FEATURE_ROW_V2_FOOTPRINT_NEAR_DISTANCE_KM]
+    footprint_far = values[offset + FEATURE_ROW_V2_FOOTPRINT_FAR_DISTANCE_KM]
+    horizontal_probability = values[offset + FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY]
+    conditional_probability = values[offset + FEATURE_ROW_V2_CLOUD_PROBABILITY_GIVEN_CLOUD]
+    legacy = row_to_feature(values, offset)
+    return GridCellFeature(
+        lat=legacy.lat,
+        lon=legacy.lon,
+        distance_km=legacy.distance_km,
+        bearing_deg=legacy.bearing_deg,
+        pressure_hpa=legacy.pressure_hpa,
+        geopotential_height_m=legacy.geopotential_height_m,
+        rh_percent=legacy.rh_percent,
+        temperature_k=legacy.temperature_k,
+        omega_pa_s=legacy.omega_pa_s,
+        u_ms=legacy.u_ms,
+        v_ms=legacy.v_ms,
+        cloud_fraction_percent=legacy.cloud_fraction_percent,
+        cloud_liquid_kg_kg=legacy.cloud_liquid_kg_kg,
+        cloud_ice_kg_kg=legacy.cloud_ice_kg_kg,
+        source_lat=legacy.source_lat,
+        source_lon=legacy.source_lon,
+        source_distance_km=legacy.source_distance_km,
+        source_bearing_deg=legacy.source_bearing_deg,
+        surface_visibility_m=legacy.surface_visibility_m,
+        precip_rate_kg_m2_s=legacy.precip_rate_kg_m2_s,
+        surface_temperature_k=None if surface_temperature != surface_temperature else surface_temperature,
+        surface_dewpoint_k=None if surface_dewpoint != surface_dewpoint else surface_dewpoint,
+        footprint_azimuth_width_deg=None if footprint_width != footprint_width else footprint_width,
+        footprint_near_distance_km=None if footprint_near != footprint_near else footprint_near,
+        footprint_far_distance_km=None if footprint_far != footprint_far else footprint_far,
+        horizontal_cloud_probability=(
+            None if horizontal_probability != horizontal_probability else horizontal_probability
+        ),
+        cloud_probability_given_cloud=(
+            None if conditional_probability != conditional_probability else conditional_probability
+        ),
+    )
+
+
 def interpolate_features(
     left: NativeFeatureBuffer,
     right: NativeFeatureBuffer,
@@ -910,6 +1123,12 @@ def interpolate_features(
     library = native_library()
     if library is None:
         raise RuntimeError(_load_error or "native library unavailable")
+    for buffer in (left, right):
+        if int(getattr(buffer, "field_count", FIELD_COUNT)) != FIELD_COUNT:
+            raise ValueError(
+                "feature interpolation consumes legacy 20-column rows; "
+                f"{int(getattr(buffer, 'field_count', FIELD_COUNT))}-column buffers need their own contract"
+            )
     azimuth = math.nan if relevant_azimuth_deg is None else relevant_azimuth_deg
     output_length = library.firesky_interpolation_output_len(
         left.values,
@@ -948,7 +1167,20 @@ def interpolate_features(
 def feature_metrics(
     feature_buffer: NativeFeatureBuffer,
     diagnostic_radius_km: float,
+    observer_elevation_m: float = 0.0,
 ) -> np.ndarray:
+    field_count = int(getattr(feature_buffer, "field_count", FIELD_COUNT))
+    if field_count == FEATURE_ROW_V2_FIELD_COUNT:
+        return assessment_feature_metrics(
+            feature_buffer,
+            diagnostic_radius_km,
+            observer_elevation_m,
+        )
+    if observer_elevation_m != 0.0:
+        raise ValueError(
+            "legacy 20-column feature metrics have no observer-elevation input; "
+            "pack hsd-assessment-feature-row-v2 rows instead"
+        )
     library = native_library()
     if library is None:
         raise RuntimeError(_load_error or "native library unavailable")
@@ -990,6 +1222,50 @@ def feature_metrics(
             backend = "GPU" if use_gpu else "CPU"
             raise RuntimeError(f"native {backend} feature metrics failed with code {result}")
     _record_compute_backend("gpu" if use_gpu else "cpu")
+    return output[:result]
+
+
+def assessment_feature_metrics(
+    feature_buffer: NativeFeatureBuffer,
+    diagnostic_radius_km: float,
+    observer_elevation_m: float = 0.0,
+) -> np.ndarray:
+    """Assessment metrics over `hsd-assessment-feature-row-v2` rows.
+
+    Calls `firesky_feature_metrics_batch_v2`: the same 9-metric layout as the
+    legacy batch, plus the satellite probability semantics and the
+    observer-elevation aware surface-LCL cloud base / apparent top. The GPU
+    backend only implements the legacy 20-column kernel, so an explicit GPU
+    request fails closed instead of silently reading the wrong row stride.
+    """
+    library = native_library()
+    if library is None:
+        raise RuntimeError(_load_error or "native library unavailable")
+    if int(getattr(feature_buffer, "field_count", FIELD_COUNT)) != FEATURE_ROW_V2_FIELD_COUNT:
+        raise ValueError(
+            f"assessment feature metrics require {FEATURE_ROW_V2_FIELD_COUNT}-column "
+            f"{FEATURE_ROW_V2_CONTRACT} rows"
+        )
+    requested = current_compute_backend()
+    if requested == "gpu":
+        raise RuntimeError("GPU compute backend has no assessment feature-metrics kernel")
+    function = getattr(library, "firesky_feature_metrics_batch_v2", None)
+    if function is None:
+        raise RuntimeError(
+            "native library lacks firesky_feature_metrics_batch_v2; rebuild native/"
+        )
+    output = np.empty((feature_buffer.length, METRIC_COUNT), dtype=np.float64)
+    result = function(
+        feature_buffer.values,
+        feature_buffer.length,
+        diagnostic_radius_km,
+        observer_elevation_m,
+        output.ctypes.data_as(ctypes.POINTER(ctypes.c_double)),
+        feature_buffer.length,
+    )
+    if result < 0:
+        raise RuntimeError(f"native assessment feature metrics failed with code {result}")
+    _record_compute_backend("cpu")
     return output[:result]
 
 

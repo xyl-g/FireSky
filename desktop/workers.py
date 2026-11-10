@@ -20,6 +20,47 @@ class CancelledError(RuntimeError):
     """任务被用户取消（协作式：由各 worker 自行抛出）。"""
 
 
+def _run_model_pair(payload, run, progress):
+    """Run each authoritative model independently; never average or fabricate results."""
+    from firesky.web_server import ForecastCancelled
+    results, errors = {}, {}
+    for index, model in enumerate(("gfs", "ec")):
+        last_event = {"percent": 0}
+        stop = threading.Event()
+        def model_progress(event, index=index, model=model):
+            last_event.update(event)
+            progress({
+                **event, "model_source": model,
+                "percent": index * 50 + min(100, max(0, int(event.get("percent") or 0))) // 2,
+                "message": f"{model.upper()} · {event.get('message') or '计算中'}",
+            })
+        model_progress({"percent": 0})
+        def heartbeat():
+            while not stop.wait(8):
+                try:
+                    model_progress({
+                        **last_event,
+                        "message": "仍在准备数据 / 计算，等待引擎进度…",
+                    })
+                except (ForecastCancelled, CancelledError):
+                    return
+        pulse = threading.Thread(target=heartbeat, daemon=True)
+        pulse.start()
+        try:
+            results[model] = run({**payload, "model_source": model}, model_progress)
+        except (ForecastCancelled, CancelledError):
+            raise
+        except Exception as exc:
+            errors[model] = str(exc) or type(exc).__name__
+            model_progress({"percent": 100, "message": f"未完成：{errors[model]}"})
+        finally:
+            stop.set()
+            pulse.join()
+    if not results:
+        raise RuntimeError("；".join(f"{model.upper()}：{error}" for model, error in errors.items()))
+    return {"model_results": results, "model_errors": errors}
+
+
 class WorkerBase(QThread):
     """通用后台任务骨架：cancel 标志 + progress/error/done 信号。"""
 
@@ -99,6 +140,16 @@ class ForecastWorker(WorkerBase):
         self._heartbeat_stop = threading.Event()
 
     def execute(self) -> dict:
+        if not self._nowcast and self._payload.get("model_source") == "both":
+            from firesky.web_server import WebServerConfig, run_forecast_payload
+            config = WebServerConfig()
+            return _run_model_pair(
+                self._payload,
+                lambda payload, progress: run_forecast_payload(
+                    payload, config, progress_callback=progress,
+                ),
+                self.emit_progress,
+            )
         import time
 
         from firesky.web_server import (
@@ -184,7 +235,7 @@ class ForecastWorker(WorkerBase):
             )
         self._last_percent = percent
         self._last_event_at = time.monotonic()
-        self.progress.emit({
+        self.emit_progress({
             "stage": "download" if percent < self._SCORE_SPAN_START else "score",
             "percent": percent,
             "message": message,
@@ -211,6 +262,14 @@ class RegionalForecastWorker(WorkerBase):
 
         config = WebServerConfig()
         try:
+            if self._payload.get("model_source") == "both":
+                return _run_model_pair(
+                    self._payload,
+                    lambda payload, progress: run_and_cache_national_forecast_payload(
+                        payload, config, progress_callback=progress,
+                    ),
+                    self.emit_progress,
+                )
             return run_and_cache_national_forecast_payload(
                 self._payload,
                 config,
@@ -241,7 +300,23 @@ class DataFetchWorker(WorkerBase):
         )
 
         config = WebServerConfig()
-        job = handle_data_fetch(dict(self._payload), config)
+        from desktop.data_access import published_cycles
+
+        payload = dict(self._payload)
+        sources = ["ecmwf" if s == "ec" else s for s in payload.get("sources", [])]
+        self.emit_progress({"percent": 0, "message": "下载前核验所选数据源发布周期…"})
+        publications = published_cycles(sources)
+        payload["cycle_overrides"] = {
+            source: item["cycle"] for source, item in publications.items()
+            if item.get("cycle")
+        }
+        for source, item in publications.items():
+            self.emit_progress({
+                "percent": 0,
+                "message": f"{source.upper()} 周期 {item['label']} · "
+                           + ("上游已核验" if item["verified"] else "推测周期，发布未核验"),
+            })
+        job = handle_data_fetch(payload, config)
         job_id = str(job.get("job_id") or "")
         deadline = time.monotonic() + 2400.0
         while True:
@@ -259,10 +334,18 @@ class DataFetchWorker(WorkerBase):
                 "snapshot": snapshot,
             })
             status = str(snapshot.get("status") or "")
-            if status in {"done", "failed"}:
+            if status == "failed":
+                raise RuntimeError(str(snapshot.get("errors") or snapshot.get("error") or snapshot))
+            if status == "done":
+                failures = [
+                    str(item.get("failed")) for item in snapshot.get("results", [])
+                    if item.get("failed")
+                ]
+                if failures:
+                    raise RuntimeError("; ".join(failures))
                 return snapshot
             if time.monotonic() > deadline:
-                return {**snapshot, "status": "timeout"}
+                raise TimeoutError("下载监控超时，后台任务可能仍在运行；请刷新本地清单。")
 
 
 class SatelliteWarmupWorker(WorkerBase):

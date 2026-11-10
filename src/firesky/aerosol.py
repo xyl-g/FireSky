@@ -77,6 +77,23 @@ _CAMS_PROBE_CACHE: OrderedDict[tuple[str, int, int], bool] = OrderedDict()
 _CAMS_PROBE_CACHE_LOCK = threading.Lock()
 
 
+def _cams_backend() -> str:
+    backend = os.environ.get("FIRESKY_CAMS_BACKEND", "python").strip().lower()
+    if backend not in {"python", "rust"}:
+        raise ValueError("FIRESKY_CAMS_BACKEND must be python or rust")
+    return backend
+
+
+def _cams_backend_identity() -> dict[str, str]:
+    return {"cams_optics_backend": "rust-cams-v1"} if _cams_backend() == "rust" else {}
+
+
+def _cams_grid_cache_key(path: Path) -> tuple[str, int, int]:
+    stat = path.stat()
+    prefix = "rust-cams-v1:" if _cams_backend() == "rust" else ""
+    return (prefix + str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+
+
 @contextmanager
 def _cams_download_guard():
     if not _CAMS_DOWNLOAD_SLOTS.acquire(timeout=CAMS_DOWNLOAD_LOCK_TIMEOUT_SECONDS):
@@ -96,8 +113,7 @@ def _cams_optics_file_valid(path: Path) -> bool:
     result is cached per (path, mtime, size) so a file is decoded once per
     process while the load-failure contract is preserved.
     """
-    stat = path.stat()
-    probe_key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    probe_key = _cams_grid_cache_key(path)
     with _CAMS_PROBE_CACHE_LOCK:
         cached = _CAMS_PROBE_CACHE.get(probe_key)
         if cached is not None:
@@ -337,7 +353,19 @@ class CamsAdsAerosolProvider(AerosolProvider):
         target_utc: datetime,
         *,
         require_exact_valid_time: bool = False,
+        refresh_before_cycle: datetime | None = None,
     ) -> Path:
+        """Fill an event time, optionally bypassing older exact-time caches.
+
+        A refresh cycle after the requested time is inapplicable and does not
+        invalidate a historical cache. Old files are not removed.
+        """
+        from firesky import rust_cams_data
+        if rust_cams_data.enabled():
+            return rust_cams_data.download(
+                self, area, [target_utc], batch=False,
+                exact=require_exact_valid_time, refresh=refresh_before_cycle,
+            )
         import cdsapi
         import requests
 
@@ -361,6 +389,12 @@ class CamsAdsAerosolProvider(AerosolProvider):
                     if bracket is not None
                     else None
                 )
+                if (
+                    bracket is not None and refresh_before_cycle is not None
+                    and refresh_before_cycle <= target_utc
+                    and bracket.left.run_time_utc < refresh_before_cycle
+                ):
+                    cached = None
             else:
                 cached = find_cached_cams_file(self.cache_dir, area, target_utc)
             if cached is not None:
@@ -483,6 +517,7 @@ class CamsAdsAerosolProvider(AerosolProvider):
         target_utcs: Sequence[datetime],
         *,
         require_exact_valid_time: bool = False,
+        refresh_before_cycle: datetime | None = None,
     ) -> dict[datetime, Path]:
         """Download every missing CAMS valid time with as few ADS requests as possible.
 
@@ -492,7 +527,16 @@ class CamsAdsAerosolProvider(AerosolProvider):
         文件，下游 bracket 查找无需感知。选择/严格校验语义与单点路径一致；
         批量中校验失败的目标不在返回值里，由调用方回退到单点路径（其自带
         ±3/±6 h 邻近 lead 回退）。
+
+        ``refresh_before_cycle`` bypasses older exact-time caches only when
+        that cycle can apply to the target, without removing historical files.
         """
+        from firesky import rust_cams_data
+        if rust_cams_data.enabled():
+            return rust_cams_data.download(
+                self, area, list(target_utcs), batch=True,
+                exact=require_exact_valid_time, refresh=refresh_before_cycle,
+            )
         import cdsapi
         import requests
 
@@ -501,7 +545,12 @@ class CamsAdsAerosolProvider(AerosolProvider):
         for target_utc in target_utcs:
             if require_exact_valid_time:
                 bracket = find_cached_cams_bracket(self.cache_dir, area, target_utc)
-                if bracket is not None and bracket.left.path == bracket.right.path:
+                refresh = (
+                    bracket is not None and refresh_before_cycle is not None
+                    and refresh_before_cycle <= target_utc
+                    and bracket.left.run_time_utc < refresh_before_cycle
+                )
+                if bracket is not None and bracket.left.path == bracket.right.path and not refresh:
                     results[target_utc] = bracket.left.path
                     continue
             else:
@@ -640,7 +689,7 @@ def _split_cams_bundle_by_lead(
 ) -> dict[int, Path]:
     """Split a multi-lead CAMS GRIB into per-lead cache files (atomic)."""
     written: dict[int, Path] = {}
-    handles: dict[int, tuple[Path, Any]] = {}
+    handles: dict[int, tuple[Path, Path, Any]] = {}
     try:
         with bundle.open('rb') as input_handle:
             while True:
@@ -650,7 +699,7 @@ def _split_cams_bundle_by_lead(
                 try:
                     lead = _grib_message_step(gid)
                     if lead in handles:
-                        _, output = handles[lead]
+                        _, _, output = handles[lead]
                     else:
                         final = target_dir / (
                             f'{CAMS_OPTICS_CACHE_PREFIX}-{run_date:%Y-%m-%d}'
@@ -859,24 +908,18 @@ def find_cached_cams_bracket(
     cache_dir: Path,
     area: List[float],
     target_utc: datetime,
+    *,
+    candidate_paths: Sequence[Path] | None = None,
+    validate_contents: bool = True,
 ) -> Optional[CamsProfileBracket]:
     left_valid, right_valid = cams_profile_bracket_times(target_utc)
     target = target_utc.astimezone(timezone.utc)
     suffix = f"-{cams_area_key(area)}.grib"
-    exact_paths = list(cache_dir.rglob(f"{CAMS_OPTICS_CACHE_PREFIX}-*{suffix}"))
-    exact_path_set = set(exact_paths)
-    candidate_paths = exact_paths + [
-        path
-        for path in cache_dir.rglob(f"{CAMS_OPTICS_CACHE_PREFIX}-*.grib")
-        if path not in exact_path_set and cams_file_covers_area(path, area)
-    ]
-
+    paths = candidate_paths if candidate_paths is not None else cache_dir.rglob(f"{CAMS_OPTICS_CACHE_PREFIX}-*.grib")
     selections: dict[datetime, CamsProfileFileSelection] = {}
-    ranks: dict[datetime, tuple[float, int]] = {}
     required = {left_valid, right_valid}
-    for path in candidate_paths:
-        if not path.is_file() or path.stat().st_size == 0:
-            continue
+    candidates = []
+    for path in paths:
         parsed = parse_cams_cache_name(path)
         if parsed is None:
             continue
@@ -884,15 +927,23 @@ def find_cached_cams_bracket(
         valid_time = run_time_utc + timedelta(hours=lead_hours)
         if valid_time not in required:
             continue
+        exact = path.name.endswith(suffix)
+        candidates.append(((-run_time_utc.timestamp(), 0 if exact else 1), path, parsed, valid_time, exact))
+    # Filter by time before opening geographic headers; inspect newest candidates
+    # first so superseded runs need neither header reads nor full GRIB decodes.
+    for _, path, parsed, valid_time, exact in sorted(candidates, key=lambda row: row[0]):
+        if valid_time in selections:
+            continue
+        run_date, run_time, lead_hours, run_time_utc = parsed
         try:
-            if not _cams_optics_file_valid(path):
+            if not path.is_file() or path.stat().st_size == 0:
+                continue
+            if not exact and not cams_file_covers_area(path, area):
+                continue
+            if validate_contents and not _cams_optics_file_valid(path):
                 continue
         except Exception:
             continue
-        rank = (-run_time_utc.timestamp(), 0 if path in exact_path_set else 1)
-        if valid_time in ranks and ranks[valid_time] <= rank:
-            continue
-        ranks[valid_time] = rank
         selections[valid_time] = CamsProfileFileSelection(
             path=path,
             run_date=run_date,
@@ -901,6 +952,8 @@ def find_cached_cams_bracket(
             run_time_utc=run_time_utc,
             valid_time=valid_time,
         )
+        if required.issubset(selections):
+            break
 
     left = selections.get(left_valid)
     right = selections.get(right_valid)
@@ -1297,14 +1350,30 @@ def _cams_message_valid_time(gid) -> datetime:
 
 def load_cams_optics_grid(path: Path) -> CamsOpticsGrid:
     """Load one complete, single-valid-time CAMS optical profile."""
-    stat = path.stat()
-    key = (str(path.resolve()), stat.st_mtime_ns, stat.st_size)
+    key = _cams_grid_cache_key(path)
     with _CAMS_GRID_CACHE_LOCK:
         cached = _CAMS_GRID_CACHE.get(key)
         if cached is not None:
             _CAMS_GRID_CACHE.move_to_end(key)
             return cached
 
+    if _cams_backend() == "rust":
+        from firesky.rust_cams import decode_optics
+        grid = decode_optics(path)
+    else:
+        grid = _decode_cams_optics_python(path)
+    with _CAMS_GRID_CACHE_LOCK:
+        stale_keys = [item for item in _CAMS_GRID_CACHE if item[0] == key[0] and item != key]
+        for stale_key in stale_keys:
+            _CAMS_GRID_CACHE.pop(stale_key, None)
+        _CAMS_GRID_CACHE[key] = grid
+        _CAMS_GRID_CACHE.move_to_end(key)
+        while len(_CAMS_GRID_CACHE) > _CAMS_GRID_CACHE_LIMIT:
+            _CAMS_GRID_CACHE.popitem(last=False)
+    return grid
+
+
+def _decode_cams_optics_python(path: Path) -> CamsOpticsGrid:
     latitudes: np.ndarray | None = None
     longitudes: np.ndarray | None = None
     aod550: np.ndarray | None = None
@@ -1442,14 +1511,6 @@ def load_cams_optics_grid(path: Path) -> CamsOpticsGrid:
         aerext532_m_inv=profile,
     )
 
-    with _CAMS_GRID_CACHE_LOCK:
-        stale_keys = [item for item in _CAMS_GRID_CACHE if item[0] == key[0] and item != key]
-        for stale_key in stale_keys:
-            _CAMS_GRID_CACHE.pop(stale_key, None)
-        _CAMS_GRID_CACHE[key] = grid
-        _CAMS_GRID_CACHE.move_to_end(key)
-        while len(_CAMS_GRID_CACHE) > _CAMS_GRID_CACHE_LIMIT:
-            _CAMS_GRID_CACHE.popitem(last=False)
     return grid
 
 
@@ -1460,6 +1521,9 @@ def effective_aerosol_scale_height_km(extinction_m_inv: np.ndarray) -> np.ndarra
     paths. Relative extinction weights preserve elevated/deep aerosol layers
     without letting the weak upper-atmosphere background flatten the slope.
     """
+    if _cams_backend() == "rust":
+        from firesky.rust_cams import scale_heights
+        return scale_heights(extinction_m_inv)
     values = np.asarray(extinction_m_inv, dtype=np.float64)
     if values.ndim < 2 or values.shape[0] != len(CAMS_AEROSOL_PROFILE_PRESSURE_LEVELS):
         raise ValueError('CAMS extinction profile has an unexpected shape')

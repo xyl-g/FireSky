@@ -29,7 +29,9 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from types import SimpleNamespace
 import numpy as np
 
+from firesky import rust_astronomy
 from firesky.aerosol import (
+    _cams_backend_identity,
     CAMS_AEROSOL_PROFILE_PRESSURE_LEVELS,
     CamsAdsAerosolProvider,
     cams_area_from_model_bbox,
@@ -90,6 +92,7 @@ from firesky.satellite_cloud_column import (
     AutoHsdCompactCacheProvider,
     HsdCacheWarmer,
     HsdCompactCache,
+    RustHsdCompactCacheProvider,
     SegmentedHimawariHsdFrameProvider,
 )
 from firesky.satellite import (
@@ -318,12 +321,43 @@ class WebServerConfig:
     regional_refresh_payload: Optional[dict[str, Any]] = None
 
 
-def _cached_satellite_frame_provider(config: WebServerConfig) -> AutoHsdCompactCacheProvider:
+def _cached_satellite_frame_provider(config: WebServerConfig):
     # HSD 独占：HCAI 整文件下载过慢已从实况链路移除。
+    configured = os.environ.get("FIRESKY_HSD_BACKEND")
+    if configured is None:
+        # The desktop Rust backend owns the compact-frame validation and
+        # retrieval path. Keep standalone web callers on the Python default,
+        # while making the desktop selector apply consistently to nowcast
+        # scoring without requiring a second undocumented environment flag.
+        configured = (
+            "rust"
+            if os.environ.get("FIRESKY_DESKTOP_DATA_BACKEND", "python")
+            .strip()
+            .lower()
+            == "rust"
+            else "python"
+        )
+    backend = configured.strip().lower()
+    if backend not in {"python", "rust"}:
+        raise ValueError("FIRESKY_HSD_BACKEND must be python or rust")
+    if backend == "rust":
+        return RustHsdCompactCacheProvider(
+            config.satellite_cache_dir,
+            allow_foreground=False,
+        )
     return AutoHsdCompactCacheProvider(
         config.satellite_cache_dir,
         allow_foreground=False,
     )
+
+
+def _native_regional_backend_enabled() -> bool:
+    """Select the native public regional executor without changing defaults."""
+    configured = os.environ.get("FIRESKY_REGIONAL_DATA_BACKEND", "python")
+    backend = configured.strip().lower()
+    if backend not in {"python", "rust"}:
+        raise ValueError("FIRESKY_REGIONAL_DATA_BACKEND must be python or rust")
+    return backend == "rust"
 
 
 class ForecastResponseCache:
@@ -1354,6 +1388,8 @@ def run_forecast_payload(
             "report_dir": str(config.report_dir),
             "aerosol_source": config.aerosol_source,
             "map_cache_dir": str(config.map_cache_dir),
+            **_cams_backend_identity(),
+            **rust_astronomy.backend_identity(),
         },
         ensure_ascii=False,
         sort_keys=True,
@@ -3090,6 +3126,8 @@ def point_forecast_cache_key(payload: dict[str, Any]) -> str:
         ).isoformat()
     else:
         identity["model_cycle"] = _point_model_cycle(payload).isoformat()
+    identity.update(_cams_backend_identity())
+    identity.update(rust_astronomy.backend_identity())
     encoded = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()[:24]
 
@@ -3573,6 +3611,9 @@ def run_national_forecast_payload(
     ).strip().lower()
     if aerosol_source != str(config.aerosol_source).strip().lower():
         raise ValueError("区域请求的 aerosol source 与执行配置不一致。")
+    ecmwf_source = str(payload.get("ecmwf_source") or "ecmwf").strip().lower()
+    if ecmwf_source not in {"ecmwf", "aws", "google"}:
+        raise ValueError("ecmwf_source 必须是 ecmwf、aws 或 google。")
     common = {
         "target_date": str(payload.get("target_date") or ""),
         "phenomenon": str(payload.get("phenomenon") or "dusk").lower(),
@@ -3585,6 +3626,7 @@ def run_national_forecast_payload(
         "radius_km": analysis_radius_km,
         "compute_backend": str(payload.get("compute_backend") or "auto").lower(),
         "gfs_resolution": str(payload.get("gfs_resolution") or "0p25").lower(),
+        "ecmwf_source": ecmwf_source,
         "_aerosol_source": aerosol_source,
         "spacing_deg": (
             0.0
@@ -4044,7 +4086,10 @@ def _run_national_batch_payload(
         )
         prepared = prepare_model_columns(client, cycle, forecast_hours, bbox, progress_callback)
     elif model_source == "ec":
-        adapter = EcmwfIfsAdapter(cache_dir=config.ecmwf_cache_dir, source="ecmwf")
+        adapter = EcmwfIfsAdapter(
+            cache_dir=config.ecmwf_cache_dir,
+            source=str(common.get("ecmwf_source") or "ecmwf"),
+        )
         prepared = common.pop("_ec_prefetched", None)
         if prepared is None:
             prepared = _load_ec_national_prepared_cache(
@@ -4434,6 +4479,7 @@ def run_and_cache_national_forecast_payload(
     if not isinstance(payload, dict):
         raise ValueError("全国预测参数必须是 JSON 对象。")
     force_refresh = bool(payload.get("force_refresh", False))
+    native_public = _native_regional_backend_enabled()
     normalized_payload = {
         key: value for key, value in payload.items() if key != "force_refresh"
     }
@@ -4446,13 +4492,39 @@ def run_and_cache_national_forecast_payload(
         except (FileNotFoundError, OSError, RuntimeError, ValueError):
             cached = None
         if cached is not None:
-            if progress_callback is not None:
-                progress_callback({
-                    "stage": "cache",
-                    "percent": 99,
-                    "message": "命中全国预测持久缓存",
-                })
-            return cached
+            native = cached.get("native_forecast")
+            if (
+                not native_public
+                or (
+                    isinstance(native, dict)
+                    and native.get("contract")
+                    == "rust-public-regional-forecast-v1"
+                    and native.get("runtime_python_used") is False
+                    and native.get("public_forecast_complete") is True
+                )
+            ):
+                if progress_callback is not None:
+                    progress_callback({
+                        "stage": "cache",
+                        "percent": 99,
+                        "message": "命中全国预测持久缓存",
+                    })
+                return cached
+    if native_public and str(
+        normalized_payload.get("forecast_mode") or "model"
+    ).strip().lower() == "model":
+        model = str(normalized_payload.get("model_source") or "gfs").strip().lower()
+        if model not in {"gfs", "ec"}:
+            raise ValueError("FIRESKY_REGIONAL_DATA_BACKEND=rust requires model_source=gfs or ec")
+        from firesky.rust_desktop_data import forecast_regional
+
+        return forecast_regional(
+            normalized_payload,
+            model=model,
+            config=config,
+            progress=progress_callback,
+            public=True,
+        )
     result = run_national_forecast_payload(
         normalized_payload, config, progress_callback
     )
@@ -4468,6 +4540,7 @@ def run_and_cache_national_forecast_public_payload(
     if not isinstance(payload, dict):
         raise ValueError("全国预测参数必须是 JSON 对象。")
     force_refresh = bool(payload.get("force_refresh", False))
+    native_public = _native_regional_backend_enabled()
     coverage = national_coverage_from_payload(payload)
     if [str(area["code"]) for area in coverage] == ["china"]:
         if _national_payload_uses_explicit_points(payload):
@@ -4480,7 +4553,7 @@ def run_and_cache_national_forecast_public_payload(
             raise ValueError(
                 "public china forecast requires exactly 36,685 generated points"
             )
-    if not force_refresh:
+    if not force_refresh and not native_public:
         summary_payload = dict(payload)
         summary_payload["_aerosol_source"] = str(config.aerosol_source).strip().lower()
         try:
@@ -4502,7 +4575,26 @@ def run_and_cache_national_forecast_public_payload(
                     "message": "命中区域摘要缓存",
                 })
             return summary
-    cached = run_and_cache_national_forecast_payload(payload, config, progress_callback)
+    cached = run_and_cache_national_forecast_payload(
+        payload, config, progress_callback
+    )
+    # The Rust desktop bridge intentionally publishes an internal regional
+    # result with ``public_forecast_complete=false``.  It shares the durable
+    # cache root for reuse by the desktop UI, but that artifact must never be
+    # promoted into the public array-v6 summary contract.  Recompute through
+    # the owning Python/public path when such a cache is encountered.
+    native = cached.get("native_forecast") if isinstance(cached, dict) else None
+    if (
+        isinstance(native, dict)
+        and native.get("contract") == "rust-desktop-regional-forecast-v1"
+        and native.get("runtime_python_used") is False
+        and native.get("public_forecast_complete") is False
+    ):
+        cached = run_and_cache_national_forecast_payload(
+            {**payload, "force_refresh": True},
+            config,
+            progress_callback,
+        )
     if str(cached.get("model_source") or "gfs").lower() == "ec":
         return _external_national_forecast_summary(cached)
     return _national_forecast_summary(cached)
@@ -4633,6 +4725,8 @@ def national_forecast_cache_identity(payload: dict[str, Any]) -> dict[str, Any]:
         "satellite_source": satellite_source,
         "aerosol_source": aerosol_source,
         "radius_km": bounded_float(effective_radius, "搜索半径", 100.0, radius_max),
+        **_cams_backend_identity(),
+        **rust_astronomy.backend_identity(),
     }
     if model_source == "gfs":
         # Preserve the existing GFS cache key byte-for-byte.
@@ -6520,7 +6614,10 @@ def _prefetch_national_inputs(
         terrain_model_hour: int | None = None
         if model_source == "ec":
             from firesky.ecmwf_point import _required_model_hours
-            adapter = EcmwfIfsAdapter(cache_dir=config.ecmwf_cache_dir, source="ecmwf")
+            adapter = EcmwfIfsAdapter(
+                cache_dir=config.ecmwf_cache_dir,
+                source=str(common.get("ecmwf_source") or "ecmwf"),
+            )
             model_grid_observers = any(
                 point.get("_elevation_source") == "model-grid" for point in points
             )
@@ -7100,6 +7197,14 @@ def handle_data_requirements(payload: dict | None = None) -> dict:
     cycles = _cached_latest_cycles(now_utc)
     cycle_sources = dict(getattr(cycles, "cycle_sources", {}))
     selected_sources = [str(value).lower() for value in payload.get("sources") or []]
+    # Desktop downloads can pin each source to the cycle just probed upstream,
+    # without relying on a scheduler/Redis instance in the local application.
+    for raw_source, raw_cycle in (payload.get("cycle_overrides") or {}).items():
+        source = "ecmwf" if raw_source == "ec" else raw_source
+        if source not in {"gfs", "ecmwf", "cams"}:
+            raise ValueError(f"未知周期数据源：{raw_source}")
+        cycles[source] = _parse_data_cycle(raw_cycle)
+        cycle_sources[source] = "override"
     if payload.get("cycle") and len(selected_sources) == 1:
         source = "ecmwf" if selected_sources[0] == "ec" else selected_sources[0]
         cycles[source] = _parse_data_cycle(payload["cycle"])
@@ -7775,6 +7880,8 @@ def _scan_gfs_local(
         if not in_region and required_bbox is None:
             continue
         info = grib_path.stat()
+        if info.st_size <= 0:
+            continue
         counted = in_region or required_bbox is None
         if counted:
             file_count += 1
@@ -7847,6 +7954,8 @@ def _scan_ecmwf_local(cache_dir: Path) -> dict:
 
     for grib_path in ec_dir.rglob("*.grib2"):
         info = grib_path.stat()
+        if info.st_size <= 0:
+            continue
         m = _ECMWF_RE.match(grib_path.name)
         if not m:
             continue
@@ -7931,6 +8040,8 @@ def _scan_cams_local(
                 continue
 
         info = grib_path.stat()
+        if info.st_size <= 0:
+            continue
         file_count += 1
         total_mb += info.st_size / (1024 * 1024)
 

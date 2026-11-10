@@ -5,10 +5,12 @@ edition = "2021"
 
 [lib]
 name = "firesky_native"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 rayon = "1.10"
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+chrono-tz = "0.10"
 
 [profile.release]
 lto = true

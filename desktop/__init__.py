@@ -32,8 +32,9 @@ def _prepare_qtwebengine() -> None:
     if not framework.is_dir():
         return
 
-    # 标准 framework 的两者都在顶层；打包产物的实际位置在 Versions/Resources 下
-    layouts = ("", "Versions/A/", "Versions/Current/", "Versions/Resources/")
+    # Prefer the canonical layout while retaining compatibility with older bundles.
+    layouts = ("", "Resources/", "Versions/A/", "Versions/A/Resources/",
+               "Versions/Current/", "Versions/Resources/")
 
     if not os.environ.get("QTWEBENGINE_RESOURCES_PATH"):
         for prefix in layouts + ("Versions/Resources/Resources/",):

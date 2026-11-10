@@ -8,6 +8,7 @@ sky. This module turns that angular cloud amount into the 0..2.5 quality scale.
 
 from __future__ import annotations
 
+import os
 from typing import Mapping, Sequence
 
 import numpy as np
@@ -265,6 +266,9 @@ def _clip(value: float, low: float = 0.0, high: float = 1.0) -> float:
 
 def calibrated_quality_response(value: np.ndarray | float) -> np.ndarray | float:
     """Map the physical quality ledger to the calibrated perceptual index once."""
+    if _use_rust_empirical():
+        from firesky.empirical_native import response
+        return response(value)
     array = np.asarray(value, dtype=np.float64)
     response = np.clip(
         QUALITY_RESPONSE_SCALE * np.power(np.maximum(array, 0.0), QUALITY_RESPONSE_EXPONENT),
@@ -278,6 +282,9 @@ def inverse_calibrated_quality_response(
     value: np.ndarray | float,
 ) -> np.ndarray | float:
     """Convert a final-index ceiling back to the physical-ledger domain."""
+    if _use_rust_empirical():
+        from firesky.empirical_native import response
+        return response(value, inverse=True)
     array = np.clip(np.asarray(value, dtype=np.float64), 0.0, MAX_SCORE)
     physical = np.clip(
         np.power(array / QUALITY_RESPONSE_SCALE, 1.0 / QUALITY_RESPONSE_EXPONENT),
@@ -1086,8 +1093,18 @@ def score_observer_cloud_field_batch(
     ]
 
 
+def _use_rust_empirical() -> bool:
+    backend = os.environ.get("FIRESKY_EMPIRICAL_BACKEND", "python").strip().lower()
+    if backend not in {"python", "rust"}:
+        raise ValueError("FIRESKY_EMPIRICAL_BACKEND must be python or rust")
+    return backend == "rust"
+
+
 def duration_factor(duration_minutes: float) -> float:
     """Normalize the event integral to 20 minutes, then saturate gradually."""
+    if _use_rust_empirical():
+        from firesky.empirical_native import duration_factor as native_duration_factor
+        return native_duration_factor(duration_minutes)
     return _piecewise(
         max(0.0, float(duration_minutes)),
         (
@@ -1155,6 +1172,9 @@ def _unified_event_window_weights(
     event composition should average with so the score follows the strongest
     continuous stretch of the event.
     """
+    if _use_rust_empirical():
+        from firesky.empirical_native import event_window_weights
+        return event_window_weights(values, active, widths, offsets)
     values = np.asarray(values, dtype=np.float64)
     active = np.asarray(active, dtype=bool)
     widths = np.asarray(widths, dtype=np.float64)
@@ -1188,6 +1208,9 @@ def _unified_event_window_weights_batch(
     offsets: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Row-wise best-window weights, grouping rows by shared activity mask."""
+    if _use_rust_empirical():
+        from firesky.empirical_native import event_window_weights_batch
+        return event_window_weights_batch(values, active, widths, offsets)
     values = np.asarray(values, dtype=np.float64)
     active = np.asarray(active, dtype=bool)
     if values.ndim != 2 or active.shape != values.shape:

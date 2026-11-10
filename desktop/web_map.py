@@ -418,6 +418,28 @@ class FireSkyMap(QWebEngineView):
         self._inject()
         return True
 
+    def set_grid(self, points: list[dict], *, spacing: float = 0.25) -> None:
+        """Render every returned cell, without interpolation or top-N truncation."""
+        import math
+
+        cells = []
+        for point in points:
+            try:
+                lat, lon = float(point["lat"]), float(point["lon"])
+                raw = point.get("peak_quality_index")
+                value = float(raw) if raw is not None else None
+                if not math.isfinite(lat) or not math.isfinite(lon):
+                    continue
+                if value is not None and not math.isfinite(value):
+                    value = None
+                cells.append([lat, lon, value])
+            except (KeyError, TypeError, ValueError):
+                continue
+        self._js(f"window.fsSetGrid({json.dumps(cells, allow_nan=False)},{float(spacing)});")
+
+    def focus_grid_cell(self, lat: float, lon: float) -> None:
+        self._js(f"window.fsFocusGridCell({float(lat)},{float(lon)});")
+
     def refresh_key(self) -> None:
         """按当前生效的 Key / 供应商重新注入（设置页变化后调用）。
 
