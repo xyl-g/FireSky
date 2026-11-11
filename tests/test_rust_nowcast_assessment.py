@@ -2794,3 +2794,36 @@ def provider_features_for_scan(wrapped, request, frame):
         return_priors=False,
     )
     return features
+
+
+def test_conftest_repairs_joined_pytest_path_args():
+    """The CI runner must survive its own quoting bug: four test paths joined
+    into one argument are split back apart by tests/conftest.py before
+    collection, so the focused gate command runs instead of erroring with
+    exit 4 ("file or directory not found")."""
+    import os
+    import subprocess
+    import sys as sys_module
+
+    if os.environ.get("FIRESKY_CONFTEST_REPAIR_PROBE"):
+        # The probe run reproduces the gate command, which collects this very
+        # test; without this guard each level would spawn another pytest run
+        # forever.  The probe still proves the joined paths collect cleanly.
+        import pytest
+
+        pytest.skip("inner conftest-repair probe run")
+
+    joined = " ".join((
+        "tests/test_rust_nowcast_assessment.py",
+        "tests/test_rust_nowcast_adjustment.py",
+        "tests/test_rust_quality.py",
+        "tests/test_scoring_invariants.py",
+    ))
+    completed = subprocess.run(
+        [sys_module.executable, "-m", "pytest", joined, "-q"],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env=dict(os.environ, FIRESKY_CONFTEST_REPAIR_PROBE="1"),
+    )
+    assert completed.returncode == 0, completed.stdout[-2000:] + completed.stderr[-500:]
