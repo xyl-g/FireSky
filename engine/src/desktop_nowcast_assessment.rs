@@ -38,7 +38,7 @@ const MAX_REQUEST_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_RESULT_BYTES: usize = 128 * 1024 * 1024;
 const MAX_FEATURES: usize = 250_000;
 const MAX_SCANS: usize = 16;
-const ASSESSMENT_CONTRACT: &str = "rust-desktop-nowcast-assessment-v1";
+const ASSESSMENT_CONTRACT: &str = "rust-desktop-nowcast-assessment-v2";
 const ASSESSMENT_FILE_CONTRACT: &str = "rust-desktop-nowcast-assessment-file-v1";
 const FEATURE_ROW_CONTRACT: &str = "hsd-assessment-feature-row-v2";
 
@@ -120,6 +120,27 @@ pub struct AssessmentRequest {
     core_window_minutes: Option<f64>,
     #[serde(default = "true_default")]
     apply_duration: bool,
+    /// Response detail level. "full" keeps every diagnostic list (acceptance
+    /// differential); "model" drops the six never-consumed-by-the-model fields
+    /// (columns + five signal lists) from the wire payload. Defaults to
+    /// "full" so pre-v2 callers keep working; anything else is rejected.
+    #[serde(default)]
+    detail: Option<String>,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// True when the request asks for (or defaults to) the full diagnostic payload.
+fn wants_full_detail(detail: &Option<String>) -> Result<bool, String> {
+    match detail.as_deref() {
+        None | Some("full") => Ok(true),
+        Some("model") => Ok(false),
+        Some(other) => Err(format!(
+            "detail must be \"full\" or \"model\", got {other:?}"
+        )),
+    }
 }
 
 fn default_max_distance_km() -> f64 {
@@ -1868,6 +1889,8 @@ struct AssessmentOutput {
     contract: &'static str,
     feature_row_contract: &'static str,
     runtime_python_used: bool,
+    /// Echoes the request's detail level ("full" or "model").
+    detail: &'static str,
     scan_count: usize,
     /// 18-value ledger rows, one per scan, in quality.rs INPUT_NAMES order,
     /// float32-quantized exactly like national_batch.py's row construction.
@@ -1876,7 +1899,120 @@ struct AssessmentOutput {
     /// The canonical event/instant ledger over those rows
     /// (contract rust-desktop-nowcast-quality-v2).
     quality: serde_json::Value,
-    scans: Vec<AssessmentStepOutput>,
+    scans: Vec<AssessmentScanOutput>,
+}
+
+/// Per-scan payload: the model-relevant fields plus, on the "full" detail
+/// level, the diagnostic lists the acceptance differential walks element by
+/// element. On "model" the six heavy list fields (columns + five signal
+/// lists) are dropped — the model rebuild reads only the top-* fields.
+#[derive(Serialize)]
+#[serde(untagged)]
+enum AssessmentScanOutput {
+    Full(AssessmentStepOutput),
+    Model(AssessmentModelStepOutput),
+}
+
+/// The "model" detail projection of `AssessmentStepOutput`: identical except
+/// that `columns`, `candidate_signals`, `local_deck_signals`,
+/// `remote_boundary_signals`, `boundary_signals` and `cloud_hole_signals` are
+/// omitted (serde skip_serializing_if on the full struct keeps one code path
+/// for assembly; the projection is enforced at the wire boundary here).
+#[derive(Serialize)]
+struct AssessmentModelStepOutput {
+    forecast_hour: i64,
+    valid_time_utc: String,
+    valid_time_local: String,
+    solar_elevation_deg: f64,
+    solar_azimuth_deg: f64,
+    burn_score: f64,
+    intensity_score: f64,
+    extent_score: f64,
+    vividness_score: f64,
+    visibility_score: f64,
+    low_cloud_penalty: f64,
+    candidate_count: usize,
+    burning_cloud_count: i64,
+    top_candidate: Option<CandidateSignalOutput>,
+    strong_burning_cloud_count: i64,
+    top_boundary: Option<BoundarySignalOutput>,
+    boundary_score: f64,
+    boundary_uncertainty: Option<BoundaryUncertaintyOutput>,
+    top_cloud_hole: Option<CloudHoleSignalOutput>,
+    cloud_hole_score: f64,
+    cross_section: CrossSectionOutput,
+    solar_inflow_blockage: Option<SolarInflowBlockageOutput>,
+    selected_regime: String,
+    scene_scores: Vec<(String, f64)>,
+    local_sky_score: f64,
+    remote_sky_score: f64,
+    convective_risk: f64,
+    color_diagnosis: serde_json::Value,
+    reasons: Vec<String>,
+    map_cells: Vec<MapCloudCellOutput>,
+    geometric_cloud_coverage: f64,
+    structure_gate_score: f64,
+    satellite_retrieval_material_evidence: Option<f64>,
+    selected_observer_path_aod550: Option<f64>,
+    selected_inflow_path_aod550: Option<f64>,
+    selected_aerosol_path_variability_score: f64,
+    forward_view_cloud_field_amount: f64,
+    forward_burnable_cloud_field_amount: f64,
+    observer_local_cloud_field_amount: f64,
+    observation_burnable: bool,
+    observation_score_ceiling: Option<f64>,
+    surface_weather_penalty: SurfaceWeatherPenaltyOutput,
+}
+
+/// Project a full step onto the "model" wire shape by moving its fields
+/// (no clones of the heavy lists — they are simply dropped).
+impl From<AssessmentStepOutput> for AssessmentModelStepOutput {
+    fn from(step: AssessmentStepOutput) -> Self {
+        AssessmentModelStepOutput {
+            forecast_hour: step.forecast_hour,
+            valid_time_utc: step.valid_time_utc,
+            valid_time_local: step.valid_time_local,
+            solar_elevation_deg: step.solar_elevation_deg,
+            solar_azimuth_deg: step.solar_azimuth_deg,
+            burn_score: step.burn_score,
+            intensity_score: step.intensity_score,
+            extent_score: step.extent_score,
+            vividness_score: step.vividness_score,
+            visibility_score: step.visibility_score,
+            low_cloud_penalty: step.low_cloud_penalty,
+            candidate_count: step.candidate_count,
+            burning_cloud_count: step.burning_cloud_count,
+            top_candidate: step.top_candidate,
+            strong_burning_cloud_count: step.strong_burning_cloud_count,
+            top_boundary: step.top_boundary,
+            boundary_score: step.boundary_score,
+            boundary_uncertainty: step.boundary_uncertainty,
+            top_cloud_hole: step.top_cloud_hole,
+            cloud_hole_score: step.cloud_hole_score,
+            cross_section: step.cross_section,
+            solar_inflow_blockage: step.solar_inflow_blockage,
+            selected_regime: step.selected_regime,
+            scene_scores: step.scene_scores,
+            local_sky_score: step.local_sky_score,
+            remote_sky_score: step.remote_sky_score,
+            convective_risk: step.convective_risk,
+            color_diagnosis: step.color_diagnosis,
+            reasons: step.reasons,
+            map_cells: step.map_cells,
+            geometric_cloud_coverage: step.geometric_cloud_coverage,
+            structure_gate_score: step.structure_gate_score,
+            satellite_retrieval_material_evidence: step.satellite_retrieval_material_evidence,
+            selected_observer_path_aod550: step.selected_observer_path_aod550,
+            selected_inflow_path_aod550: step.selected_inflow_path_aod550,
+            selected_aerosol_path_variability_score: step.selected_aerosol_path_variability_score,
+            forward_view_cloud_field_amount: step.forward_view_cloud_field_amount,
+            forward_burnable_cloud_field_amount: step.forward_burnable_cloud_field_amount,
+            observer_local_cloud_field_amount: step.observer_local_cloud_field_amount,
+            observation_burnable: step.observation_burnable,
+            observation_score_ceiling: step.observation_score_ceiling,
+            surface_weather_penalty: step.surface_weather_penalty,
+        }
+    }
 }
 
 pub fn execute(params: Params) -> Result<serde_json::Value, String> {
@@ -1911,6 +2047,8 @@ fn build_result(request: AssessmentRequest) -> Result<AssessmentOutput, String> 
     if request.scans.is_empty() || request.scans.len() > MAX_SCANS {
         return Err("nowcast assessment requires 1..16 scans".into());
     }
+    let full_detail = wants_full_detail(&request.detail)?;
+    let detail_label: &'static str = if full_detail { "full" } else { "model" };
     let zone: chrono_tz::Tz = request
         .timezone_name
         .parse()
@@ -2158,11 +2296,22 @@ fn build_result(request: AssessmentRequest) -> Result<AssessmentOutput, String> 
         contract: ASSESSMENT_CONTRACT,
         feature_row_contract: FEATURE_ROW_CONTRACT,
         runtime_python_used: false,
+        detail: detail_label,
         scan_count: steps.len(),
         rows: quality_rows,
         score_ceiling_applied: any_ceiling,
         quality,
-        scans: steps,
+        scans: if full_detail {
+            steps
+                .into_iter()
+                .map(AssessmentScanOutput::Full)
+                .collect()
+        } else {
+            steps
+                .into_iter()
+                .map(|step| AssessmentScanOutput::Model(step.into()))
+                .collect()
+        },
     })
 }
 
@@ -2218,6 +2367,7 @@ mod tests {
             event_time_utc: None,
             core_window_minutes: None,
             apply_duration: false,
+            detail: None,
         }
     }
 
@@ -2246,10 +2396,46 @@ mod tests {
     fn empty_feature_set_yields_empty_outputs() {
         let result = build_result(batch_request(vec![empty_scan(vec![])])).unwrap();
         assert_eq!(result.scan_count, 1);
-        assert!(result.scans[0].columns.is_empty());
-        assert!(result.scans[0].candidate_signals.is_empty());
+        assert_eq!(result.detail, "full");
+        let AssessmentScanOutput::Full(step) = &result.scans[0] else {
+            panic!("default detail is full");
+        };
+        assert!(step.columns.is_empty());
+        assert!(step.candidate_signals.is_empty());
         assert_eq!(result.rows.len(), 1);
         assert_eq!(result.rows[0][8], 0.0);
+    }
+
+    #[test]
+    fn model_detail_drops_heavy_lists_and_rejects_unknown_levels() {
+        let mut request = batch_request(vec![empty_scan(vec![])]);
+        request.detail = Some("model".to_string());
+        let result = build_result(request).unwrap();
+        assert_eq!(result.detail, "model");
+        let encoded = serde_json::to_vec(&result).unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&encoded).unwrap();
+        let scan = &value["scans"][0];
+        // The six never-consumed-by-the-model list fields must be absent…
+        for dropped in [
+            "columns",
+            "candidate_signals",
+            "local_deck_signals",
+            "remote_boundary_signals",
+            "boundary_signals",
+            "cloud_hole_signals",
+        ] {
+            assert!(
+                scan.get(dropped).is_none(),
+                "model detail must drop {dropped}"
+            );
+        }
+        // …while every model-consumed field survives.
+        for kept in ["top_candidate", "burn_score", "reasons", "surface_weather_penalty"] {
+            assert!(scan.get(kept).is_some(), "model detail must keep {kept}");
+        }
+        let mut request = batch_request(vec![empty_scan(vec![])]);
+        request.detail = Some("compact".to_string());
+        assert!(build_result(request).is_err());
     }
 
     #[test]

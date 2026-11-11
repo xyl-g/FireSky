@@ -3192,11 +3192,25 @@ _NOWCAST_ASSESSMENT_FIELDS = {
     "contract",
     "feature_row_contract",
     "runtime_python_used",
+    "detail",
     "scan_count",
     "rows",
     "score_ceiling_applied",
     "quality",
     "scans",
+}
+
+# Per-scan fields that only exist on the "full" detail level: the acceptance
+# differential walks them element by element, but the model rebuild never
+# consumes them (TimeStepAssessment has no columns field and reads only the
+# top-* members of the signal families).
+_ASSESSMENT_FULL_ONLY_FIELDS = {
+    "columns",
+    "candidate_signals",
+    "local_deck_signals",
+    "remote_boundary_signals",
+    "boundary_signals",
+    "cloud_hole_signals",
 }
 
 _BOUNDARY_SIGNAL_RESPONSE_FIELDS = {
@@ -3541,6 +3555,7 @@ def nowcast_assessment(
     event_time_utc=None,
     core_window_minutes=None,
     apply_duration=True,
+    detail="full",
 ):
     """Run the batch nowcast assessment kernel in Rust.
 
@@ -3548,6 +3563,11 @@ def nowcast_assessment(
     features and solar geometry. Returns the validated native payload dict
     (per-scan assessments, 18-value ledger rows and the canonical event/instant
     quality over those rows).
+
+    ``detail`` selects the response level: ``"full"`` keeps every diagnostic
+    list (the acceptance differential walks them element by element);
+    ``"model"`` drops the six fields the model rebuild never consumes
+    (columns + five signal families) and validates only key invariants.
     """
     from firesky.analysis_constants import MAX_ANALYSIS_RADIUS_KM
 
@@ -3600,6 +3620,7 @@ def nowcast_assessment(
             float(core_window_minutes) if core_window_minutes is not None else None
         ),
         "apply_duration": bool(apply_duration),
+        "detail": str(detail),
     }
     with tempfile.TemporaryDirectory(prefix="firesky-rust-nowcast-assessment-") as root:
         root = Path(root)
@@ -3651,9 +3672,10 @@ def nowcast_assessment(
     if (
         not isinstance(value, dict)
         or set(value) != _NOWCAST_ASSESSMENT_FIELDS
-        or value.get("contract") != "rust-desktop-nowcast-assessment-v1"
+        or value.get("contract") != "rust-desktop-nowcast-assessment-v2"
         or value.get("feature_row_contract") != "hsd-assessment-feature-row-v2"
         or value.get("runtime_python_used") is not False
+        or value.get("detail") not in ("full", "model")
         or value.get("scan_count") != len(encoded_scans)
         or not isinstance(value.get("rows"), list)
         or len(value.get("rows") or []) != len(encoded_scans)
@@ -3663,11 +3685,19 @@ def nowcast_assessment(
         "contract"
     ) != "rust-desktop-nowcast-quality-v2":
         raise RuntimeError("Rust nowcast assessment quality payload is invalid")
+    full_detail = value["detail"] == "full"
+    expected_scan_fields = _ASSESSMENT_SCAN_FIELDS
+    if not full_detail:
+        expected_scan_fields = _ASSESSMENT_SCAN_FIELDS - _ASSESSMENT_FULL_ONLY_FIELDS
     for scan_index, scan in enumerate(value["scans"]):
-        if not isinstance(scan, dict) or set(scan) != _ASSESSMENT_SCAN_FIELDS:
+        if not isinstance(scan, dict) or set(scan) != expected_scan_fields:
             raise RuntimeError("Rust nowcast assessment scan payload is invalid")
         if scan["candidate_count"] > encoded_scans[scan_index]["feature_count"]:
             raise RuntimeError("Rust nowcast assessment scan identity is invalid")
+        if not full_detail:
+            # Light validation: key invariants only (the model rebuild reads
+            # the top-* members and scalar fields, not the per-element lists).
+            continue
         for raw_column in scan["columns"]:
             if (
                 not isinstance(raw_column, dict)
@@ -3868,95 +3898,64 @@ def nowcast_assessment_as_model(value, *, scans):
         TimeStepAssessment,
     )
 
-    if not isinstance(value, dict) or set(value) != _NOWCAST_ASSESSMENT_FIELDS:
+    if (
+        not isinstance(value, dict)
+        or set(value) != _NOWCAST_ASSESSMENT_FIELDS
+        or value.get("detail") not in ("full", "model")
+    ):
         raise RuntimeError("Rust nowcast assessment model payload is invalid")
     if not isinstance(scans, (list, tuple)) or len(scans) != value["scan_count"]:
         raise RuntimeError("Rust nowcast assessment scan list is invalid")
     rebuilt = []
-    for scan_index, raw_scan in enumerate(value["scans"]):
-        source_scan = scans[scan_index]
-        features = list(source_scan["features"])
-        columns = []
-        for raw_column in raw_scan["columns"]:
+    for raw_scan in value["scans"]:
+        # The model rebuild reads only the top member of each signal family
+        # (TimeStepAssessment has no columns field; local-deck and
+        # remote-boundary lists were never consumed), so on either detail
+        # level only the top element of each family is materialized.
+        raw_top_candidate = raw_scan["top_candidate"]
+        if raw_top_candidate is not None:
             if (
-                not isinstance(raw_column, dict)
-                or set(raw_column) != _CLOUD_COLUMN_RESPONSE_FIELDS
-            ):
-                raise RuntimeError("Rust nowcast assessment cloud column is invalid")
-            layers = {}
-            for layer in raw_column["layers"]:
-                pressure, position = layer
-                if not isinstance(position, int) or not 0 <= position < len(features):
-                    raise RuntimeError("Rust nowcast assessment column layer is invalid")
-                layers[int(pressure)] = features[position]
-            columns.append(
-                {
-                    "key": tuple(float(item) for item in raw_column["key"]),
-                    "lat": float(raw_column["lat"]),
-                    "lon": float(raw_column["lon"]),
-                    "distance_km": float(raw_column["distance_km"]),
-                    "bearing_deg": float(raw_column["bearing_deg"]),
-                    "high_presence": float(raw_column["high_presence"]),
-                    "mid_presence": float(raw_column["mid_presence"]),
-                    "low_presence": float(raw_column["low_presence"]),
-                    "deep_cloud_risk": float(raw_column["deep_cloud_risk"]),
-                    "thickness_risk": float(raw_column["thickness_risk"]),
-                    "cloud_type": str(raw_column["cloud_type"]),
-                    "burnability_score": float(raw_column["burnability_score"]),
-                    "cloud_base_m": float(raw_column["cloud_base_m"]),
-                    "cloud_top_m": float(raw_column["cloud_top_m"]),
-                    "liquid_presence": float(raw_column["liquid_presence"]),
-                    "ice_presence": float(raw_column["ice_presence"]),
-                    "explicit_cloud_evidence": float(raw_column["explicit_cloud_evidence"]),
-                    "horizontal_cloud_probability": raw_column["horizontal_cloud_probability"],
-                    "footprint_azimuth_width_deg": raw_column["footprint_azimuth_width_deg"],
-                    "footprint_near_distance_km": raw_column["footprint_near_distance_km"],
-                    "footprint_far_distance_km": raw_column["footprint_far_distance_km"],
-                    "layers": layers,
-                }
-            )
-        signals = []
-        for raw_signal in raw_scan["candidate_signals"]:
-            if (
-                not isinstance(raw_signal, dict)
-                or set(raw_signal) != _CANDIDATE_SIGNAL_RESPONSE_FIELDS
+                not isinstance(raw_top_candidate, dict)
+                or set(raw_top_candidate) != _CANDIDATE_SIGNAL_RESPONSE_FIELDS
             ):
                 raise RuntimeError("Rust nowcast assessment candidate signal is invalid")
-            signals.append(
+            signals = [
                 CandidateSignal(
-                    lat=float(raw_signal["lat"]),
-                    lon=float(raw_signal["lon"]),
-                    pressure_hpa=int(raw_signal["pressure_hpa"]),
-                    distance_km=float(raw_signal["distance_km"]),
-                    bearing_deg=float(raw_signal["bearing_deg"]),
-                    sector_delta_deg=float(raw_signal["sector_delta_deg"]),
-                    apparent_elevation_deg=float(raw_signal["apparent_elevation_deg"]),
-                    aerosol_transmission_score=float(raw_signal["aerosol_transmission_score"]),
-                    path_clearance_score=float(raw_signal["path_clearance_score"]),
-                    illumination_height_m=float(raw_signal["illumination_height_m"]),
-                    cloud_height_m=float(raw_signal["cloud_height_m"]),
-                    score=float(raw_signal["score"]),
-                    rh_percent=float(raw_signal["rh_percent"]),
-                    cloud_base_m=float(raw_signal["cloud_base_m"]),
-                    cloud_type=str(raw_signal["cloud_type"]),
-                    cloud_type_burnability_score=float(raw_signal["cloud_type_burnability_score"]),
-                    deep_cloud_risk=float(raw_signal["deep_cloud_risk"]),
-                    aerosol_sensitivity_score=float(raw_signal["aerosol_sensitivity_score"]),
-                    aerosol_path_variability_score=float(raw_signal["aerosol_path_variability_score"]),
-                    observer_path_aod550=raw_signal["observer_path_aod550"],
-                    inflow_path_aod550=raw_signal["inflow_path_aod550"],
-                    cloud_evidence_score=float(raw_signal["cloud_evidence_score"]),
-                    cloud_fraction_percent=raw_signal["cloud_fraction_percent"],
-                    cloud_liquid_kg_kg=raw_signal["cloud_liquid_kg_kg"],
-                    cloud_ice_kg_kg=raw_signal["cloud_ice_kg_kg"],
-                    atmospheric_clarity_score=float(raw_signal["atmospheric_clarity_score"]),
-                    illumination_score=float(raw_signal["illumination_score"]),
-                    footprint_azimuth_width_deg=raw_signal["footprint_azimuth_width_deg"],
-                    footprint_near_distance_km=raw_signal["footprint_near_distance_km"],
-                    footprint_far_distance_km=raw_signal["footprint_far_distance_km"],
-                    horizontal_cloud_probability=raw_signal["horizontal_cloud_probability"],
+                    lat=float(raw_top_candidate["lat"]),
+                    lon=float(raw_top_candidate["lon"]),
+                    pressure_hpa=int(raw_top_candidate["pressure_hpa"]),
+                    distance_km=float(raw_top_candidate["distance_km"]),
+                    bearing_deg=float(raw_top_candidate["bearing_deg"]),
+                    sector_delta_deg=float(raw_top_candidate["sector_delta_deg"]),
+                    apparent_elevation_deg=float(raw_top_candidate["apparent_elevation_deg"]),
+                    aerosol_transmission_score=float(raw_top_candidate["aerosol_transmission_score"]),
+                    path_clearance_score=float(raw_top_candidate["path_clearance_score"]),
+                    illumination_height_m=float(raw_top_candidate["illumination_height_m"]),
+                    cloud_height_m=float(raw_top_candidate["cloud_height_m"]),
+                    score=float(raw_top_candidate["score"]),
+                    rh_percent=float(raw_top_candidate["rh_percent"]),
+                    cloud_base_m=float(raw_top_candidate["cloud_base_m"]),
+                    cloud_type=str(raw_top_candidate["cloud_type"]),
+                    cloud_type_burnability_score=float(raw_top_candidate["cloud_type_burnability_score"]),
+                    deep_cloud_risk=float(raw_top_candidate["deep_cloud_risk"]),
+                    aerosol_sensitivity_score=float(raw_top_candidate["aerosol_sensitivity_score"]),
+                    aerosol_path_variability_score=float(raw_top_candidate["aerosol_path_variability_score"]),
+                    observer_path_aod550=raw_top_candidate["observer_path_aod550"],
+                    inflow_path_aod550=raw_top_candidate["inflow_path_aod550"],
+                    cloud_evidence_score=float(raw_top_candidate["cloud_evidence_score"]),
+                    cloud_fraction_percent=raw_top_candidate["cloud_fraction_percent"],
+                    cloud_liquid_kg_kg=raw_top_candidate["cloud_liquid_kg_kg"],
+                    cloud_ice_kg_kg=raw_top_candidate["cloud_ice_kg_kg"],
+                    atmospheric_clarity_score=float(raw_top_candidate["atmospheric_clarity_score"]),
+                    illumination_score=float(raw_top_candidate["illumination_score"]),
+                    footprint_azimuth_width_deg=raw_top_candidate["footprint_azimuth_width_deg"],
+                    footprint_near_distance_km=raw_top_candidate["footprint_near_distance_km"],
+                    footprint_far_distance_km=raw_top_candidate["footprint_far_distance_km"],
+                    horizontal_cloud_probability=raw_top_candidate["horizontal_cloud_probability"],
                 )
-            )
+            ]
+        else:
+            signals = []
 
         def rebuild_boundary(raw_signal):
             if (
@@ -3975,12 +3974,16 @@ def nowcast_assessment_as_model(value, *, scans):
             return _rebuild_cloud_hole_signal(raw_signal)
 
         top_candidate = signals[0] if signals else None
-        boundary_list = [rebuild_boundary(raw) for raw in raw_scan["boundary_signals"]]
-        top_boundary = boundary_list[0] if boundary_list else None
-        local_deck_list = [rebuild_boundary(raw) for raw in raw_scan["local_deck_signals"]]
-        remote_boundary_list = [rebuild_boundary(raw) for raw in raw_scan["remote_boundary_signals"]]
-        cloud_hole_list = [rebuild_hole(raw) for raw in raw_scan["cloud_hole_signals"]]
-        top_cloud_hole = cloud_hole_list[0] if cloud_hole_list else None
+        top_boundary = (
+            rebuild_boundary(raw_scan["top_boundary"])
+            if raw_scan["top_boundary"] is not None
+            else None
+        )
+        top_cloud_hole = (
+            rebuild_hole(raw_scan["top_cloud_hole"])
+            if raw_scan["top_cloud_hole"] is not None
+            else None
+        )
         boundary_uncertainty = None
         if raw_scan["boundary_uncertainty"] is not None:
             raw_uncertainty = raw_scan["boundary_uncertainty"]

@@ -2012,6 +2012,78 @@ def test_engine_assessment_rows_apply_core_window_mask(assessment_engine):
     assert payload["rows"][1][17] == 0.0
 
 
+def test_engine_assessment_detail_model_roundtrip(assessment_engine):
+    """The slim "model" detail (contract v2) drops the six never-consumed
+    list fields on the wire, still rebuilds the identical TimeStepAssessment
+    objects, and keeps the full detail as the element-by-element default."""
+    from firesky.models import AerosolReading
+    from firesky.rust_desktop_data import nowcast_assessment, nowcast_assessment_as_model
+
+    features = [
+        make_feature(
+            distance_km=120.0 + 30.0 * index, bearing_deg=150.0 + 2.0 * index,
+            pressure_hpa=600, geopotential_height_m=5600.0, rh_percent=92.0,
+            horizontal_cloud_probability=0.9, cloud_probability_given_cloud=0.75,
+        )
+        for index in range(3)
+    ]
+    aerosol = AerosolReading(0.25, "detail", "measured", 30.0, 120.0)
+    scans = [_engine_scan(features, 16.0, 150.0)]
+
+    full_payload = nowcast_assessment(
+        scans=scans,
+        timezone_name="Asia/Shanghai",
+        aerosol=aerosol,
+        observer_elevation_m=0.0,
+    )
+    assert full_payload["detail"] == "full"
+    model_payload = nowcast_assessment(
+        scans=scans,
+        timezone_name="Asia/Shanghai",
+        aerosol=aerosol,
+        observer_elevation_m=0.0,
+        detail="model",
+    )
+    assert model_payload["detail"] == "model"
+
+    dropped = {
+        "columns",
+        "candidate_signals",
+        "local_deck_signals",
+        "remote_boundary_signals",
+        "boundary_signals",
+        "cloud_hole_signals",
+    }
+    full_scan = full_payload["scans"][0]
+    model_scan = model_payload["scans"][0]
+    assert dropped <= set(full_scan), "full detail must carry every diagnostic list"
+    assert dropped.isdisjoint(set(model_scan)), "model detail must drop all six"
+    # Ledger rows and the quality wrapper must be identical on both levels.
+    assert model_payload["rows"] == full_payload["rows"]
+    assert model_payload["quality"] == full_payload["quality"]
+    # The model rebuild must produce identical TimeStepAssessment objects.
+    from dataclasses import fields as dataclass_fields
+    from firesky.models import TimeStepAssessment
+
+    rebuilt_full = nowcast_assessment_as_model(full_payload, scans=scans)["assessments"]
+    rebuilt_model = nowcast_assessment_as_model(model_payload, scans=scans)["assessments"]
+    assert len(rebuilt_full) == len(rebuilt_model) == 1
+    for field in dataclass_fields(TimeStepAssessment):
+        assert getattr(rebuilt_model[0], field.name) == getattr(
+            rebuilt_full[0], field.name
+        ), f"model detail must rebuild the same {field.name}"
+
+    # Unknown detail levels must be rejected by the engine (fail closed).
+    with pytest.raises(RuntimeError):
+        nowcast_assessment(
+            scans=scans,
+            timezone_name="Asia/Shanghai",
+            aerosol=aerosol,
+            observer_elevation_m=0.0,
+            detail="compact",
+        )
+
+
 def test_engine_assessment_rejects_tampered_receipt(monkeypatch, tmp_path):
     import hashlib
     import json as json_module
@@ -2152,9 +2224,10 @@ def test_engine_assessment_contract_failure_is_not_swallowed(monkeypatch):
         calls.append(method)
         output_path = Path(params["output_path"])
         value = {
-            "contract": "rust-desktop-nowcast-assessment-v1",
+            "contract": "rust-desktop-nowcast-assessment-v2",
             "feature_row_contract": "legacy-20-field-buffer",
             "runtime_python_used": False,
+            "detail": "full",
             "scan_count": 1,
             "rows": [[0.0] * 18],
             "score_ceiling_applied": False,

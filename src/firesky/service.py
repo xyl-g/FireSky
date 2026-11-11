@@ -1399,6 +1399,10 @@ def nowcast_observation_assessments(
             observer_elevation_m=request.point.elevation_m,
             map_radius_km=request.radius_km,
             include_map_cells=request.include_map_cells,
+            # The service path only rebuilds TimeStepAssessment objects, which
+            # never read the columns/signal-family lists: ask the engine for
+            # the slim "model" projection (contract v2 detail="model").
+            detail="model",
         )
         rebuilt = nowcast_assessment_as_model(payload, scans=scans)["assessments"]
         # assess_satellite_snapshot wraps each step: cloud_source_times_utc and
