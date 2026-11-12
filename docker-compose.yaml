@@ -1,4 +1,4 @@
-# firesky 部署（单服务；redis 可选，仅用于 /data/latest/refresh 周期缓存）
+# FireSky 轻量自托管：共享 Tauri Web + Rust，默认仅发布到本机。
 # 启动：FIRESKY_IMAGE_TAG=local docker compose up -d --build
 
 name: firesky
@@ -10,29 +10,33 @@ services:
       context: .
       dockerfile: docker/Dockerfile
     ports:
-      - "${FIRESKY_HTTP_PORT:-8765}:8765"
+      - "${FIRESKY_HTTP_HOST:-127.0.0.1}:${FIRESKY_HTTP_PORT:-8765}:8765"
     environment:
-      FIRESKY_CONFIG: /app/etc/web_server.yaml
-      FIRESKY_NATIVE_VARIANT: cpu
-      FIRESKY_NATIVE_LIBRARY_PATH: /app/native/libfiresky_native_cpu.so
-      # 可选：redis 周期缓存（不配置也能运行）
-      FIRESKY_REDIS_ADDR: ${FIRESKY_REDIS_ADDR:-}
+      FIRESKY_WORKSPACE: /app
+      FIRESKY_RESOURCE_DIR: /app/resources/app-data
+      FIRESKY_REQUIRE_APP_RESOURCES: "1"
+      FIRESKY_GFS_CACHE_DIR: /data/cache/firesky/gfs
+      FIRESKY_ECMWF_CACHE_DIR: /data/cache/firesky/ecmwf
+      FIRESKY_CAMS_CACHE_DIR: /data/cams
+      FIRESKY_TASK_HISTORY_DIR: /data/state/tasks
     volumes:
       - firesky-cache:/data/cache
       - firesky-cams:/data/cams
       - firesky-reports:/data/reports
       - firesky-logs:/data/logs
+      - firesky-state:/data/state
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8765/api/v1/sunset/health"]
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8765/api/v1/firesky/health"]
       interval: 15s
       timeout: 5s
       retries: 20
       start_period: 15s
     restart: unless-stopped
 
-  # 可选：周期缓存 redis；删除本服务并把 FIRESKY_REDIS_ADDR 留空即可
+  # 仅供历史部署使用；原生主线不依赖 Redis，默认不启动。
   redis:
     image: redis:7.4-alpine
+    profiles: ["legacy-cache"]
     command: ["redis-server", "--appendonly", "yes"]
     volumes:
       - redis-data:/data
@@ -43,4 +47,5 @@ volumes:
   firesky-cams:
   firesky-reports:
   firesky-logs:
+  firesky-state:
   redis-data:

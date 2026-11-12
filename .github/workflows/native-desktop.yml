@@ -5,31 +5,382 @@ on:
     branches: [main]
     paths:
       - "apps/**"
-      - "src/firesky/desktop_*.py"
-      - "scripts/build_macos_native.sh"
+      - "engine/**"
+      - "native/**"
+      - "resources/**"
+      - "scripts/build_app_resources.py"
+      - "scripts/bundle_macos_eccodes.sh"
+      - "scripts/test_macos_native.sh"
+      - "scripts/test_macos_swift_fixtures.sh"
+      - "scripts/test_docker_contract.sh"
+      - "docker/Dockerfile"
       - ".github/workflows/native-desktop.yml"
   pull_request:
     paths:
       - "apps/**"
-      - "src/firesky/desktop_*.py"
-      - "scripts/build_macos_native.sh"
+      - "engine/**"
+      - "native/**"
+      - "resources/**"
+      - "scripts/build_app_resources.py"
+      - "scripts/bundle_macos_eccodes.sh"
+      - "scripts/test_macos_native.sh"
+      - "scripts/test_macos_swift_fixtures.sh"
+      - "scripts/test_docker_contract.sh"
+      - "docker/Dockerfile"
       - ".github/workflows/native-desktop.yml"
   workflow_dispatch:
 
 jobs:
-  macos:
-    name: SwiftUI compile
-    runs-on: macos-26
+  contracts:
+    name: Native resource contracts
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: swift build --package-path apps/macos -c release
-  windows:
-    name: WinUI 3 compile (not a bundled engine release)
-    runs-on: windows-2022
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify immutable application resources
+        run: python3 scripts/build_app_resources.py --root resources/app-data --check
+      - name: Verify Docker runtime contract
+        run: bash scripts/test_docker_contract.sh
+      - name: Verify Windows FFI adapter contract
+        run: bash scripts/test_windows_ffi_contract.sh
+      - run: node --test apps/desktop-tauri/scripts/*.test.mjs
+
+  linux-native:
+    name: Linux GTK4 + Rust FFI
+    # Linux follows the macOS ABI and lifecycle baseline; do not fan out
+    # platform UI builds before the macOS gate has passed.
+    needs: macos-native
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install GTK4 and native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            build-essential cmake pkg-config libgtk-4-dev
+      - name: Build Rust FFI shared library
+        run: cargo build --manifest-path engine/Cargo.toml --release --locked --lib
+      - name: Configure and build Linux native targets
+        run: |
+          cmake -S apps/linux -B build/linux-ffi \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DFIRESKY_BUILD_GTK_UI=ON
+          cmake --build build/linux-ffi --parallel
+          test -x build/linux-ffi/firesky_linux_native
+      - name: Run Linux FFI hello smoke
+        env:
+          FIRESKY_RESOURCE_DIR: ${{ github.workspace }}/resources/app-data
+          FIRESKY_REQUIRE_APP_RESOURCES: "1"
+        run: |
+          build/linux-ffi/firesky_linux_ffi_smoke \
+            "$PWD/engine/target/release/libfiresky_engine.so" "$PWD"
+
+  macos-native:
+    # Build and smoke-test the actual SwiftUI + Rust FFI app on both required
+    # macOS architectures. This is separate from the frozen Tauri reference.
+    name: SwiftUI + Rust FFI ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            arch: arm64
+            target: aarch64-apple-darwin
+          - runner: macos-26-intel
+            arch: x86_64
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    needs: contracts
+    env:
+      FIRESKY_MACOS_ARCH: ${{ matrix.arch }}
+      FIRESKY_EXPECTED_ARCH: ${{ matrix.arch }}
+      FIRESKY_APP_SMOKE: "1"
+      FIRESKY_CLEAN_MACHINE_SMOKE: "1"
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Install ecCodes
+        run: brew install eccodes
+      - name: Build native app
+        run: bash scripts/build_macos_native.sh
+      - name: FFI bundle smoke
+        run: bash scripts/test_macos_native.sh
+      - name: Upload native app
+        uses: actions/upload-artifact@v4
+        with:
+          name: FireSky-macos-${{ matrix.arch }}
+          if-no-files-found: error
+          path: dist/native-macos/*.app
+
+  windows-native:
+    # Windows follows the macOS ABI baseline. This builds the actual WinUI
+    # client and Rust DLL for both required Windows architectures.
+    name: WinUI + Rust FFI ${{ matrix.arch }}
+    needs: macos-native
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2022
+            arch: x64
+            platform: x64
+            rid: win-x64
+            target: x86_64-pc-windows-msvc
+            triplet: x64-windows
+          - runner: windows-11-arm
+            arch: arm64
+            platform: ARM64
+            rid: win-arm64
+            target: aarch64-pc-windows-msvc
+            triplet: arm64-windows
+    runs-on: ${{ matrix.runner }}
+    env:
+      FIRESKY_RUST_TARGET: ${{ matrix.target }}
+      FIRESKY_ECCODES_ROOT: ${{ runner.temp }}\eccodes-bundle
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
       - uses: actions/setup-dotnet@v4
         with:
           dotnet-version: "8.0.x"
-      - run: dotnet restore apps/windows/FireSky/FireSky.csproj -r win-x64 -p:Platform=x64
-      - run: dotnet build apps/windows/FireSky/FireSky.csproj --no-restore -c Release -p:Platform=x64 -r win-x64
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build Windows ecCodes bundle
+        shell: pwsh
+        env:
+          VCPKG_TRIPLET: ${{ matrix.triplet }}
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/microsoft/vcpkg.git "$env:RUNNER_TEMP/vcpkg"
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg clone failed" }
+          git -C "$env:RUNNER_TEMP/vcpkg" checkout 2ec0f1747d8186a5c9babe276e2ad57cd2b12d2a
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg checkout failed" }
+          & "$env:RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed" }
+          & "$env:RUNNER_TEMP/vcpkg/vcpkg.exe" install "eccodes[aec,png]:$env:VCPKG_TRIPLET" --classic
+          if ($LASTEXITCODE -ne 0) { throw "ecCodes build failed" }
+          node apps/desktop-tauri/scripts/bundle-vcpkg-eccodes.mjs `
+            "$env:RUNNER_TEMP/vcpkg/installed" `
+            "$env:RUNNER_TEMP/vcpkg/ports" `
+            "$env:VCPKG_TRIPLET" `
+            "$env:RUNNER_TEMP/eccodes-bundle"
+          if ($LASTEXITCODE -ne 0) { throw "ecCodes bundle failed" }
+      - name: Build WinUI native app
+        shell: pwsh
+        run: |
+          dotnet build apps/windows/FireSky/FireSky.csproj `
+            -c Release `
+            -p:Platform=${{ matrix.platform }} `
+            -r ${{ matrix.rid }} `
+            -p:FireSkyEcCodesRoot="$env:FIRESKY_ECCODES_ROOT" `
+            --self-contained true
+      - name: Verify FFI payload
+        shell: pwsh
+        run: |
+          $root = "apps/windows/FireSky/bin/Release"
+          $exe = Get-ChildItem $root -Recurse -Filter "FireSky.exe" | Select-Object -First 1
+          if ($null -eq $exe) { throw "FireSky.exe was not produced" }
+          $dll = Join-Path $exe.Directory.FullName "Resources\firesky_engine.dll"
+          if (!(Test-Path $dll)) { throw "firesky_engine.dll was not packaged" }
+          $manifest = Join-Path $exe.Directory.FullName "Resources\app-data\RESOURCE-MANIFEST.json"
+          if (!(Test-Path $manifest)) { throw "application resource manifest was not packaged" }
+          if ((Get-ChildItem $exe.Directory.FullName -Recurse -Include "*python*","*pyside*","*pyobjc*").Count -gt 0) {
+            throw "Python runtime files found in native package"
+          }
+      - name: Upload WinUI native package
+        uses: actions/upload-artifact@v4
+        with:
+          name: FireSky-windows-${{ matrix.arch }}
+          if-no-files-found: error
+          path: apps/windows/FireSky/bin/Release/**
+
+  linux-ffi:
+    # Linux currently verifies the shared native FFI foundation. The full
+    # toolkit UI and installer remain a follow-up after this contract gate.
+    name: Linux FFI ${{ matrix.arch }}
+    needs: windows-native
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Linux C++ FFI smoke
+        run: bash scripts/test_linux_ffi.sh
+
+  desktop:
+    # These build jobs are not claims of signing, clean-machine or real-data acceptance.
+    name: Tauri ${{ matrix.target }}
+    needs: contracts
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-26
+            target: aarch64-apple-darwin
+            arch: arm64
+            bundles: app,dmg
+          - runner: macos-26-intel
+            target: x86_64-apple-darwin
+            arch: x64
+            bundles: app,dmg
+          - runner: windows-2022
+            target: x86_64-pc-windows-msvc
+            arch: x64
+            triplet: x64-windows
+            bundles: nsis
+          - runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            arch: arm64
+            triplet: arm64-windows
+            bundles: nsis
+    runs-on: ${{ matrix.runner }}
+    env:
+      FIRESKY_NATIVE_TARGET: ${{ matrix.target }}
+      EXPECTED_NODE_ARCH: ${{ matrix.arch }}
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          architecture: ${{ matrix.arch }}
+          cache: npm
+          cache-dependency-path: apps/desktop-tauri/package-lock.json
+      - name: Verify native runner architecture
+        run: node -e "if (process.arch !== process.env.EXPECTED_NODE_ARCH) throw Error('Wrong native builder architecture')"
+      - name: Install JavaScript dependencies
+        working-directory: apps/desktop-tauri
+        run: npm ci --no-audit --no-fund
+      - name: Install macOS decoder
+        if: runner.os == 'macOS'
+        run: brew install eccodes
+      - name: Build Windows decoder from pinned vcpkg ports
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          VCPKG_TRIPLET: ${{ matrix.triplet }}
+        run: |
+          git clone --filter=blob:none --no-checkout https://github.com/microsoft/vcpkg.git "$env:RUNNER_TEMP/vcpkg"
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg clone failed" }
+          git -C "$env:RUNNER_TEMP/vcpkg" checkout 2ec0f1747d8186a5c9babe276e2ad57cd2b12d2a
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg checkout failed" }
+          & "$env:RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed" }
+          & "$env:RUNNER_TEMP/vcpkg/vcpkg.exe" install "eccodes[aec,png]:$env:VCPKG_TRIPLET" --classic
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg decoder build failed" }
+          node apps/desktop-tauri/scripts/bundle-vcpkg-eccodes.mjs "$env:RUNNER_TEMP/vcpkg/installed" "$env:RUNNER_TEMP/vcpkg/ports" "$env:VCPKG_TRIPLET" "$env:RUNNER_TEMP/eccodes-bundle"
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg decoder metadata failed" }
+          "FIRESKY_ECCODES_ROOT=$env:RUNNER_TEMP/eccodes-bundle" >> $env:GITHUB_ENV
+      - name: Resource contract tests on the target host
+        run: node --test apps/desktop-tauri/scripts/*.test.mjs
+      - name: Test native engine
+        run: cargo test --locked --target ${{ matrix.target }} --manifest-path engine/Cargo.toml
+      - name: Build target-native Tauri release
+        # NSIS supports native ARM64 apps; its x86 installer stub runs under emulation.
+        # offlineInstaller selects arm64/x64 WebView2 from the actual Tauri target.
+        working-directory: apps/desktop-tauri
+        run: npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+      - name: Verify prepared resource checksums and target
+        working-directory: apps/desktop-tauri
+        run: node --input-type=module -e "import {nativeTarget} from './scripts/native-target.mjs'; import {verifyResourceManifest} from './scripts/native-resources.mjs'; verifyResourceManifest('src-tauri/resources/native', nativeTarget());"
+      - name: Upload actual target installers and resource manifests
+        uses: actions/upload-artifact@v4
+        with:
+          name: FireSky-${{ matrix.target }}
+          if-no-files-found: error
+          path: |
+            apps/desktop-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/
+            apps/desktop-tauri/src-tauri/resources/native/RESOURCE-MANIFEST.json
+            apps/desktop-tauri/src-tauri/resources/native/BUNDLE-METADATA.json
+
+  docker:
+    name: Docker ${{ matrix.platform }} build and runtime smoke
+    needs: contracts
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+            architecture: amd64
+            machine: x86_64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            architecture: arm64
+            machine: aarch64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: docker/setup-buildx-action@v3
+      - name: Build and load the actual target image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/Dockerfile
+          platforms: ${{ matrix.platform }}
+          load: true
+          push: false
+          tags: firesky:ci-${{ matrix.architecture }}
+      - name: Verify image platform, start Rust service, and smoke shared SPA
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.architecture }}
+          EXPECTED_MACHINE: ${{ matrix.machine }}
+        run: |
+          test "$(docker image inspect firesky:ci-${EXPECTED_ARCH} --format '{{.Architecture}}')" = "${EXPECTED_ARCH}"
+          docker volume create firesky-smoke-state
+          docker run -d --name firesky-smoke -v firesky-smoke-state:/data/state -p 127.0.0.1:18765:8765 firesky:ci-${EXPECTED_ARCH}
+          test "$(docker exec firesky-smoke uname -m)" = "${EXPECTED_MACHINE}"
+          docker exec firesky-smoke sh -c '! command -v python && ! command -v python3'
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/firesky/health > /dev/null; then break; fi
+            sleep 1
+          done
+          docker exec firesky-smoke sh -c 'test "$FIRESKY_TASK_HISTORY_DIR" = /data/state/tasks'
+          docker exec firesky-smoke test -w /data/state/tasks
+          docker exec firesky-smoke test -d /data/state/tasks/jobs
+          docker exec firesky-smoke test -d /data/state/tasks/owners
+          umask 077
+          docker cp firesky-smoke:/data/state/http-token "${RUNNER_TEMP}/firesky-http-token"
+          export FIRESKY_HTTP_TOKEN_FILE="${RUNNER_TEMP}/firesky-http-token"
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18765/api/v1/firesky/desktop/status)" = 401
+          node apps/desktop-tauri/scripts/smoke-http-runtime.mjs http://127.0.0.1:18765 --history-seed "${RUNNER_TEMP}/firesky-history-smoke.json"
+          docker rm -f firesky-smoke
+          docker run -d --name firesky-smoke -v firesky-smoke-state:/data/state -p 127.0.0.1:18765:8765 firesky:ci-${EXPECTED_ARCH}
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/firesky/health > /dev/null; then break; fi
+            sleep 1
+          done
+          docker cp firesky-smoke:/data/state/http-token "${RUNNER_TEMP}/firesky-http-token-restored"
+          cmp "${RUNNER_TEMP}/firesky-http-token" "${RUNNER_TEMP}/firesky-http-token-restored"
+          node apps/desktop-tauri/scripts/smoke-http-runtime.mjs http://127.0.0.1:18765 --history-verify "${RUNNER_TEMP}/firesky-history-smoke.json"
+      - name: Capture container diagnostics
+        if: always()
+        run: docker logs firesky-smoke
+      - name: Stop smoke container
+        if: always()
+        run: docker rm -f firesky-smoke
+      - name: Remove smoke state volume
+        if: always()
+        run: docker volume rm -f firesky-smoke-state

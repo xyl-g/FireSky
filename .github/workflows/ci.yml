@@ -20,21 +20,30 @@ jobs:
         run: pip install -e ".[dev,cams,nowcast,ec]"
       - name: 构建原生评分器
         run: ./scripts/build_native_variants.sh
+      - name: 构建独立 Rust 引擎
+        run: cargo build --manifest-path engine/Cargo.toml --release --locked
       - name: pytest
+        env:
+          FIRESKY_REQUIRE_RUST_TESTS: "1"
+          FIRESKY_RUST_ENGINE_BIN: ${{ github.workspace }}/engine/target/release/firesky-engine
         run: python -m pytest tests/ -q
 
   rust:
-    name: cargo test（native 契约）
+    name: cargo test（native + Python-free runtime）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: native
+          workspaces: |
+            native
+            engine
       - name: cargo test
         working-directory: native
         run: cargo test --release --locked
+      - name: Build and test native runtime
+        run: cargo test --manifest-path engine/Cargo.toml --locked
 
   frontend:
     name: svelte-check + build
@@ -55,45 +64,35 @@ jobs:
       - name: build
         working-directory: frontend
         run: npm run build
+      - name: Native contract tests
+        working-directory: frontend
+        run: npm run test:contracts
 
 
   desktop:
-    name: desktop bundle (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            artifact: FireSky-macos
-          - os: windows-latest
-            artifact: FireSky-windows
+    name: SwiftUI + Rust bundle
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-          cache: pip
-      - name: 安装模型核心依赖（桌面版不含 nowcast/卫星栈）
-        run: pip install -e ".[dev,cams,ec]" PySide6 pyinstaller
-      - name: 构建原生评分器
-        run: ./scripts/build_native_variants.sh
-        shell: bash
-      - name: PyInstaller 打包
-        run: pyinstaller desktop/FireSky.spec --noconfirm
-      - name: macOS → dmg
-        if: runner.os == 'macOS'
+      - name: Native application bundle
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
         run: |
-          cd dist
-          hdiutil create -volname FireSky -srcfolder FireSky -ov -format UDZO FireSky-macos.dmg
+          brew install eccodes
+          bash scripts/build_macos_native.sh
+      - name: macOS FFI bundle smoke
+        run: |
+          FIRESKY_EXPECTED_ARCH="$(uname -m)" \
+          FIRESKY_CLEAN_MACHINE_SMOKE=1 \
+          FIRESKY_APP_SMOKE=1 \
+            bash scripts/test_macos_native.sh
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
+          name: FireSky-macos-native
           path: |
-            dist/FireSky-macos.dmg
-            dist/FireSky/
+            dist/native-macos/*.app
 
   docker:
     name: docker build（三阶段镜像）
