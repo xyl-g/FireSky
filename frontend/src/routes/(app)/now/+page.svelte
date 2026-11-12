@@ -262,7 +262,7 @@
                   reject(error);
                 }
               }
-              else if (eventName === 'failed') { settled = true; source.close(); updateProgress(d as any, requestSequence); reject(new Error(String(d.message || '实况预测失败'))); }
+              else if (eventName === 'failed' || eventName === 'interrupted') { settled = true; source.close(); updateProgress(d as any, requestSequence); reject(new Error(String(d.message || (eventName === 'interrupted' ? '运行时已退出，任务已中断' : '实况预测失败')))); }
             },
             onError: () => { if (!settled) { settled = true; source.close(); reject(new Error('进度连接中断，请重试。')); } },
           });

@@ -159,6 +159,8 @@ interface RegionalForecastContract {
   summary_version: number;
   cache_version: number;
   point_format: string;
+  contract?: string;
+  runtime_python_used?: boolean;
 }
 
 function validateRegionalForecastContract(payload: unknown): void {
@@ -166,6 +168,16 @@ function validateRegionalForecastContract(payload: unknown): void {
     throw new Error('区域预测合同响应无效，任务未启动。');
   }
   const contract = payload as Partial<RegionalForecastContract>;
+  if (contract.contract === 'rust-desktop-regional-forecast-v1') {
+    if (
+      contract.scope !== 'regional'
+      || contract.point_format !== 'native-object-v1'
+      || contract.runtime_python_used !== false
+    ) {
+      throw new Error('Native regional forecast contract is invalid');
+    }
+    return;
+  }
   if (
     contract.scope !== 'regional'
     || typeof contract.algorithm !== 'string'
@@ -904,13 +916,191 @@ function validateExternalRegionalSummary(payload: unknown): Record<string, unkno
   return summary;
 }
 
-/** Decode the bandwidth-limited national point arrays at the API boundary. */
+function nativeRegionalPointArrays(payload: Record<string, unknown>): Record<string, unknown> {
+  const native = payload.native_forecast as Record<string, unknown>;
+  if (
+    native.contract !== 'rust-desktop-regional-forecast-v1'
+    || native.runtime_python_used !== false
+    || native.point_payload_complete !== true
+    || native.frame_payload_complete !== true
+    || native.public_forecast_complete !== false
+    || payload.scope !== 'regional'
+    || (payload.model_source !== 'gfs' && payload.model_source !== 'ec')
+    || payload.forecast_mode !== 'model'
+  ) throw new Error('Native regional identity is invalid');
+  if (
+    !['dawn', 'dusk'].includes(String(payload.phenomenon))
+    || !['explicit-single-points', 'generated-regional-grid'].includes(String(payload.point_mode))
+    || !['auto', 'cpu', 'gpu'].includes(String(payload.compute_backend_requested))
+    || payload.compute_backend !== 'cpu'
+  ) throw new Error('Native regional request identity is invalid');
+  requireStrictIsoDate(payload.target_date, 'Native regional target_date');
+  requireStrictUtcIsoTime(payload.cycle_time_utc, 'Native regional cycle_time_utc');
+  const regions = payload.regions;
+  const coverage = payload.coverage;
+  if (
+    !Array.isArray(regions) || regions.length === 0
+    || regions.some((code) => !REGIONAL_AREA_CODES.has(String(code)))
+    || new Set(regions).size !== regions.length
+    || !Array.isArray(coverage) || coverage.length !== regions.length
+  ) throw new Error('Native regional coverage is invalid');
+  coverage.forEach((raw, index) => {
+    const area = requireExactObject(raw, REGIONAL_COVERAGE_FIELDS, 'Native regional coverage');
+    if (area.code !== regions[index]) throw new Error('Native regional coverage identity is invalid');
+    requireNonEmptyString(area.label, 'Native regional coverage label');
+    requireNonEmptyString(area.point_prefix, 'Native regional coverage point_prefix');
+    if (!Array.isArray(area.bounds) || area.bounds.length !== 4) {
+      throw new Error('Native regional bounds are invalid');
+    }
+    const [west, south, east, north] = area.bounds.map((value) =>
+      requireFiniteNumber(value, 'Native regional bound'));
+    if (!(west >= -180 && west < east && east <= 180 && south >= -90 && south < north && north <= 90)) {
+      throw new Error('Native regional bounds are invalid');
+    }
+    if (SHARED_TIMEZONE_AREA_CODES.has(String(area.code))) {
+      if (typeof area.timezone_name !== 'string' || !isValidIanaTimezone(area.timezone_name)) {
+        throw new Error('Native regional timezone is invalid');
+      }
+    } else if (area.timezone_name !== null) throw new Error('Native regional per-point timezone is invalid');
+  });
+  const points = payload.points;
+  const count = requireNonNegativeInteger(payload.point_count, 'Native regional point_count');
+  if (
+    !Array.isArray(points) || points.length !== count
+    || payload.success_count !== count || payload.error_count !== 0
+    || !Array.isArray(payload.errors) || payload.errors.length !== 0
+  ) throw new Error('Native regional point counts are inconsistent');
+  const cache = payload.cache as Record<string, unknown>;
+  if (
+    cache?.contract !== 'rust-native-runtime-cache-v1'
+    || !['hit', 'refresh'].includes(String(cache.status))
+    || typeof cache.key !== 'string' || !/^[a-f0-9]{64}$/.test(cache.key)
+    || typeof cache.source_id !== 'string' || !/^[a-f0-9]{64}$/.test(cache.source_id)
+  ) throw new Error('Native regional cache identity is invalid');
+  requireStrictUtcIsoTime(cache.generated_at_utc, 'Native regional cache time');
+  const manifest = payload.input_manifest as Record<string, unknown>;
+  if (manifest?.contract !== 'rust-runtime-input-provenance-v1' || !Array.isArray(manifest.sources)) {
+    throw new Error('Native regional source manifest is invalid');
+  }
+  const hours: number[] = [];
+  const modelFiles: string[] = [];
+  const camsFiles: string[] = [];
+  for (const raw of manifest.sources) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('Native regional source identity is invalid');
+    }
+    const source = raw as Record<string, unknown>;
+    const identity = source.identity as Record<string, unknown>;
+    if (
+      typeof source.path !== 'string' || !source.path
+      || typeof source.role !== 'string'
+      || !identity || typeof identity.sha256 !== 'string'
+      || !/^[a-f0-9]{64}$/.test(identity.sha256)
+      || !Number.isInteger(identity.bytes) || Number(identity.bytes) <= 0
+    ) throw new Error('Native regional source identity is incomplete');
+    const model = /^model:f(\d+)$/.exec(source.role);
+    if (model) {
+      hours.push(Number(model[1]));
+      modelFiles.push(source.path);
+    } else if (source.role.startsWith('cams:')) camsFiles.push(source.path);
+  }
+  if (!modelFiles.length || !camsFiles.length) throw new Error('Native regional inputs are incomplete');
+  const frames = payload.frame_data as Record<string, unknown>;
+  if (
+    !frames || frames.version !== 103 || frames.encoding !== 'base64-quantized-row-major-v1'
+    || frames.point_count !== count || !Array.isArray(frames.frames) || frames.frames.length !== 20
+  ) {
+    throw new Error('Native regional frames are incomplete');
+  }
+  const precision = requireExactObject(
+    frames.precision, REGIONAL_PRECISION_FIELDS, 'Native regional precision',
+  );
+  requireNonEmptyString(precision.mode, 'Native regional precision mode');
+  requireNonEmptyString(precision.aerosol_profile_mode, 'Native regional aerosol mode');
+  const publicPrecision = requireExactObject(
+    payload.precision, REGIONAL_PRECISION_FIELDS, 'Native regional public precision',
+  );
+  for (const field of ['point_spacing_deg', 'model_grid_spacing_deg']) {
+    if (requireFiniteNumber(precision[field], `Native regional ${field}`) <= 0) {
+      throw new Error(`Native regional ${field} must be positive`);
+    }
+  }
+  if (
+    precision.point_count !== count || precision.full_point_coverage !== true
+    || typeof precision.vertical_profiles !== 'boolean'
+    || requireNonNegativeInteger(precision.processed_sample_count, 'Native processed samples') > count * 20
+    || requireNonNegativeInteger(precision.candidate_limit_per_sample, 'Native candidate limit') !== 0
+    || REGIONAL_PRECISION_FIELDS.some((field) => publicPrecision[field] !== precision[field])
+  ) throw new Error('Native regional precision is inconsistent');
+  frames.frames.forEach((raw, index) => {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('Native regional frame is invalid');
+    }
+    const frame = raw as Record<string, unknown>;
+    if (
+      frame.offset_minutes !== (payload.phenomenon === 'dawn' ? -75 : -20) + index * 5
+      || typeof frame.valid !== 'string' || !frame.valid
+    ) throw new Error('Native regional frame identity is invalid');
+  });
+  const performance = frames.performance as Record<string, unknown>;
+  const rawTiming = payload.timing as Record<string, unknown>;
+  const ms = rawTiming?.native_timings_ms as Record<string, unknown>;
+  const metric = (source: Record<string, unknown> | undefined, name: string) => {
+    const value = source?.[name];
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+      throw new Error(`Native regional timing ${name} is invalid`);
+    }
+    return value;
+  };
+  const prefetch = metric(rawTiming, 'prefetch_seconds');
+  const tensor = ['model_profiles_and_solar', 'model_decode_and_source_hash', 'model_pack_and_derive', 'cams_assembly']
+    .reduce((sum, field) => sum + metric(ms, field), 0) / 1000;
+  const compute = metric(ms, 'native_assessment') / 1000;
+  const frameSeconds = metric(performance, 'total_seconds');
+  const components: Record<string, string> =
+    Object.fromEntries(COMPACT_POINT_FIELDS.slice(11, 24).map((field) => [field, field]));
+  components.burnable_duration_minutes = 'duration_minutes';
+  return {
+    ...payload,
+    algorithm: native.contract,
+    point_format: 'native-object-v1', point_fields: [...COMPACT_POINT_FIELDS],
+    data_provenance: {
+      model_source: payload.model_source, cycle_utc: payload.cycle_time_utc,
+      forecast_hours: [...new Set(hours)].sort((a, b) => a - b),
+      model_files: modelFiles, cams_files: camsFiles,
+    },
+    timing: {
+      prefetch_seconds: prefetch, tensor_seconds: tensor, compute_seconds: compute,
+      frames_seconds: frameSeconds,
+      frame_instant_scoring_seconds: metric(performance, 'instant_scoring_seconds'),
+      frame_assembly_seconds: metric(performance, 'assembly_seconds'),
+      frame_points_per_second: metric(performance, 'points_per_second'),
+      frame_samples_per_second: metric(performance, 'samples_per_second'),
+      total_seconds: prefetch + tensor + compute + frameSeconds,
+    },
+    points: points.map((raw) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new Error('Native regional point is invalid');
+      }
+      const point = raw as Record<string, unknown>;
+      const quality = point.quality_components as Record<string, unknown>;
+      if (!quality || typeof quality !== 'object') throw new Error('Native point quality is missing');
+      return COMPACT_POINT_FIELDS.map((field) =>
+        components[field] ? quality[components[field]] : point[field]);
+    }),
+  };
+}
+
+/** Validate legacy array-v6 and independently versioned native regional results. */
 export function normalizeRegionalForecastPayload(payload: RegionalForecastPayload): RegionalForecastPayload {
-  const source = (payload as unknown as Record<string, unknown>).model_source;
-  const compact = source === 'ec'
+  const raw = payload as unknown as Record<string, unknown>;
+  const native = raw.native_forecast as Record<string, unknown> | undefined;
+  const source = raw.model_source;
+  const compact = native?.contract === 'rust-desktop-regional-forecast-v1'
+    ? nativeRegionalPointArrays(raw) : source === 'ec'
     ? validateExternalRegionalSummary(payload)
     : validateRegionalSummary(payload);
-  if (compact.point_format !== 'array-v6') {
+  if (compact.point_format !== 'array-v6' && compact.point_format !== 'native-object-v1') {
     throw new Error(`Unsupported regional point format: ${String(compact.point_format)}`);
   }
   if (
@@ -1031,7 +1221,7 @@ export function normalizeRegionalForecastPayload(payload: RegionalForecastPayloa
     return point as unknown as RegionalForecastPoint;
   });
 
-  return { ...payload, points };
+  return { ...compact, points } as unknown as RegionalForecastPayload;
 }
 
 /** POST synchronous forecast (blocks until complete) */
@@ -1051,7 +1241,9 @@ export function startForecast(body: ForecastRequest): Promise<ForecastStartRespo
 
 /** POST synchronous nowcast (satellite-primary prediction) */
 export function runNowcast(body: ForecastRequest): Promise<ForecastPayload> {
-  return post<ForecastPayload>('/api/v1/firesky/forecasts/nowcast/compute', body).then((payload) => {
+  return post<ForecastPayload>('/api/v1/firesky/forecasts/nowcast/compute', {
+    include_map_cells: true, ...body,
+  }).then((payload) => {
     if (payload.nowcast === undefined || payload.nowcast === null) {
       throw new Error('Nowcast response is missing the calibrated cloud-column contract');
     }
@@ -1062,7 +1254,9 @@ export function runNowcast(body: ForecastRequest): Promise<ForecastPayload> {
 
 /** Start async nowcast, returns job_id for SSE polling */
 export function startNowcast(body: ForecastRequest): Promise<ForecastStartResponse> {
-  return post<ForecastStartResponse>('/api/v1/firesky/forecasts/nowcast', body);
+  return post<ForecastStartResponse>('/api/v1/firesky/forecasts/nowcast', {
+    include_map_cells: true, ...body,
+  });
 }
 
 export function runRegionalForecast(body: RegionalForecastRequest): Promise<RegionalForecastPayload> {

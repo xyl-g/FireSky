@@ -52,6 +52,7 @@ export interface ForecastRequest {
   model_source?: ModelSource;
   satellite_source?: SatelliteSource;
   forecast_mode?: 'model' | 'nowcast';
+  include_map_cells?: boolean;
   gfs_resolution?: '0p25' | '0p50';
   _gfs_cycle_override?: string;
   _ec_cycle_override?: string;
@@ -837,7 +838,16 @@ export interface RegionalExternalDataProvenance {
   cams_files: string[];
 }
 
-export type RegionalDataProvenance = RegionalGfsDataProvenance | RegionalExternalDataProvenance;
+export interface NativeRegionalDataProvenance {
+  model_source: 'gfs' | 'ec';
+  cycle_utc: string;
+  forecast_hours: number[];
+  model_files: string[];
+  cams_files: string[];
+}
+
+export type RegionalDataProvenance =
+  RegionalGfsDataProvenance | RegionalExternalDataProvenance | NativeRegionalDataProvenance;
 
 interface RegionalForecastPayloadBase {
   scope: 'regional';
@@ -898,7 +908,31 @@ export interface RegionalExternalForecastPayload extends RegionalForecastPayload
   cache: RegionalForecastCache;
 }
 
-export type RegionalForecastPayload = RegionalGfsForecastPayload | RegionalExternalForecastPayload;
+export interface NativeRegionalForecastPayload extends Omit<
+  RegionalForecastPayloadBase, 'point_format'
+> {
+  model_source: 'gfs' | 'ec';
+  forecast_mode: 'model';
+  compute_backend_requested: 'auto' | 'cpu' | 'gpu';
+  compute_backend: 'cpu';
+  point_format: 'native-object-v1';
+  frame_data: unknown;
+  data_provenance: NativeRegionalDataProvenance;
+  cache: Omit<RegionalForecastCache, 'version'> & {
+    contract: 'rust-native-runtime-cache-v1';
+    source_id: string;
+  };
+  native_forecast: {
+    contract: 'rust-desktop-regional-forecast-v1';
+    runtime_python_used: false;
+    point_payload_complete: true;
+    frame_payload_complete: true;
+    public_forecast_complete: false;
+  };
+}
+
+export type RegionalForecastPayload =
+  RegionalGfsForecastPayload | RegionalExternalForecastPayload | NativeRegionalForecastPayload;
 
 export interface NationalCrossSectionFields {
   geopotential_height_asl_m: Array<Array<number | null>>;
@@ -1306,7 +1340,8 @@ export type ForecastJobStatus =
   | 'running'
   | 'done'
   | 'failed'
-  | 'cancelled';
+  | 'cancelled'
+  | 'interrupted';
 
 export interface ForecastJob {
   id: string;

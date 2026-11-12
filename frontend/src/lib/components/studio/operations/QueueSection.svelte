@@ -60,6 +60,7 @@
     done: '完成',
     failed: '失败',
     cancelled: '已取消',
+    interrupted: '已中断',
   };
 
   const STATUS_COLORS: Record<ForecastJobStatus, string> = {
@@ -67,6 +68,7 @@
     done: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
     failed: 'bg-red-500/10 text-red-600 dark:text-red-400',
     cancelled: 'bg-muted text-muted-foreground',
+    interrupted: 'bg-amber-500/10 text-amber-700 dark:text-amber-300',
   };
 
   const REGIONAL_STATUS_COLORS: Record<string, string> = {
@@ -74,6 +76,7 @@
     done: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
     failed: 'bg-red-500/10 text-red-600 dark:text-red-400',
     cancelled: 'bg-muted text-muted-foreground',
+    interrupted: 'bg-amber-500/10 text-amber-700 dark:text-amber-300',
   };
 
   // ══════════════════════════════════════
@@ -158,13 +161,17 @@
             selectedJob = { ...selectedJob, status: 'done', progress_percent: 100 };
           }
           void refreshSelectedJob(jobId);
-        } else if (eventName === 'failed') {
+        } else if (eventName === 'failed' || eventName === 'interrupted') {
           liveProgress = { ...liveProgress, percent: 100, stage: 'failed', message: (d.message as string) || '失败' };
           stopLive();
           stopSelectedPolling();
           loadGoJobs();
           if (selectedJob) {
-            selectedJob = { ...selectedJob, status: 'failed', error_message: (d.message as string) || '失败' };
+            selectedJob = {
+              ...selectedJob,
+              status: eventName === 'interrupted' ? 'interrupted' : 'failed',
+              error_message: (d.message as string) || (eventName === 'interrupted' ? '运行时已退出，任务已中断' : '失败'),
+            };
           }
         }
       },
@@ -218,7 +225,7 @@
   }
 
   function isTerminalStatus(status: ForecastJobStatus): boolean {
-    return status === 'done' || status === 'failed' || status === 'cancelled';
+    return status === 'done' || status === 'failed' || status === 'cancelled' || status === 'interrupted';
   }
 
   function stopLive() {
@@ -501,7 +508,7 @@
     <!-- Filter -->
     <div class="flex flex-wrap items-center gap-2">
       <Filter class="w-3.5 h-3.5 text-muted-foreground" />
-      {#each ['', 'running', 'done', 'failed'] as s}
+      {#each ['', 'running', 'done', 'failed', 'interrupted'] as s}
         <button
           class="px-2.5 py-1 rounded-md text-xs font-medium transition-colors
             {statusFilter === s ? 'bg-primary text-primary-foreground' : 'border hover:bg-muted'}"
@@ -570,7 +577,7 @@
                   </div>
                 {:else}
                   <span class="inline-flex px-2 py-0.5 rounded text-[10px] font-medium {REGIONAL_STATUS_COLORS[job.status] || ''}">
-                    {job.status === 'done' ? '完成' : job.status === 'failed' ? '失败' : job.status === 'cancelled' ? '已取消' : '排队中'}
+                    {job.status === 'done' ? '完成' : job.status === 'failed' ? '失败' : job.status === 'cancelled' ? '已取消' : job.status === 'interrupted' ? '已中断' : '排队中'}
                   </span>
                 {/if}
               </div>
@@ -612,6 +619,8 @@
                 <CheckCircle class="w-4 h-4 text-emerald-500 shrink-0" />
               {:else if job.status === 'failed'}
                 <XCircle class="w-4 h-4 text-destructive shrink-0" />
+              {:else if job.status === 'interrupted'}
+                <Clock class="w-4 h-4 text-amber-600 shrink-0" />
               {:else}
                 <Clock class="w-4 h-4 text-muted-foreground shrink-0" />
               {/if}

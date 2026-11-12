@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import type { DataStatus } from '$lib/api/data';
-  import { getDataStatus } from '$lib/api/data';
+  import { onDestroy, onMount } from 'svelte';
+  import type { DataStatus, DataFetchProgress } from '$lib/api/data';
+  import { getDataStatus, verifiedFetchReadiness } from '$lib/api/data';
   import { REGION_OPTIONS, REGION_BOUNDS } from '$lib/api/regions';
   import { post, get } from '$lib/api/client';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
@@ -10,7 +10,6 @@
   import Clock from '@lucide/svelte/icons/clock';
   import DownloadCloud from '@lucide/svelte/icons/download-cloud';
   import Info from '@lucide/svelte/icons/info';
-  import CheckCircle from '@lucide/svelte/icons/check-circle';
   import Globe from '@lucide/svelte/icons/globe';
   import ChevronRight from '@lucide/svelte/icons/chevron-right';
   import ChevronDown from '@lucide/svelte/icons/chevron-down';
@@ -36,6 +35,10 @@
   };
   let regions: Region[] = [];
   let selectedRegion = 'china';
+  let revision = 0;
+  let inventoryRequest = 0;
+  let destroyed = false;
+  onDestroy(() => { destroyed = true; revision += 1; });
 
   // firesky has no region-management service (that lived in the old Go
   // gateway). Build the list locally from the shared region table so the
@@ -100,8 +103,10 @@
   let dlCams: DownloadStatus = { loading: false, message: '', kind: 'info', completed: 0, total: 0 };
 
   async function startDownload(sources: string[], setStatus: (s: DownloadStatus) => void, label: string, cycle?: string) {
-    const source = sources[0] || '';
-    setStatus({ loading: true, message: `${label} 下载中…`, kind: 'info', completed: 0, total: 0 });
+    const requestRevision = revision;
+    const current = () => !destroyed && requestRevision === revision;
+    const update = (value: DownloadStatus) => { if (current()) setStatus(value); };
+    update({ loading: true, message: `${label} 下载中…`, kind: 'info', completed: 0, total: 0 });
     let job_id = '';
     try {
       const options = planOptions();
@@ -117,73 +122,59 @@
       } = { sources, ...options };
       // Pin the download to the exact cycle shown on the card so we never re-query
       // and end up fetching a different (stale) cycle than the one the user sees.
-      if (cycle) body.cycle = cycle;
+      if (cycle && !sources.includes('cams')) body.cycle = cycle;
       const start = await post<{ job_id: string; status: string; sources?: string[] }>(
         '/api/v1/firesky/data/fetch',
         body,
       );
       job_id = start.job_id;
     } catch (e) {
-      setStatus({ loading: false, message: `下载失败: ${e instanceof Error ? e.message : '未知错误'}`, kind: 'error', completed: 0, total: 0 });
+      update({ loading: false, message: `下载失败: ${e instanceof Error ? e.message : '未知错误'}`, kind: 'error', completed: 0, total: 0 });
       return;
     }
 
     const POLL_INTERVAL = 1500;
-    while (true) {
+    let pollFailures = 0;
+    while (current()) {
       await new Promise((r) => setTimeout(r, POLL_INTERVAL));
+      if (!current()) return;
       try {
-        const s = await get<{
-          job_id: string;
-          status: string;
-          completed: number;
-          total: number;
-          current?: string;
-          results?: Array<{ source: string; downloaded?: string[]; failed?: string[] }>;
-          errors?: string[];
-          elapsed_seconds?: number;
-        }>(`/api/v1/firesky/data/fetch/status`, { job_id });
+        const s = await get<DataFetchProgress>(`/api/v1/firesky/data/fetch/status`, { job_id });
+        if (!current()) return;
+        pollFailures = 0;
 
         if (s.status === 'done') {
-          const totalFiles = (s.results || []).reduce((sum, r) => sum + (r.downloaded?.length || 0), 0);
-          const failedCount = (s.results || []).reduce((sum, r) => sum + (r.failed?.length || 0), 0);
-          const refreshed = await loadStatus();
-          const refreshedDataset = refreshed?.datasets?.find((dataset) => dataset.source === source);
-          const remaining = refreshedDataset?.missing_hours?.length;
-          const failureSuffix = failedCount > 0 ? `，失败 ${failedCount} 个` : '';
-          const verificationFailed = !refreshedDataset || remaining === undefined;
-          const msg = verificationFailed
-            ? `已处理 ${totalFiles} 个文件，但无法验证本地库存${failureSuffix}`
-            : remaining > 0
-              ? `已处理 ${totalFiles} 个文件，仍缺 ${remaining} 个时效${failureSuffix}`
-              : failedCount > 0
-                ? `数据已就绪 ${totalFiles} 个文件，但有 ${failedCount} 个失败`
-                : `数据已就绪：${refreshedDataset.required_hours_count} 个时效`;
-          setStatus({
+          const readiness = verifiedFetchReadiness(s, sources);
+          const verifiedFiles = readiness?.datasets.reduce((sum, row) => sum + row.verified_files, 0) ?? 0;
+          await loadStatus();
+          update({
             loading: false,
-            message: msg,
-            kind: verificationFailed || remaining > 0 || failedCount > 0 ? 'error' : 'success',
-            completed: s.total || totalFiles,
-            total: s.total || totalFiles,
+            message: readiness ? `请求输入已验证：${verifiedFiles} 个文件` : '下载结束，但冻结请求完整性未通过验证',
+            kind: readiness ? 'success' : 'error',
+            completed: s.completed ?? 0,
+            total: s.total ?? 0,
           });
-          setTimeout(() => setStatus({ loading: false, message: '', kind: 'info', completed: 0, total: 0 }), 5000);
           return;
         }
-        if (s.status === 'failed') {
+        if (['failed', 'cancelled', 'interrupted'].includes(s.status)) {
           const errMsg = (s.errors && s.errors.length > 0) ? s.errors[0] : '下载失败';
-          setStatus({ loading: false, message: `下载失败: ${errMsg}`, kind: 'error', completed: s.completed, total: s.total });
+          update({ loading: false, message: `下载失败: ${errMsg}`, kind: 'error', completed: s.completed ?? 0, total: s.total ?? 0 });
           return;
         }
         // running
-        const pct = s.total > 0 ? Math.round((s.completed / s.total) * 100) : 0;
-        setStatus({
+        const pct = (s.total ?? 0) > 0 ? Math.round(((s.completed ?? 0) / s.total!) * 100) : 0;
+        update({
           loading: true,
-          message: s.current ? `${s.current} ${pct}% (${s.completed}/${s.total})` : `${label} 下载中…`,
+          message: s.current ? `${s.current} ${pct}% (${s.completed ?? 0}/${s.total ?? 0})` : `${label} 下载中…`,
           kind: 'info',
-          completed: s.completed,
-          total: s.total,
+          completed: s.completed ?? 0,
+          total: s.total ?? 0,
         });
       } catch (e) {
-        // Network hiccup — keep polling.
+        if (++pollFailures >= 10) {
+          update({ loading: false, message: '下载状态连接中断，请刷新库存并重新检查请求', kind: 'error', completed: 0, total: 0 });
+          return;
+        }
       }
     }
   }
@@ -219,17 +210,32 @@
   }
 
   async function loadStatus(): Promise<DataStatus | null> {
+    const requestId = ++inventoryRequest;
+    const requestRevision = revision;
     loading = true;
     error = '';
     try {
-      status = await getDataStatus(planOptions());
+      const result = await getDataStatus(planOptions());
+      if (destroyed || requestId !== inventoryRequest || requestRevision !== revision) return null;
+      status = result;
       return status;
     } catch (e) {
-      error = e instanceof Error ? e.message : '加载数据状态失败';
+      if (!destroyed && requestId === inventoryRequest && requestRevision === revision) {
+        error = e instanceof Error ? e.message : '加载数据状态失败';
+      }
       return null;
     } finally {
-      loading = false;
+      if (!destroyed && requestId === inventoryRequest && requestRevision === revision) loading = false;
     }
+  }
+
+  function changeRegion() {
+    revision += 1;
+    status = null;
+    dlGfs = { loading: false, message: '', kind: 'info', completed: 0, total: 0 };
+    dlEc = { ...dlGfs };
+    dlCams = { ...dlGfs };
+    void loadStatus();
   }
 
   let pruning = false;
@@ -307,7 +313,7 @@
         下载区域
       </div>
       <div class="region-row">
-        <select class="region-select" bind:value={selectedRegion} onchange={() => loadStatus()}>
+        <select class="region-select" bind:value={selectedRegion} onchange={changeRegion}>
           {#each regions as r}
             <option value={r.code}>{r.name}</option>
           {/each}
@@ -326,13 +332,11 @@
     <div class="download-grid">
       {#each [['gfs', '#3b82f6', dlGfs], ['ecmwf', '#8b5cf6', dlEc], ['cams', '#f59e0b', dlCams]] as [source, color, dl]}
         {@const ds = status?.datasets?.find(d => d.source === (source as string))}
-        {@const isUnavailable = ds?.status === 'unavailable'}
-        {@const isPartial = ds?.capability_status === 'partial'}
+        {@const isUnavailable = ds?.capability_status === 'unavailable'}
         {@const hasLocal = !!ds?.latest_local_cycle}
-        {@const hasUpdate = hasLocal && cycleLabel(ds?.latest_available_cycle || '') !== cycleLabel(ds?.latest_local_cycle || '')}
+        {@const hasUpdate = hasLocal && !!ds?.latest_available_cycle && cycleLabel(ds.latest_available_cycle) !== cycleLabel(ds?.latest_local_cycle || '')}
         {@const hasMissing = hasLocal && !hasUpdate && ds?.missing_hours?.length > 0}
         {@const hasNoData = !hasLocal && !isUnavailable}
-        {@const isCurrent = hasLocal && !hasUpdate && !hasMissing && !isUnavailable}
         <div class="dl-card glass-panel">
           <div class="dl-head">
             <div class="dl-badge" style="background: {color}20; color: {color};">
@@ -342,14 +346,10 @@
               <span class="dl-name">{datasetLabel(source as string)}</span>
               <span class="dl-cycle">最新: {cycleLabel(ds?.latest_available_cycle || '')}</span>
             </div>
-            {#if isCurrent && !(dl as DownloadStatus).loading}
-              <span class="up-to-date"><CheckCircle class="w-3.5 h-3.5" />{isPartial ? '可用范围完整' : '完整'}</span>
-            {:else}
               <button class="dl-btn" style="--dl-color: {color}" onclick={() => downloadFor(source as string)} disabled={(dl as DownloadStatus).loading || isUnavailable}>
                 {#if (dl as DownloadStatus).loading}<span class="spinning"><RefreshCw class="w-3.5 h-3.5" /></span>{/if}
-                {(dl as DownloadStatus).loading ? '下载中' : isUnavailable ? '不可用' : hasNoData ? '下载' : hasUpdate ? '更新' : hasMissing ? '补全' : '完整'}
+                {(dl as DownloadStatus).loading ? '下载中' : isUnavailable ? '不可用' : hasNoData ? '下载' : hasUpdate ? '更新' : '检查并补全'}
               </button>
-            {/if}
           </div>
           {#if !(dl as DownloadStatus).loading && ds}
             {#if isUnavailable || ds.capability_status === 'partial'}
@@ -379,6 +379,8 @@
                   缺 {ds.missing_hours.length} 个时效
                 {/if}
               </div>
+            {:else if ds.prepared === false}
+              <div class="dl-hint"><Info class="w-3 h-3" />库存不代表预测输入完整</div>
             {/if}
           {/if}
           {#if (dl as DownloadStatus).loading && (dl as DownloadStatus).total > 0}
@@ -676,17 +678,6 @@
 
   .dl-btn:hover { opacity: 0.85; }
   .dl-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  .up-to-date {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    font-size: 12px;
-    font-weight: 500;
-    color: #16a34a;
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
 
   .dl-hint {
     display: flex;

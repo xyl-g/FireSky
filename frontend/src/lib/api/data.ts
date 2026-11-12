@@ -89,6 +89,52 @@ export interface DataFetchProgress {
   results?: Array<Record<string, unknown>>;
   errors?: string[];
   elapsed_seconds?: number;
+  readiness?: DataReadiness;
+  ready?: boolean;
+  prepared?: boolean;
+}
+
+export interface DataReadiness {
+  contract: 'rust-data-readiness-v1';
+  ready: boolean;
+  prepared: boolean;
+  frozen_plan: boolean;
+  network_enabled: boolean;
+  datasets: Array<{
+    source: string;
+    ready: boolean;
+    prepared: boolean;
+    required_files: number;
+    verified_files: number;
+    missing_count: number;
+    missing: unknown[];
+    errors: unknown[];
+  }>;
+}
+
+// Inventory is intentionally not readiness. Accept only a checked, nonempty
+// frozen request, including every requested source, after native verification.
+export function verifiedFetchReadiness(value: unknown, sources: string[]): DataReadiness | null {
+  if (!value || typeof value !== 'object' || sources.length === 0) return null;
+  const result = value as Record<string, unknown>;
+  const readiness = result.readiness as DataReadiness | undefined;
+  if (result.contract !== 'rust-data-fetch-v1' || result.status !== 'done'
+      || result.ready !== true || result.prepared !== true
+      || !Array.isArray(result.errors) || result.errors.length !== 0
+      || readiness?.contract !== 'rust-data-readiness-v1'
+      || readiness.ready !== true || readiness.prepared !== true
+      || readiness.frozen_plan !== true || readiness.network_enabled !== false
+      || !Array.isArray(readiness.datasets) || readiness.datasets.length === 0) return null;
+  if (!readiness.datasets.every((row) => row && typeof row === 'object')) return null;
+  if (!sources.every((source) => readiness.datasets.some((row) => row.source === source))) return null;
+  if (!readiness.datasets.every((row) =>
+    sources.includes(row.source) && row.ready === true && row.prepared === true
+      && Number.isSafeInteger(row.required_files) && row.required_files > 0
+      && row.verified_files === row.required_files && row.missing_count === 0
+      && Array.isArray(row.missing) && row.missing.length === 0
+      && Array.isArray(row.errors) && row.errors.length === 0
+  )) return null;
+  return readiness;
 }
 
 export function startDataFetch(body: DataFetchRequest): Promise<DataFetchJob> {
@@ -108,6 +154,8 @@ export interface DataRequirementDataset {
 
 export interface DataRequirementPlan {
   datasets: DataRequirementDataset[];
+  readiness?: DataReadiness;
+  ready?: boolean;
   [key: string]: unknown;
 }
 

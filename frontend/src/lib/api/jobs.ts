@@ -12,13 +12,14 @@ export const TERMINAL_FORECAST_JOB_STATUSES: ReadonlySet<ForecastJobStatus> = ne
   'done',
   'failed',
   'cancelled',
+  'interrupted',
 ]);
 
 export function isTerminalForecastJobStatus(status: ForecastJobStatus): boolean {
   return TERMINAL_FORECAST_JOB_STATUSES.has(status);
 }
 
-/** List in-memory forecast jobs (this process only), paginated and filterable. */
+/** List durable forecast jobs, paginated and filterable. */
 export function listForecastJobs(params?: {
   status?: string;
   limit?: number;
@@ -36,8 +37,13 @@ export function getForecastJob(id: string): Promise<ForecastJob> {
   return get<ForecastJob>(`/api/v1/firesky/forecasts/jobs/${id}`);
 }
 
-export function cancelForecastJob(id: string): Promise<{ job_id: string; status: 'cancelled' }> {
-  return post<{ job_id: string; status: 'cancelled' }>(`/api/v1/firesky/forecasts/${id}/cancel`, {});
+/** Acknowledges cancellation; poll the job until its worker reaches a terminal state. */
+export function cancelForecastJob(id: string): Promise<{
+  job_id: string;
+  status: 'running';
+  cancel_requested: true;
+}> {
+  return post(`/api/v1/firesky/forecasts/${id}/cancel`, {});
 }
 
 export function getForecastResult<T>(jobId: string): Promise<T> {

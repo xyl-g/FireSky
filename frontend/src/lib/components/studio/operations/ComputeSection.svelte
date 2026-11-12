@@ -440,7 +440,7 @@
           regionalJobs.updateJob(storeId, {
             stage: job.stage, progress: job.progress, message: job.message, elapsed: job.elapsed,
           });
-        } else if (eventName === 'done' || eventName === 'failed' || eventName === 'cancelled') {
+        } else if (eventName === 'done' || eventName === 'failed' || eventName === 'cancelled' || eventName === 'interrupted') {
           // SSE is only a progress signal. Read the Go job row for the terminal state.
           void pollStatus();
         }
