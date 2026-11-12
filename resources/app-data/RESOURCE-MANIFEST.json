@@ -1,0 +1,109 @@
+{
+  "schema": "firesky-app-resources-v1",
+  "version": "2026.11.11",
+  "read_only": true,
+  "user_data_is_external": true,
+  "resources": {
+    "city_catalog": {
+      "path": "cities/china-city-catalog.json",
+      "bytes": 316910,
+      "sha256": "8a0680a1d1ac040fbf2969a90633839e6091e0ce9bbbb6d5f496586114476f07",
+      "schema_version": 3,
+      "city_count": 695,
+      "source": "https://geo.datav.aliyun.com/areas_v3/bound/geojson",
+      "authoritative_source": "https://www.xzqh.org/show/china/2026/2026.html",
+      "license_notice": "cities/CITY-CATALOG-NOTICE.md",
+      "license_status": "upstream-terms-not-specified"
+    },
+    "timezone_source": {
+      "path": "timezones/manifest.json",
+      "bytes": 10612,
+      "sha256": "29e415aea527811932c8aa19cbf0cb2b02316a4eef3f9354afa0e19c92110d49",
+      "contract": "firesky-timezone-source-v1",
+      "exporter": "timezonefinder-9.2.0",
+      "data_version": "2026f",
+      "data_package_version": "4.2026.6",
+      "licenses": [
+        "timezones/CODE_LICENSE",
+        "timezones/DATA_LICENSE"
+      ]
+    }
+  },
+  "files": [
+    {
+      "path": "cities/CITY-CATALOG-NOTICE.md",
+      "bytes": 779,
+      "sha256": "d6ad5222148b909f15ee824fe33430c714f024e0e32cf8f286e4ea7be11f8fcd"
+    },
+    {
+      "path": "cities/china-city-catalog.json",
+      "bytes": 316910,
+      "sha256": "8a0680a1d1ac040fbf2969a90633839e6091e0ce9bbbb6d5f496586114476f07"
+    },
+    {
+      "path": "timezones/CODE_LICENSE",
+      "bytes": 1105,
+      "sha256": "0ea4c1422d4d56477cf030c3a79a40999f2fcae800e3c5f23d73f810357515be"
+    },
+    {
+      "path": "timezones/DATA_LICENSE",
+      "bytes": 26030,
+      "sha256": "064dbcd9fdd0ffdf36742c40718a23596be8a51838cb43b397f45d383ba42440"
+    },
+    {
+      "path": "timezones/blocks.npy",
+      "bytes": 871040,
+      "sha256": "2bab46ef4044d4ae1e071d37fe917a8589f402d69d7f23576e4c747b7c68f376"
+    },
+    {
+      "path": "timezones/coordinates.npy",
+      "bytes": 66354752,
+      "sha256": "767ca594d8391b5d47780b857af48566993b3c600a4303323f1fadd858f49ae6"
+    },
+    {
+      "path": "timezones/ends.npy",
+      "bytes": 14712,
+      "sha256": "cb3781e04b036f6baa4334175404fb5b0099f20a7d78361b0db2ee4c39723ec3"
+    },
+    {
+      "path": "timezones/last_change.npy",
+      "bytes": 14712,
+      "sha256": "5c928ed614dc48bd795ea0cd756b51026f58e62f554b9c1ddac5970d20c54c01"
+    },
+    {
+      "path": "timezones/manifest.json",
+      "bytes": 10612,
+      "sha256": "29e415aea527811932c8aa19cbf0cb2b02316a4eef3f9354afa0e19c92110d49"
+    },
+    {
+      "path": "timezones/payload.npy",
+      "bytes": 35544,
+      "sha256": "5e6ca3f08cfdefdb07bef8aa75d26a34451742421844315d6eef1e7c58ecc6dc"
+    },
+    {
+      "path": "timezones/polygon_offsets.npy",
+      "bytes": 5556,
+      "sha256": "cd3ebcc618c7d9fc133a2e3cec161d029ab27d670199443ecbecbfb68c4bdd1d"
+    },
+    {
+      "path": "timezones/ring_offsets.npy",
+      "bytes": 8724,
+      "sha256": "97b3d38876cbf03557a923ff467cfc00e05676c48e7faf8b4a47fcac2cef1483"
+    },
+    {
+      "path": "timezones/starts.npy",
+      "bytes": 14712,
+      "sha256": "3782a77880724e1ebb44677da1c356d437ce6f0990c66e4a8857a2e781486ab7"
+    },
+    {
+      "path": "timezones/table.npy",
+      "bytes": 460928,
+      "sha256": "8a018b2cce51eb271a070e44a05ace71a3ff3527e724f8bb9f4c9beb083eec6e"
+    },
+    {
+      "path": "timezones/zones.npy",
+      "bytes": 5552,
+      "sha256": "3306d3af098d280607fa179ea97e583384dfc6ed83227276bfd1a866d5025bd1"
+    }
+  ]
+}
