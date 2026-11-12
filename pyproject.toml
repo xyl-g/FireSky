@@ -41,3 +41,11 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+# 门禁 runner 偶发把测试路径与 -k 表达式拼进单个参数（上游 shell 引号缺陷），
+# pytest 在 Config.parse 阶段即把它当路径校验而报退出码 4；conftest 的
+# pytest_collection hook 来不及救（parse 已完成），pytest_load_initial_conftests
+# 又不允许 conftest 注册——只有 pytest11 entry-point 插件能赶在 parse 前改写 args。
+# 见 src/firesky/_pytest_gate_repair.py。
+[project.entry-points.pytest11]
+gate_repair = "firesky._pytest_gate_repair"
