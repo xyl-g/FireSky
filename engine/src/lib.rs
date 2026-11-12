@@ -32,6 +32,7 @@ pub mod desktop_preflight;
 pub mod desktop_prepare;
 pub mod desktop_profiles;
 pub mod desktop_publications;
+pub mod desktop_sync;
 pub mod desktop_runtime;
 pub mod desktop_session;
 pub mod diagnostics;

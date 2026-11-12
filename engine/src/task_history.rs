@@ -315,7 +315,7 @@ impl TaskHistory {
         }
         if !matches!(
             method,
-            "check" | "prepare" | "forecast" | "publications" | "network_probe"
+            "check" | "prepare" | "forecast" | "publications" | "network_probe" | "data_sync"
         ) {
             return Err("method does not create workflow history".into());
         }

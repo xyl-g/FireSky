@@ -95,6 +95,13 @@ struct InventoryView: View {
                 HStack {
                     Text("本地数据").font(.title.weight(.semibold))
                     Spacer()
+                    Button("立即同步", systemImage: "arrow.triangle.2.circlepath") {
+                        store.runDataSyncNow()
+                    }
+                    .disabled(!store.online || store.busy || store.dataSyncRunning)
+                    .help(store.dataSyncEnabled
+                          ? "立即同步设置中启用的数据源（可解除失败熔断）"
+                          : "先在设置中启用后台数据同步")
                     Button("按本次位置下载", systemImage: "arrow.down") {
                         store.page = .point
                         store.beginCheck()
@@ -249,6 +256,61 @@ struct SettingsView: View {
                     .disabled(!store.online || store.savingRetention || store.busy)
                 }
             }
+            Section("后台数据同步") {
+                Toggle("启用后台同步", isOn: $store.dataSyncEnabled)
+                Text("应用运行期间，引擎按间隔把 CAMS/GFS/EC 最新已发布周期拉齐到本地缓存。默认关闭；保存成功即生效，重新保存也会解除失败熔断。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if store.dataSyncEnabled && !store.dataSyncRetentionConfigured {
+                    Label("未配置缓存保留策略，缓存将随同步增长；可在下方「缓存与报告保留」中设置。", systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack(spacing: 12) {
+                    Toggle("CAMS", isOn: $store.dataSyncCAMS).disabled(!store.dataSyncEnabled)
+                    Toggle("GFS", isOn: $store.dataSyncGFS).disabled(!store.dataSyncEnabled)
+                    Toggle("EC", isOn: $store.dataSyncEC).disabled(!store.dataSyncEnabled)
+                }
+                HStack(spacing: 12) {
+                    dataSyncField("同步间隔", text: $store.dataSyncInterval, suffix: "分钟")
+                    dataSyncField("GFS/EC 时效上限", text: $store.dataSyncLeadHorizon, suffix: "小时")
+                }
+                Picker("锚定区域", selection: $store.dataSyncAnchor) {
+                    Text("未设置").tag("")
+                    ForEach(store.regionDefinitions.indices, id: \.self) { index in
+                        let region = store.regionDefinitions[index]
+                        Text(region["label"] as? String ?? region["code"] as? String ?? "")
+                            .tag(region["code"] as? String ?? "")
+                    }
+                }
+                Text("间隔 30–1440 分钟；时效上限仅 GFS/EC 需要（3–240 小时、3 的倍数），CAMS 自动拉齐全部时效；锚定区域决定 CAMS 洲包络与 GFS/EC 下载范围；EC 下载源沿用上方「数据源」的设置。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    if store.savingDataSync { ProgressView().controlSize(.small) }
+                    if !store.dataSyncMessage.isEmpty {
+                        Text(store.dataSyncMessage).font(.caption)
+                            .foregroundStyle(store.dataSyncSaveFailed ? Color.red : Color.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else if store.dataSyncConfigured {
+                        Text(store.dataSyncEnabled ? "后台同步已启用" : "已配置，当前关闭")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("保存同步设置", systemImage: "externaldrive.badge.checkmark") {
+                        store.saveDataSyncSettings()
+                    }
+                    .disabled(!store.online || store.savingDataSync || store.busy)
+                }
+                if store.dataSyncLoaded {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("同步状态").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        dataSyncSourceRow("cams", "CAMS")
+                        dataSyncSourceRow("gfs", "GFS")
+                        dataSyncSourceRow("ec", "EC")
+                    }
+                }
+            }
             Section("本地引擎") {
                 TextField("数据目录", text: $store.workspace)
                 TextField("Rust 引擎（留空使用内置）", text: $store.engineBinary)
@@ -282,6 +344,58 @@ struct SettingsView: View {
                 Text(suffix).font(.caption).foregroundStyle(.secondary)
             }
         }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func dataSyncField(_ title: String, text: Binding<String>, suffix: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption).foregroundStyle(.secondary)
+            HStack(spacing: 5) {
+                TextField("未设置", text: text)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(minWidth: 64)
+                Text(suffix).font(.caption).foregroundStyle(.secondary)
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// 每源同步状态行（设计 11.1 状态行）：last_cycle + last_result 摘要 + 熔断提示。
+    private func dataSyncSourceRow(_ name: String, _ label: String) -> some View {
+        let state = store.dataSyncState[name] as? JSONObject ?? [:]
+        let result = state["last_result"] as? JSONObject ?? [:]
+        let status = result["status"] as? String ?? ""
+        let files = (result["files"] as? NSNumber)?.intValue ?? 0
+        let cycle = state["last_cycle"] as? String ?? ""
+        let failures = (state["consecutive_failures"] as? NSNumber)?.intValue ?? 0
+        let suspended = state["suspended"] as? Bool ?? false
+        let badge: String
+        let color: Color
+        switch status {
+        case "synced": badge = "已同步"; color = .green
+        case "current": badge = "已是最新"; color = .green
+        case "failed": badge = "失败"; color = .red
+        case "cancelled": badge = "已取消"; color = .secondary
+        default: badge = "从未同步"; color = .secondary
+        }
+        var details: [String] = []
+        if !cycle.isEmpty { details.append("最近周期 \(cycle)") }
+        if files > 0 { details.append("\(files) 个文件") }
+        if let errors = result["errors"] as? [String], let first = errors.first, !first.isEmpty {
+            details.append("最近错误：\(first)")
+        }
+        if failures > 0 { details.append("连续失败 \(failures) 次") }
+        if suspended { details.append("已暂停：立即同步或重新保存设置可解锁") }
+        return HStack(alignment: .top, spacing: 10) {
+            Text(label).font(.callout.weight(.medium)).frame(width: 44, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(badge).font(.callout).foregroundStyle(color)
+                if !details.isEmpty {
+                    Text(details.joined(separator: " · "))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer()
+        }
     }
 
     private func tutorialStep<Content: View>(_ number: String, _ title: String, detail: String,

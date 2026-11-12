@@ -14,7 +14,7 @@ use std::{
     path::Path,
     ptr,
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
@@ -25,6 +25,11 @@ pub const FIRESKY_FFI_ABI_VERSION: u32 = 1;
 const MAX_WORKSPACE_BYTES: usize = 4096;
 const MAX_METHOD_BYTES: usize = 128;
 const MAX_JSON_BYTES: usize = 8 * 1024 * 1024;
+
+/// Distinguishes concurrently started tasks inside one process; with the pid
+/// it forms the task-history request id (JSONL uses the wire request id and
+/// HTTP uses caller UUIDs, so the prefixes never collide).
+static FFI_TASK_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub const FIRESKY_FFI_OK: i32 = 0;
 pub const FIRESKY_FFI_INVALID_ARGUMENT: i32 = 1;
@@ -55,6 +60,8 @@ type TaskOutcome = Result<String, FfiError>;
 pub struct FireskyTaskHandle {
     cancel: Arc<AtomicBool>,
     join: Mutex<Option<JoinHandle<TaskOutcome>>>,
+    runtime: Arc<Runtime>,
+    request_id: String,
 }
 
 #[derive(Debug)]
@@ -229,6 +236,7 @@ fn call_runtime(
     cancel: Arc<AtomicBool>,
     callback: Option<FireskyProgressCallback>,
     user_data: usize,
+    task_id: Option<&str>,
 ) -> TaskOutcome {
     let progress = |event: Value| -> Result<(), String> {
         let Some(callback) = callback else {
@@ -245,7 +253,7 @@ fn call_runtime(
         Ok(())
     };
     runtime
-        .dispatch_cancellable(method, params, cancel, &progress)
+        .dispatch_cancellable(method, params, cancel, &progress, task_id)
         .map_err(FfiError::runtime)
         .and_then(|result| success_envelope(method, result))
 }
@@ -341,26 +349,59 @@ pub unsafe extern "C" fn firesky_engine_start(
             return Err(FfiError::argument("task output handle pointer is null"));
         }
         let cancel = Arc::new(AtomicBool::new(false));
-        let task_cancel = cancel.clone();
         let runtime = handle.runtime.clone();
         let callback_data = user_data as usize;
+        // Task history mirrors the JSONL serve path (design 7.2): whitelisted
+        // methods receive a durable receipt while other methods dispatch
+        // without one (begin_task returns None and never touches disk).
+        let request_id = format!(
+            "ffi-{}-{}-{method}",
+            std::process::id(),
+            FFI_TASK_SEQUENCE.fetch_add(1, Ordering::Relaxed),
+        );
+        let task = runtime
+            .begin_task(&request_id, &method, &params)
+            .map_err(FfiError::runtime)?;
         let worker_method = method.clone();
+        let worker_cancel = cancel.clone();
         let join = thread::Builder::new()
             .name(format!("firesky-ffi-{method}"))
             .spawn(move || {
-                call_runtime(
+                let mut outcome = call_runtime(
                     &runtime,
                     &worker_method,
                     params,
-                    task_cancel,
+                    worker_cancel.clone(),
                     callback,
                     callback_data,
-                )
+                    task.as_ref().map(|task| task.id()),
+                );
+                // Commit the receipt exactly like the JSONL worker: cancelled
+                // rounds never publish a result, and a history commit failure
+                // replaces the outcome with an error.
+                if let Some(task) = task {
+                    let cancelled = worker_cancel.load(Ordering::Acquire);
+                    let finish_input = match &outcome {
+                        Ok(response) => serde_json::from_str::<Value>(response)
+                            .ok()
+                            .and_then(|envelope| envelope.get("result").cloned())
+                            .ok_or_else(|| "ffi response envelope is invalid".to_string()),
+                        Err(error) => Err(error.message.clone()),
+                    };
+                    if let Err(message) = task.finish(&finish_input, cancelled) {
+                        outcome = Err(FfiError::runtime(format!(
+                            "task history commit failed: {message}"
+                        )));
+                    }
+                }
+                outcome
             })
             .map_err(|error| FfiError::runtime(error.to_string()))?;
         *out_task = Box::into_raw(Box::new(FireskyTaskHandle {
             cancel,
             join: Mutex::new(Some(join)),
+            runtime: handle.runtime.clone(),
+            request_id,
         }));
         Ok(())
     })
@@ -378,6 +419,9 @@ pub unsafe extern "C" fn firesky_task_cancel(
             .as_ref()
             .ok_or_else(|| FfiError::argument("task handle is null"))?;
         task.cancel.store(true, Ordering::Release);
+        // Best-effort receipt so the history row shows the cancel request; the
+        // cooperative flag above stays the actual cancellation channel.
+        let _ = task.runtime.cancel_history(&task.request_id);
         Ok(())
     })
 }
@@ -420,6 +464,7 @@ pub unsafe extern "C" fn firesky_task_free(task: *mut FireskyTaskHandle) {
     }
     let task = Box::from_raw(task);
     task.cancel.store(true, Ordering::Release);
+    let _ = task.runtime.cancel_history(&task.request_id);
     let join = task.join.lock().ok().and_then(|mut guard| guard.take());
     if let Some(join) = join {
         let _ = join.join();
@@ -457,6 +502,107 @@ mod tests {
             .to_owned();
         unsafe { firesky_ffi_string_free(pointer) };
         serde_json::from_str(&value).unwrap()
+    }
+
+    #[test]
+    fn busy_and_cancelled_messages_map_to_dedicated_codes() {
+        // Design 7.1: a yielding sync round reports "active" so the FFI maps
+        // it to FIRESKY_FFI_BUSY instead of a generic runtime error.
+        assert_eq!(
+            FfiError::runtime("data sync skipped because another prepare/forecast is active").code,
+            FIRESKY_FFI_BUSY
+        );
+        assert_eq!(
+            FfiError::runtime("another data sync is active").code,
+            FIRESKY_FFI_BUSY
+        );
+        assert_eq!(
+            FfiError::runtime("desktop operation cancelled").code,
+            FIRESKY_FFI_CANCELLED
+        );
+    }
+
+    #[test]
+    fn started_data_sync_rounds_get_a_durable_history_receipt() {
+        let workspace = tempfile::tempdir().unwrap();
+        let workspace = CString::new(workspace.path().to_str().unwrap()).unwrap();
+        let mut handle = ptr::null_mut();
+        let mut open_error = ptr::null_mut();
+        assert_eq!(
+            unsafe { firesky_engine_open(workspace.as_ptr(), &mut handle, &mut open_error) },
+            FIRESKY_FFI_OK,
+            "{:?}",
+            parse_owned(open_error)
+        );
+        let method = CString::new("data_sync_run").unwrap();
+        let params = CString::new(r#"{"sources":["cams"]}"#).unwrap();
+        let mut task = ptr::null_mut();
+        let mut error = ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                firesky_engine_start(
+                    handle,
+                    method.as_ptr(),
+                    params.as_ptr(),
+                    None,
+                    ptr::null_mut(),
+                    &mut task,
+                    &mut error,
+                )
+            },
+            FIRESKY_FFI_OK,
+            "{:?}",
+            parse_owned(error)
+        );
+        // The round is refused without any network access (sync disabled) and
+        // the failure lands in the shared task history under the design's
+        // `data_sync` method label.
+        let mut response = ptr::null_mut();
+        let mut join_error = ptr::null_mut();
+        assert_eq!(
+            unsafe { firesky_task_join(task, &mut response, &mut join_error) },
+            FIRESKY_FFI_RUNTIME_ERROR
+        );
+        let envelope = parse_owned(join_error);
+        assert!(envelope["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("not enabled"));
+        unsafe { firesky_ffi_string_free(response) };
+        unsafe { firesky_task_free(task) };
+        let history_method = CString::new("task_history").unwrap();
+        let history_params = CString::new(r#"{"limit":10}"#).unwrap();
+        let mut history_response = ptr::null_mut();
+        let mut history_error = ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                firesky_engine_call(
+                    handle,
+                    history_method.as_ptr(),
+                    history_params.as_ptr(),
+                    &mut history_response,
+                    &mut history_error,
+                )
+            },
+            FIRESKY_FFI_OK,
+            "{:?}",
+            parse_owned(history_error)
+        );
+        let result = parse_owned(history_response);
+        let rows = result["result"]["tasks"].as_array().unwrap();
+        let row = rows
+            .iter()
+            .find(|task| task["method"] == "data_sync")
+            .unwrap_or_else(|| panic!("data_sync task missing from history: {result}"));
+        assert_eq!(row["status"], "failed");
+        assert!(row["request_id"]
+            .as_str()
+            .unwrap_or_default()
+            .starts_with("ffi-"));
+        // `response` stays null on the join error path and `history_response`
+        // was already released by `parse_owned`; freeing them again would be a
+        // double free.
+        unsafe { firesky_engine_free(handle) };
     }
 
     #[test]

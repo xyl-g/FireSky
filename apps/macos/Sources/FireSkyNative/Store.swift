@@ -68,6 +68,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             regionalProfileCoordinate = nil
             regionalProfileState = "idle"
             regionalProfileError = ""
+            showRegionalProfileFigure = false
             frozenProfileTask?.cancel()
             frozenProfileTask = nil
             frozenProfile = nil
@@ -97,6 +98,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var showRegionBounds = false
     @Published var showRegionalInspector = true
     @Published var showRegionalGrid = false
+    /// 采样格点叠加层开关（regional-6）：复用 points[]，上限截断，与网格线开关并存。
+    @Published var showRegionalSamples = false
     @Published var regionalDisplay = "gfs" {
         didSet { if regionalDisplay != "compare" { selectedModel = regionalDisplay } }
     }
@@ -109,6 +112,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var regionalProfileCoordinate: GridCoordinate?
     @Published var regionalProfileState = "idle"
     @Published var regionalProfileError = ""
+    /// 区域网格剖面图层弹窗开关（regional-7）。
+    @Published var showRegionalProfileFigure = false
     @Published var frozenProfile: JSONObject?
     @Published var frozenProfileModel = ""
     @Published var frozenProfileTime = ""
@@ -164,6 +169,24 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var savingRetention = false
     @Published var retentionMessage = ""
     @Published var retentionSaveFailed = false
+    /// 后台数据同步（设计 11 节）：UI 只镜像引擎设置文件（事实来源在引擎），
+    /// 不经 UserDefaults 持久化；默认全关。
+    @Published var dataSyncEnabled = false
+    @Published var dataSyncCAMS = false
+    @Published var dataSyncGFS = false
+    @Published var dataSyncEC = false
+    @Published var dataSyncInterval = ""
+    @Published var dataSyncAnchor = ""
+    @Published var dataSyncLeadHorizon = ""
+    @Published var dataSyncConfigured = false
+    @Published var dataSyncRetentionConfigured = false
+    @Published var dataSyncLoaded = false
+    @Published var savingDataSync = false
+    @Published var dataSyncMessage = ""
+    @Published var dataSyncSaveFailed = false
+    @Published var dataSyncRunning = false
+    /// 每源 last_cycle/last_result/熔断状态（`rust-data-sync-state-v1` 镜像）。
+    @Published var dataSyncState: JSONObject = [:]
     @Published var taskHistory: [NativeTaskHistoryItem] = []
     @Published var taskHistoryTotal = 0
     @Published var taskHistoryIssues = 0
@@ -187,6 +210,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     private var downloadProbeTask: Task<Void, Never>?
     private var taskHistoryTask: Task<Void, Never>?
     private var taskHistoryEventsTask: Task<Void, Never>?
+    /// 60 秒心跳（设计 5.1/11.3）：唯一节拍源，调度决策全部在引擎。
+    private var syncTickTask: Task<Void, Never>?
     private var locationTimeout: Task<Void, Never>?
     private var generation = UUID()
     private var metadataGeneration = UUID()
@@ -277,6 +302,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 showCAMSReminder = camsConfiguration["configured"] as? Bool != true
             }
             await loadRetentionSettings()
+            await loadDataSyncSettings()
+            startSyncTick()
             status = "引擎已连接"
             UserDefaults.standard.set(workspace, forKey: "workspace")
             UserDefaults.standard.set(engineBinary, forKey: "engineBinary")
@@ -851,6 +878,17 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         regionalFocusVersion += 1
     }
 
+    /// 区域→单点点诊断入口（regional-5，方案 :32-33 保留的用户发起模式切换，
+    /// 非图-表联动）。沿用 selectPoint 的坐标预填语义：坐标变化会按既有规则
+    /// 作废当前结果，单点页显示「等待预测」，不会拿区域数据拼接填充。
+    func openRegionalCellInPointForecast(_ cell: RegionalCell, model: String) {
+        guard !busy else { return }
+        selectPoint(lat: cell.coordinate.lat, lon: cell.coordinate.lon)
+        name = cell.label
+        selectedModel = model
+        page = .point
+    }
+
     func queryRegionalProfile(model: String, coordinate: GridCoordinate) {
         guard resultKind == .regional,
               let reports = result?["model_results"] as? JSONObject,
@@ -873,6 +911,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         regionalProfileCoordinate = coordinate
         regionalProfileState = "loading"
         regionalProfileError = ""
+        showRegionalProfileFigure = false
         regionalProfileTask = Task { [weak self] in
             guard let self else { return }
             do {
@@ -1084,6 +1123,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 retentionConfigured = response["configured"] as? Bool ?? false
                 retentionMessage = retentionConfigured ? "保留设置已保存；下一次成功准备后执行清理。" : "已清空保留设置。"
                 retentionSaveFailed = false
+                // 同步页的「未配置保留」软警告依赖 retention_configured，一并刷新。
+                await refreshDataSyncState()
             } catch {
                 retentionMessage = error.localizedDescription
                 retentionSaveFailed = true
@@ -1107,6 +1148,188 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     private func retentionNumber(_ value: String) -> Any {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? NSNull() : (Double(trimmed) ?? -1)
+    }
+
+    // MARK: 后台数据同步（设计 11 节）
+
+    /// 连接时加载合并状态（设置 + 每源状态 + 保留配置提示），与
+    /// loadRetentionSettings 同管道；非法值不在 UI 拦截，由引擎保存时报错回显。
+    func loadDataSyncSettings() async {
+        guard online else { return }
+        do {
+            let response = try await engine.call("data_sync_settings")
+            applyDataSyncStatus(response)
+        } catch {
+            dataSyncMessage = error.localizedDescription
+            dataSyncSaveFailed = true
+        }
+    }
+
+    private func applyDataSyncStatus(_ response: JSONObject) {
+        let settings = response["settings"] as? JSONObject ?? [:]
+        let sources = settings["sources"] as? JSONObject ?? [:]
+        dataSyncEnabled = settings["enabled"] as? Bool ?? false
+        dataSyncCAMS = sources["cams"] as? Bool ?? false
+        dataSyncGFS = sources["gfs"] as? Bool ?? false
+        dataSyncEC = sources["ec"] as? Bool ?? false
+        dataSyncInterval = dataSyncNumberText(settings["interval_minutes"])
+        dataSyncLeadHorizon = dataSyncNumberText(settings["lead_horizon_hours"])
+        dataSyncAnchor = settings["anchor_region"] as? String ?? ""
+        dataSyncConfigured = response["configured"] as? Bool ?? false
+        dataSyncRetentionConfigured = response["retention_configured"] as? Bool ?? false
+        dataSyncState = (response["state"] as? JSONObject)?["sources"] as? JSONObject ?? [:]
+        dataSyncLoaded = true
+    }
+
+    private func dataSyncNumberText(_ value: Any?) -> String {
+        guard let number = value as? NSNumber else { return "" }
+        return String(number.intValue)
+    }
+
+    private func dataSyncInteger(_ value: String) -> Any {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? NSNull() : (Int(trimmed) ?? -1)
+    }
+
+    func saveDataSyncSettings() {
+        guard online, !busy, !savingDataSync else { return }
+        savingDataSync = true
+        dataSyncMessage = ""
+        let payload: JSONObject = [
+            "settings": [
+                "enabled": dataSyncEnabled,
+                "sources": ["cams": dataSyncCAMS, "gfs": dataSyncGFS, "ec": dataSyncEC],
+                "interval_minutes": dataSyncInteger(dataSyncInterval),
+                "anchor_region": (dataSyncAnchor.isEmpty ? NSNull() : dataSyncAnchor) as Any,
+                "lead_horizon_hours": dataSyncInteger(dataSyncLeadHorizon),
+                // EC 下载源复用现有 ecmwfSource（设计 11.1）。
+                "ecmwf_source": ecmwfSource,
+            ],
+        ]
+        Task {
+            defer { savingDataSync = false }
+            do {
+                // 重存设置即解锁通道：引擎在保存时清零熔断计数与挂起标记。
+                let response = try await engine.call("save_data_sync_settings", payload)
+                applyDataSyncStatus(response)
+                dataSyncMessage = dataSyncEnabled
+                    ? "后台同步已保存；引擎按新设置在心跳周期内执行。"
+                    : "后台同步已关闭。"
+                dataSyncSaveFailed = false
+            } catch {
+                dataSyncMessage = error.localizedDescription
+                dataSyncSaveFailed = true
+            }
+        }
+    }
+
+    /// 当前镜像中启用的数据源；引擎仍是权威校验方（未启用的源会被拒绝）。
+    private var dataSyncEnabledSources: [String] {
+        [("cams", dataSyncCAMS), ("gfs", dataSyncGFS), ("ec", dataSyncEC)]
+            .filter { $0.1 }.map { $0.0 }
+    }
+
+    /// 60 秒心跳（设计 5.1/11.3）：启动即先 tick 一次，之后每 60 秒一次；
+    /// 引擎未连接、手动会话进行中或同步未启用时静默跳过。
+    private func startSyncTick() {
+        syncTickTask?.cancel()
+        syncTickTask = Task { [weak self] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.syncTick()
+                try? await Task.sleep(for: .seconds(60))
+            }
+        }
+    }
+
+    private func syncTick() async {
+        guard online, !busy, !probingDownloads, !dataSyncRunning,
+              dataSyncLoaded, dataSyncEnabled else { return }
+        do {
+            let due = try await engine.call("data_sync_due")
+            guard !Task.isCancelled, due["due_for_any"] as? Bool == true,
+                  let sources = due["due_sources"] as? [String], !sources.isEmpty else { return }
+            // tick 静默（设计 11.3）：轮级错误不写界面文案，逐源结果留在
+            // 状态文件与任务历史，下个心跳重新判定。
+            _ = await runDataSyncRound(sources: sources)
+        } catch {
+            // tick 保持静默：失败留在每源状态与任务历史里，下个心跳重新判定。
+        }
+    }
+
+    /// 仅刷新每源状态与保留配置提示；不回填设置字段，避免覆盖正在编辑的内容。
+    private func refreshDataSyncState() async {
+        guard online, let response = try? await engine.call("data_sync_settings") else { return }
+        dataSyncRetentionConfigured = response["retention_configured"] as? Bool ?? dataSyncRetentionConfigured
+        dataSyncState = (response["state"] as? JSONObject)?["sources"] as? JSONObject ?? dataSyncState
+    }
+
+    /// 一轮同步（tick 触发或手动）。引擎侧自带锁矩阵与熔断状态提交；
+    /// busy 由 store.busy 表达手动会话，同步不占用它。返回轮次结果与轮级
+    /// 错误：每源成败写在状态文件与任务历史里，但轮级拒绝（busy 让路、
+    /// 源未启用、状态写盘失败）不会进入任何持久记录，手动路径必须展示。
+    private func runDataSyncRound(sources: [String]) async -> (response: JSONObject?, error: Error?) {
+        dataSyncRunning = true
+        defer { dataSyncRunning = false }
+        var response: JSONObject?
+        var roundError: Error?
+        do {
+            response = try await engine.call("data_sync_run", ["sources": sources],
+                                             progress: { [weak self] event in
+                // 不覆盖进行中的手动操作文案（设计 11.3）。
+                guard let self, !self.busy else { return }
+                self.updateProgress(event)
+            })
+        } catch {
+            roundError = error
+        }
+        await refreshDataSyncState()
+        return (response, roundError)
+    }
+
+    /// 数据页「立即同步」（设计 5.1 第 4 条/11.2）：绕过 due 判定直接执行一轮，
+    /// 显式传当前启用的源；引擎在源真正开始执行时清零其熔断状态（人工解锁）。
+    func runDataSyncNow() {
+        guard online, !busy, !probingDownloads, !dataSyncRunning, !savingDataSync else { return }
+        let sources = dataSyncEnabledSources
+        guard dataSyncEnabled, !sources.isEmpty else {
+            dataSyncMessage = "请先在设置中启用后台数据同步并至少选择一个数据源。"
+            dataSyncSaveFailed = true
+            return
+        }
+        status = "正在立即同步后台数据"
+        Task {
+            let round = await runDataSyncRound(sources: sources)
+            guard !busy else { return }
+            if let error = round.error {
+                // 轮级拒绝不进状态文件也不进任务历史，直接展示具体原因。
+                dataSyncMessage = error.localizedDescription
+                dataSyncSaveFailed = true
+                status = "立即同步未完成"
+            } else {
+                status = round.response.map(dataSyncRoundSummary) ?? "立即同步未完成，详见任务历史。"
+            }
+        }
+    }
+
+    private func dataSyncRoundSummary(_ response: JSONObject) -> String {
+        let labels = ["cams": "CAMS", "gfs": "GFS", "ec": "EC"]
+        let names = ["cams", "gfs", "ec"]
+        let parts = names.compactMap { name -> String? in
+            guard let source = response["sources"] as? JSONObject, let row = source[name] as? JSONObject
+            else { return nil }
+            let status = row["status"] as? String ?? ""
+            let text: String
+            switch status {
+            case "synced": text = "已同步"
+            case "current": text = "已是最新"
+            case "failed": text = "失败"
+            case "cancelled": text = "已取消"
+            default: text = status.isEmpty ? "无结果" : status
+            }
+            return "\(labels[name] ?? name) \(text)"
+        }
+        return parts.isEmpty ? "立即同步结束，没有可同步的数据源。" : "立即同步结束：" + parts.joined(separator: "、")
     }
 
     func saveCAMSKey() {
@@ -1214,6 +1437,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         frozenProfileTask?.cancel()
         taskHistoryTask?.cancel()
         taskHistoryEventsTask?.cancel()
+        syncTickTask?.cancel()
         engine.stop()
     }
 }

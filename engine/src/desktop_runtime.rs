@@ -39,6 +39,7 @@ pub struct Runtime {
     history: Arc<crate::task_history::TaskHistory>,
     operation: Mutex<()>,
     network_probe: Mutex<()>,
+    sync: Mutex<()>,
 }
 
 fn decode<T: DeserializeOwned>(value: Value) -> Result<T, String> {
@@ -136,6 +137,7 @@ impl Runtime {
             ),
             operation: Mutex::new(()),
             network_probe: Mutex::new(()),
+            sync: Mutex::new(()),
         })
     }
 
@@ -393,6 +395,7 @@ impl Runtime {
             params,
             Arc::new(AtomicBool::new(false)),
             &|_| Ok(()),
+            None,
         )
     }
 
@@ -402,9 +405,18 @@ impl Runtime {
         method: &str,
         params: &Value,
     ) -> Result<Option<crate::task_history::Task>, String> {
+        // The wire method is `data_sync_run`; history records it under the
+        // design's `data_sync` label so users can tell background sync rounds
+        // apart from manual prepare/forecast tasks (design 3.2/7.2).
+        let label = if method == "data_sync_run" {
+            "data_sync"
+        } else {
+            method
+        };
         if !matches!(
             method,
             "check" | "prepare" | "forecast" | "publications" | "network_probe"
+                | "data_sync" | "data_sync_run"
         ) {
             return Ok(None);
         }
@@ -423,7 +435,7 @@ impl Runtime {
         } else {
             Value::Null
         };
-        self.history.begin(request_id, method, retry).map(Some)
+        self.history.begin(request_id, label, retry).map(Some)
     }
 
     pub(crate) fn cancel_history(&self, request_id: &str) -> Result<(), String> {
@@ -452,6 +464,7 @@ impl Runtime {
         params: Value,
         cancel: Arc<AtomicBool>,
         progress: &(dyn Fn(Value) -> Result<(), String> + Sync),
+        task_id: Option<&str>,
     ) -> Result<Value, String> {
         check(&cancel)?;
         if !params.is_object() {
@@ -462,7 +475,7 @@ impl Runtime {
                 "protocol":1,"engine":"firesky-rust","workspace":self.workspace,
                 "source_id":env!("FIRESKY_ENGINE_SOURCE_ID"),
                 "runtime_python_used":false,"production_desktop_complete":false,
-                "capabilities":["point","regional","nowcast","inventory","search","metadata","network_probe","cancel","profile_query","task_history","task_events","result_restore"],
+                "capabilities":["point","regional","nowcast","inventory","search","metadata","network_probe","data_sync","cancel","profile_query","task_history","task_events","result_restore"],
                 "profile_capabilities":{
                     "dynamic_model_cross_section":true,"regional_result_points":true,
                     "satellite_step_solar_path":true,"dynamic_satellite_vertical":false,
@@ -509,6 +522,45 @@ impl Runtime {
                 .history
                 .forget(params["task_id"].as_str().ok_or("task_id is required")?),
             "save_cams_key" => desktop_credentials::save(params),
+            "data_sync_settings" => crate::desktop_sync::status(&self.workspace),
+            "save_data_sync_settings" => crate::desktop_sync::save(&self.workspace, params),
+            "data_sync_due" => {
+                // A busy engine (manual prepare/forecast or a running round)
+                // skips the publication probe entirely.
+                let operation_busy = self.operation.try_lock().is_err();
+                let sync_busy = self.sync.try_lock().is_err();
+                crate::desktop_sync::due(
+                    &self.workspace,
+                    operation_busy || sync_busy,
+                    params["now_utc"].as_str(),
+                )
+            }
+            "data_sync_run" => {
+                // Lock matrix (design 7.1): the compute lock is only probed —
+                // an in-flight manual prepare/forecast makes the round yield
+                // (the "active" keyword maps to the FFI busy code) — and the
+                // dedicated sync mutex keeps at most one round at a time.
+                let operation_free = self.operation.try_lock().is_ok();
+                if !operation_free {
+                    return Err("data sync skipped because another prepare/forecast is active".into());
+                }
+                let _sync_guard = self
+                    .sync
+                    .try_lock()
+                    .map_err(|_| "another data sync is active")?;
+                crate::desktop_sync::run(
+                    &crate::desktop_sync::RunContext {
+                        workspace: &self.workspace,
+                        cams_cache_dir: self.inventory.cams_cache_dir.clone(),
+                        gfs_cache_dir: self.inventory.gfs_cache_dir.clone(),
+                        ecmwf_cache_dir: self.inventory.ecmwf_cache_dir.clone(),
+                    },
+                    params,
+                    task_id,
+                    &cancel,
+                    progress,
+                )
+            }
             "network_probe" => {
                 let _guard = self
                     .network_probe
@@ -1731,6 +1783,7 @@ fn serve_runtime(
                             request.params,
                             cancel.clone(),
                             &progress,
+                            task.as_ref().map(|task| task.id()),
                         )
                     }))
                     .unwrap_or_else(|_| Err("native desktop worker panicked".into()));
@@ -1909,6 +1962,10 @@ mod tests {
             .as_array()
             .unwrap()
             .contains(&json!("result_restore")));
+        assert!(value["capabilities"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("data_sync")));
         assert!(runtime
             .dispatch("check", json!({"kind":"nowcast","payload":{}}))
             .is_err());
@@ -2169,5 +2226,161 @@ mod tests {
             )
             .unwrap_err()
             .contains("cancelled"));
+    }
+
+    fn save_cams_only_sync_settings(workspace: &Path) {
+        crate::desktop_sync::save(
+            workspace,
+            json!({"settings":{"enabled":true,"sources":{"cams":true},
+                "interval_minutes":60,"anchor_region":"china"}}),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn data_sync_yields_to_manual_work_and_serializes_rounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::new(dir.path()).unwrap();
+        save_cams_only_sync_settings(dir.path());
+        // Manual prepare/forecast holds the compute lock; the round yields
+        // with the "active" keyword that maps to the FFI busy code.
+        let operation = runtime.operation.try_lock().unwrap();
+        let error = runtime
+            .dispatch("data_sync_run", json!({"sources":["cams"]}))
+            .unwrap_err();
+        assert!(error.contains("another prepare/forecast is active"));
+        assert!(error.contains("active"));
+        drop(operation);
+        // A second concurrent round is rejected by the dedicated sync mutex.
+        let sync = runtime.sync.try_lock().unwrap();
+        let error = runtime
+            .dispatch("data_sync_run", json!({"sources":["cams"]}))
+            .unwrap_err();
+        assert!(error.contains("another data sync is active"));
+        // due() reports busy (and skips the probe) while a round is running;
+        // sources that are not enabled in settings stay "disabled".
+        let value = runtime.dispatch("data_sync_due", json!({})).unwrap();
+        assert_eq!(value["sources"]["cams"]["reason"], "busy");
+        assert_eq!(value["sources"]["gfs"]["reason"], "disabled");
+        assert_eq!(value["due_for_any"], false);
+        drop(sync);
+    }
+
+    #[test]
+    fn data_sync_settings_persist_and_report_merged_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::new(dir.path()).unwrap();
+        let saved = runtime
+            .dispatch(
+                "save_data_sync_settings",
+                json!({"settings":{"enabled":true,"sources":{"cams":true,"gfs":true},
+                    "interval_minutes":90,"anchor_region":"china","lead_horizon_hours":120,
+                    "ecmwf_source":"aws"}}),
+            )
+            .unwrap();
+        assert_eq!(saved["settings"]["enabled"], true);
+        assert_eq!(saved["retention_configured"], false);
+        let status = runtime.dispatch("data_sync_settings", json!({})).unwrap();
+        assert_eq!(status["configured"], true);
+        assert_eq!(status["settings"]["interval_minutes"], 90);
+        assert_eq!(status["state"]["contract"], "rust-data-sync-state-v1");
+        // Invalid payloads are rejected and leave the saved settings intact.
+        assert!(runtime
+            .dispatch("save_data_sync_settings", json!({"settings":{"enabled":true}}))
+            .is_err());
+        assert!(runtime
+            .dispatch(
+                "save_data_sync_settings",
+                json!({"settings":{"enabled":true,"sources":{"cams":true,"gfs":true},
+                    "interval_minutes":90,"anchor_region":"china"}})
+            )
+            .is_err());
+        let status = runtime.dispatch("data_sync_settings", json!({})).unwrap();
+        assert_eq!(status["settings"]["interval_minutes"], 90);
+        assert_eq!(status["settings"]["lead_horizon_hours"], 120);
+    }
+
+    #[test]
+    fn data_sync_run_rejects_disabled_state_and_unlisted_sources_without_probing() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::new(dir.path()).unwrap();
+        assert!(runtime
+            .dispatch("data_sync_run", json!({"sources":["cams"]}))
+            .unwrap_err()
+            .contains("not enabled"));
+        // Empty and unknown source lists are rejected before any state write.
+        assert!(runtime.dispatch("data_sync_run", json!({})).is_err());
+        assert!(runtime
+            .dispatch("data_sync_run", json!({"sources":[]}))
+            .is_err());
+        assert!(runtime
+            .dispatch("data_sync_run", json!({"sources":["satellite"]}))
+            .is_err());
+        save_cams_only_sync_settings(dir.path());
+        let error = runtime
+            .dispatch("data_sync_run", json!({"sources":["gfs"]}))
+            .unwrap_err();
+        assert!(error.contains("gfs is not enabled in settings"));
+    }
+
+    #[test]
+    fn data_sync_rounds_are_tracked_as_cancellable_history_tasks() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::new(dir.path()).unwrap();
+        let task = runtime
+            .begin_task("sync-req-1", "data_sync", &json!({"sources":["cams"]}))
+            .unwrap()
+            .unwrap();
+        let id = task.id().to_owned();
+        task.finish(&Ok(json!({"sources":{}})), false).unwrap();
+        let list = runtime.dispatch("task_history", json!({"limit":10})).unwrap();
+        assert_eq!(list["tasks"][0]["method"], "data_sync");
+        assert_eq!(list["tasks"][0]["status"], "done");
+        assert_eq!(list["tasks"][0]["task_id"], id);
+        // A cancelled round is a terminal cancelled state with no published result.
+        let task = runtime
+            .begin_task("sync-req-2", "data_sync", &json!({"sources":[]}))
+            .unwrap()
+            .unwrap();
+        task.finish(&Ok(json!({"sources":{}})), true).unwrap();
+        let list = runtime.dispatch("task_history", json!({"limit":10})).unwrap();
+        let cancelled = list["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["method"] == "data_sync" && task["status"] == "cancelled")
+            .cloned()
+            .unwrap();
+        let detail = runtime
+            .task_history_detail(cancelled["task_id"].as_str().unwrap())
+            .unwrap();
+        assert_eq!(detail["result_ref"], Value::Null);
+    }
+
+    #[test]
+    fn data_sync_wire_method_records_history_under_design_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::new(dir.path()).unwrap();
+        // The wire method is `data_sync_run`; the history label stays `data_sync`
+        // (design 7.2), so a round that fails contract validation is still a
+        // queryable failed task instead of vanishing from the workflow record.
+        let task = runtime
+            .begin_task("sync-wire-1", "data_sync_run", &json!({"sources":[]}))
+            .unwrap()
+            .unwrap();
+        task.finish(&Err("data sync requires an explicit nonempty sources array".into()), false)
+            .unwrap();
+        let list = runtime.dispatch("task_history", json!({"limit":10})).unwrap();
+        assert_eq!(list["tasks"][0]["method"], "data_sync");
+        assert_eq!(list["tasks"][0]["status"], "failed");
+        // Read-only setup methods never create workflow history.
+        assert!(runtime
+            .begin_task("sync-wire-2", "data_sync_due", &json!({}))
+            .unwrap()
+            .is_none());
+        assert!(runtime
+            .begin_task("sync-wire-3", "save_data_sync_settings", &json!({}))
+            .unwrap()
+            .is_none());
     }
 }

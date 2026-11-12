@@ -346,11 +346,12 @@ async fn start(
         "request_id":request_id,"instance_id":app.desktop_jobs.instance_id,"status":"running",
         "task_id":task_id,
     });
+    let job_task_id = task_id.clone();
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         run_tracked_job(&app.desktop_jobs, &request_id, task, |progress| {
             app.runtime
-                .dispatch_cancellable(&request.method, request.params, cancel, progress)
+                .dispatch_cancellable(&request.method, request.params, cancel, progress, job_task_id.as_deref())
         });
     });
     Ok((StatusCode::ACCEPTED, Json(response)))
