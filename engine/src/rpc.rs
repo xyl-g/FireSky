@@ -114,6 +114,8 @@ fn full_model_levels() -> Vec<i32> {
 #[serde(deny_unknown_fields)]
 struct CamsFileParams {
     path: String,
+    #[serde(default)]
+    paths: Vec<String>,
     output_dir: String,
 }
 
@@ -204,11 +206,17 @@ fn grid_payload(grid: &GfsGrid) -> Value {
     json!({"latitudes": grid.latitudes, "longitudes": grid.longitudes, "fields": fields})
 }
 
-fn dispatch(method: &str, params: Value) -> Result<Value, String> {
+pub fn dispatch(method: &str, params: Value) -> Result<Value, String> {
     match method {
+        "decode_raw_hsd_to_files" => {
+            crate::hsd_raw::execute(serde_json::from_value(params).map_err(|e| e.to_string())?)
+        }
+        "warm_hsd_cache" => crate::hsd_provider::execute(params),
+        "assess_radar_images" => crate::radar::metrics_request(params),
         "hello" => Ok(json!({
             "protocol": 1,
             "engine": "firesky-rust",
+            "source_id": env!("FIRESKY_ENGINE_SOURCE_ID"),
             "migration_stage": "desktop-data-preflight",
             "native_abi": firesky_native::NATIVE_ABI_VERSION,
             "astronomy": {"contract": "rust-astronomy-v1", "timezone_database": chrono_tz::IANA_TZDB_VERSION},
@@ -224,7 +232,7 @@ fn dispatch(method: &str, params: Value) -> Result<Value, String> {
                 "diagnose_profile_columns", "diagnose_stored_profiles_to_files", "build_stored_frames_to_files",
                 "assemble_observer_frames", "quantize_frame_fields",
                 "validate_point_core", "materialize_point_core", "forecast_stored_point_to_files",
-                "gfs_data", "plan_gfs_inputs", "forecast_cached_gfs_point_to_files", "cams_data", "ecmwf_data",
+                "gfs_data", "plan_gfs_inputs", "forecast_cached_gfs_point_to_files", "cams_data", "calculate_earth_engine_aod", "ecmwf_data",
                 "materialize_ecmwf_point", "plan_ecmwf_inputs", "forecast_cached_ecmwf_point_to_files",
                 "build_stored_cross_section", "render_html_report", "forecast_ecmwf_service_to_files",
                 "read_ecmwf_service_cross_section", "forecast_ecmwf_service_cached",
@@ -239,7 +247,8 @@ fn dispatch(method: &str, params: Value) -> Result<Value, String> {
                 "desktop_nowcast_prepare",
                 "desktop_nowcast_hsd_cache",
                 "desktop_nowcast_hsd_export", "desktop_nowcast_hsd_motion",
-                "desktop_nowcast_hsd_advection", "desktop_nowcast_hsd_retrieval"],
+                "desktop_nowcast_hsd_advection", "desktop_nowcast_hsd_retrieval",
+                "decode_raw_hsd_to_files", "warm_hsd_cache", "assess_radar_images"],
         })),
         "desktop_context" => crate::desktop_context::execute(
             serde_json::from_value(params).map_err(|e| e.to_string())?,
@@ -340,6 +349,9 @@ fn dispatch(method: &str, params: Value) -> Result<Value, String> {
         }
         "cams_data" => {
             crate::cams_data::execute(serde_json::from_value(params).map_err(|e| e.to_string())?)
+        }
+        "calculate_earth_engine_aod" => {
+            crate::earth_engine_aod::execute(serde_json::from_value(params).map_err(|e| e.to_string())?)
         }
         "ecmwf_data" => {
             crate::ecmwf_data::execute(serde_json::from_value(params).map_err(|e| e.to_string())?)
@@ -706,10 +718,45 @@ fn dispatch(method: &str, params: Value) -> Result<Value, String> {
         "decode_cams_to_files" => {
             let params: CamsFileParams =
                 serde_json::from_value(params).map_err(|e| e.to_string())?;
+            if params.paths.len() > 1 {
+                return Err("CAMS decode supports at most two rectangle paths".into());
+            }
             let path = Path::new(&params.path);
             let source = source_identity(path)?;
-            let optics = cams::decode(&EcCodes::load()?, path)?;
-            let writer = optics.write(Path::new(&params.output_dir), source)?;
+            let mut paths = vec![path.to_owned()];
+            for extra in &params.paths {
+                let extra = Path::new(extra).to_owned();
+                if !paths.contains(&extra) {
+                    paths.push(extra);
+                }
+            }
+            let mut identities = vec![source.clone()];
+            identities.extend(
+                paths
+                    .iter()
+                    .skip(1)
+                    .map(|path| source_identity(path))
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+            let codes = EcCodes::load()?;
+            let optics = if paths.len() == 1 {
+                cams::decode(&codes, path)?
+            } else {
+                cams::decode_many(&codes, &paths)?
+            };
+            for (path, identity) in paths.iter().zip(&identities) {
+                if source_identity(path)? != *identity {
+                    return Err("CAMS source changed while decoding".into());
+                }
+            }
+            let mut writer = optics.write(Path::new(&params.output_dir), source)?;
+            if paths.len() > 1 {
+                writer.metadata_mut()["sources"] = json!(paths
+                    .iter()
+                    .zip(&identities)
+                    .map(|(path, identity)| json!({"path":path,"identity":identity}))
+                    .collect::<Vec<_>>());
+            }
             Ok(json!({"manifest_path": writer.commit(path)?}))
         }
         "map_cams_to_files" => {
@@ -927,6 +974,7 @@ mod tests {
                 "plan_gfs_inputs",
                 "forecast_cached_gfs_point_to_files",
                 "cams_data",
+                "calculate_earth_engine_aod",
                 "ecmwf_data",
                 "materialize_ecmwf_point",
                 "plan_ecmwf_inputs",
@@ -957,7 +1005,10 @@ mod tests {
                 "desktop_nowcast_hsd_export",
                 "desktop_nowcast_hsd_motion",
                 "desktop_nowcast_hsd_advection",
-                "desktop_nowcast_hsd_retrieval"
+                "desktop_nowcast_hsd_retrieval",
+                "decode_raw_hsd_to_files",
+                "warm_hsd_cache",
+                "assess_radar_images"
             ])
         );
         let result = response(br#"{"id":"f","method":"forecast"}"#);
