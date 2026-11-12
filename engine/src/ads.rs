@@ -164,9 +164,10 @@ impl Ads {
         let (url, key) = credentials(&config)?;
         let mut headers = HeaderMap::new();
         headers.insert("PRIVATE-TOKEN", key);
+        // Honor the ambient proxy environment (HTTP(S)_PROXY/ALL_PROXY/NO_PROXY)
+        // like the GFS/EC clients; ADS often needs the user's proxy for reachability.
         let make = || {
             Client::builder()
-                .no_proxy()
                 .referer(false)
                 .retry(reqwest::retry::never())
                 .user_agent("firesky-rust/0.1")
