@@ -443,6 +443,10 @@ def serve(input_stream=None, output_stream=None, service=None):
                             if s in message), source.upper())
             safe_event = {"percent": event.get("percent", 0),
                           "stage": event.get("stage", ""), "source": dataset}
+            if isinstance(event.get("message"), str):
+                safe_event["message"] = event["message"][:1024]
+            if isinstance(event.get("cache_hit"), bool):
+                safe_event["cache_hit"] = event["cache_hit"]
             if request["method"] == "network_probe" and isinstance(event.get("probe"), dict):
                 safe_event["probe"] = {
                     key: event["probe"][key] for key in

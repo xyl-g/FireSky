@@ -1412,7 +1412,8 @@ def run_forecast_payload(
                     cached, point_grid_resolution
                 )
                 if progress_callback is not None:
-                    progress_callback({"stage": "cache", "percent": 99, "message": "命中单点预测持久缓存"})
+                    progress_callback({"stage": "cache", "percent": 99, "message": "命中单点预测持久缓存",
+                                       "cache_hit": True})
                 return cached
         request = forecast_request_from_payload(normalized_payload)
         if request.forecast_mode == "model" and request.model_source == "gfs":
@@ -4508,6 +4509,7 @@ def run_and_cache_national_forecast_payload(
                         "stage": "cache",
                         "percent": 99,
                         "message": "命中全国预测持久缓存",
+                        "cache_hit": True,
                     })
                 return cached
     if native_public and str(
@@ -4573,6 +4575,7 @@ def run_and_cache_national_forecast_public_payload(
                     "stage": "cache",
                     "percent": 99,
                     "message": "命中区域摘要缓存",
+                    "cache_hit": True,
                 })
             return summary
     cached = run_and_cache_national_forecast_payload(

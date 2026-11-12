@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, List, Optional, Sequence
 import numpy as np
 
 from firesky.aerosol import AerosolProvider, fetch_particulate_reading
+from firesky.analysis_constants import MAX_ANALYSIS_RADIUS_KM
 from firesky.cycle_availability import query_latest_gfs_cycle
 from firesky.ecmwf import choose_ecmwf_cycle
 from firesky.geometry import solar_event_time_local, solar_snapshot
@@ -1397,6 +1398,10 @@ def nowcast_observation_assessments(
             timezone_name=request.timezone_name,
             aerosol=aerosol,
             observer_elevation_m=request.point.elevation_m,
+            max_distance_km=max(
+                MAX_ANALYSIS_RADIUS_KM,
+                request.radius_km if request.include_map_cells else 0.0,
+            ),
             map_radius_km=request.radius_km,
             include_map_cells=request.include_map_cells,
             # The service path only rebuilds TimeStepAssessment objects, which

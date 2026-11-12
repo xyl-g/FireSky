@@ -1281,6 +1281,7 @@ def forecast_regional(
                             "stage": "cache",
                             "percent": 99,
                             "message": f"{model.upper()} 命中 Rust 区域缓存",
+                            "cache_hit": True,
                         }
                     )
                 return cached

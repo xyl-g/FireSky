@@ -237,6 +237,85 @@ def test_wire_cancel_and_progress_redaction():
     assert "/secret" not in output.getvalue()
 
 
+def test_wire_progress_optional_fields_are_typed_bounded_and_not_inferred():
+    completed = threading.Event()
+
+    class Service:
+        def dispatch(self, method, params, progress):
+            progress({"stage": "cache", "percent": 49, "message": "GFS hit",
+                      "cache_hit": True, "diagnostic": "not public"})
+            progress({"stage": "cache", "percent": 99, "message": "EC hit",
+                      "cache_hit": True})
+            progress({"stage": "cache", "percent": 49})
+            progress({"stage": "cache", "percent": 99, "cache_hit": False})
+            progress({"message": "x" * 2000, "cache_hit": "true"})
+            progress({"message": {"secret": "not status text"}, "cache_hit": 1})
+            return {}
+
+    class Input:
+        sent = False
+
+        def readline(self, _limit):
+            if not self.sent:
+                self.sent = True
+                return '{"id":"progress","method":"work"}\n'
+            assert completed.wait(3)
+            return ""
+
+    class Output(io.StringIO):
+        def write(self, value):
+            result = super().write(value)
+            if '"type": "result"' in value:
+                completed.set()
+            return result
+
+    output = Output()
+    rpc.serve(Input(), output, Service())
+    events = [message["event"] for message in
+              map(json.loads, output.getvalue().splitlines())
+              if message["type"] == "progress"]
+    assert events[:2] == [
+        {"percent": 49, "stage": "cache", "source": "GFS",
+         "message": "GFS hit", "cache_hit": True},
+        {"percent": 99, "stage": "cache", "source": "EC",
+         "message": "EC hit", "cache_hit": True},
+    ]
+    assert "cache_hit" not in events[2]
+    assert events[3]["cache_hit"] is False
+    assert len(events[4]["message"]) == 1024 and "cache_hit" not in events[4]
+    assert "message" not in events[5] and "cache_hit" not in events[5]
+
+
+@pytest.mark.parametrize("kind", ["point", "regional"])
+def test_pair_progress_preserves_explicit_cache_hit_and_message(service, monkeypatch, kind):
+    def run(payload, config, progress_callback):
+        model = payload["model_source"]
+        progress_callback({"stage": "cache", "percent": 99,
+                           "cache_hit": True, "message": f"{model} cached"})
+        return {"quality_index": 1.25}
+
+    method = "run_forecast_payload" if kind == "point" else "run_and_cache_national_forecast_payload"
+    monkeypatch.setattr(engine, method, run)
+    events = []
+    service._forecast(kind, {}, events.append)
+    hits = [event for event in events if event.get("cache_hit") is True]
+    assert [(event["model_source"], event["percent"], event["message"]) for event in hits] == [
+        ("gfs", 49, "gfs cached"), ("ec", 99, "ec cached"),
+    ]
+
+
+def test_regional_cache_producer_marks_explicit_hit(monkeypatch):
+    cached = {"fixture": "cached regional output"}
+    monkeypatch.setattr(engine, "_native_regional_backend_enabled", lambda: False)
+    monkeypatch.setattr(engine, "read_national_forecast_cache", lambda *args: cached)
+    events = []
+    assert engine.run_and_cache_national_forecast_payload(
+        {}, engine.WebServerConfig(), events.append,
+    ) is cached
+    assert events == [{"stage": "cache", "percent": 99,
+                       "message": "命中全国预测持久缓存", "cache_hit": True}]
+
+
 def test_real_child_handshake_is_json_only_and_qt_free():
     root = Path(__file__).resolve().parents[1]
     env = {**os.environ, "PYTHONPATH": str(root / "src")}
