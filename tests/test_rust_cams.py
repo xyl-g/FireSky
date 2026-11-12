@@ -26,7 +26,8 @@ def cams_native():
         unavailable(str(exc))
 
 
-def write_cams(path, *, hour=0, minute=0, mutation=None):
+def write_cams(path, *, hour=0, minute=0, mutation=None,
+               longitudes=(100, 101, 102), source_columns=(0, 1, 2)):
     codes = pytest.importorskip("eccodes")
     records = [("aod550", 0)] + [("aerext532", level) for level in LEVELS]
     if mutation == "missing":
@@ -40,11 +41,11 @@ def write_cams(path, *, hour=0, minute=0, mutation=None):
                 for key, value in {
                     "centre": "ecmf", "shortName": name,
                     "typeOfLevel": "surface" if name == "aod550" else "isobaricInhPa",
-                    "level": level, "Ni": 3, "Nj": 2,
+                    "level": level, "Ni": len(longitudes), "Nj": 2,
                     "latitudeOfFirstGridPointInDegrees": 1,
-                    "longitudeOfFirstGridPointInDegrees": 100,
+                    "longitudeOfFirstGridPointInDegrees": longitudes[0],
                     "latitudeOfLastGridPointInDegrees": 0,
-                    "longitudeOfLastGridPointInDegrees": 102,
+                    "longitudeOfLastGridPointInDegrees": longitudes[-1],
                     "iDirectionIncrementInDegrees": 1, "jDirectionIncrementInDegrees": 1,
                     "dataDate": 20261109, "dataTime": minute, "forecastTime": hour,
                     "packingType": "grid_ieee", "precision": 2,
@@ -69,6 +70,7 @@ def write_cams(path, *, hour=0, minute=0, mutation=None):
                     codes.codes_set(handle, "missingValue", 9999)
                     codes.codes_set(handle, "bitmapPresent", 1)
                     values[0] = 9999
+                values = values.reshape(2, 3)[:, source_columns].ravel()
                 codes.codes_set_values(handle, values)
                 codes.codes_write(handle, output)
             finally:
@@ -130,6 +132,47 @@ def test_bad_compact_inputs_reject_without_fallback(engine_binary, tmp_path, mon
         monkeypatch.setenv("FIRESKY_CAMS_BACKEND", "rust")
         monkeypatch.setenv("FIRESKY_RUST_ENGINE_BIN", str(engine_binary))
         assert not aerosol._cams_optics_file_valid(path)
+
+
+def test_real_dateline_decode_merge_deduplicates_edge_and_preserves_all_levels(engine_binary, tmp_path):
+    full = write_cams(tmp_path / "full.grib", longitudes=(179, 180, 181))
+    west = write_cams(tmp_path / "west.grib", longitudes=(179, 180), source_columns=(0, 1))
+    east = write_cams(tmp_path / "east.grib", longitudes=(-180, -179), source_columns=(1, 2))
+
+    def decode(label, path, paths=()):
+        output = tmp_path / label
+        response = rpc(engine_binary, [dict(
+            id=label, method="decode_cams_to_files",
+            params=dict(path=str(path), paths=[str(p) for p in paths], output_dir=str(output)))],
+            env=dict(os.environ, PATH="", PYTHONPATH="", FIRESKY_PYTHON="/no/python"))[0]
+        return output, response
+
+    full_output, baseline = decode("single", full)
+    split_output, merged = decode("merged", west, (east,))
+    assert baseline["type"] == merged["type"] == "result", (baseline, merged)
+    expected = load_tensor_bundle(full_output / "manifest.json", kind="cams-optics-v1", source_path=full)
+    actual = load_tensor_bundle(split_output / "manifest.json", kind="cams-optics-v1", source_path=west)
+    assert actual.arrays["latitudes"].shape == (6,)
+    assert len(actual.manifest["metadata"]["sources"]) == 2
+
+    def ordered(bundle):
+        lons = (bundle.arrays["longitudes"] + 180) % 360 - 180
+        order = np.lexsort((lons, bundle.arrays["latitudes"]))
+        return order, lons
+
+    expected_order, expected_lons = ordered(expected)
+    actual_order, actual_lons = ordered(actual)
+    np.testing.assert_array_equal(actual_lons[actual_order], expected_lons[expected_order])
+    for name in ("latitudes", "aod550"):
+        np.testing.assert_array_equal(actual.arrays[name][actual_order], expected.arrays[name][expected_order])
+    np.testing.assert_array_equal(actual.arrays["aerext532"][:, actual_order],
+                                  expected.arrays["aerext532"][:, expected_order])
+
+    write_cams(east, hour=3, longitudes=(-180, -179), source_columns=(1, 2))
+    failed_output, failed = decode("wrong-time", west, (east,))
+    assert failed["type"] == "error", failed
+    assert "different valid times" in failed["error"]["message"]
+    assert not failed_output.exists()
 
 
 @pytest.mark.parametrize("layout", ["regular", "holes", "duplicates", "single_axis"])

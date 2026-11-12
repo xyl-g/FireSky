@@ -73,6 +73,11 @@ pub struct Params {
     #[serde(default = "default_exact")]
     pub require_exact_valid_time: bool,
     pub refresh_before_cycle: Option<String>,
+    /// User-directed full-cycle scope: expand every download group to all
+    /// leads ADS reports for the chosen run so later requests resolve from
+    /// cache without re-queueing ADS jobs.
+    #[serde(default)]
+    pub all_leads: bool,
 }
 
 struct Area {
@@ -118,7 +123,8 @@ impl Area {
         if bounds[0] > 90.0
             || bounds[2] < -90.0
             || bounds[0] <= bounds[2]
-            || bounds[1] >= bounds[3]
+            || bounds[1] == bounds[3]
+            || (bounds[1] == 180.0 && bounds[3] == -180.0)
             || bounds[1] < -540.0
             || bounds[3] > 540.0
         {
@@ -140,6 +146,62 @@ impl Area {
 pub(crate) fn area_identity(raw: Value) -> Result<([f64; 4], String, String), String> {
     let area = Area::new(raw)?;
     Ok((area.bounds, area.key, area.tuple))
+}
+
+/// Convert a CAMS area into one or two ordinary rectangles.  CAMS/ADS does
+/// not accept a west/east interval that wraps across the dateline, so a
+/// wrapped request is represented as two bounded requests whose edge cells
+/// can be merged by the assessment reader.
+pub(crate) fn split_areas(area: [f64; 4]) -> Result<Vec<[f64; 4]>, String> {
+    let [north, west, south, east] = area;
+    if [north, west, south, east]
+        .iter()
+        .any(|value| !value.is_finite())
+        || north <= south
+        || north > 90.0
+        || south < -90.0
+        || !(-540.0..=540.0).contains(&west)
+        || !(-540.0..=540.0).contains(&east)
+        || west == east
+    {
+        return Err("invalid CAMS area".into());
+    }
+    let span = if east > west {
+        east - west
+    } else {
+        east + 360.0 - west
+    };
+    if span <= 0.0 {
+        return Err("invalid zero-width CAMS longitude interval".into());
+    }
+    // Source-grid padding may extend an ordinary interval beyond +/-180.
+    // Preserve its arc width before normalizing so it cannot become a near-
+    // global request or lose the narrow strip on the other side.
+    if span >= 360.0 {
+        return Ok(vec![[north, -180.0, south, 180.0]]);
+    }
+    if west >= -180.0 && east <= 180.0 && west < east {
+        return Ok(vec![area]);
+    }
+    if west > east && west > -180.0 && west < 180.0 && east > -180.0 && east < 180.0 {
+        return Ok(vec![
+            [north, west, south, 180.0],
+            [north, -180.0, south, east],
+        ]);
+    }
+    let west = if (-180.0..180.0).contains(&west) {
+        west
+    } else {
+        (west + 180.0).rem_euclid(360.0) - 180.0
+    };
+    let end = west + span;
+    if end <= 180.0 {
+        return Ok(vec![[north, west, south, end]]);
+    }
+    Ok(vec![
+        [north, west, south, 180.0],
+        [north, -180.0, south, end - 360.0],
+    ])
 }
 fn base_query(area: &Area) -> Value {
     json!({"variable":["total_aerosol_optical_depth_550nm","aerosol_extinction_coefficient_532nm"],
@@ -588,6 +650,7 @@ pub(crate) fn resolve(
         allow_download: true,
         require_exact_valid_time: true,
         refresh_before_cycle: None,
+        all_leads: false,
     })
 }
 
@@ -602,6 +665,13 @@ fn run(params: Params) -> Result<Value, String> {
         return Err("invalid CAMS cache area/root".into());
     }
     let area = Area::new(params.area)?;
+    let rectangles = split_areas(area.bounds)?;
+    if rectangles.len() != 1 || rectangles[0] != area.bounds {
+        return Err(
+            "CAMS resolver requires an ordinary rectangle; split wrapped or padded areas before resolving"
+                .into(),
+        );
+    }
     let mut targets: Vec<_> = params
         .target_utcs
         .iter()
@@ -684,13 +754,28 @@ fn run(params: Params) -> Result<Value, String> {
             groups_count = groups.len();
             for group in groups.values() {
                 let run = &group[0].1;
-                let leads: BTreeSet<_> = group
+                let mut leads: BTreeSet<_> = group
                     .iter()
                     .filter_map(|(target, _)| {
                         let seconds = (*target - run.time).num_seconds();
                         (seconds >= 0).then_some((seconds / 3600) as u32)
                     })
                     .collect();
+                if params.all_leads {
+                    let constraints = availability
+                        .days
+                        .get(&run.day)
+                        .ok_or("missing CAMS day constraints for full-cycle download")?;
+                    for value in strings(constraints.get("leadtime_hour"), &[])? {
+                        let lead: u32 = value
+                            .parse()
+                            .map_err(|_| "invalid ADS lead constraint".to_string())?;
+                        if lead > 999 {
+                            return Err("ADS lead exceeds three-digit CAMS cache range".into());
+                        }
+                        leads.insert(lead);
+                    }
+                }
                 match retrieve_group(
                     &mut session,
                     &params.cache_dir,
@@ -751,7 +836,8 @@ fn run(params: Params) -> Result<Value, String> {
     Ok(
         json!({"contract":"rust-cams-data-v1","files":rows,"missing_valid_times":missing,
         "cache_hits":cache_hits,"groups":groups_count,"single_fallbacks":fallbacks,"group_errors":errors,
-        "network_enabled":params.allow_download,"constraints_requests":ads.as_ref().map_or(0,|a|a.ads.constraints_requests),
+        "network_enabled":params.allow_download,"all_leads":params.all_leads,
+        "constraints_requests":ads.as_ref().map_or(0,|a|a.ads.constraints_requests),
         "execution_requests":ads.as_ref().map_or(0,|a|a.ads.submissions),"asset_downloads":ads.as_ref().map_or(0,|a|a.ads.downloads),
         "timings_ms":{"constraints":ads.as_ref().map_or(0.0,|a|a.ads.constraints_ms),
             "job_poll_transfer":ads.as_ref().map_or(0.0,|a|a.ads.retrieval_ms),
@@ -830,5 +916,44 @@ mod tests {
         assert!((1..=limit).contains(&peak.load(Ordering::SeqCst)));
         assert_eq!(active.load(Ordering::SeqCst), 0);
         assert!(Slot::acquire(0.0).is_ok());
+    }
+
+    #[test]
+    fn split_wrapped_area_keeps_two_narrow_rectangles() {
+        assert_eq!(
+            split_areas([70.0, 170.0, 10.0, -170.0]).unwrap(),
+            vec![[70.0, 170.0, 10.0, 180.0], [70.0, -180.0, 10.0, -170.0]]
+        );
+        assert_eq!(
+            split_areas([70.0, -170.0, 10.0, 170.0]).unwrap(),
+            vec![[70.0, -170.0, 10.0, 170.0]]
+        );
+    }
+
+    #[test]
+    fn split_wrapped_area_rejects_zero_width() {
+        assert!(split_areas([70.0, 10.0, 10.0, 10.0]).is_err());
+        assert!(split_areas([70.0, 180.0, 10.0, -180.0]).is_err());
+    }
+
+    #[test]
+    fn split_padded_boundary_normalizes_without_expanding_the_arc() {
+        for area in [[20.0, 169.4, -20.0, 180.6], [20.0, -180.6, -20.0, -169.4]] {
+            let parts = split_areas(area).unwrap();
+            assert_eq!(parts.len(), 2);
+            let span: f64 = parts.iter().map(|part| part[3] - part[1]).sum();
+            assert!((span - 11.2).abs() < 1e-9);
+            assert!(parts
+                .iter()
+                .all(|part| part[1] >= -180.0 && part[3] <= 180.0 && part[1] < part[3]));
+        }
+        assert_eq!(
+            split_areas([20.0, -180.6, -20.0, 180.6]).unwrap(),
+            vec![[20.0, -180.0, -20.0, 180.0]]
+        );
+        assert_eq!(
+            split_areas([20.0, 180.0, -20.0, -170.0]).unwrap(),
+            vec![[20.0, -180.0, -20.0, -170.0]]
+        );
     }
 }

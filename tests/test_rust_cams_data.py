@@ -393,6 +393,21 @@ def test_inflight_monitor_timeout_distinguishes_operation_budget(
     no_temps(tmp_path)
 
 
+@pytest.mark.parametrize("area", [
+    [1., 179., 0., -179.],
+    [1., 179., 0., 181.],
+    [1., -181., 0., -179.],
+])
+def test_single_rectangle_resolver_rejects_unsplit_areas_before_network(
+        engine_binary, tmp_path, ads_server, area):
+    endpoint, state = ads_server
+    response = invoke(engine_binary, params(tmp_path, endpoint, area=area))
+    assert response["type"] == "error", response
+    assert "ordinary rectangle" in response["error"]["message"]
+    assert not state.requests
+    assert not (tmp_path / "cams").exists()
+
+
 @pytest.mark.parametrize("fault", ["area","time","naive","exact","unknown","attempts","timeout","tls"])
 def test_invalid_configuration_rejects_before_network(engine_binary, tmp_path, ads_server, fault):
     endpoint, state = ads_server
@@ -556,13 +571,44 @@ def test_broken_destination_is_preserved_on_failure_and_replaced_only_after_vali
     assert canonical.read_bytes() != original
 
 
-def test_proxy_environment_is_not_used_for_api_or_asset(engine_binary,tmp_path,ads_server,monkeypatch):
+def test_proxy_environment_is_used_for_api_and_asset(engine_binary,tmp_path,ads_server,monkeypatch):
+    # ADS honors the ambient proxy environment like the GFS/EC clients: with every
+    # proxy variable pointed at a dead port the download must fail, and it must
+    # succeed again once NO_PROXY exempts the test server host.
     endpoint,_ = ads_server
     for name in ("HTTP_PROXY","HTTPS_PROXY","ALL_PROXY","http_proxy","https_proxy","all_proxy"):
         monkeypatch.setenv(name,"http://127.0.0.1:9")
     monkeypatch.setenv("NO_PROXY","")
     monkeypatch.setenv("no_proxy","")
+    response = invoke(engine_binary,params(tmp_path,endpoint,operation="download",hours=(9,)))
+    assert response["type"] == "error"
+    monkeypatch.setenv("NO_PROXY","127.0.0.1")
     assert result(engine_binary,params(tmp_path,endpoint,operation="download",hours=(9,)))["files"]
+
+
+def test_full_cycle_download_fetches_every_reported_lead_in_one_execution(engine_binary,tmp_path,ads_server):
+    endpoint,state = ads_server
+    got = result(engine_binary,params(tmp_path,endpoint,operation="resolve",hours=(9,),all_leads=True))
+    assert got["all_leads"] is True and got["execution_requests"] == 1
+    assert got["missing_valid_times"] == []
+    queries = [job["query"] for job in state.jobs.values()]
+    assert len(queries) == 1
+    assert queries[0]["leadtime_hour"] == [str(h) for h in range(0, 73, 3)]
+    published = sorted(path.name for path in (tmp_path/"cams").rglob("*.grib"))
+    keys = {name.rsplit("-",1)[-1] for name in published}
+    assert len(keys) == 1
+    leads = sorted(int(name.split("-")[-2]) for name in published)
+    assert leads == [h for h in range(0, 73, 3)]
+
+
+def test_full_cycle_cache_serves_later_targets_without_new_executions(engine_binary,tmp_path,ads_server):
+    endpoint,state = ads_server
+    result(engine_binary,params(tmp_path,endpoint,operation="resolve",hours=(9,),all_leads=True))
+    assert state.calls["execution"] == 1
+    got = result(engine_binary,params(tmp_path,endpoint,operation="resolve",hours=(12,)))
+    assert got["all_leads"] is False and got["cache_hits"] == 1
+    assert got["execution_requests"] == 0 and got["missing_valid_times"] == []
+    assert state.calls["execution"] == 1
 
 
 def test_credentials_file_and_env_precedence_without_exposing_key(engine_binary,tmp_path,ads_server,monkeypatch):

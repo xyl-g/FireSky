@@ -5,6 +5,7 @@ use crate::tensor_bundle::{source_identity, BundleWriter, CoordinateGrid, Source
 use chrono::{DateTime, Datelike, SecondsFormat, TimeZone, Timelike, Utc};
 use firesky_native::cams::{self, Grid, Mapped, LEVELS};
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 pub struct Optics {
@@ -13,6 +14,102 @@ pub struct Optics {
     pub aod: Vec<f64>,
     pub extinction: Vec<f64>,
     pub valid_time: DateTime<Utc>,
+}
+
+const MERGE_COORD_SCALE: f64 = 10_000_000.0;
+
+fn normalized_longitude(value: f64) -> f64 {
+    let value = (value + 180.0).rem_euclid(360.0) - 180.0;
+    if value == -180.0 && value.is_sign_negative() {
+        -180.0
+    } else {
+        value
+    }
+}
+
+fn merge_coordinate_key(lat: f64, lon: f64) -> Result<(i64, i64), String> {
+    if !lat.is_finite() || !lon.is_finite() {
+        return Err("CAMS merge contains nonfinite coordinates".into());
+    }
+    let lat = (lat * MERGE_COORD_SCALE).round();
+    let lon = (normalized_longitude(lon) * MERGE_COORD_SCALE).round();
+    if !lat.is_finite() || !lon.is_finite() {
+        return Err("CAMS merge coordinate is outside the supported range".into());
+    }
+    Ok((lat as i64, lon as i64))
+}
+
+/// Merge ordinary CAMS rectangles that together cover a wrapped longitude
+/// interval.  The source files are decoded independently because ecCodes
+/// represents each area as a separate native grid.  Cells on the shared
+/// dateline edge are canonicalized and retained once.
+pub fn merge(parts: &[Optics]) -> Result<Optics, String> {
+    if parts.is_empty() {
+        return Err("CAMS merge requires at least one optical grid".into());
+    }
+    let valid_time = parts[0].valid_time;
+    let mut cells = BTreeMap::<(i64, i64), usize>::new();
+    let mut latitudes = Vec::new();
+    let mut longitudes = Vec::new();
+    let mut aod = Vec::new();
+    let mut profiles: Vec<[f64; LEVELS.len()]> = Vec::new();
+    for part in parts {
+        if part.valid_time != valid_time {
+            return Err("CAMS merge parts use different valid times".into());
+        }
+        let count = part.latitudes.len();
+        if count == 0
+            || part.longitudes.len() != count
+            || part.aod.len() != count
+            || part.extinction.len() != count * LEVELS.len()
+            || count + latitudes.len() > cams::MAX_SOURCE_CELLS
+        {
+            return Err("invalid CAMS merge grid dimensions or cell limit".into());
+        }
+        for index in 0..count {
+            let key = merge_coordinate_key(part.latitudes[index], part.longitudes[index])?;
+            if cells.contains_key(&key) {
+                // Area requests include their boundary cells.  Keep the first
+                // value so the merged source identity stays deterministic.
+                continue;
+            }
+            let output_index = latitudes.len();
+            cells.insert(key, output_index);
+            latitudes.push(part.latitudes[index]);
+            longitudes.push(normalized_longitude(part.longitudes[index]));
+            aod.push(part.aod[index]);
+            let mut profile = [0.0; LEVELS.len()];
+            for (level, value) in profile.iter_mut().enumerate() {
+                *value = part.extinction[level * count + index];
+            }
+            profiles.push(profile);
+        }
+    }
+    if latitudes.is_empty() {
+        return Err("CAMS merge produced no cells".into());
+    }
+    let mut extinction = Vec::with_capacity(latitudes.len() * LEVELS.len());
+    for level in 0..LEVELS.len() {
+        extinction.extend(profiles.iter().map(|profile| profile[level]));
+    }
+    Ok(Optics {
+        latitudes,
+        longitudes,
+        aod,
+        extinction,
+        valid_time,
+    })
+}
+
+pub fn decode_many(codes: &EcCodes, paths: &[PathBuf]) -> Result<Optics, String> {
+    if paths.is_empty() {
+        return Err("CAMS decode requires at least one path".into());
+    }
+    let parts = paths
+        .iter()
+        .map(|path| decode(codes, path))
+        .collect::<Result<Vec<_>, _>>()?;
+    merge(&parts)
 }
 
 fn valid_time(message: &Message<'_>) -> Result<DateTime<Utc>, String> {
@@ -304,5 +401,57 @@ mod tests {
         assert!(bracket("2026-11-09T00:00:00.000000001Z").is_err());
         assert!(bracket("2016-12-31T23:59:60Z").is_err());
         assert!(bracket("9999-12-31T23:59:00Z").is_err());
+    }
+
+    #[test]
+    fn merge_deduplicates_dateline_boundary_cells() {
+        let left = Optics {
+            latitudes: vec![0.0, 1.0],
+            longitudes: vec![179.6, 180.0],
+            aod: vec![1.0, 2.0],
+            extinction: (0..11)
+                .flat_map(|level| [level as f64 + 1.0, level as f64 + 2.0])
+                .collect(),
+            valid_time: Utc.with_ymd_and_hms(2026, 11, 12, 0, 0, 0).unwrap(),
+        };
+        let right = Optics {
+            latitudes: vec![1.0, 1.0],
+            longitudes: vec![-180.0, -179.6],
+            aod: vec![20.0, 3.0],
+            extinction: (0..11)
+                .flat_map(|level| [level as f64 + 20.0, level as f64 + 3.0])
+                .collect(),
+            valid_time: left.valid_time,
+        };
+        let merged = merge(&[left, right]).unwrap();
+        assert_eq!(merged.latitudes.len(), 3);
+        assert!(merged
+            .longitudes
+            .iter()
+            .zip([179.6, -180.0, -179.6])
+            .all(|(left, right)| (left - right).abs() < 1e-9));
+        assert_eq!(merged.aod, [1.0, 2.0, 3.0]);
+        assert_eq!(merged.extinction.len(), 33);
+        assert_eq!(merged.extinction[3], 2.0);
+    }
+
+    #[test]
+    fn merge_rejects_mixed_valid_times() {
+        let valid_time = Utc.with_ymd_and_hms(2026, 11, 12, 0, 0, 0).unwrap();
+        let base = Optics {
+            latitudes: vec![0.0],
+            longitudes: vec![0.0],
+            aod: vec![1.0],
+            extinction: vec![1.0; LEVELS.len()],
+            valid_time,
+        };
+        let other = Optics {
+            latitudes: vec![0.0],
+            longitudes: vec![0.0],
+            aod: vec![1.0],
+            extinction: vec![1.0; LEVELS.len()],
+            valid_time: valid_time + chrono::Duration::hours(3),
+        };
+        assert!(merge(&[base, other]).is_err());
     }
 }

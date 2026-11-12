@@ -13,7 +13,7 @@ use firesky_native::timeline::{self, Point};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     time::{Instant, SystemTime},
 };
@@ -77,6 +77,54 @@ struct Prepared {
     summary: Value,
 }
 
+struct CamsPlan {
+    areas: Vec<[f64; 4]>,
+    selected: BTreeMap<DateTime<Utc>, Vec<cams_cache::Selection>>,
+    download_reports: Vec<Value>,
+    cache_hits: usize,
+}
+
+fn cams_plan(
+    root: &Path,
+    area: [f64; 4],
+    targets: &BTreeSet<DateTime<Utc>>,
+    download: Option<&crate::ads::Config>,
+) -> Result<CamsPlan, String> {
+    let areas = cams_data::split_areas(area)?;
+    let mut selected_by_time = BTreeMap::<DateTime<Utc>, Vec<cams_cache::Selection>>::new();
+    let mut download_reports = Vec::new();
+    let mut cache_hits = 0;
+    for sub_area in &areas {
+        let mut selected = cams_cache::select(root, *sub_area, targets)?;
+        cache_hits += selected.len();
+        if selected.len() < targets.len() {
+            if let Some(config) = download {
+                download_reports.push(cams_data::resolve(
+                    root,
+                    *sub_area,
+                    targets.iter().copied().collect(),
+                    config.clone(),
+                )?);
+                selected = cams_cache::select(root, *sub_area, targets)?;
+            }
+        }
+        for target in targets {
+            if let Some(value) = selected.get(target) {
+                selected_by_time
+                    .entry(*target)
+                    .or_default()
+                    .push(value.clone());
+            }
+        }
+    }
+    Ok(CamsPlan {
+        areas,
+        selected: selected_by_time,
+        download_reports,
+        cache_hits,
+    })
+}
+
 fn points(input: &Input, elevations: &[f64]) -> Result<Vec<Point>, String> {
     input
         .points
@@ -99,13 +147,16 @@ fn points(input: &Input, elevations: &[f64]) -> Result<Vec<Point>, String> {
 fn bbox(input: &Input) -> Result<[f64; 4], String> {
     if let Some(value) = input.bbox {
         let value = gfs_data::canonical_bbox(value, "0p25")?;
-        if value[0] >= value[1] || value[3] >= value[2] {
-            return Err("GFS planning requires a nonempty non-dateline bbox".into());
+        if value[0] == value[1] || (value[0] == 180.0 && value[1] == -180.0) || value[3] >= value[2]
+        {
+            return Err("GFS planning requires a nonempty bbox".into());
         }
         return Ok(value);
     }
     let radius = (input.radius_km + (input.radius_km + 400.0).min(1000.0)).max(1000.0);
-    let mut result = [180.0_f64, -180.0_f64, -90.0_f64, 90.0_f64];
+    let mut longitude_intervals = Vec::with_capacity(input.points.len());
+    let mut north = -90.0_f64;
+    let mut south = 90.0_f64;
     let normalize = |lon: f64| {
         let value = (lon + 180.0).rem_euclid(360.0) - 180.0;
         if value == -180.0 && lon > 0.0 {
@@ -119,15 +170,62 @@ fn bbox(input: &Input) -> Result<[f64; 4], String> {
         let lon_pad = radius / (111.0 * p.lat.to_radians().cos()).max(25.0);
         let west = normalize(p.lon - lon_pad);
         let east = normalize(p.lon + lon_pad);
-        if west > east {
-            return Err("GFS planning source domain crosses the dateline".into());
-        }
-        result[0] = result[0].min(west);
-        result[1] = result[1].max(east);
-        result[2] = result[2].max((p.lat + lat_pad).min(90.0));
-        result[3] = result[3].min((p.lat - lat_pad).max(-90.0));
+        longitude_intervals.push((west, east));
+        north = north.max((p.lat + lat_pad).min(90.0));
+        south = south.min((p.lat - lat_pad).max(-90.0));
     }
-    gfs_data::canonical_bbox(result, "0p25")
+    let [west, east] = union_longitudes(longitude_intervals);
+    gfs_data::canonical_bbox([west, east, north, south], "0p25")
+}
+
+fn longitude_ranges(west: f64, east: f64) -> Vec<(f64, f64)> {
+    if west <= east {
+        vec![(west, east)]
+    } else {
+        vec![(west, 180.0), (-180.0, east)]
+    }
+}
+
+fn union_longitudes(intervals: impl IntoIterator<Item = (f64, f64)>) -> [f64; 2] {
+    let mut segments = intervals
+        .into_iter()
+        .flat_map(|(west, east)| longitude_ranges(west, east))
+        .collect::<Vec<_>>();
+    segments.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+    let mut merged: Vec<(f64, f64)> = Vec::with_capacity(segments.len());
+    for (left, right) in segments {
+        if let Some(last) = merged.last_mut() {
+            if left <= last.1 + 1e-9 {
+                last.1 = last.1.max(right);
+                continue;
+            }
+        }
+        merged.push((left, right));
+    }
+    if merged.is_empty() {
+        return [-180.0, 180.0];
+    }
+    if merged.len() == 1 && merged[0].0 <= -180.0 + 1e-9 && merged[0].1 >= 180.0 - 1e-9 {
+        return [-180.0, 180.0];
+    }
+    let mut largest_gap = -1.0;
+    let mut gap_index = 0usize;
+    for index in 0..merged.len() {
+        let next = (index + 1) % merged.len();
+        let gap = if next == 0 {
+            merged[0].0 + 360.0 - merged[index].1
+        } else {
+            merged[next].0 - merged[index].1
+        };
+        if gap > largest_gap {
+            largest_gap = gap;
+            gap_index = index;
+        }
+    }
+    let start_index = (gap_index + 1) % merged.len();
+    let west = merged[start_index].0;
+    let east = merged[gap_index].1;
+    [west, if east > 180.0 { east - 360.0 } else { east }]
 }
 
 pub(crate) fn scalar_times(
@@ -463,33 +561,47 @@ fn prepare(path: &Path, point_only: bool) -> Result<Prepared, String> {
         round(domain[1] + 0.6),
     ];
     let phase = Instant::now();
-    let mut selected = cams_cache::select(&input.cams_cache_dir, area, &required.cams)?;
-    let mut download_report = None;
-    if selected.len() < required.cams.len() {
-        if let Some(config) = &input.cams_download {
-            download_report = Some(cams_data::resolve(
-                &input.cams_cache_dir,
-                area,
-                required.cams.iter().copied().collect(),
-                config.clone(),
-            )?);
-            selected = cams_cache::select(&input.cams_cache_dir, area, &required.cams)?;
-        }
-    }
+    let cams_plan = cams_plan(
+        &input.cams_cache_dir,
+        area,
+        &required.cams,
+        input.cams_download.as_ref(),
+    )?;
     let cams_ms = phase.elapsed().as_secs_f64() * 1000.0;
     let missing_cams: Vec<_> = required
         .cams
         .iter()
-        .filter(|t| !selected.contains_key(t))
+        .filter(|t| {
+            cams_plan
+                .selected
+                .get(t)
+                .is_none_or(|values| values.len() != cams_plan.areas.len())
+        })
         .map(|t| time_contract::iso(*t))
         .collect();
-    let cams: Vec<_> = selected
+    let cams: Vec<_> = cams_plan
+        .selected
         .values()
-        .map(|s| OpticalFile {
-            valid_time: time_contract::iso(s.valid_time),
-            path: s.path.clone(),
+        .filter(|values| values.len() == cams_plan.areas.len())
+        .map(|values| {
+            let paths = values.iter().map(|s| s.path.clone()).collect::<Vec<_>>();
+            OpticalFile {
+                valid_time: time_contract::iso(values[0].valid_time),
+                path: paths[0].clone(),
+                paths: paths.into_iter().skip(1).collect(),
+            }
         })
         .collect();
+    let cams_area_keys = cams_plan
+        .areas
+        .iter()
+        .map(|area| cams_cache::area_key(*area))
+        .collect::<Result<Vec<_>, _>>()?;
+    let download_report = match cams_plan.download_reports.as_slice() {
+        [] => Value::Null,
+        [single] => single.clone(),
+        many => Value::Array(many.to_vec()),
+    };
     let summary = json!({
         "contract":"rust-gfs-input-plan-v1","cycle_utc":time_contract::iso(cycle),
         "cycle_selection":if input.cycle_utc.is_some() {"explicit"} else {"target-event-or-now-minus-4h-6h-cycle"},
@@ -497,12 +609,16 @@ fn prepare(path: &Path, point_only: bool) -> Result<Prepared, String> {
         "point_count":input.points.len(),"radius_km":input.radius_km,
         "time_policy":if input.points.len() >= input.batch_min_points {"regional-twenty-sample"} else {"scalar-dense-minute"},
         "batch_min_points":input.batch_min_points,"bbox":domain,"prepared_bbox":prepared_bbox,
-        "cams_area":area,"cams_area_key":cams_cache::area_key(area)?,
+        "cams_area":area,
+        "cams_areas":cams_plan.areas,
+        "cams_area_key":if cams_area_keys.len() == 1 {json!(cams_area_keys[0])} else {Value::Null},
+        "cams_area_keys":cams_area_keys,
         "initial_forecast_hours":initial_hours,"forecast_hours":required.hours,
         "first_evaluation_utc":required.first.map(time_contract::iso),
         "last_evaluation_utc":required.last.map(time_contract::iso),
         "cams_valid_times":required.cams.iter().copied().map(time_contract::iso).collect::<Vec<_>>(),
-        "model_files":frames,"cams_files":cams,"cams_selections":selected.values().collect::<Vec<_>>(),
+        "model_files":frames,"cams_files":cams,
+        "cams_selections":cams_plan.selected.values().flatten().collect::<Vec<_>>(),
         "missing_hours":missing,"missing_cams_valid_times":missing_cams,
         "terrain_pending":terrain_pending,"terrain_source":terrain,
         "model_grid_observer_count":model_grid.len(),
@@ -511,7 +627,9 @@ fn prepare(path: &Path, point_only: bool) -> Result<Prepared, String> {
             model_grid.iter().map(|&i| elevations[i]).fold(f64::NEG_INFINITY,f64::max)])},
         "inputs_located":missing.is_empty()&&missing_cams.is_empty()&&!terrain_pending,
         "gfs_download_enabled":input.allow_gfs_download,"cams_download_supported":true,
-        "cams_download_enabled":input.cams_download.is_some(),"cams_download":download_report,
+        "cams_download_enabled":input.cams_download.is_some(),
+        "cams_download":if download_report.is_null() {Value::Null} else {download_report},
+        "cams_cache_hits_validated":cams_plan.cache_hits,
         "model_cache_hits_validated":false,"cams_profile_contents_validated":true,
         "derived_cache":input.derived_cache,
         "cams_filename_grib_time_verified":false,
@@ -542,4 +660,26 @@ fn prepare(path: &Path, point_only: bool) -> Result<Prepared, String> {
             derived_cache: input.derived_cache,
         },
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::union_longitudes;
+
+    #[test]
+    fn wrapped_longitude_union_keeps_the_narrow_arc() {
+        assert_eq!(
+            union_longitudes([(179.0, 180.0), (-180.0, -179.0)]),
+            [179.0, -179.0]
+        );
+        assert_eq!(union_longitudes([(170.0, -170.0)]), [170.0, -170.0]);
+    }
+
+    #[test]
+    fn ordinary_longitude_union_remains_ordinary() {
+        assert_eq!(
+            union_longitudes([(100.0, 110.0), (105.0, 115.0)]),
+            [100.0, 115.0]
+        );
+    }
 }
