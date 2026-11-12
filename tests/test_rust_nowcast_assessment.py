@@ -2084,6 +2084,53 @@ def test_engine_assessment_detail_model_roundtrip(assessment_engine):
         )
 
 
+@pytest.mark.parametrize("solar_elevation", [5.0, 15.0])
+def test_zero_path_aod_keeps_python_local_deck_diagnostic_fallback(
+    assessment_engine, solar_elevation
+):
+    from firesky.models import AerosolSample
+    from firesky.rust_desktop_data import nowcast_assessment
+
+    features = [
+        make_feature(
+            lat=30.0 + index * 0.01,
+            lon=120.0,
+            distance_km=distance,
+            bearing_deg=150.0,
+            pressure_hpa=600,
+            geopotential_height_m=6000.0,
+            rh_percent=95.0 if index < 2 else 5.0,
+            horizontal_cloud_probability=0.95 if index < 2 else 0.01,
+            cloud_probability_given_cloud=0.9 if index < 2 else 0.01,
+        )
+        for index, distance in enumerate([0.0, 20.0, 100.0, 140.0, 180.0])
+    ]
+    aerosol = AerosolReading(
+        0.25, "zero-path-aod", "measured", 30.0, 120.0,
+        path_samples=[AerosolSample(30.0, 120.0, 0.0, 150.0, 0.0)],
+    )
+    python_step = assess_timestep(
+        make_snapshot(features), solar_elevation, 150.0, aerosol
+    )
+    payload = nowcast_assessment(
+        scans=[_engine_scan(features, solar_elevation, 150.0)],
+        timezone_name="Asia/Shanghai",
+        aerosol=aerosol,
+        observer_elevation_m=0.0,
+        detail="model",
+    )
+    scan = payload["scans"][0]
+    assert python_step.selected_regime == scan["selected_regime"] == "local_deck"
+    # The raw path measurement stays zero, but Python's legacy `or` fallback
+    # uses local AOD in the public diagnostic reason.
+    assert scan["selected_inflow_path_aod550"] == 0.0
+    assert scan["reasons"] == python_step.reasons
+    assert any(
+        "观测/入射路径 AOD 0.250/0.250" in reason
+        for reason in scan["reasons"]
+    )
+
+
 def test_engine_assessment_rejects_tampered_receipt(monkeypatch, tmp_path):
     import hashlib
     import json as json_module
@@ -2431,6 +2478,51 @@ def test_nowcast_observation_assessments_radar_missing_is_identity(assessment_en
     assert rust_steps[0].observation_burnable is True
     assert rust_nowcast.radar_reliability_score == 0.0
     assert rust_nowcast.summary == ["base line"]
+
+
+@pytest.mark.parametrize("include_map_cells", [False, True])
+def test_nowcast_large_map_radius_preserves_python_column_envelope(
+    assessment_engine, include_map_cells
+):
+    from firesky.service import nowcast_observation_assessments
+
+    features = [
+        make_feature(
+            lat=30.0 + index * 0.1,
+            lon=120.0,
+            distance_km=distance,
+            bearing_deg=150.0,
+            pressure_hpa=600,
+            geopotential_height_m=6000.0,
+            rh_percent=90.0,
+            horizontal_cloud_probability=0.9,
+            cloud_probability_given_cloud=0.8,
+        )
+        for index, distance in enumerate([120.0, 1100.0])
+    ]
+    nowcast = _stub_nowcast(
+        features, {"source": None},
+        observed_time_utc=datetime(2026, 1, 1, 4, tzinfo=timezone.utc),
+    )
+    request = SimpleNamespace(
+        point=SimpleNamespace(lat=30.0, lon=120.0, elevation_m=0.0),
+        timezone_name="Asia/Shanghai",
+        radius_km=1200.0,
+        include_map_cells=include_map_cells,
+    )
+    aerosol = AerosolReading(0.2, "large-map-radius", "measured", 30.0, 120.0)
+    python_steps, python_nowcast = nowcast_observation_assessments(
+        request, nowcast, aerosol, backend="python"
+    )
+    rust_steps, rust_nowcast = nowcast_observation_assessments(
+        request, nowcast, aerosol, backend="rust"
+    )
+    assert rust_steps == python_steps
+    assert rust_nowcast == python_nowcast
+    if include_map_cells:
+        assert any(cell.distance_km > 1000.0 for cell in rust_steps[0].map_cells)
+    else:
+        assert rust_steps[0].map_cells == []
 
 
 def test_nowcast_observation_assessments_low_coverage_radar_not_strong(assessment_engine, monkeypatch):
@@ -2871,9 +2963,9 @@ def provider_features_for_scan(wrapped, request, frame):
 
 def test_conftest_repairs_joined_pytest_path_args():
     """The CI runner must survive its own quoting bug: four test paths joined
-    into one argument are split back apart by tests/conftest.py before
-    collection, so the focused gate command runs instead of erroring with
-    exit 4 ("file or directory not found")."""
+    into one argument are split back apart before collection, so the focused
+    gate command runs instead of erroring with exit 4 ("file or directory not
+    found")."""
     import os
     import subprocess
     import sys as sys_module
@@ -2900,3 +2992,37 @@ def test_conftest_repairs_joined_pytest_path_args():
         env=dict(os.environ, FIRESKY_CONFTEST_REPAIR_PROBE="1"),
     )
     assert completed.returncode == 0, completed.stdout[-2000:] + completed.stderr[-500:]
+
+
+def test_gate_repair_survives_path_and_k_expression_joined():
+    """The gate runner's actual failure shape: the test path AND the trailing
+    -k expression arrive joined into ONE argument
+    (``tests/test_rust_nowcast_adjustment.py -k "reused_nowcast_diagnostics
+    or receipt or tampered"``).  The pytest11 entry-point plugin
+    (firesky._pytest_gate_repair) rewrites args before Config.parse, which is
+    the only point early enough — a conftest pytest_collection hook runs
+    after parse and cannot help (regression for gate exit code 4,
+    "ERROR: file or directory not found: -k …")."""
+    import os
+    import subprocess
+    import sys as sys_module
+
+    if os.environ.get("FIRESKY_CONFTEST_REPAIR_PROBE"):
+        import pytest
+
+        pytest.skip("inner conftest-repair probe run")
+
+    joined = (
+        'tests/test_rust_nowcast_adjustment.py '
+        '-k "reused_nowcast_diagnostics or receipt or tampered"'
+    )
+    completed = subprocess.run(
+        [sys_module.executable, "-m", "pytest", joined, "-q"],
+        capture_output=True,
+        text=True,
+        timeout=600,
+        env=dict(os.environ, FIRESKY_CONFTEST_REPAIR_PROBE="1"),
+    )
+    assert completed.returncode == 0, completed.stdout[-2000:] + completed.stderr[-500:]
+    # The -k expression must actually select, not silently run everything.
+    assert "5 passed" in completed.stdout, completed.stdout[-2000:]

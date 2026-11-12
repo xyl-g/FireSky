@@ -19,13 +19,12 @@
 
 use crate::request_file;
 use firesky_native::{
-    aerosol_transmission_samples_impl, angular_difference, curvature_drop_m,
-    estimated_cloud_base, py_clamp, solar_illumination_elevation_deg,
-    v2_apparent_cloud_elevation, v2_feature_metrics_row,
-    FEATURE_ROW_V2_CLOUD_PROBABILITY_GIVEN_CLOUD, FEATURE_ROW_V2_FIELD_COUNT,
-    FEATURE_ROW_V2_FOOTPRINT_AZIMUTH_WIDTH_DEG, FEATURE_ROW_V2_FOOTPRINT_FAR_DISTANCE_KM,
-    FEATURE_ROW_V2_FOOTPRINT_NEAR_DISTANCE_KM, FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY,
-    METRIC_COUNT,
+    aerosol_transmission_samples_impl, angular_difference, curvature_drop_m, estimated_cloud_base,
+    py_clamp, solar_illumination_elevation_deg, v2_apparent_cloud_elevation,
+    v2_feature_metrics_row, FEATURE_ROW_V2_CLOUD_PROBABILITY_GIVEN_CLOUD,
+    FEATURE_ROW_V2_FIELD_COUNT, FEATURE_ROW_V2_FOOTPRINT_AZIMUTH_WIDTH_DEG,
+    FEATURE_ROW_V2_FOOTPRINT_FAR_DISTANCE_KM, FEATURE_ROW_V2_FOOTPRINT_NEAR_DISTANCE_KM,
+    FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY, METRIC_COUNT,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -346,7 +345,10 @@ fn python_round(value: f64, digits: u32) -> f64 {
     let (mantissa, exponent) = if exponent_field == 0 {
         (mantissa_field, -1074i64)
     } else {
-        (mantissa_field | 0x0010_0000_0000_0000, exponent_field - 1075)
+        (
+            mantissa_field | 0x0010_0000_0000_0000,
+            exponent_field - 1075,
+        )
     };
     // value = mantissa * 2^exponent (sign handled separately). A non-negative
     // exponent means the value is already an integer, which no decimal
@@ -386,7 +388,11 @@ fn curvature_drop_at_distance_m(distance_km: f64) -> f64 {
     curvature_drop_m(distance_km)
 }
 
-fn apparent_cloud_elevation_deg(distance_km: f64, cloud_height_m: f64, observer_elevation_m: f64) -> f64 {
+fn apparent_cloud_elevation_deg(
+    distance_km: f64,
+    cloud_height_m: f64,
+    observer_elevation_m: f64,
+) -> f64 {
     v2_apparent_cloud_elevation(distance_km, cloud_height_m, observer_elevation_m)
 }
 
@@ -417,7 +423,11 @@ fn horizon_proximity_weight(apparent_elevation_deg: f64) -> f64 {
     if apparent_elevation_deg < 12.0 {
         return 1.0 - 0.5 * (apparent_elevation_deg - 4.0) / 8.0;
     }
-    py_clamp(0.5 - 0.25 * (apparent_elevation_deg - 12.0) / 12.0, 0.25, 1.0)
+    py_clamp(
+        0.5 - 0.25 * (apparent_elevation_deg - 12.0) / 12.0,
+        0.25,
+        1.0,
+    )
 }
 
 fn pressure_weight(pressure_hpa: i64) -> f64 {
@@ -462,14 +472,11 @@ fn sightline_height_at_distance_m(
     sample_distance_km: f64,
     observer_elevation_m: f64,
 ) -> f64 {
-    let apparent_deg = apparent_cloud_elevation_deg(
-        target_distance_km,
-        target_height_m,
-        observer_elevation_m,
-    );
+    let apparent_deg =
+        apparent_cloud_elevation_deg(target_distance_km, target_height_m, observer_elevation_m);
     let apparent = apparent_deg.to_radians();
-    let relative_height =
-        apparent.tan() * sample_distance_km * 1000.0 + curvature_drop_at_distance_m(sample_distance_km);
+    let relative_height = apparent.tan() * sample_distance_km * 1000.0
+        + curvature_drop_at_distance_m(sample_distance_km);
     observer_elevation_m + relative_height
 }
 
@@ -480,9 +487,9 @@ fn solar_ray_height_at_distance_m(
     solar_elevation_deg: f64,
 ) -> f64 {
     let distance_delta_m = (sample_distance_km - target_distance_km) * 1000.0;
-    let target_local_elevation_rad =
-        solar_illumination_elevation_deg(solar_elevation_deg).to_radians()
-            + target_distance_km / EARTH_RADIUS_KM;
+    let target_local_elevation_rad = solar_illumination_elevation_deg(solar_elevation_deg)
+        .to_radians()
+        + target_distance_km / EARTH_RADIUS_KM;
     target_height_m
         + target_local_elevation_rad.tan() * distance_delta_m
         + distance_delta_m * distance_delta_m / (2.0 * EARTH_RADIUS_KM * 1000.0)
@@ -611,7 +618,11 @@ impl SpatialIndex {
             let key = bearing_key(feature.bearing_deg(), bin_count, BEARING_BIN_DEG);
             index.by_bearing.entry(key).or_default().push(position);
             if feature.blocker_opacity() > 0.12 {
-                index.blockers_by_bearing.entry(key).or_default().push(position);
+                index
+                    .blockers_by_bearing
+                    .entry(key)
+                    .or_default()
+                    .push(position);
             }
             index
                 .by_pressure_bearing
@@ -643,17 +654,32 @@ impl SpatialIndex {
         index.distances_by_bearing = index
             .by_bearing
             .iter()
-            .map(|(key, positions)| (*key, positions.iter().map(|p| index.distances[*p]).collect()))
+            .map(|(key, positions)| {
+                (
+                    *key,
+                    positions.iter().map(|p| index.distances[*p]).collect(),
+                )
+            })
             .collect();
         index.blocker_distances_by_bearing = index
             .blockers_by_bearing
             .iter()
-            .map(|(key, positions)| (*key, positions.iter().map(|p| index.distances[*p]).collect()))
+            .map(|(key, positions)| {
+                (
+                    *key,
+                    positions.iter().map(|p| index.distances[*p]).collect(),
+                )
+            })
             .collect();
         index.pressure_distances = index
             .by_pressure_bearing
             .iter()
-            .map(|(key, positions)| (*key, positions.iter().map(|p| index.distances[*p]).collect()))
+            .map(|(key, positions)| {
+                (
+                    *key,
+                    positions.iter().map(|p| index.distances[*p]).collect(),
+                )
+            })
             .collect();
         index
     }
@@ -663,8 +689,7 @@ impl SpatialIndex {
         let half_bin = BEARING_BIN_DEG * 0.5;
         for (bearing, tolerance) in windows {
             let base_key = bearing_key(*bearing, self.bin_count, BEARING_BIN_DEG);
-            let radius =
-                (((tolerance + half_bin) / BEARING_BIN_DEG).ceil() as i64) + 1;
+            let radius = (((tolerance + half_bin) / BEARING_BIN_DEG).ceil() as i64) + 1;
             for offset in -radius..=radius {
                 let key = (base_key + offset).rem_euclid(self.bin_count);
                 let center = (key as f64 + 0.5) * BEARING_BIN_DEG;
@@ -933,8 +958,7 @@ fn build_cloud_columns(
             let score = score_of(position);
             if score.has_horizontal {
                 any_horizontal = true;
-                horizontal_cloud_probability =
-                    horizontal_cloud_probability.max(score.horizontal);
+                horizontal_cloud_probability = horizontal_cloud_probability.max(score.horizontal);
             }
         }
         let presence_of = |position: usize| score_of(position).presence;
@@ -961,7 +985,8 @@ fn build_cloud_columns(
             let score = score_of(position);
             liquid_presence = liquid_presence.max(score.liquid);
             ice_presence = ice_presence.max(score.ice);
-            explicit_cloud_evidence = explicit_cloud_evidence.max(score.explicit.max(score.horizontal));
+            explicit_cloud_evidence =
+                explicit_cloud_evidence.max(score.explicit.max(score.horizontal));
         }
         let cloudy_count = cloudy_layers.len() as f64;
         let deep_cloud_risk = clamp(
@@ -1069,13 +1094,9 @@ fn estimated_column_cloud_bounds(
         })
         .collect();
     let base_m = match lower_dry.pop() {
-        Some(lower) => interpolate_cloud_threshold_height(
-            features,
-            lower,
-            lowest,
-            threshold,
-            presence_of,
-        ),
+        Some(lower) => {
+            interpolate_cloud_threshold_height(features, lower, lowest, threshold, presence_of)
+        }
         None => estimated_cloud_base_table(&features[lowest].row),
     };
     let upper_dry: Vec<usize> = ordered
@@ -1087,13 +1108,9 @@ fn estimated_column_cloud_bounds(
         })
         .collect();
     let top_m = match upper_dry.first() {
-        Some(upper) => interpolate_cloud_threshold_height(
-            features,
-            highest,
-            *upper,
-            threshold,
-            presence_of,
-        ),
+        Some(upper) => {
+            interpolate_cloud_threshold_height(features, highest, *upper, threshold, presence_of)
+        }
         None => features[highest].height_m(),
     };
     (base_m.max(0.0), base_m.max(top_m))
@@ -1165,8 +1182,7 @@ fn classify_cloud_type(
             layers
                 .get(**level)
                 .map(|position| {
-                    scores[&position].presence
-                        >= if !conditional_profile { 0.45 } else { 1e-9 }
+                    scores[&position].presence >= if !conditional_profile { 0.45 } else { 1e-9 }
                 })
                 .unwrap_or(false)
         })
@@ -1309,7 +1325,8 @@ fn cloud_type_burnability_score(
     if cloud_type == "深厚云盾" {
         thick_penalty *= 1.35;
     }
-    let thickness_optical = clamp(1.0 - sensitivity * (0.30 * thickness_risk + 0.20 * deep_cloud_risk));
+    let thickness_optical =
+        clamp(1.0 - sensitivity * (0.30 * thickness_risk + 0.20 * deep_cloud_risk));
     clamp(base * thickness_optical * (0.55 + 0.45 * high_enough) - low_penalty - thick_penalty)
 }
 
@@ -1553,14 +1570,15 @@ fn solar_inflow_blocking_risk(
         if intersection <= 0.0 {
             continue;
         }
-        let distance_factor = clamp(
-            1.0 - (gap_km - 20.0) / (MAX_SOLAR_INFLOW_BLOCKER_DISTANCE_KM - 20.0),
-        );
+        let distance_factor =
+            clamp(1.0 - (gap_km - 20.0) / (MAX_SOLAR_INFLOW_BLOCKER_DISTANCE_KM - 20.0));
         let raw_alignment = 1.0
             - (angular_difference_deg(feature.bearing_deg(), target.bearing_deg())
                 / bearing_tolerance.max(1.0))
-                .max(angular_difference_deg(feature.bearing_deg(), solar_azimuth_deg)
-                    / solar_tolerance.max(1.0));
+            .max(
+                angular_difference_deg(feature.bearing_deg(), solar_azimuth_deg)
+                    / solar_tolerance.max(1.0),
+            );
         let far_factor = if gap_km <= 360.0 { 1.0 } else { 0.72 };
         penalties.push(
             opacity
@@ -1594,7 +1612,8 @@ fn path_aod_components(
         let delta_rad = angular_difference_deg(sample.bearing_deg, target_bearing_deg).to_radians();
         let along_km = sample.distance_km * delta_rad.cos();
         let cross_km = (sample.distance_km * delta_rad.sin()).abs();
-        if (-30.0..=(target_distance_km + 50.0)).contains(&along_km) && cross_km <= observer_width_km
+        if (-30.0..=(target_distance_km + 50.0)).contains(&along_km)
+            && cross_km <= observer_width_km
         {
             observer_rows.push((along_km.max(0.0), sample.aod550));
         }
@@ -1694,7 +1713,8 @@ fn assess_candidates(
         let distance_km = feature.distance_km();
         let is_local_upper =
             distance_km < LOCAL_UPPER_CANDIDATE_MAX_DISTANCE_KM && feature.pressure_hpa() <= 600;
-        if distance_km > MAX_CANDIDATE_DISTANCE_KM || (distance_km < MIN_CANDIDATE_DISTANCE_KM && !is_local_upper)
+        if distance_km > MAX_CANDIDATE_DISTANCE_KM
+            || (distance_km < MIN_CANDIDATE_DISTANCE_KM && !is_local_upper)
         {
             continue;
         }
@@ -1788,7 +1808,9 @@ fn assess_candidates(
                 continue;
             }
         }
-        if feature.distance_km() < LOCAL_UPPER_CANDIDATE_MAX_DISTANCE_KM && cloud_evidence_score < 0.42 {
+        if feature.distance_km() < LOCAL_UPPER_CANDIDATE_MAX_DISTANCE_KM
+            && cloud_evidence_score < 0.42
+        {
             continue;
         }
         let lift_score = match feature.omega_pa_s() {
@@ -2015,6 +2037,11 @@ impl From<AssessmentStepOutput> for AssessmentModelStepOutput {
     }
 }
 
+pub(crate) fn compute(request: serde_json::Value) -> Result<serde_json::Value, String> {
+    let request = serde_json::from_value(request).map_err(|error| error.to_string())?;
+    serde_json::to_value(build_result(request)?).map_err(|error| error.to_string())
+}
+
 pub fn execute(params: Params) -> Result<serde_json::Value, String> {
     let (request, identity) =
         request_file::read::<AssessmentRequest>(&params.request_path, MAX_REQUEST_BYTES)?;
@@ -2096,12 +2123,17 @@ fn build_result(request: AssessmentRequest) -> Result<AssessmentOutput, String> 
         }
         let metrics: Vec<[f64; METRIC_COUNT]> = rows_v2
             .iter()
-            .map(|row| v2_feature_metrics_row(row, request.max_distance_km, request.observer_elevation_m))
+            .map(|row| {
+                v2_feature_metrics_row(row, request.max_distance_km, request.observer_elevation_m)
+            })
             .collect();
         let features: Vec<Feature<'_>> = rows_v2
             .iter()
             .zip(metrics.iter())
-            .map(|(row, metric)| Feature { row, metrics: metric })
+            .map(|(row, metric)| Feature {
+                row,
+                metrics: metric,
+            })
             .collect();
         let index = SpatialIndex::build(&features);
         let columns = build_cloud_columns(&features, &index, request.max_distance_km);
@@ -2139,8 +2171,11 @@ fn build_result(request: AssessmentRequest) -> Result<AssessmentOutput, String> 
                 .partial_cmp(&a.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        let cloud_hole_signals =
-            cloud_hole_lightpath_signals(&columns, scan.solar_elevation_deg, scan.solar_azimuth_deg);
+        let cloud_hole_signals = cloud_hole_lightpath_signals(
+            &columns,
+            scan.solar_elevation_deg,
+            scan.solar_azimuth_deg,
+        );
         let solar_inflow_blockage = diagnose_solar_inflow_blockage(
             &features,
             &index,
@@ -2176,6 +2211,7 @@ fn build_result(request: AssessmentRequest) -> Result<AssessmentOutput, String> 
             request.aerosol.aod550,
             &request.aerosol.quality,
             &crate::astronomy::local_iso(valid_time_utc.with_timezone(&chrono::Utc), zone)?,
+            full_detail,
         );
         let step = match &scan.radar {
             Some(radar) => apply_observation_constraints(step, radar),
@@ -2245,14 +2281,9 @@ fn build_result(request: AssessmentRequest) -> Result<AssessmentOutput, String> 
         };
         let (load_override, material_override, incoming_override) = scan_load_overrides[index];
         let derived_material_load = burnable * 2.5 * material_quality;
-        let material_load = py_clamp(
-            material_override.unwrap_or(derived_material_load),
-            0.0,
-            2.5,
-        );
+        let material_load = py_clamp(material_override.unwrap_or(derived_material_load), 0.0, 2.5);
         let burn_load = py_clamp(load_override.unwrap_or(material_load), 0.0, 2.5);
-        let incoming_aerosol_load =
-            py_clamp(incoming_override.unwrap_or(material_load), 0.0, 2.5);
+        let incoming_aerosol_load = py_clamp(incoming_override.unwrap_or(material_load), 0.0, 2.5);
         let ceiling = match &steps[index].observation_score_ceiling {
             Some(value) => *value,
             None => 2.5,
@@ -2275,7 +2306,11 @@ fn build_result(request: AssessmentRequest) -> Result<AssessmentOutput, String> 
             0.0,
             0.0,
             0.0,
-            quantize(if steps[index].observation_burnable { 1.0 } else { 0.0 }),
+            quantize(if steps[index].observation_burnable {
+                1.0
+            } else {
+                0.0
+            }),
             quantize(ceiling),
             quantize(if valid_mask[index] { 1.0 } else { 0.0 }),
         ]);
@@ -2283,14 +2318,17 @@ fn build_result(request: AssessmentRequest) -> Result<AssessmentOutput, String> 
 
     // NowcastParams is Deserialize-only; reuse its serde contract for the
     // internal call instead of widening quality.rs visibility.
-    let quality = crate::quality::execute_nowcast(serde_json::from_value(serde_json::json!({
-        "rows": quality_rows,
-        "apply_duration": request.apply_duration,
-        "local_columns": true,
-        "score_ceiling": any_ceiling,
-        "radius_km": MAX_ANALYSIS_RADIUS_KM,
-        "parallel_instants": true,
-    })).map_err(|error| error.to_string())?)?;
+    let quality = crate::quality::execute_nowcast(
+        serde_json::from_value(serde_json::json!({
+            "rows": quality_rows,
+            "apply_duration": request.apply_duration,
+            "local_columns": true,
+            "score_ceiling": any_ceiling,
+            "radius_km": MAX_ANALYSIS_RADIUS_KM,
+            "parallel_instants": true,
+        }))
+        .map_err(|error| error.to_string())?,
+    )?;
 
     Ok(AssessmentOutput {
         contract: ASSESSMENT_CONTRACT,
@@ -2302,10 +2340,7 @@ fn build_result(request: AssessmentRequest) -> Result<AssessmentOutput, String> 
         score_ceiling_applied: any_ceiling,
         quality,
         scans: if full_detail {
-            steps
-                .into_iter()
-                .map(AssessmentScanOutput::Full)
-                .collect()
+            steps.into_iter().map(AssessmentScanOutput::Full).collect()
         } else {
             steps
                 .into_iter()
@@ -2430,7 +2465,12 @@ mod tests {
             );
         }
         // …while every model-consumed field survives.
-        for kept in ["top_candidate", "burn_score", "reasons", "surface_weather_penalty"] {
+        for kept in [
+            "top_candidate",
+            "burn_score",
+            "reasons",
+            "surface_weather_penalty",
+        ] {
             assert!(scan.get(kept).is_some(), "model detail must keep {kept}");
         }
         let mut request = batch_request(vec![empty_scan(vec![])]);
@@ -2572,8 +2612,7 @@ fn solar_inflow_aerosol_optical_depth(
         return 0.0;
     }
     let stop_distance = (target_distance_km + 20.0).max(max_distance_km);
-    let steps = (((stop_distance - target_distance_km) / 15.0) as i64)
-        .clamp(48, 180);
+    let steps = (((stop_distance - target_distance_km) / 15.0) as i64).clamp(48, 180);
     let mut tau = 0.0f64;
     let mut previous_distance = target_distance_km;
     let mut previous_height = target_height_m;
@@ -2640,7 +2679,8 @@ fn local_deck_aerosol_transmission_samples(
         );
         let view_tau = aod550.max(0.0)
             * (1.0
-                - (-(cloud_base_m - observer_elevation_m).max(0.0) / scale_height_m.max(1.0)).exp());
+                - (-(cloud_base_m - observer_elevation_m).max(0.0) / scale_height_m.max(1.0))
+                    .exp());
         samples[index] = (-(inflow_tau + view_tau).min(20.0)).exp();
     }
     samples
@@ -2661,7 +2701,11 @@ fn physical_transmission_quality(transmission: f64) -> f64 {
     if value <= bright {
         return 0.18 + 0.52 * (value / weak).ln() / (bright / weak).ln();
     }
-    py_clamp(0.70 + 0.30 * (value / bright).ln() / (1.0 / bright).ln(), 0.0, 1.0)
+    py_clamp(
+        0.70 + 0.30 * (value / bright).ln() / (1.0 / bright).ln(),
+        0.0,
+        1.0,
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -2717,7 +2761,8 @@ fn cloud_edge_geometry_score(
     solar_elevation_deg: f64,
     observer_elevation_m: f64,
 ) -> f64 {
-    let distance_quality = cloud_edge_distance_quality(edge_distance_km, cloud_base_m, observer_elevation_m);
+    let distance_quality =
+        cloud_edge_distance_quality(edge_distance_km, cloud_base_m, observer_elevation_m);
     if distance_quality <= 0.0 {
         return 0.0;
     }
@@ -2945,7 +2990,11 @@ fn boundary_clear_slot_score(
             continue;
         }
         let distance_factor = clamp(1.0 - feature.distance_km() / boundary.distance_km().max(1.0));
-        let lower_layer_factor = if feature.pressure_hpa() >= 700 { 1.0 } else { 0.72 };
+        let lower_layer_factor = if feature.pressure_hpa() >= 700 {
+            1.0
+        } else {
+            0.72
+        };
         penalties.push(opacity * lower_layer_factor * (0.55 + 0.45 * distance_factor));
     }
     if penalties.is_empty() {
@@ -3099,7 +3148,8 @@ fn local_deck_edge_signals(
         return Vec::new();
     }
     let current_reach_km = cloud_edge_reach_km(solar_elevation_deg);
-    let required_base_m = firesky_native::required_illumination_height_m(0.0, solar_elevation_deg, 0.0);
+    let required_base_m =
+        firesky_native::required_illumination_height_m(0.0, solar_elevation_deg, 0.0);
     let mut signals: Vec<BoundarySignalOutput> = Vec::new();
     for layer in ["low", "mid", "high"] {
         let mut local_rows: Vec<&CloudColumnOutput> = column_values
@@ -3136,8 +3186,7 @@ fn local_deck_edge_signals(
         let mut target_column = local_rows[0];
         let mut target_key = f64::NEG_INFINITY;
         for column in &local_rows {
-            let key =
-                column_layer_presence(column, layer) * (-column.distance_km / 80.0).exp();
+            let key = column_layer_presence(column, layer) * (-column.distance_km / 80.0).exp();
             if key > target_key {
                 target_key = key;
                 target_column = column;
@@ -3147,7 +3196,8 @@ fn local_deck_edge_signals(
         if cloud_base_m <= required_base_m {
             continue;
         }
-        let maximum_edge_distance_km = cloud_edge_max_distance_km(cloud_base_m, observer_elevation_m);
+        let maximum_edge_distance_km =
+            cloud_edge_max_distance_km(cloud_base_m, observer_elevation_m);
         let geometric_reach_km = if current_reach_km != 0.0 {
             current_reach_km
         } else {
@@ -3180,7 +3230,8 @@ fn local_deck_edge_signals(
             if presence > 0.30 || column.distance_km < 30.0f64.max(last_cloud_distance + 8.0) {
                 continue;
             }
-            let following: Vec<&CloudColumnOutput> = corridor[index..(index + 6).min(corridor.len())]
+            let following: Vec<&CloudColumnOutput> = corridor
+                [index..(index + 6).min(corridor.len())]
                 .iter()
                 .copied()
                 .filter(|row| row.distance_km <= column.distance_km + 150.0)
@@ -3188,8 +3239,12 @@ fn local_deck_edge_signals(
             if following.is_empty() {
                 continue;
             }
-            let mean_presence =
-                statistics_mean(&following.iter().map(|row| column_layer_presence(row, layer)).collect::<Vec<f64>>());
+            let mean_presence = statistics_mean(
+                &following
+                    .iter()
+                    .map(|row| column_layer_presence(row, layer))
+                    .collect::<Vec<f64>>(),
+            );
             if mean_presence > 0.40 {
                 continue;
             }
@@ -3263,9 +3318,8 @@ fn local_deck_edge_signals(
                 .iter()
                 .copied()
                 .fold(f64::INFINITY, f64::min);
-        let aerosol_quality = clamp(
-            statistics_mean(&transmission_qualities) - 0.25 * transmission_spread,
-        );
+        let aerosol_quality =
+            clamp(statistics_mean(&transmission_qualities) - 0.25 * transmission_spread);
         let thickness =
             clamp(1.0 - 0.55 * target_column.deep_cloud_risk - 0.25 * target_column.thickness_risk);
         let score = clamp(
@@ -3467,7 +3521,8 @@ fn boundary_lightpath_signals(
         let minimum = samples.iter().copied().fold(f64::INFINITY, f64::min);
         let maximum = samples.iter().copied().fold(f64::NEG_INFINITY, f64::max);
         let spread = maximum - minimum;
-        let aerosol_weight = ((samples[0] + samples[1] + samples[2]) / 3.0 - 0.15 * spread).clamp(0.0, 1.0);
+        let aerosol_weight =
+            ((samples[0] + samples[1] + samples[2]) / 3.0 - 0.15 * spread).clamp(0.0, 1.0);
         let aerosol_sensitivity = clamp(spread);
         let (row_index, clearance, observer_path_aod, inflow_path_aod, path_variability) =
             eligible[eligible_index];
@@ -3476,7 +3531,9 @@ fn boundary_lightpath_signals(
         let feature = &features[position];
         let edge_contrast = boundary_edge_contrast_score(features, index, position);
         let clear_slot = boundary_clear_slot_score(features, index, position, solar_azimuth_deg);
-        let column = row.column_index.map(|column_index| &columns[column_index].1);
+        let column = row
+            .column_index
+            .map(|column_index| &columns[column_index].1);
         let type_burnability = column.map_or(0.5, |column| column.burnability_score);
         let cloud_type = column.map_or("unknown".to_string(), |column| column.cloud_type.clone());
         let deep_risk = column.map_or(0.0, |column| column.deep_cloud_risk);
@@ -3687,7 +3744,11 @@ fn cloud_hole_path_clearance(
 fn cloud_hole_blocking_risk(column: &CloudColumnOutput) -> f64 {
     let low_mid_block = column.low_presence.max(0.82 * column.mid_presence);
     let thick_upper_block = column.high_presence.max(column.mid_presence)
-        * clamp(1.0 - column.burnability_score + 0.45 * column.thickness_risk + 0.45 * column.deep_cloud_risk);
+        * clamp(
+            1.0 - column.burnability_score
+                + 0.45 * column.thickness_risk
+                + 0.45 * column.deep_cloud_risk,
+        );
     clamp(
         0.66 * low_mid_block
             + 0.46 * column.deep_cloud_risk
@@ -3727,9 +3788,7 @@ fn cloud_hole_rear_blocking_risk(
         risks.push(risk * (0.62 + 0.38 * distance_factor));
     }
     let target_self_risk = clamp(
-        0.55 * target.deep_cloud_risk
-            + 0.35 * target.thickness_risk
-            + 0.28 * target.low_presence,
+        0.55 * target.deep_cloud_risk + 0.35 * target.thickness_risk + 0.28 * target.low_presence,
     );
     risks.push(target_self_risk);
     risks.iter().copied().fold(0.0f64, f64::max)
@@ -3855,9 +3914,8 @@ fn cloud_hole_lightpath_signals(
         });
         let rear = &rear_targets[0];
         let target = column_values[rear.position];
-        let distance_gap_score = clamp(
-            (target.distance_km - hole.distance_km - 30.0) / 130.0,
-        ) * clamp(1.0 - (target.distance_km - hole.distance_km - 260.0) / 260.0);
+        let distance_gap_score = clamp((target.distance_km - hole.distance_km - 30.0) / 130.0)
+            * clamp(1.0 - (target.distance_km - hole.distance_km - 260.0) / 260.0);
         let score = clamp(
             (0.26 * clear_slot
                 + 0.22 * edge_contrast
@@ -3963,11 +4021,12 @@ fn diagnose_solar_inflow_blockage(
         if intersection <= 0.0 {
             continue;
         }
-        let distance_factor = clamp(
-            1.0 - (gap_km - 20.0) / (MAX_SOLAR_INFLOW_BLOCKER_DISTANCE_KM - 20.0),
+        let distance_factor =
+            clamp(1.0 - (gap_km - 20.0) / (MAX_SOLAR_INFLOW_BLOCKER_DISTANCE_KM - 20.0));
+        let alignment = clamp(
+            1.0 - (target_delta / bearing_tolerance.max(1.0))
+                .max(solar_delta / solar_tolerance.max(1.0)),
         );
-        let alignment =
-            clamp(1.0 - (target_delta / bearing_tolerance.max(1.0)).max(solar_delta / solar_tolerance.max(1.0)));
         let far_factor = if gap_km <= 360.0 { 1.0 } else { 0.72 };
         let score =
             opacity * intersection * alignment * (0.45 + 0.55 * distance_factor) * far_factor;
@@ -3976,9 +4035,7 @@ fn diagnose_solar_inflow_blockage(
         }
         rows.push((score, position, ray_height, cloud_base, intersection));
     }
-    rows.sort_by(|a, b| {
-        b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal)
-    });
+    rows.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
     let (score, position, ray_height, cloud_base, _) = rows.first().copied()?;
     let feature = &features[position];
     Some(SolarInflowBlockageOutput {
@@ -4031,7 +4088,10 @@ pub struct SurfaceWeatherPenaltyOutput {
 }
 
 /// `surface_weather_penalty` (scoring.py:1022-1043), index-based variant.
-fn surface_weather_penalty(features: &[Feature<'_>], index: &SpatialIndex) -> SurfaceWeatherPenaltyOutput {
+fn surface_weather_penalty(
+    features: &[Feature<'_>],
+    index: &SpatialIndex,
+) -> SurfaceWeatherPenaltyOutput {
     // (lat, lon) rounded keys keep the nearest feature per grid point.
     let mut points: HashMap<ColumnKey, usize> = HashMap::new();
     for position in index.query(&[(0.0, 180.0)], 0.0, 80.0, false) {
@@ -4179,8 +4239,11 @@ fn column_blocker_opacity(
 fn target_column_score(column: &CloudColumnOutput, solar_elevation_deg: f64) -> f64 {
     let high_mid = column.high_presence.max(0.82 * column.mid_presence);
     let distance_score = clamp(1.0 - (column.distance_km - 170.0).abs() / 210.0);
-    let required_height =
-        firesky_native::required_illumination_height_m(column.distance_km, solar_elevation_deg, 0.0);
+    let required_height = firesky_native::required_illumination_height_m(
+        column.distance_km,
+        solar_elevation_deg,
+        0.0,
+    );
     let high_enough = clamp((column.cloud_base_m - required_height + 1200.0) / 4200.0);
     clamp(
         high_mid
@@ -4266,9 +4329,7 @@ fn column_3d_blocking_risk(
         layer_risks.push(opacity * intersection * (0.50 + 0.50 * distance_factor));
     }
     let deep_risk = column.deep_cloud_risk * (0.35 + 0.35 * distance_factor);
-    clamp(
-        layer_risks.iter().copied().fold(0.0f64, f64::max) + deep_risk,
-    )
+    clamp(layer_risks.iter().copied().fold(0.0f64, f64::max) + deep_risk)
 }
 
 fn heuristic_lightpath_blocking_risk(
@@ -4278,15 +4339,20 @@ fn heuristic_lightpath_blocking_risk(
 ) -> f64 {
     let mut risks: Vec<f64> = Vec::new();
     for column in samples {
-        let required_height =
-            firesky_native::required_illumination_height_m(column.distance_km, solar_elevation_deg, 0.0);
+        let required_height = firesky_native::required_illumination_height_m(
+            column.distance_km,
+            solar_elevation_deg,
+            0.0,
+        );
         let low_block = column_blocker_opacity(features, column, "low")
             * clamp(1.0 - column.distance_km / 160.0);
         let mid_block = column_blocker_opacity(features, column, "mid")
             * clamp((column.distance_km - 25.0) / 160.0)
             * clamp((5200.0 - required_height) / 5200.0);
         let deep_block = column.deep_cloud_risk * clamp((column.distance_km - 40.0) / 220.0);
-        risks.push(clamp(0.75 * low_block + 0.30 * mid_block + 0.45 * deep_block));
+        risks.push(clamp(
+            0.75 * low_block + 0.30 * mid_block + 0.45 * deep_block,
+        ));
     }
     risks.iter().copied().fold(0.0f64, f64::max)
 }
@@ -4300,8 +4366,7 @@ fn lightpath_blocking_risk(
     target_column: Option<&CloudColumnOutput>,
     observer_elevation_m: f64,
 ) -> f64 {
-    let legacy_risk =
-        heuristic_lightpath_blocking_risk(features, samples, solar_elevation_deg);
+    let legacy_risk = heuristic_lightpath_blocking_risk(features, samples, solar_elevation_deg);
     if let Some(target_column) = target_column {
         if target_column_score(target_column, solar_elevation_deg) > 0.18 {
             let target_height_m = target_column.cloud_base_m;
@@ -4368,7 +4433,9 @@ fn nearest_column<'a>(
     // — stable sort, first maximum wins per key tuple.
     candidates.sort_by(|a, b| {
         let key = |item: &(f64, f64, f64, f64, usize)| (item.0, -item.1, -item.2, item.3);
-        key(b).partial_cmp(&key(a)).unwrap_or(std::cmp::Ordering::Equal)
+        key(b)
+            .partial_cmp(&key(a))
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
     columns.get(candidates[0].4).copied()
 }
@@ -4382,10 +4449,13 @@ fn profile_blocking_risk(
     target_column: Option<&CloudColumnOutput>,
     observer_elevation_m: f64,
 ) -> f64 {
-    let required_height =
-        firesky_native::required_illumination_height_m(column.distance_km, solar_elevation_deg, 0.0);
-    let low_block = column_blocker_opacity(features, column, "low")
-        * clamp(1.0 - column.distance_km / 160.0);
+    let required_height = firesky_native::required_illumination_height_m(
+        column.distance_km,
+        solar_elevation_deg,
+        0.0,
+    );
+    let low_block =
+        column_blocker_opacity(features, column, "low") * clamp(1.0 - column.distance_km / 160.0);
     let mid_block = column_blocker_opacity(features, column, "mid")
         * clamp((column.distance_km - 25.0) / 160.0)
         * clamp((5200.0 - required_height) / 5200.0);
@@ -4491,8 +4561,7 @@ fn diagnose_cross_section(
     solar_azimuth_deg: f64,
     observer_elevation_m: f64,
 ) -> CrossSectionOutput {
-    let all_columns: Vec<&CloudColumnOutput> =
-        columns.iter().map(|(_, column)| column).collect();
+    let all_columns: Vec<&CloudColumnOutput> = columns.iter().map(|(_, column)| column).collect();
     let profile_columns: Vec<&CloudColumnOutput> = all_columns
         .iter()
         .copied()
@@ -4549,7 +4618,9 @@ fn diagnose_cross_section(
     let mut summary = vec![
         format!(
             "剖面诊断：太阳方位 {:.0}°，样本 {} 个，主导云型 {}。",
-            solar_azimuth_deg, samples.len(), vertical_type
+            solar_azimuth_deg,
+            samples.len(),
+            vertical_type
         ),
         format!(
             "光路完整度 {:.0}/100，路径通透度 {:.0}/100，深厚云系风险 {:.0}/100。",
@@ -4634,9 +4705,7 @@ fn np_linspace(start: f64, stop: f64, num: usize) -> Vec<f64> {
         return vec![start];
     }
     let step = (stop - start) / (num - 1) as f64;
-    let mut values: Vec<f64> = (0..num)
-        .map(|index| start + step * index as f64)
-        .collect();
+    let mut values: Vec<f64> = (0..num).map(|index| start + step * index as f64).collect();
     values[num - 1] = stop;
     values
 }
@@ -4766,7 +4835,8 @@ struct ExtentOutcome {
 fn extent_score(signals: &[CandidateSignalOutput]) -> ExtentOutcome {
     let mut burnable_cells: Vec<((i64, i64), f64)> = Vec::new();
     let mut burnable_index: HashMap<(i64, i64), usize> = HashMap::new();
-    let mut strong_cells: std::collections::BTreeSet<(i64, i64)> = std::collections::BTreeSet::new();
+    let mut strong_cells: std::collections::BTreeSet<(i64, i64)> =
+        std::collections::BTreeSet::new();
     for signal in signals {
         let cell = (
             (signal.bearing_deg / 10.0).floor() as i64,
@@ -4793,10 +4863,13 @@ fn extent_score(signals: &[CandidateSignalOutput]) -> ExtentOutcome {
     let mut distance_index: HashMap<i64, usize> = HashMap::new();
     let mut weighted_cells = 0.0f64;
     for ((az_bin, dist_bin), score) in &burnable_cells {
-        let weight = clamp((score - BURNABLE_CELL_SCORE) / (STRONG_CELL_SCORE - BURNABLE_CELL_SCORE));
+        let weight =
+            clamp((score - BURNABLE_CELL_SCORE) / (STRONG_CELL_SCORE - BURNABLE_CELL_SCORE));
         weighted_cells += weight;
         match azimuth_index.get(az_bin) {
-            Some(&position) => azimuth_weights[position].1 = azimuth_weights[position].1.max(weight),
+            Some(&position) => {
+                azimuth_weights[position].1 = azimuth_weights[position].1.max(weight)
+            }
             None => {
                 azimuth_index.insert(*az_bin, azimuth_weights.len());
                 azimuth_weights.push((*az_bin, weight));
@@ -4804,7 +4877,9 @@ fn extent_score(signals: &[CandidateSignalOutput]) -> ExtentOutcome {
         }
         let distance_bin = ((*dist_bin as f64) * 45.0 / 90.0).floor() as i64;
         match distance_index.get(&distance_bin) {
-            Some(&position) => distance_weights[position].1 = distance_weights[position].1.max(weight),
+            Some(&position) => {
+                distance_weights[position].1 = distance_weights[position].1.max(weight)
+            }
             None => {
                 distance_index.insert(distance_bin, distance_weights.len());
                 distance_weights.push((distance_bin, weight));
@@ -4862,16 +4937,10 @@ fn candidate_angular_cloud_coverage(
     if rows.is_empty() {
         return 0.0;
     }
-    let mut latitudes: Vec<f64> = rows
-        .iter()
-        .map(|row| python_round(row.lat, 6))
-        .collect();
+    let mut latitudes: Vec<f64> = rows.iter().map(|row| python_round(row.lat, 6)).collect();
     latitudes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     latitudes.dedup_by(|a, b| *a == *b);
-    let mut longitudes: Vec<f64> = rows
-        .iter()
-        .map(|row| python_round(row.lon, 6))
-        .collect();
+    let mut longitudes: Vec<f64> = rows.iter().map(|row| python_round(row.lon, 6)).collect();
     longitudes.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     longitudes.dedup_by(|a, b| *a == *b);
     let mut spacings: Vec<f64> = Vec::new();
@@ -4938,8 +5007,9 @@ fn candidate_angular_cloud_coverage(
         } else {
             let cell_width_km = spacing_deg
                 * (110.574f64.powi(2) + (111.320 * latitude.to_radians().cos()).powi(2)).sqrt();
-            let half_width =
-                (0.5 * cell_width_km / distance_km.max(1.0)).atan().to_degrees();
+            let half_width = (0.5 * cell_width_km / distance_km.max(1.0))
+                .atan()
+                .to_degrees();
             azimuth_start = (center - half_width).max(-60.0);
             azimuth_end = (center + half_width).min(60.0);
         }
@@ -4967,7 +5037,11 @@ fn candidate_angular_cloud_coverage(
             60.0
         } else {
             py_clamp(
-                apparent_cloud_elevation_deg(top_distance_km, row.cloud_height_m, observer_elevation_m),
+                apparent_cloud_elevation_deg(
+                    top_distance_km,
+                    row.cloud_height_m,
+                    observer_elevation_m,
+                ),
                 0.0,
                 60.0,
             )
@@ -4981,9 +5055,8 @@ fn candidate_angular_cloud_coverage(
         let elevation_end = (top.ceil() as i64).clamp(0, 60);
         for azimuth_bin in az_start..az_end {
             let bin_start = -60.0 + azimuth_bin as f64 * 5.0;
-            let azimuth_overlap = clamp(
-                (azimuth_end.min(bin_start + 5.0) - azimuth_start.max(bin_start)) / 5.0,
-            );
+            let azimuth_overlap =
+                clamp((azimuth_end.min(bin_start + 5.0) - azimuth_start.max(bin_start)) / 5.0);
             for elevation_bin in elevation_start..elevation_end {
                 let elevation_overlap =
                     clamp(top.min(elevation_bin as f64 + 1.0) - base.max(elevation_bin as f64));
@@ -4993,15 +5066,12 @@ fn candidate_angular_cloud_coverage(
             }
         }
     }
-    let weights: Vec<f64> = (0..61)
-        .map(|index| (index as f64).to_radians())
-        .collect();
+    let weights: Vec<f64> = (0..61).map(|index| (index as f64).to_radians()).collect();
     let mut products = vec![0.0f64; 24 * 60];
     for (cell, value) in products.iter_mut().enumerate() {
         let azimuth_bin = cell / 60;
         let elevation_bin = cell % 60;
-        *value = opacity[cell]
-            * ((weights[elevation_bin + 1].sin() - weights[elevation_bin].sin()));
+        *value = opacity[cell] * (weights[elevation_bin + 1].sin() - weights[elevation_bin].sin());
         let _ = azimuth_bin;
     }
     let occupied = numpy_pairwise_sum(&products);
@@ -5033,15 +5103,13 @@ fn cloud_column_angular_cloud_coverage(
     let rows: Vec<AngularCoverageRow> = columns
         .iter()
         .map(|(_, column)| {
-            let probability = column
-                .horizontal_cloud_probability
-                .unwrap_or_else(|| {
-                    column
-                        .high_presence
-                        .max(column.mid_presence)
-                        .max(column.low_presence)
-                        .max(column.explicit_cloud_evidence)
-                });
+            let probability = column.horizontal_cloud_probability.unwrap_or_else(|| {
+                column
+                    .high_presence
+                    .max(column.mid_presence)
+                    .max(column.low_presence)
+                    .max(column.explicit_cloud_evidence)
+            });
             let probability = clamp(probability);
             AngularCoverageRow {
                 lat: column.lat,
@@ -5103,15 +5171,13 @@ fn observer_local_cloud_field_amount_from_columns(
         if !contains_observer {
             continue;
         }
-        let probability = column
-            .horizontal_cloud_probability
-            .unwrap_or_else(|| {
-                column
-                    .high_presence
-                    .max(column.mid_presence)
-                    .max(column.low_presence)
-                    .max(column.explicit_cloud_evidence)
-            });
+        let probability = column.horizontal_cloud_probability.unwrap_or_else(|| {
+            column
+                .high_presence
+                .max(column.mid_presence)
+                .max(column.low_presence)
+                .max(column.explicit_cloud_evidence)
+        });
         local_probabilities.push(clamp(probability));
     }
     local_probabilities
@@ -5164,7 +5230,10 @@ fn scene_diagnosis(
     if positive_score < 0.08 {
         if scores[4].1 < 0.35 {
             selected_regime = "clear".to_string();
-            scores.push(("clear".to_string(), clamp(1.0 - positive_score.max(scores[4].1))));
+            scores.push((
+                "clear".to_string(),
+                clamp(1.0 - positive_score.max(scores[4].1)),
+            ));
         } else {
             selected_regime = "convective".to_string();
         }
@@ -5191,7 +5260,10 @@ pub struct CloudPhaseOutput {
     confidence: f64,
 }
 
-fn cloud_phase_diagnosis(cloud_ice_kg_kg: Option<f64>, cloud_liquid_kg_kg: Option<f64>) -> CloudPhaseOutput {
+fn cloud_phase_diagnosis(
+    cloud_ice_kg_kg: Option<f64>,
+    cloud_liquid_kg_kg: Option<f64>,
+) -> CloudPhaseOutput {
     let ice = cloud_ice_kg_kg.unwrap_or(0.0).max(0.0);
     let liquid = cloud_liquid_kg_kg.unwrap_or(0.0).max(0.0);
     let total = ice + liquid;
@@ -5251,9 +5323,8 @@ fn color_diagnosis(
     } else {
         "deep_red"
     };
-    let confidence = clamp(
-        0.30 * strength + 0.30 * vividness + 0.25 * transmission + 0.15 * (1.0 - deep),
-    );
+    let confidence =
+        clamp(0.30 * strength + 0.30 * vividness + 0.25 * transmission + 0.15 * (1.0 - deep));
     ColorDiagnosisOutput {
         color_type: color_type.to_string(),
         confidence,
@@ -5386,6 +5457,7 @@ fn assemble_step(
     aod550: f64,
     aerosol_quality: &str,
     valid_time_local: &str,
+    full_detail: bool,
 ) -> AssessmentStepOutput {
     let top = signals.first().cloned();
     let top_boundary = boundary_signals.first().cloned();
@@ -5406,11 +5478,7 @@ fn assemble_step(
     let forward_burnable_cloud_field_amount =
         candidate_signal_angular_coverage(signals, scan.solar_azimuth_deg, observer_elevation_m);
     let observer_local_cloud_field_amount = observer_local_cloud_field_amount_from_columns(columns);
-    let raw_extent = candidate_signal_angular_coverage(
-        signals,
-        scan.solar_azimuth_deg,
-        observer_elevation_m,
-    );
+    let raw_extent = forward_burnable_cloud_field_amount;
     let mut edge_structure_gate = 1.0;
     if extent.score >= 0.45 {
         edge_structure_gate = match &top_boundary {
@@ -5425,7 +5493,9 @@ fn assemble_step(
     let mut visible_extent = clamp(structured_extent * ground_visibility);
     let boundary_component = top_boundary.as_ref().map_or(0.0, |signal| signal.score);
     let local_deck_component = top_local_deck.as_ref().map_or(0.0, |signal| signal.score);
-    let remote_boundary_component = top_remote_boundary.as_ref().map_or(0.0, |signal| signal.score);
+    let remote_boundary_component = top_remote_boundary
+        .as_ref()
+        .map_or(0.0, |signal| signal.score);
     let cloud_hole_component = top_cloud_hole.as_ref().map_or(0.0, |signal| signal.score);
     let profile_integrity = cross_section.lightpath_integrity_score;
     let profile_factor = if cross_section.samples_count == 0 {
@@ -5466,9 +5536,8 @@ fn assemble_step(
         );
         structured_extent = structured_extent.max(local_geometric_extent);
         visible_extent = visible_extent.max(local_geometric_extent * regime_visibility_gate);
-        let local_vividness = clamp(
-            0.65 * top_deck.local_cloud_presence_score + 0.35 * top_deck.edge_contrast_score,
-        );
+        let local_vividness =
+            clamp(0.65 * top_deck.local_cloud_presence_score + 0.35 * top_deck.edge_contrast_score);
         vividness = vividness.max(local_vividness);
         regime_profile_factor = 1.0;
     } else {
@@ -5510,6 +5579,7 @@ fn assemble_step(
         selected_aod_observer = selected_aod_observer.max(deck.observer_path_aod550.unwrap_or(0.0));
         selected_aod_inflow = deck
             .inflow_path_aod550
+            .filter(|value| *value != 0.0)
             .unwrap_or(selected_aod_observer);
         selected_cloud_base_m = deck.cloud_base_m;
         selected_distance_km = deck.distance_km;
@@ -5519,9 +5589,13 @@ fn assemble_step(
         selected_observer_path_aod550 = boundary.observer_path_aod550;
         selected_inflow_path_aod550 = boundary.inflow_path_aod550;
         selected_aerosol_path_variability_score = boundary.aerosol_path_variability_score;
-        selected_aod_observer = boundary.observer_path_aod550.unwrap_or(selected_aod_observer);
+        selected_aod_observer = boundary
+            .observer_path_aod550
+            .filter(|value| *value != 0.0)
+            .unwrap_or(selected_aod_observer);
         selected_aod_inflow = boundary
             .inflow_path_aod550
+            .filter(|value| *value != 0.0)
             .unwrap_or(selected_aod_observer);
         selected_cloud_base_m = boundary.cloud_base_m;
         selected_distance_km = boundary.distance_km;
@@ -5726,7 +5800,9 @@ fn assemble_step(
             ));
         }
         if top.cloud_type_burnability_score < 0.45 {
-            reasons.push("该云型可烧性偏低，可能更像厚云盾、低云或弱云，已下调候选云评分。".to_string());
+            reasons.push(
+                "该云型可烧性偏低，可能更像厚云盾、低云或弱云，已下调候选云评分。".to_string(),
+            );
         } else if top.cloud_type_burnability_score >= 0.75 {
             reasons.push("该云型对霞光较友好，具备较好的染色潜力。".to_string());
         }
@@ -5734,21 +5810,33 @@ fn assemble_step(
             reasons.push("目标云柱多层湿度叠加偏强，存在厚云盾或降水云系风险。".to_string());
         }
         if top.cloud_base_m > top.illumination_height_m {
-            reasons.push("云底高于估算的受光阈值，具备被夕阳或晨光照亮的条件；云顶用于判断地面是否看得到。".to_string());
+            reasons.push(
+                "云底高于估算的受光阈值，具备被夕阳或晨光照亮的条件；云顶用于判断地面是否看得到。"
+                    .to_string(),
+            );
         } else {
-            reasons.push("云底接近或低于受光阈值，成霞时间会比较敏感；云顶高度不再替代云底参与受光判断。".to_string());
+            reasons.push(
+                "云底接近或低于受光阈值，成霞时间会比较敏感；云顶高度不再替代云底参与受光判断。"
+                    .to_string(),
+            );
         }
         if top.apparent_elevation_deg < 0.8 {
-            reasons.push("目标云在地平线上方仰角很低，远距离视线路径会削弱地面可见效果。".to_string());
+            reasons
+                .push("目标云在地平线上方仰角很低，远距离视线路径会削弱地面可见效果。".to_string());
         }
         if top.aerosol_transmission_score < 0.7 {
-            reasons.push("目标云视仰角较低或气溶胶偏多，视线路径消光会削弱亮度和饱和度。".to_string());
+            reasons
+                .push("目标云视仰角较低或气溶胶偏多，视线路径消光会削弱亮度和饱和度。".to_string());
         }
         if top.aerosol_sensitivity_score >= 0.12 {
-            reasons.push("气溶胶垂直分布敏感性较高，不同尺度高度假设会明显改变光路透过率。".to_string());
+            reasons.push(
+                "气溶胶垂直分布敏感性较高，不同尺度高度假设会明显改变光路透过率。".to_string(),
+            );
         }
         if top.aerosol_path_variability_score >= 0.30 {
-            reasons.push("沿程 AOD 水平起伏较大，局地洁净空气不能代表完整入射与观测光路。".to_string());
+            reasons.push(
+                "沿程 AOD 水平起伏较大，局地洁净空气不能代表完整入射与观测光路。".to_string(),
+            );
         }
         if top.path_clearance_score < 0.7 {
             reasons.push("目标云与太阳/观测点之间存在疑似挡光云层，光路完整性偏差。".to_string());
@@ -5792,7 +5880,9 @@ fn assemble_step(
             reasons.push("目标附近多层云叠加偏厚，云体可能发灰或压暗。".to_string());
         }
     } else if raw_extent >= 0.45 {
-        reasons.push("候选云虽多，但没有识别到明确云边界，大面积成霞度已按连续云盾风险下调。".to_string());
+        reasons.push(
+            "候选云虽多，但没有识别到明确云边界，大面积成霞度已按连续云盾风险下调。".to_string(),
+        );
     }
     if let Some(top_cloud_hole) = &top_cloud_hole {
         reasons.push(format!(
@@ -5806,10 +5896,13 @@ fn assemble_step(
             top_cloud_hole.rear_blocking_risk * 100.0
         ));
         if top_cloud_hole.rear_blocking_risk > 0.45 {
-            reasons.push("云洞后方存在一定厚云或中低云遮挡，后方云可能部分挡光而不是充分受光。".to_string());
+            reasons.push(
+                "云洞后方存在一定厚云或中低云遮挡，后方云可能部分挡光而不是充分受光。".to_string(),
+            );
         }
         if top_cloud_hole.path_clearance_score < 0.65 {
-            reasons.push("云洞后方通道仍有中低云或厚云风险，透光到后方云的确定性偏低。".to_string());
+            reasons
+                .push("云洞后方通道仍有中低云或厚云风险，透光到后方云的确定性偏低。".to_string());
         } else if top_cloud_hole.rear_target_score >= 0.55 {
             reasons.push("云洞后方目标云可烧性较好，属于“洞后云被打亮”的有利结构。".to_string());
         }
@@ -5834,7 +5927,8 @@ fn assemble_step(
     }
     reasons.push(format!(
         "地面可见的大面积成霞度约 {:.0}/100，鲜艳度约 {:.0}/100。",
-        visible_extent * 100.0, vividness * 100.0
+        visible_extent * 100.0,
+        vividness * 100.0
     ));
     if low_penalty > 0.4 {
         reasons.push("观测点附近低层湿度偏高，地平线附近可能被低云或雾霾遮挡。".to_string());
@@ -5847,7 +5941,9 @@ fn assemble_step(
         ));
     }
     if weather_penalty >= 0.35 {
-        reasons.push("地面能见度偏低或存在降水，即使高空云被照亮，实际观测效果也会明显受限。".to_string());
+        reasons.push(
+            "地面能见度偏低或存在降水，即使高空云被照亮，实际观测效果也会明显受限。".to_string(),
+        );
     }
     if !signals.is_empty() && ground_visibility <= 0.05 {
         reasons.push("近场低云遮挡过强，即使高空有可受光云，地面也很难看到完整霞光。".to_string());
@@ -5909,12 +6005,36 @@ fn assemble_step(
         observation_burnable: true,
         observation_score_ceiling: None,
         surface_weather_penalty: weather.clone(),
-        columns: columns.iter().map(|(_, column)| column.clone()).collect(),
-        candidate_signals: signals.to_vec(),
-        local_deck_signals: local_deck_signals.to_vec(),
-        remote_boundary_signals: remote_boundary_signals.to_vec(),
-        boundary_signals: boundary_signals.to_vec(),
-        cloud_hole_signals: cloud_hole_signals.to_vec(),
+        columns: if full_detail {
+            columns.iter().map(|(_, column)| column.clone()).collect()
+        } else {
+            Vec::new()
+        },
+        candidate_signals: if full_detail {
+            signals.to_vec()
+        } else {
+            Vec::new()
+        },
+        local_deck_signals: if full_detail {
+            local_deck_signals.to_vec()
+        } else {
+            Vec::new()
+        },
+        remote_boundary_signals: if full_detail {
+            remote_boundary_signals.to_vec()
+        } else {
+            Vec::new()
+        },
+        boundary_signals: if full_detail {
+            boundary_signals.to_vec()
+        } else {
+            Vec::new()
+        },
+        cloud_hole_signals: if full_detail {
+            cloud_hole_signals.to_vec()
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -5955,11 +6075,7 @@ fn combine_regime_intensity_score(
         .min(visibility_gate_score)
         .min(profile_factor);
     let quality_fill = clamp(0.56 + 0.36 * vividness + 0.08 * geometric_extent);
-    clamp(
-        necessary_ceiling
-            * quality_fill
-            * py_clamp(path_illumination_factor, 0.70, 1.0),
-    )
+    clamp(necessary_ceiling * quality_fill * py_clamp(path_illumination_factor, 0.70, 1.0))
 }
 
 /// `local_deck_boundary_uncertainty` (scoring.py:2280-2366).
@@ -5986,8 +6102,12 @@ fn local_deck_boundary_uncertainty(
         return None;
     }
     let nominal = boundary.distance_km.clamp(lower, upper);
-    let nominal_geometry =
-        cloud_edge_geometry_score(nominal, boundary.cloud_base_m, solar_elevation_deg, observer_elevation_m);
+    let nominal_geometry = cloud_edge_geometry_score(
+        nominal,
+        boundary.cloud_base_m,
+        solar_elevation_deg,
+        observer_elevation_m,
+    );
     if nominal_geometry <= 0.0 {
         return None;
     }
@@ -6016,13 +6136,15 @@ fn local_deck_boundary_uncertainty(
         )
     };
     let bracket_distances = np_linspace(lower, upper, 41);
-    let bracket_scores: Vec<f64> = bracket_distances.iter().map(|distance| score_at(*distance)).collect();
+    let bracket_scores: Vec<f64> = bracket_distances
+        .iter()
+        .map(|distance| score_at(*distance))
+        .collect();
     let nominal_event = nominal_burn_score >= event_threshold;
     let classification_stable = bracket_scores
         .iter()
         .all(|score| (*score >= event_threshold) == nominal_event);
-    let maximum_distance =
-        cloud_edge_max_distance_km(boundary.cloud_base_m, observer_elevation_m);
+    let maximum_distance = cloud_edge_max_distance_km(boundary.cloud_base_m, observer_elevation_m);
     let search_distances = np_linspace(1.0, maximum_distance.max(1.0), 801);
     let mut nearest_flip: Option<f64> = None;
     for distance in &search_distances {
@@ -6042,7 +6164,10 @@ fn local_deck_boundary_uncertainty(
         upper_distance_km: upper,
         width_km: upper - lower,
         score_min: bracket_scores.iter().copied().fold(f64::INFINITY, f64::min),
-        score_max: bracket_scores.iter().copied().fold(f64::NEG_INFINITY, f64::max),
+        score_max: bracket_scores
+            .iter()
+            .copied()
+            .fold(f64::NEG_INFINITY, f64::max),
         event_threshold,
         classification_stable,
         nearest_flip_displacement_km: nearest_flip,
@@ -6115,12 +6240,16 @@ fn build_map_cloud_cells(
             deep_cloud_risk: column.deep_cloud_risk,
             burn_score,
             illumination_score: signal
-                .map(|signal| illumination_feasibility(signal.cloud_base_m, signal.illumination_height_m))
+                .map(|signal| {
+                    illumination_feasibility(signal.cloud_base_m, signal.illumination_height_m)
+                })
                 .unwrap_or(0.0),
             path_clearance_score: signal.map_or(0.0, |signal| signal.path_clearance_score),
-            aerosol_transmission_score: signal.map_or(0.0, |signal| signal.aerosol_transmission_score),
+            aerosol_transmission_score: signal
+                .map_or(0.0, |signal| signal.aerosol_transmission_score),
             blocking_risk: clamp(column.low_presence.max(0.70 * column.deep_cloud_risk)),
-            atmospheric_clarity_score: signal.map_or(1.0, |signal| signal.atmospheric_clarity_score),
+            atmospheric_clarity_score: signal
+                .map_or(1.0, |signal| signal.atmospheric_clarity_score),
         });
     }
     let _ = features;
@@ -6186,11 +6315,31 @@ fn radar_effective_path_blocking_risk(radar: &RadarInput) -> f64 {
     clamp(reliability * clamp(radar.path_precip_ratio.unwrap_or(0.0)))
 }
 
+pub(crate) fn radar_diagnostics(value: serde_json::Value) -> Result<serde_json::Value, String> {
+    let radar: RadarInput = serde_json::from_value(value).map_err(|e| e.to_string())?;
+    let (reliability, convective_risk) = radar_effective_convective_risk(&radar);
+    let path_risk = radar_effective_path_blocking_risk(&radar);
+    Ok(serde_json::json!({
+        "radar_reliability_score":reliability,
+        "effective_convective_risk":convective_risk,
+        "effective_path_blocking_risk":path_risk,
+        "convective_score_ceiling":py_clamp(
+            1.0 - 0.88 * observation_ramp(path_risk, 0.18, 0.72),0.12,f64::MAX),
+    }))
+}
+
 /// `apply_nowcast_observation_constraints` (service.py:1486-1562), assessment side.
-fn apply_observation_constraints(mut step: AssessmentStepOutput, radar: &RadarInput) -> AssessmentStepOutput {
+fn apply_observation_constraints(
+    mut step: AssessmentStepOutput,
+    radar: &RadarInput,
+) -> AssessmentStepOutput {
     let (radar_reliability, convective_risk) = radar_effective_convective_risk(radar);
     let path_blocking_risk = radar_effective_path_blocking_risk(radar);
-    let convective_ceiling = py_clamp(1.0 - 0.88 * observation_ramp(path_blocking_risk, 0.18, 0.72), 0.12, f64::MAX);
+    let convective_ceiling = py_clamp(
+        1.0 - 0.88 * observation_ramp(path_blocking_risk, 0.18, 0.72),
+        0.12,
+        f64::MAX,
+    );
     let burn_score = step.burn_score.min(convective_ceiling);
     let intensity_score = step.intensity_score.min(convective_ceiling);
     let vividness_score = step.vividness_score.min(convective_ceiling);
@@ -6227,7 +6376,11 @@ fn apply_observation_constraints(mut step: AssessmentStepOutput, radar: &RadarIn
         if selected_regime == "convective" {
             step.color_diagnosis["type"] = serde_json::json!("muted_glow");
         }
-        if let Some(inputs) = step.color_diagnosis.get_mut("inputs").and_then(|value| value.as_object_mut()) {
+        if let Some(inputs) = step
+            .color_diagnosis
+            .get_mut("inputs")
+            .and_then(|value| value.as_object_mut())
+        {
             let deep = inputs
                 .get("deep_cloud_risk")
                 .and_then(|value| value.as_f64())

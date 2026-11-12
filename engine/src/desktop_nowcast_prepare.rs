@@ -1,13 +1,17 @@
 //! Native desktop nowcast input preparation.
 //!
-//! Remote HSD discovery and cache writes remain owned by the Python provider.
-//! Once compact frames exist, this module owns their strict cache gate plus
-//! native GFS/CAMS resolution and downloads for the nowcast event window.
+//! Owns HSD discovery/calibration/cache warming and strict native GFS/CAMS
+//! resolution and downloads for the nowcast event window.
 use crate::{ads, cams_data, desktop_hsd, desktop_nowcast, gfs_data, request_file, time_contract};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::{json, Value};
-use std::{collections::BTreeSet, path::PathBuf, time::Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+    sync::atomic::{AtomicBool, Ordering},
+    time::Instant,
+};
 
 const MAX_JSON: u64 = 128 * 1024 * 1024;
 const MAX_HOURS: usize = 64;
@@ -50,7 +54,10 @@ fn request_number(context: &Value, key: &str) -> Result<f64, String> {
         .ok_or_else(|| format!("nowcast context request has invalid {key}"))
 }
 
-fn model_hours(context: &Value, frame_times: &[DateTime<Utc>]) -> Result<Vec<u32>, String> {
+pub(crate) fn model_hours(
+    context: &Value,
+    frame_times: &[DateTime<Utc>],
+) -> Result<Vec<u32>, String> {
     let cycle = parse_time(context, "cycle")?;
     let mut hours = BTreeSet::new();
     let mut add = |value: DateTime<Utc>| {
@@ -86,7 +93,7 @@ fn model_hours(context: &Value, frame_times: &[DateTime<Utc>]) -> Result<Vec<u32
 
 fn hsd_frames(input: &Input, context: &Value) -> Result<Value, String> {
     let lookup = parse_time(context, "lookup")?;
-    let result = desktop_hsd::execute(desktop_hsd::Params {
+    let mut result = desktop_hsd::execute(desktop_hsd::Params {
         cache_dir: input.config.satellite_cache_dir.clone(),
         reference_time_utc: time_contract::iso(lookup),
         lat: request_number(context, "lat")?,
@@ -96,6 +103,20 @@ fn hsd_frames(input: &Input, context: &Value) -> Result<Value, String> {
         max_age_minutes: 30.0,
         output_dir: None,
     })?;
+    if !input.fast
+        && result["frames"]
+            .as_array()
+            .is_none_or(|frames| frames.len() < 2)
+    {
+        result = crate::hsd_provider::execute(json!({
+            "cache_dir":input.config.satellite_cache_dir,
+            "reference_time_utc":time_contract::iso(lookup),
+            "lat":request_number(context,"lat")?,
+            "lon":request_number(context,"lon")?,
+            "radius_km":request_number(context,"radius_km")?,
+            "count":2,"max_age_minutes":30.0
+        }))?;
+    }
     if result["frames"]
         .as_array()
         .is_none_or(|frames| frames.len() < 2)
@@ -110,6 +131,7 @@ fn gfs_files(
     context: &Value,
     cycle: DateTime<Utc>,
     hours: &[u32],
+    cancel: &AtomicBool,
 ) -> Result<Vec<Value>, String> {
     let bbox = context["bbox"]
         .as_array()
@@ -136,6 +158,7 @@ fn gfs_files(
     hours
         .iter()
         .map(|&hour| {
+            check(cancel)?;
             let row = client
                 .resolve(cycle, hour, Some(bbox), false, true)?
                 .ok_or_else(|| format!("GFS f{hour:03} did not resolve to a cache file"))?;
@@ -152,11 +175,7 @@ fn gfs_files(
 }
 
 fn cams_result(input: &Input, context: &Value, payload: &Value) -> Result<Value, String> {
-    let area = context["area"]
-        .as_array()
-        .filter(|row| row.len() == 4)
-        .ok_or("nowcast context has no CAMS area")?
-        .clone();
+    let areas = desktop_nowcast::cams_areas(context)?;
     let targets = context["cams_valid_times"]
         .as_array()
         .filter(|rows| !rows.is_empty() && rows.len() <= 256)
@@ -176,30 +195,86 @@ fn cams_result(input: &Input, context: &Value, payload: &Value) -> Result<Value,
         .map(time_contract::parse_utc)
         .transpose()?
         .map(time_contract::iso);
-    let result = cams_data::execute(cams_data::Params {
-        operation: "resolve".into(),
-        cache_dir: input.config.cams_cache_dir.clone(),
-        area: Value::Array(area),
-        target_utcs: targets,
-        target_utc: None,
-        config: ads::Config::default(),
-        allow_download: true,
-        require_exact_valid_time: true,
-        refresh_before_cycle: refresh,
-    })?;
-    let missing = result["missing_valid_times"]
-        .as_array()
-        .ok_or("CAMS response is missing missing_valid_times")?;
-    if !missing.is_empty() {
-        return Err(format!(
-            "native nowcast CAMS preparation is incomplete: {result}"
-        ));
+    let mut parts = Vec::with_capacity(areas.len());
+    for area in &areas {
+        let result = cams_data::execute(cams_data::Params {
+            operation: "resolve".into(),
+            cache_dir: input.config.cams_cache_dir.clone(),
+            area: area.clone(),
+            target_utcs: targets.clone(),
+            target_utc: None,
+            config: ads::Config::default(),
+            allow_download: true,
+            require_exact_valid_time: true,
+            refresh_before_cycle: refresh.clone(),
+            all_leads: false,
+        })?;
+        let missing = result["missing_valid_times"]
+            .as_array()
+            .ok_or("CAMS response is missing missing_valid_times")?;
+        if !missing.is_empty() {
+            return Err(format!(
+                "native nowcast CAMS preparation is incomplete: {result}"
+            ));
+        }
+        parts.push(result);
     }
-    Ok(result)
+    if parts.len() == 1 {
+        return Ok(parts.pop().unwrap());
+    }
+    let mut grouped = BTreeMap::<String, Vec<Value>>::new();
+    for part in &parts {
+        for row in part["files"]
+            .as_array()
+            .ok_or("CAMS response is missing files")?
+        {
+            let key = row["requested_valid_time"]
+                .as_str()
+                .ok_or("CAMS response contains an invalid requested time")?
+                .to_owned();
+            grouped.entry(key).or_default().push(row.clone());
+        }
+    }
+    let files = grouped
+        .into_iter()
+        .map(|(_, rows)| {
+            let mut row = rows
+                .first()
+                .cloned()
+                .ok_or("CAMS response contains an empty file group")?;
+            let paths = rows
+                .iter()
+                .map(|value| value["path"].clone())
+                .collect::<Vec<_>>();
+            row["paths"] = Value::Array(paths.into_iter().skip(1).collect());
+            Ok(row)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(json!({
+        "contract": "rust-cams-data-v1",
+        "files": files,
+        "missing_valid_times": [],
+        "areas": areas,
+        "parts": parts,
+        "wrapped": true,
+    }))
 }
 
 pub fn execute(params: Params) -> Result<Value, String> {
+    execute_cancellable(params, &AtomicBool::new(false))
+}
+
+fn check(cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Acquire) {
+        Err("nowcast preparation cancelled".into())
+    } else {
+        Ok(())
+    }
+}
+
+pub fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result<Value, String> {
     let started = Instant::now();
+    check(cancel)?;
     let (input, _) = request_file::read::<Input>(&params.path, MAX_JSON)?;
     if input.fast {
         return Err("native nowcast preparation requires a non-fast context".into());
@@ -211,7 +286,9 @@ pub fn execute(params: Params) -> Result<Value, String> {
         payload: input.payload.clone(),
         fast: false,
     })?;
+    check(cancel)?;
     let hsd = hsd_frames(&input, &context)?;
+    check(cancel)?;
     let frame_times = hsd["frames"]
         .as_array()
         .ok_or("native HSD response is missing frames")?
@@ -226,8 +303,10 @@ pub fn execute(params: Params) -> Result<Value, String> {
         .collect::<Result<Vec<_>, _>>()?;
     let cycle = parse_time(&context, "cycle")?;
     let hours = model_hours(&context, &frame_times)?;
-    let gfs = gfs_files(&input, &context, cycle, &hours)?;
+    let gfs = gfs_files(&input, &context, cycle, &hours, cancel)?;
+    check(cancel)?;
     let cams = cams_result(&input, &context, &input.payload)?;
+    check(cancel)?;
     Ok(json!({
         "contract": "rust-desktop-nowcast-prepare-v1",
         "runtime_python_used": false,

@@ -1047,6 +1047,11 @@ fn assemble_result(
     .map_err(|error| error.to_string())
 }
 
+pub(crate) fn compute(request: Value) -> Result<Value, String> {
+    let request = serde_json::from_value(request).map_err(|error| error.to_string())?;
+    serde_json::to_value(build_result(request)?).map_err(|error| error.to_string())
+}
+
 pub fn execute(params: Params) -> Result<Value, String> {
     let (request, identity) =
         request_file::read::<AdjustmentRequest>(&params.request_path, MAX_REQUEST_BYTES)?;

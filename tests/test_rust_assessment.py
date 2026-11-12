@@ -35,7 +35,8 @@ def rewrite_time(path, hour):
             codes.codes_release(handle)
 
 
-def write_gfs(path, hour, *, missing=False, shifted=False, terrain_delta=0, spacing=1):
+def write_gfs(path, hour, *, missing=False, shifted=False, terrain_delta=0, spacing=1,
+              longitude_start=100):
     codes = pytest.importorskip("eccodes")
     records = [("surface", 0, "orog", np.arange(6)*10+20+terrain_delta)]
     records += [("surface", 0, "vis", np.full(6, 30000))]
@@ -58,8 +59,8 @@ def write_gfs(path, hour, *, missing=False, shifted=False, terrain_delta=0, spac
                     "centre": "kwbc", "Ni": 3, "Nj": 2,
                     "latitudeOfFirstGridPointInDegrees": 0,
                     "latitudeOfLastGridPointInDegrees": spacing,
-                    "longitudeOfFirstGridPointInDegrees": 100+int(shifted),
-                    "longitudeOfLastGridPointInDegrees": 100+int(shifted)+2*spacing,
+                    "longitudeOfFirstGridPointInDegrees": longitude_start+int(shifted),
+                    "longitudeOfLastGridPointInDegrees": longitude_start+int(shifted)+2*spacing,
                     "iDirectionIncrementInDegrees": spacing, "jDirectionIncrementInDegrees": spacing,
                     "jScansPositively": 1,
                     "shortName": name, "typeOfLevel": kind, "level": level,
@@ -232,6 +233,115 @@ def test_nonunit_grid_spacing_matches_reference(engine_binary, inputs, tmp_path,
     assert bundle.manifest["metadata"]["geometry"]["spacing"] == .5
     for name, wanted in zip(["assessment", "samples", "evaluation_epoch", "anchor_epoch"], expected[:4]):
         np.testing.assert_allclose(bundle.arrays[name], wanted, rtol=4e-5, atol=5e-4, equal_nan=True, err_msg=name)
+
+
+def test_multi_rectangle_cams_real_decoding_matches_single_grid_and_rejects_bad_part(
+        engine_binary, inputs, tmp_path):
+    _, request = inputs()
+
+    def assess(label):
+        path = tmp_path / f"{label}.json"
+        path.write_text(json.dumps(request))
+        output = tmp_path / label
+        response = run(engine_binary, path, output,
+                       env=dict(os.environ, PATH="", PYTHONPATH="", FIRESKY_PYTHON="/no/python"))
+        return path, output, response
+
+    baseline_path, baseline_output, baseline = assess("single")
+    assert baseline["type"] == "result", baseline
+    expected = load_tensor_bundle(baseline_output / "manifest.json",
+                                 kind="regional-assessment-v1", source_path=baseline_path)
+    for hour, row in zip((9, 12, 15), request["cams"]):
+        west = write_cams(tmp_path / f"west-{hour}.grib", hour=hour,
+                          longitudes=(100, 101), source_columns=(0, 1))
+        east = write_cams(tmp_path / f"east-{hour}.grib", hour=hour,
+                          longitudes=(101, 102), source_columns=(1, 2))
+        row.update(path=str(west), paths=[str(east)])
+    split_path, split_output, split = assess("split")
+    assert split["type"] == "result", split
+    actual = load_tensor_bundle(split_output / "manifest.json",
+                               kind="regional-assessment-v1", source_path=split_path)
+    for name in ("assessment", "samples", "aerosol_profiles", "evaluation_epoch", "anchor_epoch"):
+        np.testing.assert_allclose(actual.arrays[name], expected.arrays[name],
+                                   rtol=0, atol=0, equal_nan=True, err_msg=name)
+    sources = actual.manifest["metadata"]["sources"]
+    roles = [row["role"] for row in sources if str(row.get("role", "")).startswith("cams:")]
+    assert len(roles) >= 2
+    for prefix in {role.rsplit(":", 1)[0] for role in roles}:
+        assert {role for role in roles if role.startswith(prefix + ":")} == {
+            prefix + ":0", prefix + ":1"}
+
+    write_cams(Path(request["cams"][1]["paths"][0]), hour=15,
+               longitudes=(101, 102), source_columns=(1, 2))
+    _, failed_output, failed = assess("mismatched-time")
+    assert failed["type"] == "error", failed
+    assert "different valid times" in failed["error"]["message"]
+    assert not failed_output.exists()
+
+
+def test_wrapped_real_grib_assessment_frames_and_frozen_profile_keep_both_sides(
+        engine_binary, tmp_path):
+    request = dict(
+        model="gfs", cycle_utc="2026-11-09T00:00:00Z", date="2026-11-09",
+        phenomenon="dusk", radius_km=200, bbox=[179, -179, 1, 0], frames=[], cams=[],
+        points=[dict(name="West", lat=.25, lon=179.25, timezone_name="Pacific/Wake",
+                     elevation_source="model-grid"),
+                dict(name="East", lat=.5, lon=-179.5, timezone_name="Pacific/Wake",
+                     elevation_source="model-grid")])
+    for hour in (3, 6, 9):
+        model = write_gfs(tmp_path / f"wrapped-gfs-{hour}.grib", hour, longitude_start=179)
+        cams = write_cams(tmp_path / f"wrapped-full-{hour}.grib", hour=hour,
+                          longitudes=(179, 180, 181))
+        request["frames"].append(dict(hour=hour, path=str(model)))
+        request["cams"].append(dict(
+            valid_time=(datetime(2026, 11, 9, tzinfo=timezone.utc)
+                        + timedelta(hours=hour)).isoformat(), path=str(cams)))
+
+    def frames(label):
+        path = tmp_path / f"{label}.json"
+        path.write_text(json.dumps(request))
+        output = tmp_path / label
+        response = rpc(engine_binary, [dict(
+            id=label, method="build_stored_frames_to_files",
+            params=dict(path=str(path), output_dir=str(output)))],
+            env=dict(os.environ, PATH="", PYTHONPATH="", FIRESKY_PYTHON="/no/python"))[0]
+        assert response["type"] == "result", response
+        bundle = load_tensor_bundle(output / "manifest.json", kind="regional-frames-v1", source_path=path)
+        return output, bundle
+
+    full_output, expected = frames("wrapped-full")
+    for hour, row in zip((3, 6, 9), request["cams"]):
+        west = write_cams(tmp_path / f"wrapped-west-{hour}.grib", hour=hour,
+                          longitudes=(179, 180), source_columns=(0, 1))
+        east = write_cams(tmp_path / f"wrapped-east-{hour}.grib", hour=hour,
+                          longitudes=(-180, -179), source_columns=(1, 2))
+        row.update(path=str(west), paths=[str(east)])
+    output, actual = frames("wrapped-split")
+    for name in ("assessment", "samples", "columns", "profile_diagnostics", "aerosol_profiles"):
+        np.testing.assert_array_equal(actual.arrays[name], expected.arrays[name], err_msg=name)
+    np.testing.assert_array_equal(actual.arrays["longitudes"], [179, -180, -179] * 2)
+    np.testing.assert_array_equal(actual.arrays["columns"][0, :, 24], [20, 30, 40, 50, 60, 70])
+    np.testing.assert_array_equal(actual.arrays["observers"][:, 1], [179.25, -179.5])
+    np.testing.assert_array_equal(actual.arrays["observers"][:, 2], [30, 50])
+    assert actual.manifest["metadata"]["geometry"] == dict(
+        rows=2, cols=3, lat0=0, lon0=179, spacing=1)
+    for row, aod in zip(actual.arrays["samples"], [.1259567890123, .1264567890123]):
+        valid = row[:, 6] >= .5
+        assert valid.any()
+        np.testing.assert_allclose(row[valid, 5], aod, rtol=0, atol=2e-8)
+    payload = json.loads((output / actual.manifest["metadata"]["frame_payload"]["file"]).read_text())
+    assert [row["lon"] for row in payload["results"]] == [179.25, -179.5]
+    assert [row["observer_elevation_asl_m"] for row in payload["results"]] == [30, 50]
+
+    descriptor = actual.manifest["metadata"]["cross_section_source"]
+    response = rpc(engine_binary, [dict(
+        id="east-profile", method="build_stored_cross_section", params=dict(
+            source_path=str(output / descriptor["file"]), source_identity=descriptor["identity"],
+            point=dict(lat=.5, lon=-179.5, elevation_m=50, timezone_name="Pacific/Wake"),
+            offset_minutes=0, max_distance_km=0))])[0]
+    assert response["type"] == "result", response
+    assert response["result"]["observer"]["lon"] == -179.5
+    assert response["result"]["terrain_elevation_asl_m"] == [50]
 
 
 @pytest.mark.parametrize("fault", [

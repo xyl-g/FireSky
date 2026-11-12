@@ -49,6 +49,8 @@ pub(crate) struct Frame {
 pub(crate) struct OpticalFile {
     pub valid_time: String,
     pub path: PathBuf,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<PathBuf>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -150,7 +152,7 @@ impl Geometry {
             return Err("nonfinite regional coordinates".into());
         }
         let lats = unique(&grid.latitudes);
-        let lons = unique(&grid.longitudes);
+        let mut lons = unique(&grid.longitudes);
         let cells = grid.latitudes.len();
         if cells == 0 || cells > derivation::MAX_CELLS || lats.len() * lons.len() != cells {
             return Err("regional assessment requires a complete rectangular grid".into());
@@ -158,22 +160,64 @@ impl Geometry {
         let spacing = lats
             .windows(2)
             .next()
-            .or_else(|| lons.windows(2).next())
             .map(|p| p[1] - p[0])
+            .or_else(|| {
+                lons.windows(2)
+                    .map(|p| p[1] - p[0])
+                    .chain((lons.len() > 1).then(|| 360.0 + lons[0] - lons[lons.len() - 1]))
+                    .filter(|gap| *gap > 0.0)
+                    .min_by(f32::total_cmp)
+            })
             .ok_or("cannot infer regional grid spacing")?;
-        if !spacing.is_finite()
-            || spacing <= 0.0
-            || lats
-                .windows(2)
-                .chain(lons.windows(2))
-                .any(|p| ((p[1] - p[0]) - spacing).abs() > 1e-5)
-        {
+        let regular = |axis: &[f32]| {
+            axis.windows(2)
+                .all(|p| ((p[1] - p[0]) - spacing).abs() <= 1e-5)
+        };
+        if !regular(&lons) && lons.len() > 1 {
+            // A contiguous circular axis has one omitted arc and no other
+            // gaps. Rotate only that seam; arbitrary sparse axes stay invalid.
+            let breaks: Vec<_> = (0..lons.len())
+                .filter(|&i| {
+                    let next = if i + 1 == lons.len() {
+                        lons[0] + 360.0
+                    } else {
+                        lons[i + 1]
+                    };
+                    ((next - lons[i]) - spacing).abs() > 1e-5
+                })
+                .collect();
+            if breaks.len() == 1 && breaks[0] + 1 < lons.len() {
+                let seam = breaks[0] + 1;
+                lons = lons[seam..]
+                    .iter()
+                    .copied()
+                    .chain(lons[..seam].iter().map(|lon| lon + 360.0))
+                    .collect();
+            }
+        }
+        if !spacing.is_finite() || spacing <= 0.0 || !regular(&lats) || !regular(&lons) {
             return Err(
                 "regional assessment requires uniform common latitude/longitude spacing".into(),
             );
         }
+        let end = *lons.last().unwrap();
+        let unwrap = lons[0] < -180.0
+            || end > 180.0
+            || (end == 180.0 && lons[0] > -180.0);
+        let center = (lons[0] + lons[lons.len() - 1]) * 0.5;
+        let mapped_lons: Vec<_> = grid
+            .longitudes
+            .iter()
+            .map(|&lon| {
+                if unwrap {
+                    lon + 360.0 * ((center - lon) / 360.0).round()
+                } else {
+                    lon
+                }
+            })
+            .collect();
         let mut order = vec![usize::MAX; cells];
-        for (i, (&lat, &lon)) in grid.latitudes.iter().zip(&grid.longitudes).enumerate() {
+        for (i, (&lat, &lon)) in grid.latitudes.iter().zip(&mapped_lons).enumerate() {
             let r = lats.partition_point(|v| *v < lat);
             let c = lons.partition_point(|v| *v < lon);
             let target = r * lons.len() + c;
@@ -187,10 +231,12 @@ impl Geometry {
         }
         if order.iter().enumerate().any(|(i, v)| i != *v) {
             grid.latitudes = order.iter().map(|&i| grid.latitudes[i]).collect();
-            grid.longitudes = order.iter().map(|&i| grid.longitudes[i]).collect();
             for values in grid.fields.values_mut() {
                 *values = order.iter().map(|&i| values[i]).collect();
             }
+        }
+        if unwrap || order.iter().enumerate().any(|(i, v)| i != *v) {
+            grid.longitudes = order.iter().map(|&i| mapped_lons[i]).collect();
         }
         Ok(Self {
             rows: lats.len(),
@@ -202,7 +248,19 @@ impl Geometry {
             lons,
         })
     }
+    fn longitude(&self, lon: f64) -> f64 {
+        let west = f64::from(self.lons[0]);
+        let east = f64::from(*self.lons.last().unwrap());
+        if west < -180.0 || east > 180.0 || (east == 180.0 && west > -180.0) {
+            lon + 360.0 * (((west + east) * 0.5 - lon) / 360.0).round()
+        } else if lon == 180.0 && west == -180.0 && east < 180.0 {
+            -180.0
+        } else {
+            lon
+        }
+    }
     fn inside(&self, lat: f64, lon: f64) -> bool {
+        let lon = self.longitude(lon);
         lat >= f64::from(self.lats[0]) - 1e-6
             && lat <= f64::from(*self.lats.last().unwrap()) + 1e-6
             && lon >= f64::from(self.lons[0]) - 1e-6
@@ -226,7 +284,10 @@ impl Geometry {
             )
         };
         let (a, b, y) = bound(&self.lats, lat);
-        let (c, d, x) = bound(&self.lons, (lon + 180.0).rem_euclid(360.0) - 180.0);
+        let (c, d, x) = bound(
+            &self.lons,
+            self.longitude((lon + 180.0).rem_euclid(360.0) - 180.0),
+        );
         let q = |r, c| f64::from(values[r * self.cols + c]);
         q(a, c) * (1.0 - y) * (1.0 - x)
             + q(a, d) * (1.0 - y) * x
@@ -235,7 +296,7 @@ impl Geometry {
     }
     fn stencil(&self, observer: [f32; 3]) -> ([usize; 4], [f32; 4]) {
         let r = (observer[0] - self.lat0) / self.spacing;
-        let c = (observer[1] - self.lon0) / self.spacing;
+        let c = (self.longitude(f64::from(observer[1])) as f32 - self.lon0) / self.spacing;
         let a = r.floor().clamp(0.0, (self.rows - 1) as f32) as usize;
         let b = c.floor().clamp(0.0, (self.cols - 1) as f32) as usize;
         let d = (a + 1).min(self.rows - 1);
@@ -396,7 +457,7 @@ fn expand_steps(result: &mut [f32], points: usize, start: usize, stop: usize) {
 }
 
 struct OpticalCatalog {
-    files: BTreeMap<DateTime<Utc>, PathBuf>,
+    files: BTreeMap<DateTime<Utc>, Vec<PathBuf>>,
     mapped: BTreeMap<DateTime<Utc>, Mapped>,
 }
 impl OpticalCatalog {
@@ -411,12 +472,18 @@ impl OpticalCatalog {
         if self.mapped.contains_key(&time) {
             return Ok(());
         }
-        let path = self
+        let paths = self
             .files
             .get(&time)
             .ok_or_else(|| format!("missing frozen CAMS bracket at {time}"))?;
-        let source = Source::capture(path.clone(), format!("cams:{time}"))?;
-        let optics = cams::decode(codes, path)?;
+        let mut loaded_sources = Vec::with_capacity(paths.len());
+        for (index, path) in paths.iter().enumerate() {
+            loaded_sources.push(Source::capture(
+                path.clone(),
+                format!("cams:{time}:{index}"),
+            )?);
+        }
+        let optics = cams::decode_many(codes, paths)?;
         if optics.valid_time != time {
             return Err("CAMS actual valid time differs from stored catalog".into());
         }
@@ -424,8 +491,13 @@ impl OpticalCatalog {
         if mapped.covered.iter().any(|v| !v) {
             return Err("CAMS full profile does not cover every model cell".into());
         }
-        source.revalidate()?;
-        sources.push(source);
+        for source in &loaded_sources {
+            source.revalidate()?;
+        }
+        // Keep the original order stable so source provenance remains
+        // deterministic for ordinary single-area catalogs and wrapped
+        // two-area catalogs alike.
+        sources.extend(loaded_sources);
         self.mapped.insert(time, mapped);
         Ok(())
     }
@@ -690,7 +762,22 @@ fn run_input(
             || time.hour() % 3 != 0
             || catalog
                 .files
-                .insert(time, resolve(base, &file.path))
+                .insert(
+                    time,
+                    if file.paths.is_empty() {
+                        vec![resolve(base, &file.path)]
+                    } else {
+                        let mut paths = Vec::with_capacity(file.paths.len() + 1);
+                        paths.push(resolve(base, &file.path));
+                        for path in &file.paths {
+                            let path = resolve(base, path);
+                            if !paths.contains(&path) {
+                                paths.push(path);
+                            }
+                        }
+                        paths
+                    },
+                )
                 .is_some()
         {
             return Err("CAMS frozen catalog requires unique exact three-hour valid times".into());
@@ -1015,7 +1102,15 @@ fn run_input(
         }
     }
     let aerosol_ms = started.elapsed().as_secs_f64() * 1000.0 - model_ms;
-    let observers: Vec<_> = solar.rows.iter().map(|row| row.observer).collect();
+    let observers: Vec<_> = solar
+        .rows
+        .iter()
+        .map(|row| {
+            let mut observer = row.observer;
+            observer[1] = geom.longitude(f64::from(observer[1])) as f32;
+            observer
+        })
+        .collect();
     let trimmed: Vec<_> = samples
         .iter()
         .flat_map(|row| row[step_start * 9..step_stop * 9].iter().copied())
@@ -1048,7 +1143,17 @@ fn run_input(
     let t = hours.len() as u64;
     let c = cells as u64;
     writer.f32("latitudes", &[c], latitudes.iter().copied())?;
-    writer.f32("longitudes", &[c], longitudes.iter().copied())?;
+    writer.f32(
+        "longitudes",
+        &[c],
+        longitudes.iter().map(|&lon| {
+            if !(-180.0..180.0).contains(&lon) {
+                (lon + 180.0).rem_euclid(360.0) - 180.0
+            } else {
+                lon
+            }
+        }),
+    )?;
     writer.f64("hours", &[t], hours.iter().copied())?;
     writer.f32("columns", &[t, c, 36], grid.iter().flatten().copied())?;
     writer.f32(
@@ -1056,7 +1161,11 @@ fn run_input(
         &[t, c, 11],
         aerosol.iter().flatten().copied(),
     )?;
-    writer.f32("observers", &[n, 3], observers.iter().flatten().copied())?;
+    writer.f32(
+        "observers",
+        &[n, 3],
+        solar.rows.iter().flat_map(|row| row.observer),
+    )?;
     writer.f32("samples", &[n, 20, 9], samples.iter().flatten().copied())?;
     writer.f32(
         "assessment",
@@ -1468,5 +1577,51 @@ mod tests {
         ] {
             assert!(Geometry::canonicalize(&mut gfs::GfsGrid::new(latitudes, longitudes)).is_err());
         }
+    }
+
+    #[test]
+    fn wrapped_axis_is_contiguous_and_sampling_uses_equivalent_longitudes() {
+        let mut grid = gfs::GfsGrid::new(
+            vec![1., 0., 1., 0., 1., 0.],
+            vec![-179., 179., 179., -180., -180., -179.],
+        );
+        grid.fields.insert(
+            ("surface".into(), 0, "orog".into()),
+            vec![60., 10., 40., 20., 50., 30.],
+        );
+        let geom = Geometry::canonicalize(&mut grid).unwrap();
+        assert_eq!(geom.lons, [179., 180., 181.]);
+        assert_eq!(grid.longitudes, [179., 180., 181., 179., 180., 181.]);
+        let values = grid.fields.values().next().unwrap();
+        assert_eq!(values, &[10., 20., 30., 40., 50., 60.]);
+        for lon in [-179.5, 180.5] {
+            assert!(geom.inside(0.5, lon));
+            assert_eq!(geom.terrain(values, 0.5, lon), 40.);
+            assert_eq!(geom.stencil([0.5, lon as f32, 0.]).0, [1, 2, 4, 5]);
+            assert_eq!(geom.stencil([0.5, lon as f32, 0.]).1, [0.25; 4]);
+        }
+        assert!(!geom.inside(0.5, 178.));
+        assert!(!geom.inside(0.5, -178.));
+        let before = grid.longitudes.clone();
+        Geometry::canonicalize(&mut grid).unwrap();
+        assert_eq!(grid.longitudes, before);
+
+        for lons in [
+            vec![-179., -177., 179., -179., -177., 179.],
+            vec![-180., -178., 179., -180., -178., 179.],
+        ] {
+            assert!(Geometry::canonicalize(&mut gfs::GfsGrid::new(
+                vec![0., 0., 0., 1., 1., 1.],
+                lons,
+            ))
+            .is_err());
+        }
+        let mut edge = gfs::GfsGrid::new(vec![0., 0., 1., 1.], vec![179., -180., 179., -180.]);
+        let edge = Geometry::canonicalize(&mut edge).unwrap();
+        assert_eq!(edge.lons, [179., 180.]);
+        assert!(edge.inside(0., -180.));
+        let mut western = gfs::GfsGrid::new(vec![0., 0., 1., 1.], vec![-180., -179., -180., -179.]);
+        let western = Geometry::canonicalize(&mut western).unwrap();
+        assert!(western.inside(0., 180.));
     }
 }

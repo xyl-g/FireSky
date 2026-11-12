@@ -1918,9 +1918,13 @@ def path_clearance_weight(
 ) -> float:
     # Target visibility is defined for the illuminated cloud base. Ignore any
     # caller-supplied top-height apparent angle so all scoring paths agree.
+    # estimated_cloud_base_m(candidate) 对冻结候选是纯函数（只读气压层/位势高/
+    # 地表温露点），下方 sightline/inflow 风险复用同一值：提升为局部量，
+    # 避免每个候选重复计算 3 次。
+    candidate_cloud_base_m = estimated_cloud_base_m(candidate)
     candidate_apparent_elevation_deg = apparent_cloud_elevation_deg(
         candidate.distance_km,
-        estimated_cloud_base_m(candidate),
+        candidate_cloud_base_m,
         observer_elevation_m,
     )
     penalties: List[float] = []
@@ -1964,14 +1968,14 @@ def path_clearance_weight(
     sightline_risk = observer_sightline_blocking_risk(
         snapshot,
         candidate,
-        estimated_cloud_base_m(candidate),
+        candidate_cloud_base_m,
         feature_index,
         observer_elevation_m,
     )
     inflow_risk = solar_inflow_blocking_risk(
         snapshot,
         candidate,
-        estimated_cloud_base_m(candidate),
+        candidate_cloud_base_m,
         solar_elevation_deg,
         solar_azimuth_deg,
         feature_index,
@@ -3868,11 +3872,9 @@ def assess_timestep(
     observer_local_cloud_field_amount = observer_local_cloud_field_amount_from_columns(
         list(columns.values())
     )
-    raw_extent = candidate_angular_cloud_coverage(
-        signals,
-        solar_azimuth_deg,
-        observer_elevation_m,
-    )
+    # raw_extent 语义与 forward_burnable_cloud_field_amount 完全一致（同参数、
+    # 纯函数、中间无状态变更）：直接复用，避免每扫描重复计算一次立体角网格。
+    raw_extent = forward_burnable_cloud_field_amount
     edge_structure_gate = 1.0
     if structure_extent >= 0.45:
         if top_boundary is None:

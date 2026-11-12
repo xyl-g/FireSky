@@ -5,7 +5,7 @@
 //! time contract so the desktop checker does not need Python numerical code.
 use crate::{
     astronomy::{self, EventsParams, Phenomenon},
-    time_contract,
+    cams_data, time_contract,
 };
 use chrono::{DateTime, Duration, Timelike, Utc};
 use reqwest::blocking::Client;
@@ -17,8 +17,8 @@ const MAX_NOWCAST_HOURS: i64 = 4;
 const HSD_LOOKAHEAD_MINUTES: i64 = 10;
 const LIGHTPATH_RADIUS_KM: f64 = 1000.0;
 const INTERPOLATION_PADDING_KM: f64 = 2.0 * 0.25 * 111.2;
+const AEROSOL_CORRIDOR_PADDING_KM: f64 = 150.0;
 const GRID_DEGREES: f64 = 0.25;
-const EAST_ASIA: [f64; 4] = [63.0, 145.0, 60.0, 12.0];
 const REGIONS: [(&str, [f64; 4]); 10] = [
     ("east-asia", [63.0, 155.0, 60.0, 12.0]),
     ("southeast-asia", [85.0, 155.0, 35.0, -20.0]),
@@ -137,12 +137,22 @@ fn normalize_lon(value: f64) -> f64 {
 
 fn bounding(point: Point, radius_km: f64) -> [f64; 4] {
     let lat_pad = radius_km / 111.0;
-    let lon_pad = radius_km / (111.0 * point.lat.to_radians().cos()).max(25.0);
+    let north = (point.lat + lat_pad).min(90.0);
+    let south = (point.lat - lat_pad).max(-90.0);
+    if north == 90.0 || south == -90.0 {
+        return [-180.0, 180.0, north, south];
+    }
+    // A spherical cap's longitude extrema are not at its centre latitude.
+    // Using 111 km/degree is conservative relative to the haversine sampler.
+    let lon_pad = (lat_pad.to_radians().sin() / point.lat.to_radians().cos())
+        .clamp(-1.0, 1.0)
+        .asin()
+        .to_degrees();
     [
         normalize_lon(point.lon - lon_pad),
         normalize_lon(point.lon + lon_pad),
-        (point.lat + lat_pad).min(90.0),
-        (point.lat - lat_pad).max(-90.0),
+        north,
+        south,
     ]
 }
 
@@ -180,6 +190,49 @@ fn cams_area(bbox: [f64; 4]) -> [f64; 4] {
     .map(|value| (value * 1000.0).round() / 1000.0)
 }
 
+fn covers_area(outer: [f64; 4], inner: [f64; 4]) -> Result<bool, String> {
+    let outer = cams_data::split_areas(outer)?;
+    let inner = cams_data::split_areas(inner)?;
+    Ok(inner.iter().all(|inner| {
+        outer.iter().any(|outer| {
+            outer[0] >= inner[0]
+                && outer[2] <= inner[2]
+                && outer[1] <= inner[1]
+                && outer[3] >= inner[3]
+        })
+    }))
+}
+
+fn aerosol_area(point: Point, radius: f64) -> Result<[f64; 4], String> {
+    let required = cams_area(canonical_bbox(bounding(
+        point,
+        (radius.max(LIGHTPATH_RADIUS_KM) + INTERPOLATION_PADDING_KM)
+            .max(radius + AEROSOL_CORRIDOR_PADDING_KM),
+    )));
+    if let Some(name) = region(point) {
+        let named = cams_area(REGIONS.iter().find(|(code, _)| *code == name).unwrap().1);
+        if covers_area(named, required)? {
+            return Ok(named);
+        }
+    }
+    Ok(required)
+}
+
+pub(crate) fn cams_areas(context: &Value) -> Result<Vec<Value>, String> {
+    let area: [f64; 4] = serde_json::from_value(context["area"].clone())
+        .map_err(|_| "nowcast context has no valid CAMS area")?;
+    let expected = cams_data::split_areas(area)?
+        .into_iter()
+        .map(|area| json!(area))
+        .collect::<Vec<_>>();
+    if let Some(areas) = context.get("areas") {
+        if areas.as_array() != Some(&expected) {
+            return Err("nowcast CAMS areas differ from the frozen area".into());
+        }
+    }
+    Ok(expected)
+}
+
 fn parse_cycle(payload: &Value) -> Result<Option<DateTime<Utc>>, String> {
     for key in ["gfs_cycle_override", "_gfs_cycle_override"] {
         if let Some(value) = payload.get(key).filter(|v| !v.is_null()) {
@@ -204,9 +257,6 @@ pub fn gfs_plan(params: GfsPlanParams) -> Result<Value, String> {
     let cycle = time_contract::parse_utc(&params.cycle_utc)?;
     let source_radius = radius.max(LIGHTPATH_RADIUS_KM) + INTERPOLATION_PADDING_KM;
     let bbox = canonical_bbox(bounding(point, source_radius));
-    if bbox[0] > bbox[1] {
-        return Err("nowcast GFS bbox crosses the dateline".into());
-    }
 
     let mut hours = std::collections::BTreeSet::new();
     let mut valid_times = Vec::with_capacity(params.valid_times.len());
@@ -302,9 +352,6 @@ pub fn execute(params: Params) -> Result<Value, String> {
     };
     let source_radius = radius.max(LIGHTPATH_RADIUS_KM) + INTERPOLATION_PADDING_KM;
     let bbox = canonical_bbox(bounding(point, source_radius));
-    if bbox[0] > bbox[1] {
-        return Err("nowcast GFS bbox crosses the dateline".into());
-    }
     let sample_times: Vec<_> = (-9..=9)
         .map(|step| anchor + Duration::minutes(i64::from(step * 5)))
         .collect();
@@ -322,16 +369,8 @@ pub fn execute(params: Params) -> Result<Value, String> {
             cams_valid_times.insert(iso(left + Duration::hours(3)));
         }
     }
-    let area = cams_area(
-        region(point)
-            .and_then(|name| {
-                REGIONS
-                    .iter()
-                    .find(|(code, _)| *code == name)
-                    .map(|(_, bbox)| *bbox)
-            })
-            .unwrap_or(EAST_ASIA),
-    );
+    let area = aerosol_area(point, radius)?;
+    let areas = cams_data::split_areas(area)?;
     let request = json!({
         "target_date": date,
         "timezone_name": timezone_name,
@@ -358,6 +397,112 @@ pub fn execute(params: Params) -> Result<Value, String> {
         "times": times,
         "region": region(point),
         "area": area,
+        "areas": areas,
         "cams_valid_times": cams_valid_times.into_iter().collect::<Vec<_>>(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn context(lat: f64, lon: f64) -> Value {
+        execute(Params {
+            payload: json!({
+                "lat":lat,"lon":lon,"elevation_m":0,"timezone_name":"UTC",
+                "target_date":"2026-11-12","phenomenon":"dusk","radius_km":1000,
+                "reference_time_utc":"2026-11-13T00:00:00Z",
+                "_gfs_cycle_override":"2026-11-11T00:00:00Z",
+            }),
+            fast: true,
+        })
+        .unwrap()
+    }
+
+    fn includes(area: [f64; 4], lat: f64, lon: f64) -> bool {
+        let lon = (lon + 180.0).rem_euclid(360.0) - 180.0;
+        lat <= area[0] + 1e-6
+            && lat >= area[2] - 1e-6
+            && ((area[1] - 1e-6..=area[3] + 1e-6).contains(&lon)
+                || (lon == -180.0 && area[3] == 180.0))
+    }
+
+    #[test]
+    fn unknown_dateline_point_gets_local_split_not_east_asia() {
+        for lon in [179.0, -179.0] {
+            let context = context(10.0, lon);
+            assert!(context["region"].is_null());
+            let areas = cams_areas(&context).unwrap();
+            assert_eq!(areas.len(), 2);
+            let areas = areas
+                .into_iter()
+                .map(|v| serde_json::from_value::<[f64; 4]>(v).unwrap())
+                .collect::<Vec<_>>();
+            assert!(areas.iter().any(|area| includes(*area, 10.0, lon)));
+            assert!(areas.iter().any(|area| includes(*area, 10.0, -lon)));
+            assert!(!areas.iter().any(|area| includes(*area, 10.0, 120.0)));
+            assert!(context["bbox"][0].as_f64().unwrap() > context["bbox"][1].as_f64().unwrap());
+        }
+        let context = context(0.0, -110.0);
+        assert!(context["region"].is_null());
+        assert_eq!(cams_areas(&context).unwrap().len(), 1);
+        let area: [f64; 4] = serde_json::from_value(context["areas"][0].clone()).unwrap();
+        assert!(includes(area, 0.0, -110.0));
+        assert!(!includes(area, 30.0, 120.0));
+    }
+
+    #[test]
+    fn named_cache_area_is_used_only_when_it_covers_the_sample_domain() {
+        assert_eq!(
+            context(30.0, 110.0)["area"],
+            json!([54.6, 72.4, 17.4, 136.6])
+        );
+        let edge = context(20.0, 135.0);
+        assert_eq!(edge["region"], "china");
+        assert_ne!(edge["area"], json!([54.6, 72.4, 17.4, 136.6]));
+        assert!(edge["area"][2].as_f64().unwrap() < 17.4);
+    }
+
+    #[test]
+    fn spherical_aerosol_domain_covers_every_sample_bearing_including_poles() {
+        for (lat, lon) in [(0.0, 179.0), (30.0, 120.0), (80.0, 179.0), (-85.0, -90.0)] {
+            let point = Point {
+                lat,
+                lon,
+                elevation_m: 0.0,
+            };
+            let areas = cams_data::split_areas(aerosol_area(point, 1000.0).unwrap()).unwrap();
+            let distance = 1150.0 / 6371.0_f64;
+            for bearing in (0..360).step_by(5) {
+                let bearing = f64::from(bearing).to_radians();
+                let latitude = lat.to_radians();
+                let target_lat = (latitude.sin() * distance.cos()
+                    + latitude.cos() * distance.sin() * bearing.cos())
+                .asin();
+                let target_lon = lon.to_radians()
+                    + (bearing.sin() * distance.sin() * latitude.cos())
+                        .atan2(distance.cos() - latitude.sin() * target_lat.sin());
+                assert!(
+                    areas.iter().any(|area| includes(
+                        *area,
+                        target_lat.to_degrees(),
+                        target_lon.to_degrees()
+                    )),
+                    "uncovered sample {lat},{lon}, bearing {bearing}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn pinned_context_and_split_geometry_are_stable_and_reject_tampering() {
+        let mut value = context(10.0, 179.0);
+        assert_eq!(value, context(10.0, 179.0));
+        assert_eq!(
+            cams_areas(&value).unwrap(),
+            value["areas"].as_array().unwrap().clone()
+        );
+        value["areas"][0][1] = json!(63.0);
+        assert!(cams_areas(&value).unwrap_err().contains("frozen area"));
+    }
 }
