@@ -767,17 +767,16 @@ pub unsafe extern "C" fn firesky_feature_metrics_batch_v2(
         return -2;
     }
     let values = slice::from_raw_parts(features_ptr, features_len * FEATURE_ROW_V2_FIELD_COUNT);
-    let features: &[FeatureRowV2] = slice::from_raw_parts(
-        values.as_ptr().cast::<FeatureRowV2>(),
-        features_len,
-    );
+    let features: &[FeatureRowV2] =
+        slice::from_raw_parts(values.as_ptr().cast::<FeatureRowV2>(), features_len);
     let output_values = slice::from_raw_parts_mut(output_ptr, output_capacity * METRIC_COUNT);
     let output: &mut [[f64; METRIC_COUNT]] = slice::from_raw_parts_mut(
         output_values.as_mut_ptr().cast::<[f64; METRIC_COUNT]>(),
         output_capacity,
     );
     for (position, feature) in features.iter().enumerate() {
-        output[position] = v2_feature_metrics_row(feature, diagnostic_radius_km, observer_elevation_m);
+        output[position] =
+            v2_feature_metrics_row(feature, diagnostic_radius_km, observer_elevation_m);
     }
     features_len as isize
 }
@@ -1014,7 +1013,10 @@ pub unsafe extern "C" fn firesky_cloud_columns_batch(
             .cast::<[f64; AGG_COLUMN_FIELDS]>(),
         output_capacity,
     );
-    let presences: Vec<f64> = features.iter().map(|feature| cloud_presence(feature)).collect();
+    let presences: Vec<f64> = features
+        .iter()
+        .map(|feature| cloud_presence(feature))
+        .collect();
 
     for (output_index, column) in columns.iter().enumerate() {
         let layer_indices: Vec<usize> = column.layers.iter().flatten().copied().collect();
@@ -1775,13 +1777,19 @@ pub unsafe extern "C" fn firesky_path_clearance_batch(
     let candidate_indices = slice::from_raw_parts(candidate_indices_ptr, candidate_len);
     let output = slice::from_raw_parts_mut(output_ptr, candidate_len);
 
-    let blocker_opacities: Vec<f64> = features.iter().map(|feature| feature_blocker_opacity(feature)).collect();
+    let blocker_opacities: Vec<f64> = features
+        .iter()
+        .map(|feature| feature_blocker_opacity(feature))
+        .collect();
     let lightpath_opacities: Vec<f64> = features
         .iter()
         .zip(blocker_opacities.iter())
         .map(|(feature, opacity)| lightpath_opacity(feature, *opacity))
         .collect();
-    let cloud_bases: Vec<f64> = features.iter().map(|feature| estimated_cloud_base(feature)).collect();
+    let cloud_bases: Vec<f64> = features
+        .iter()
+        .map(|feature| estimated_cloud_base(feature))
+        .collect();
     let apparent_tops: Vec<f64> = features
         .iter()
         .map(|feature| apparent_cloud_elevation(feature[DISTANCE], feature[HEIGHT]))
@@ -1952,13 +1960,19 @@ pub unsafe extern "C" fn firesky_boundary_clearance_batch(
     let target_heights = slice::from_raw_parts(target_heights_ptr, target_len);
     let output = slice::from_raw_parts_mut(output_ptr, target_len);
 
-    let blocker_opacities: Vec<f64> = features.iter().map(|feature| feature_blocker_opacity(feature)).collect();
+    let blocker_opacities: Vec<f64> = features
+        .iter()
+        .map(|feature| feature_blocker_opacity(feature))
+        .collect();
     let lightpath_opacities: Vec<f64> = features
         .iter()
         .zip(blocker_opacities.iter())
         .map(|(feature, opacity)| lightpath_opacity(feature, *opacity))
         .collect();
-    let cloud_bases: Vec<f64> = features.iter().map(|feature| estimated_cloud_base(feature)).collect();
+    let cloud_bases: Vec<f64> = features
+        .iter()
+        .map(|feature| estimated_cloud_base(feature))
+        .collect();
     let apparent_tops: Vec<f64> = features
         .iter()
         .map(|feature| apparent_cloud_elevation(feature[DISTANCE], feature[HEIGHT]))
@@ -2120,8 +2134,14 @@ pub unsafe extern "C" fn firesky_boundary_context_batch(
     let output_values = slice::from_raw_parts_mut(output_ptr, target_len * 2);
     let output: &mut [[f64; 2]] =
         slice::from_raw_parts_mut(output_values.as_mut_ptr().cast::<[f64; 2]>(), target_len);
-    let cloud_opacities: Vec<f64> = features.iter().map(|feature| feature_cloud_opacity(feature)).collect();
-    let blocker_opacities: Vec<f64> = features.iter().map(|feature| feature_blocker_opacity(feature)).collect();
+    let cloud_opacities: Vec<f64> = features
+        .iter()
+        .map(|feature| feature_cloud_opacity(feature))
+        .collect();
+    let blocker_opacities: Vec<f64> = features
+        .iter()
+        .map(|feature| feature_blocker_opacity(feature))
+        .collect();
     // pressure_bins: pressure_level → bearing_bin(2°) → Vec<feature_index>
     let mut pressure_bins: HashMap<i32, [Vec<usize>; 180]> = HashMap::new();
     let mut blocker_bins: Vec<Vec<usize>> = (0..180).map(|_| Vec::new()).collect();
@@ -3538,7 +3558,10 @@ mod feature_row_v2_tests {
         // come from the model fraction and opacity from the legacy blend.
         assert_eq!(metrics[0], 0.4);
         assert_eq!(metrics[1], 0.4);
-        assert_eq!(metrics[4], clamp01(0.22 * 0.0 + 0.78 * clamp01(0.4 * (0.35 + 0.65 * 0.5))));
+        assert_eq!(
+            metrics[4],
+            clamp01(0.22 * 0.0 + 0.78 * clamp01(0.4 * (0.35 + 0.65 * 0.5)))
+        );
         assert_eq!(metrics[5], metrics[4]);
     }
 
@@ -3615,9 +3638,8 @@ mod feature_row_v2_tests {
         assert!(elevated < sea_level);
         assert_eq!(
             elevated,
-            ((1500.0 - 250.0 - curvature_drop_m(30.0))
-                .atan2((30.0_f64 * 1000.0).max(1.0)))
-            .to_degrees()
+            ((1500.0 - 250.0 - curvature_drop_m(30.0)).atan2((30.0_f64 * 1000.0).max(1.0)))
+                .to_degrees()
         );
     }
 

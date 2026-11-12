@@ -1,0 +1,191 @@
+import AppKit
+import MapKit
+
+enum RegionalPalette {
+    static let steps = 51
+    static func color(_ index: Int) -> NSColor {
+        fill(Double(index) / Double(steps - 1) * 2.5).color
+    }
+
+    // Matches cloud-render.ts burnColor and BurnOutlookMap.svelte fillForScore.
+    static func fill(_ quality: Double) -> RegionalFill {
+        let t = min(1, max(0, quality / 2.5))
+        let stops: [(Double, [Double])] = [
+            (0, [253, 230, 220]), (0.2, [251, 176, 122]), (0.45, [245, 124, 102]),
+            (0.7, [237, 91, 130]), (1, [201, 60, 145]),
+        ]
+        for index in 1..<stops.count where t <= stops[index].0 {
+            let (leftAt, left) = stops[index - 1], (rightAt, right) = stops[index]
+            let f = (t - leftAt) / (rightAt - leftAt)
+            let rgb = zip(left, right).map { Int(($0 + ($1 - $0) * f).rounded()) }
+            let alpha = t <= 0.001 ? 12 : Int((42 + 190 * sqrt(t)).rounded())
+            return RegionalFill(red: rgb[0], green: rgb[1], blue: rgb[2], alpha: alpha)
+        }
+        return RegionalFill(red: 201, green: 60, blue: 145, alpha: 232)
+    }
+}
+
+struct RegionalFill: Hashable {
+    let red: Int
+    let green: Int
+    let blue: Int
+    let alpha: Int
+    var color: NSColor {
+        NSColor(srgbRed: Double(red) / 255, green: Double(green) / 255,
+                blue: Double(blue) / 255, alpha: Double(alpha) / 255)
+    }
+}
+
+// Immutable MapKit geometry is built off the main thread, then installed as one snapshot.
+struct RegionalMapLayers: @unchecked Sendable {
+    enum Style { case value(RegionalFill), missing, outline, grid }
+    let overlays: [MKOverlay]
+    let styles: [ObjectIdentifier: Style]
+
+    static func build(areas: [[Double]], cells: [RegionalCell], showGrid: Bool = false) throws -> RegionalMapLayers {
+        var overlays: [MKOverlay] = []
+        var styles: [ObjectIdentifier: Style] = [:]
+        func append(_ overlay: MKOverlay, _ style: Style) {
+            overlays.append(overlay)
+            styles[ObjectIdentifier(overlay)] = style
+        }
+        var bins: [RegionalFill: [MKPolygon]] = [:]
+        var missing: [MKPolygon] = []
+        for (index, cell) in cells.enumerated() {
+            if index % 256 == 0 { try Task.checkCancellation() }
+            let c = cell.coordinate
+            let shape = polygon(west: c.lon - 0.125, south: c.lat - 0.125, east: c.lon + 0.125, north: c.lat + 0.125)
+            if let quality = cell.quality { bins[RegionalPalette.fill(quality), default: []].append(shape) }
+            else { missing.append(shape) }
+        }
+        for (fill, polygons) in bins { append(MKMultiPolygon(polygons), .value(fill)) }
+        if !missing.isEmpty { append(MKMultiPolygon(missing), .missing) }
+        var outlines: [MKPolygon] = []
+        var lines: [MKPolyline] = []
+        for area in areas {
+            try Task.checkCancellation()
+            guard let bounds = GridBounds(area) else { continue }
+            let south = bounds.south - 0.125
+            let north = south + Double(bounds.rows) * 0.25
+            for (rangeWest, rangeEast) in bounds.longitudeRanges {
+                let west = max(-180, rangeWest - 0.125)
+                let east = min(180, rangeEast + 0.125)
+                outlines.append(polygon(west: west, south: south, east: east, north: north))
+                if showGrid {
+                    // Include the two half-cell boundary lines around the
+                    // segment, matching the ordinary-area grid contract.
+                    let columns = Int(((rangeEast - rangeWest) * 4).rounded(.down)) + 1
+                    for y in 0...bounds.rows {
+                        let lat = south + Double(y) * 0.25
+                        lines.append(line(lat, west, lat, east))
+                    }
+                    for x in 0...columns {
+                        let lon = min(180, west + Double(x) * 0.25)
+                        lines.append(line(south, lon, north, lon))
+                    }
+                }
+            }
+        }
+        if !lines.isEmpty { append(MKMultiPolyline(lines), .grid) }
+        if !outlines.isEmpty, cells.isEmpty || showGrid { append(MKMultiPolygon(outlines), .outline) }
+        return RegionalMapLayers(overlays: overlays, styles: styles)
+    }
+
+    /// Return a compact MapKit region for ordinary and wrapped areas. A
+    /// naive min/max longitude fit turns 170E..170W into a 340-degree view;
+    /// choosing the largest circular gap keeps the requested narrow arc.
+    static func fitRegion(areas: [[Double]], paddingDegrees: Double = 0.25) -> MKCoordinateRegion? {
+        let bounds = areas.compactMap(GridBounds.init)
+        guard !bounds.isEmpty else { return nil }
+        let south = bounds.map(\.south).min()! - paddingDegrees
+        let north = bounds.map(\.north).max()! + paddingDegrees
+        var segments = bounds.flatMap(\.longitudeRanges)
+        segments.sort { $0.0 == $1.0 ? $0.1 < $1.1 : $0.0 < $1.0 }
+        var merged: [(Double, Double)] = []
+        for segment in segments {
+            if let last = merged.last, segment.0 <= last.1 + 1e-9 {
+                merged[merged.count - 1].1 = max(last.1, segment.1)
+            } else {
+                merged.append(segment)
+            }
+        }
+        guard !merged.isEmpty else { return nil }
+        let (centerLongitude, span): (Double, Double)
+        if merged.count == 1 && merged[0].0 <= -180 + 1e-9 && merged[0].1 >= 180 - 1e-9 {
+            centerLongitude = 0
+            span = 360
+        } else {
+            var largestGap = -1.0
+            var gapIndex = 0
+            for index in merged.indices {
+                let next = merged.index(after: index) == merged.endIndex
+                    ? merged.startIndex : merged.index(after: index)
+                let gap = next == merged.startIndex
+                    ? merged[next].0 + 360 - merged[index].1
+                    : merged[next].0 - merged[index].1
+                if gap > largestGap {
+                    largestGap = gap
+                    gapIndex = index
+                }
+            }
+            let startIndex = merged.index(after: gapIndex) == merged.endIndex
+                ? merged.startIndex : merged.index(after: gapIndex)
+            let start = merged[startIndex].0
+            let rawEnd = merged[gapIndex].1
+            let end = rawEnd < start ? rawEnd + 360 : rawEnd
+            span = min(360, max(0.5, end - start + 2 * paddingDegrees))
+            let midpoint = start + (end - start) / 2
+            centerLongitude = midpoint > 180 ? midpoint - 360 : midpoint
+        }
+        return MKCoordinateRegion(
+            center: CLLocationCoordinate2D(
+                latitude: max(-85, min(85, (south + north) / 2)),
+                longitude: centerLongitude
+            ),
+            span: MKCoordinateSpan(
+                latitudeDelta: min(170, max(0.5, north - south)),
+                longitudeDelta: span
+            )
+        )
+    }
+
+    static func polygon(west: Double, south: Double, east: Double, north: Double) -> MKPolygon {
+        let coordinates = [coordinate(south, west), coordinate(south, east),
+                           coordinate(north, east), coordinate(north, west)]
+        return MKPolygon(coordinates: coordinates, count: coordinates.count)
+    }
+    private static func coordinate(_ lat: Double, _ lon: Double) -> CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: min(85.05112878, max(-85.05112878, lat)), longitude: min(180, max(-180, lon)))
+    }
+    private static func line(_ a: Double, _ b: Double, _ c: Double, _ d: Double) -> MKPolyline {
+        let points = [coordinate(a, b), coordinate(c, d)]
+        return MKPolyline(coordinates: points, count: 2)
+    }
+}
+
+final class RegionalGridRenderer: MKMultiPolylineRenderer {
+    override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
+        let cellWidth = MKMapRect.world.width / 360 * 0.25 * zoomScale
+        guard cellWidth >= 6 else { return }
+        super.draw(mapRect, zoomScale: zoomScale, in: context)
+    }
+}
+
+final class RegionalFieldRenderer: MKMultiPolygonRenderer {
+    var fillsCells = false
+
+    override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
+        context.saveGState()
+        // Adjacent cells share an edge; antialiasing must not leave hairline seams.
+        context.setShouldAntialias(false)
+        if fillsCells, let fillColor {
+            context.setFillColor(fillColor.cgColor)
+            for cell in multiPolygon.polygons where cell.boundingMapRect.intersects(mapRect) {
+                context.fill(rect(for: cell.boundingMapRect))
+            }
+        } else {
+            super.draw(mapRect, zoomScale: zoomScale, in: context)
+        }
+        context.restoreGState()
+    }
+}

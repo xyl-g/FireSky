@@ -1,5 +1,6 @@
 import shutil
 import json
+import platform
 import subprocess
 import sys
 from pathlib import Path
@@ -12,10 +13,22 @@ def preparation_checks(tmp_path_factory):
     if sys.platform != "darwin" or not shutil.which("swiftc"):
         pytest.skip("Native preparation checks require the macOS Swift compiler")
     root = Path(__file__).resolve().parents[1]
+    swift_arch = platform.machine()
+    swift_target = {
+        "arm64": "arm64-apple-macos14.0",
+        "x86_64": "x86_64-apple-macos14.0",
+    }.get(swift_arch)
+    if swift_target is None:
+        pytest.skip(f"unsupported macOS architecture: {swift_arch}")
     binary = tmp_path_factory.mktemp("native-ui") / "preparation-checks"
     subprocess.run(
         [
             "swiftc",
+            "-parse-as-library",
+            "-swift-version",
+            "5",
+            "-target",
+            swift_target,
             str(root / "apps/macos/Sources/FireSkyNative/PreparationActions.swift"),
             str(root / "apps/macos/Sources/FireSkyNative/DownloadProbe.swift"),
             str(root / "apps/macos/Sources/FireSkyNative/ObservationDate.swift"),
@@ -23,6 +36,7 @@ def preparation_checks(tmp_path_factory):
             str(root / "apps/macos/Sources/FireSkyNative/MapZoom.swift"),
             str(root / "apps/macos/Sources/FireSkyNative/NowcastPresentation.swift"),
             str(root / "apps/macos/Sources/FireSkyNative/RegionalForecast.swift"),
+            str(root / "apps/macos/Sources/FireSkyNative/ProfileQuery.swift"),
             str(root / "apps/macos/Sources/FireSkyNative/RegionalMapLayers.swift"),
             str(root / "apps/macos/Tests/PreparationActionsChecks.swift"),
             "-o", str(binary),

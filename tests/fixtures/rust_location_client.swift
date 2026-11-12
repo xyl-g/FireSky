@@ -3,13 +3,22 @@ import Foundation
 @main
 struct LocationClientProbe {
     @MainActor
+    static func assertNativeRuntime(_ client: EngineClient) async throws {
+        let hello = try await client.call("hello")
+        guard hello["engine"] as? String == "firesky-rust",
+              hello["runtime_python_used"] as? Bool == false else {
+            throw EngineError(message: "main runtime is not Python-free Rust")
+        }
+    }
+
+    @MainActor
     static func main() async {
         let args = CommandLine.arguments
         let client = EngineClient()
         do {
             if args[3] == "cancel" {
-                try client.start(workspace: args[1], python: args[2])
-                _ = try await client.call("hello")
+                try client.start(workspace: args[1], engineBinary: args[2])
+                try await assertNativeRuntime(client)
                 let operation = Task {
                     _ = try await client.call("metadata", ["lat": 51.0, "lon": -1.0])
                     try Task.checkCancellation()
@@ -27,7 +36,7 @@ struct LocationClientProbe {
                 guard cancelled else {
                     throw EngineError(message: "cancelled task returned success")
                 }
-                _ = try await client.call("probe")
+                try await assertNativeRuntime(client)
                 client.stop()
                 print("{\"passed\":true}")
                 return
@@ -35,8 +44,17 @@ struct LocationClientProbe {
             var output: JSONObject = ["passed": true]
             for _ in 0..<(args[3] == "restart" ? 2 : 1) {
                 output.removeValue(forKey: "search")
-                try client.start(workspace: args[1], python: args[2])
-                _ = try await client.call("hello")
+                try client.start(workspace: args[1], engineBinary: args[2])
+                try await assertNativeRuntime(client)
+                if args[3] == "native-default" {
+                    let inventory = try await client.call("inventory")
+                    guard (inventory["datasets"] as? [JSONObject])?.count == 3 else {
+                        throw EngineError(message: "native default inventory is incomplete")
+                    }
+                    output["inventory"] = inventory
+                    client.stop()
+                    continue
+                }
                 if args[3] == "oversized" {
                     var rejected = false
                     do {
@@ -65,7 +83,7 @@ struct LocationClientProbe {
                         || (args[3] == "inventoryfailure" && output["inventory"] == nil) else { throw error }
                     output["nativeFailure"] = error.localizedDescription
                 }
-                _ = try await client.call("probe")
+                try await assertNativeRuntime(client)
                 client.stop()
             }
             print(String(data: try JSONSerialization.data(withJSONObject: output), encoding: .utf8)!)

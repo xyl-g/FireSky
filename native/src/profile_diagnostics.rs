@@ -47,7 +47,17 @@ impl Stencil {
             return Err("invalid selected-column grid geometry".into());
         }
         let row = (point[0] - origin[0]) / spacing;
-        let col = (point[1] - origin[1]) / spacing;
+        let max_lon = origin[1] + (cols - 1) as f32 * spacing;
+        let lon =
+            if origin[1] < -180.0 || max_lon > 180.0 || (max_lon == 180.0 && origin[1] > -180.0) {
+                let center = origin[1] + (max_lon - origin[1]) * 0.5;
+                point[1] + ((center - point[1]) / 360.0).round() * 360.0
+            } else if point[1] == 180.0 && origin[1] == -180.0 && max_lon < 180.0 {
+                -180.0
+            } else {
+                point[1]
+            };
+        let col = (lon - origin[1]) / spacing;
         if !row.is_finite() || !col.is_finite() {
             return Err("selected-column grid position overflow".into());
         }
@@ -392,6 +402,52 @@ impl FramePair<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unwrapped_longitude_axis_samples_equivalent_dateline_points_identically() {
+        for origin in [179.0, -181.0] {
+            for (positive, negative) in [(179.0, -181.0), (180.0, -180.0), (181.0, -179.0)] {
+                let a = Stencil::new([0.25, positive], [0.0, origin], 1.0, 2, 3).unwrap();
+                let b = Stencil::new([0.25, negative], [0.0, origin], 1.0, 2, 3).unwrap();
+                assert_eq!(a.cells, b.cells);
+                assert_eq!(a.weights.map(f32::to_bits), b.weights.map(f32::to_bits));
+                let mut actual = [0.0];
+                a.sample_with(0.0, &mut actual, |_, cell, _| cell as f32)
+                    .unwrap();
+                assert_eq!(actual, [positive - 179.0 + 0.75]);
+            }
+        }
+    }
+
+    #[test]
+    fn ordinary_longitude_axes_keep_wide_domains_and_outside_clamping() {
+        let east = Stencil::new([0.0, 179.0], [0.0, -179.0], 1.0, 1, 359).unwrap();
+        assert_eq!(east.cells, [358; 4]);
+        assert_eq!(east.weights, [1.0, 0.0, 0.0, 0.0]);
+        let outside = Stencil::new([0.0, -181.0], [0.0, -179.0], 1.0, 1, 359).unwrap();
+        assert_eq!(outside.cells, [0, 1, 0, 1]);
+        assert_eq!(outside.weights, [1.0, 0.0, 0.0, 0.0]);
+        let far = Stencil::new([0.5, -179.0], [0.0, 100.0], 1.0, 2, 3).unwrap();
+        assert_eq!(far.cells, [0, 1, 3, 4]);
+        assert_eq!(far.weights, [0.5, 0.0, 0.5, 0.0]);
+    }
+
+    #[test]
+    fn exact_dateline_endpoints_share_the_same_column() {
+        for (origin, expected) in [(179.0, 1.0), (-180.0, 0.0)] {
+            let a = Stencil::new([0.0, 180.0], [0.0, origin], 1.0, 1, 2).unwrap();
+            let b = Stencil::new([0.0, -180.0], [0.0, origin], 1.0, 1, 2).unwrap();
+            assert_eq!(a.cells, b.cells);
+            assert_eq!(a.weights.map(f32::to_bits), b.weights.map(f32::to_bits));
+            let mut value = [0.0];
+            a.sample_with(0.0, &mut value, |_, cell, _| cell as f32)
+                .unwrap();
+            assert_eq!(value, [expected]);
+        }
+        let ordinary_outside = Stencil::new([0.0, 181.0], [0.0, -180.0], 1.0, 1, 2).unwrap();
+        assert_eq!(ordinary_outside.cells, [1; 4]);
+        assert_eq!(ordinary_outside.weights, [0.0, 1.0, 0.0, 0.0]);
+    }
 
     #[test]
     fn temporal_fallback_is_before_horizontal_normalization() {

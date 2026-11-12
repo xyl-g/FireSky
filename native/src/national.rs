@@ -3496,6 +3496,17 @@ fn target_point(lat: f32, lon: f32, bearing: f32, distance_km: f32) -> (f32, f32
     DestinationPathGeometry::new(lat, lon, bearing).target_point(distance_km)
 }
 
+fn longitude_on_grid(lon: f32, lon0: f32, spacing: f32, cols: usize) -> f32 {
+    let end = lon0 + spacing * cols.saturating_sub(1) as f32;
+    if lon0 < -180.0 || end > 180.0 || (end == 180.0 && lon0 > -180.0) {
+        lon + 360.0 * (((lon0 + end) * 0.5 - lon) / 360.0).round()
+    } else if lon == 180.0 && lon0 == -180.0 && end < 180.0 {
+        -180.0
+    } else {
+        lon
+    }
+}
+
 fn cell_for_point(
     lat: f32,
     lon: f32,
@@ -3505,6 +3516,7 @@ fn cell_for_point(
     rows: usize,
     cols: usize,
 ) -> Option<usize> {
+    let lon = longitude_on_grid(lon, lon0, spacing, cols);
     let row = ((lat - lat0) / spacing).round() as isize;
     let col = ((lon - lon0) / spacing).round() as isize;
     if row < 0 || col < 0 || row >= rows as isize || col >= cols as isize {
@@ -4825,6 +4837,7 @@ impl Batch<'_> {
         if self.rows == 0 || self.cols == 0 || !self.spacing.is_finite() || self.spacing <= 0.0 {
             return [(0, 1.0), (0, 0.0), (0, 0.0), (0, 0.0)];
         }
+        let lon = longitude_on_grid(lon, self.lon0, self.spacing, self.cols);
         let row_position = (lat - self.lat0) / self.spacing;
         let col_position = (lon - self.lon0) / self.spacing;
         let row0 = row_position.floor().clamp(0.0, (self.rows - 1) as f32) as usize;
@@ -4848,6 +4861,7 @@ impl Batch<'_> {
         if self.rows == 0 || self.cols == 0 || !self.spacing.is_finite() || self.spacing <= 0.0 {
             return None;
         }
+        let lon = longitude_on_grid(lon, self.lon0, self.spacing, self.cols);
         let max_lat = self.lat0 + self.spacing * (self.rows - 1) as f32;
         let max_lon = self.lon0 + self.spacing * (self.cols - 1) as f32;
         if !lat.is_finite()
@@ -5563,6 +5577,7 @@ impl Batch<'_> {
         let dlon_deg = (u_ms * seconds / (EARTH_RADIUS_KM * 1000.0 * latitude_cosine)).to_degrees();
         let displaced_lat = (lat + direction * dlat_deg).clamp(-89.9, 89.9);
         let displaced_lon = (lon + direction * dlon_deg + 180.0).rem_euclid(360.0) - 180.0;
+        let displaced_lon = longitude_on_grid(displaced_lon, self.lon0, self.spacing, self.cols);
         (displaced_lat, displaced_lon)
     }
 
@@ -5971,6 +5986,7 @@ impl Batch<'_> {
         if self.cols == 0 {
             return lon;
         }
+        let lon = longitude_on_grid(lon, self.lon0, self.spacing, self.cols);
         let max_lon = self.lon0 + self.spacing * (self.cols - 1) as f32;
         lon.clamp(self.lon0, max_lon)
     }
@@ -11236,6 +11252,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn wrapped_grid_sampling_keeps_wind_and_rays_on_the_contiguous_axis() {
+        let batch = Batch {
+            grid: &[],
+            aerosol_profiles: &[],
+            time_count: 0,
+            cell_count: 6,
+            observers: &[],
+            samples: &[],
+            step_count: 0,
+            rows: 2,
+            cols: 3,
+            lat0: 0.,
+            lon0: 179.,
+            spacing: 1.,
+            radius_km: 200.,
+            observer_geometry_templates: None,
+        };
+        assert_eq!(
+            batch.horizontal_weights(0.5, -179.5),
+            batch.horizontal_weights(0.5, 180.5)
+        );
+        assert_eq!(
+            batch.cloud_horizontal_weights(0.5, -179.5),
+            Some([(1, 0.25), (2, 0.25), (4, 0.25), (5, 0.25)])
+        );
+        assert_eq!(cell_for_point(0., -179., 0., 179., 1., 2, 3), Some(2));
+        assert_eq!(batch.clamp_to_grid_lon(-179.5), 180.5);
+        assert_eq!(batch.clamp_to_grid_lon(-178.), 181.);
+        assert_eq!(batch.clamp_to_grid_lon(178.), 179.);
+        let (_, eastward) = batch.wind_displaced_position_with_wind(0.5, 179.99, 600., 1., 10., 0.);
+        assert!(eastward > 180. && eastward < 181.);
+        assert!(batch.cloud_horizontal_weights(0.5, eastward).is_some());
+        let (lat, lon) = target_point(0.5, 179.5, 90., 100.);
+        assert!(lon > 180. && lon < 181.);
+        assert!(batch.cloud_horizontal_weights(lat, lon).is_some());
+        assert_eq!(
+            batch.horizontal_weights(lat, lon),
+            batch.horizontal_weights(lat, lon - 360.)
+        );
+        assert_eq!(longitude_on_grid(179., -179., 1., 359), 179.);
+        assert_eq!(longitude_on_grid(-180., -179., 1., 359), -180.);
+        assert_eq!(longitude_on_grid(-180., 179., 1., 2), 180.);
+        assert_eq!(longitude_on_grid(180., -180., 1., 2), -180.);
+    }
+
+    #[test]
     fn material_lane_motion_blend_matches_original_scalar_bits() {
         let choices = [
             -0.0,
@@ -12234,7 +12296,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn target_extension_factor_ramps_with_distance_from_target() {
         // The exemption is full near the target, ramps linearly, and is gone
         // beyond the far cutoff so distant same-layer cells block normally.
@@ -12253,6 +12314,7 @@ mod tests {
         assert_eq!(target_extension_factor_at_distance(f32::NAN), 1.0);
     }
 
+    #[test]
     fn solar_path_integrates_the_full_aerosol_profile() {
         let cell_count = 20;
         let mut grid = vec![0.0f32; cell_count * GRID_FIELDS];
