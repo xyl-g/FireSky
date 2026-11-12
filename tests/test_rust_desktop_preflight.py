@@ -222,7 +222,7 @@ def test_real_event_planner_adapter_preserves_point_and_regional_context(
         _ec_cycle_override=CYCLE.isoformat())
     if regional:
         payload.update(regions=["custom"], points=[dict(
-            name=f"p{i}", lat=30.+i*.001, lon=120., elevation_source="model-grid",
+            name=f"p{i}", lat=30.+i*.001, lon=120.+i*.001, elevation_source="model-grid",
             timezone_name="Asia/Shanghai") for i in range(count)])
     expected = data.check_model_data(payload, regional=regional, config=config, probe=False, fast=True)
     monkeypatch.setenv("FIRESKY_DESKTOP_DATA_BACKEND", "rust")
@@ -257,7 +257,7 @@ def params(config):
     lambda p:p["plans"][0].update(cams_valid_times=["2026-11-09T07:00:00Z"]),
     lambda p:p["plans"][0].update(cycle_utc="2026-11-10T00:00:00Z"),
     lambda p:p["plans"][0].update(point_count=0),
-    lambda p:p["plans"][0].update(bbox=[102,100,1,0]),
+    lambda p:p["plans"][0].update(bbox=[180,-180,1,0]),
     lambda p:p["plans"][0].update(area=[0,100,1,102]),
     lambda p:p["plans"][0].update(unknown=True),
     lambda p:p["config"].update(gfs_cache_dir=""),
@@ -380,3 +380,38 @@ def test_strict_selection_rechecks_changed_raw_files_in_same_process(engine_bina
         process.stdout.close()
         process.stderr.close()
     assert process.returncode==0
+
+
+@pytest.mark.parametrize("padded", [False, True])
+@pytest.mark.parametrize("fast", [False, True])
+def test_wrapped_cams_readiness_requires_both_rectangles(engine_binary, config, padded, fast):
+    seed_models(config)
+    areas = ([1., 179., 0., 180.], [1., -180., 0., -179.])
+    request = params(config)
+    request["fast"] = fast
+    request["plans"][0]["bbox"] = [179., -179., 1., 0.]
+    request["plans"][0]["area"] = [1., 179., 0., 181. if padded else -179.]
+
+    def check():
+        response = rpc(engine_binary, [
+            dict(id="wrapped", method="check_desktop_data", params=request)])[0]
+        assert response["type"] == "result", response
+        return response["result"]["report"]["datasets"][-1]
+
+    missing = check()
+    assert missing["missing_count"] == 4
+    assert len(missing["missing_keys"]) == 4
+    assert len(missing["missing_valid_times"]) == 2
+
+    for hour, path in zip((6, 9), seed_cams(config, area=areas[0])):
+        write_cams(path, hour=hour, longitudes=(179, 180), source_columns=(0, 1))
+    one_side = check()
+    assert not one_side["ready"]
+    assert one_side["missing_count"] == 2
+    assert all(", -180.0," in key for key in one_side["missing_keys"])
+
+    for hour, path in zip((6, 9), seed_cams(config, area=areas[1])):
+        write_cams(path, hour=hour, longitudes=(-180, -179), source_columns=(1, 2))
+    both_sides = check()
+    assert both_sides["ready"]
+    assert both_sides["missing_count"] == 0

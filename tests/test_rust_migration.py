@@ -197,7 +197,8 @@ def test_engine_protocol_and_score_match_python(engine_binary, monkeypatch):
         "diagnose_profile_columns", "diagnose_stored_profiles_to_files", "build_stored_frames_to_files",
         "assemble_observer_frames", "quantize_frame_fields",
         "validate_point_core", "materialize_point_core", "forecast_stored_point_to_files", "gfs_data",
-        "plan_gfs_inputs", "forecast_cached_gfs_point_to_files", "cams_data", "ecmwf_data",
+        "plan_gfs_inputs", "forecast_cached_gfs_point_to_files", "cams_data",
+        "calculate_earth_engine_aod", "ecmwf_data",
         "materialize_ecmwf_point", "plan_ecmwf_inputs", "forecast_cached_ecmwf_point_to_files",
         "build_stored_cross_section", "render_html_report", "forecast_ecmwf_service_to_files",
         "read_ecmwf_service_cross_section",
@@ -216,6 +217,7 @@ def test_engine_protocol_and_score_match_python(engine_binary, monkeypatch):
             "desktop_nowcast_hsd_cache", "desktop_nowcast_hsd_export",
             "desktop_nowcast_hsd_motion", "desktop_nowcast_hsd_advection",
             "desktop_nowcast_hsd_retrieval",
+            "decode_raw_hsd_to_files", "warm_hsd_cache", "assess_radar_images",
     ]
     assert forecast["type"] == "error"
     monkeypatch.setenv("FIRESKY_EMPIRICAL_BACKEND", "python")

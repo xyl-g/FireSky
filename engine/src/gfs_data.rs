@@ -145,6 +145,34 @@ pub fn canonical_bbox(bbox: [f64; 4], resolution: &str) -> Result<[f64; 4], Stri
     .map(|v| if v == 0.0 { 0.0 } else { v }))
 }
 
+/// Return whether `outer` covers every longitude/latitude cell in `inner`.
+///
+/// Longitudes use the public FireSky convention `[west, east, north, south]`.
+/// A `west > east` interval wraps through the antimeridian and is represented
+/// as two ordinary intervals for containment checks.  Keeping this logic in
+/// the cache index means a wrapped request can reuse a larger cached subset
+/// without being mistaken for an empty or near-global rectangle.
+fn bbox_covers(outer: [f64; 4], inner: [f64; 4]) -> bool {
+    if outer[2] < inner[2] || outer[3] > inner[3] {
+        return false;
+    }
+    let segments = |west: f64, east: f64| {
+        if west <= east {
+            vec![(west, east)]
+        } else {
+            vec![(west, 180.0), (-180.0, east)]
+        }
+    };
+    let outer = segments(outer[0], outer[1]);
+    segments(inner[0], inner[1])
+        .into_iter()
+        .all(|(left, right)| {
+            outer
+                .iter()
+                .any(|(outer_left, outer_right)| *outer_left <= left && *outer_right >= right)
+        })
+}
+
 pub fn build_url(
     cycle: DateTime<Utc>,
     hour: u32,
@@ -627,11 +655,7 @@ impl GfsClient {
                         return Ok(Some(file));
                     }
                 } else if let (Some(outer), Some(inner)) = (entry.bbox, bbox) {
-                    if outer[0] <= inner[0]
-                        && outer[1] >= inner[1]
-                        && outer[2] >= inner[2]
-                        && outer[3] <= inner[3]
-                    {
+                    if bbox_covers(outer, inner) {
                         return Ok(Some(file));
                     }
                 }
@@ -964,4 +988,33 @@ pub fn execute(params: Params) -> Result<Value, String> {
     result["elapsed_ms"] = json!(started.elapsed().as_secs_f64() * 1000.0);
     result["contract"] = json!("rust-gfs-data-v1");
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{bbox_covers, canonical_bbox};
+
+    #[test]
+    fn canonical_bbox_preserves_wrapped_longitude_order() {
+        assert_eq!(
+            canonical_bbox([170.01, -170.01, 10.01, -10.01], "0p25").unwrap(),
+            [170.0, -170.0, 10.25, -10.25]
+        );
+    }
+
+    #[test]
+    fn wrapped_cache_coverage_does_not_expand_to_global() {
+        assert!(bbox_covers(
+            [170.0, -170.0, 20.0, -20.0],
+            [175.0, -175.0, 10.0, -10.0]
+        ));
+        assert!(bbox_covers(
+            [-180.0, 180.0, 90.0, -90.0],
+            [175.0, -175.0, 10.0, -10.0]
+        ));
+        assert!(!bbox_covers(
+            [170.0, -170.0, 20.0, -20.0],
+            [160.0, 170.0, 10.0, -10.0]
+        ));
+    }
 }

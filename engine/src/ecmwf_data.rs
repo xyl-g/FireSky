@@ -150,7 +150,7 @@ fn parse_cycle(value: &str) -> Result<DateTime<Utc>, String> {
     }
     Ok(cycle)
 }
-fn path(root: &Path, cycle: DateTime<Utc>, hour: i64) -> PathBuf {
+pub(crate) fn path(root: &Path, cycle: DateTime<Utc>, hour: i64) -> PathBuf {
     root.join(cycle.format("%Y-%m-%d").to_string())
         .join(format!("{:02}Z", cycle.hour()))
         .join(format!(

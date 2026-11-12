@@ -397,12 +397,13 @@ def swift_location_probe(tmp_path_factory):
     binary = tmp_path_factory.mktemp("swift-location")/"probe"
     subprocess.run([compiler,"-swift-version","5","-parse-as-library",
         str(root/"apps/macos/Sources/FireSkyNative/EngineClient.swift"),
+        str(root/"apps/macos/Sources/FireSkyNative/FFIEngineClient.swift"),
         str(root/"tests/fixtures/rust_location_client.swift"),"-o",str(binary)],
         check=True,capture_output=True,text=True,timeout=120)
     return binary
 
 
-@pytest.mark.parametrize("mode", ["success","failure","restart","legacy","oversized"])
+@pytest.mark.parametrize("mode", ["success","failure","restart","native-default","oversized"])
 def test_real_swift_client_routes_location_without_python_fallback(
     engine_binary,swift_location_probe,provider,tmp_path,mode
 ):
@@ -416,20 +417,22 @@ def test_real_swift_client_routes_location_without_python_fallback(
     stub.write_text(f"#!{sys.executable}\n"+(root/"tests/fixtures/native_location_python_stub.py").read_text())
     stub.chmod(0o755)
     record = tmp_path/"python-calls.ndjson"
-    env = dict(os.environ,FIRESKY_LOCATION_ENGINE_BIN=str(engine_binary),
+    workspace = tmp_path/"workspace"
+    workspace.mkdir()
+    env = dict(os.environ,FIRESKY_RUST_ENGINE_BIN=str(engine_binary),
+        FIRESKY_LOCATION_ENGINE_BIN=str(engine_binary),FIRESKY_PYTHON=str(stub),
         FIRESKY_LOCATION_CONFIG=str(settings),FIRESKY_NATIVE_LOG_DIR=str(tmp_path/"logs"),
         FIRESKY_PROBE_PYTHON_RECORD=str(record))
-    if mode=="legacy":
+    if mode=="native-default":
         del env["FIRESKY_LOCATION_ENGINE_BIN"]
         del env["FIRESKY_LOCATION_CONFIG"]
-    process = subprocess.run([str(swift_location_probe),str(root),str(stub),mode],
-        env=dict(env,PYTHONPATH=str(root/"tests/fixtures")),capture_output=True,text=True,timeout=30)
+    process = subprocess.run([str(swift_location_probe),str(workspace),str(engine_binary),mode],
+        env=env,capture_output=True,text=True,timeout=30)
     assert process.returncode==0, process.stdout+process.stderr
     output = json.loads(process.stdout)
     assert output["passed"]
-    calls = [json.loads(line) for line in record.read_text().splitlines()]
-    expected = ["hello","search","metadata","probe"] if mode=="legacy" else ["hello","probe"]
-    assert calls == expected*(2 if mode=="restart" else 1), calls
+    assert not record.exists(), "native client started the forbidden Python sidecar"
+    assert not (workspace/"pyproject.toml").exists()
     if mode in ("success","restart","oversized"):
         assert output["search"] == dict(name="Town",lat=51.4,lon=-.2,
             timezone_name="Europe/London",elevation_m=80)
@@ -448,9 +451,12 @@ def test_real_swift_cancellation_targets_native_child(
     stub.chmod(0o755)
     settings,record,marker = tmp_path/"settings.json",tmp_path/"calls.ndjson",tmp_path/"cancel"
     settings.write_text(json.dumps(dict(location=config)))
-    process = subprocess.Popen([str(swift_location_probe),str(root),str(stub),"cancel"],
+    workspace = tmp_path/"workspace"
+    workspace.mkdir()
+    process = subprocess.Popen([str(swift_location_probe),str(workspace),str(engine_binary),"cancel"],
         stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,
-        env=dict(os.environ,FIRESKY_LOCATION_ENGINE_BIN=str(engine_binary),
+        env=dict(os.environ,FIRESKY_RUST_ENGINE_BIN=str(engine_binary),
+            FIRESKY_LOCATION_ENGINE_BIN=str(engine_binary),FIRESKY_PYTHON=str(stub),
             FIRESKY_LOCATION_CONFIG=str(settings),FIRESKY_NATIVE_LOG_DIR=str(tmp_path/"logs"),
             FIRESKY_PROBE_PYTHON_RECORD=str(record),FIRESKY_PROBE_CANCEL_MARKER=str(marker)))
     try:
@@ -462,7 +468,7 @@ def test_real_swift_cancellation_targets_native_child(
         stdout,stderr = process.communicate(timeout=10)
         assert process.returncode==0,stdout+stderr
         assert json.loads(stdout)["passed"]
-        assert [json.loads(v) for v in record.read_text().splitlines()] == ["hello","probe"]
+        assert not record.exists(), "native cancellation reached the forbidden Python sidecar"
     finally:
         release.set()
         if process.poll() is None:
@@ -480,14 +486,17 @@ def test_real_swift_hello_rejects_invalid_native_setup(
     stub.chmod(0o755)
     path,record = tmp_path/"settings.json",tmp_path/"calls.ndjson"
     path.write_text(json.dumps(dict(workers=0)))
-    env = dict(os.environ,FIRESKY_LOCATION_ENGINE_BIN=str(engine_binary),
+    workspace = tmp_path/"workspace"
+    workspace.mkdir()
+    env = dict(os.environ,FIRESKY_RUST_ENGINE_BIN=str(engine_binary),
+        FIRESKY_LOCATION_ENGINE_BIN=str(engine_binary),FIRESKY_PYTHON="/forbidden/python",
         FIRESKY_LOCATION_CONFIG=str(path),FIRESKY_NATIVE_LOG_DIR=str(tmp_path/"logs"),
         FIRESKY_PROBE_PYTHON_RECORD=str(record))
     if fault=="protocol":
         env["FIRESKY_LOCATION_ENGINE_BIN"] = str(stub)
     elif fault=="executable":
         env["FIRESKY_LOCATION_ENGINE_BIN"] = str(tmp_path/"missing-engine")
-    process = subprocess.run([str(swift_location_probe),str(root),str(stub),"success"],
+    process = subprocess.run([str(swift_location_probe),str(workspace),str(engine_binary),"success"],
         env=env,capture_output=True,text=True,timeout=15)
     assert process.returncode==1,process.stdout+process.stderr
     assert not json.loads(process.stdout)["passed"]

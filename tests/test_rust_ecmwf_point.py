@@ -285,7 +285,7 @@ def test_one_request_resolves_downloads_cams_and_scores_ec_without_python(
 
 @pytest.mark.parametrize("fault", ["name", "lat", "zone", "elevation", "model-grid", "radius",
                                  "cams-cache", "source", "resolution", "date", "hour", "horizon",
-                                 "dateline", "unknown", "backend", "ec-cache"])
+                                 "unknown", "backend", "ec-cache"])
 def test_invalid_ec_plan_does_not_touch_network(engine_binary, tmp_path, ec_server, fault):
     endpoint, state = ec_server
     request = recipe(tmp_path, endpoint)
@@ -301,7 +301,6 @@ def test_invalid_ec_plan_does_not_touch_network(engine_binary, tmp_path, ec_serv
     elif fault == "date": request["date"] = "2026-02-30"
     elif fault == "hour": request["cycle_utc"] = "2026-11-09T00:01:00Z"
     elif fault == "horizon": request["cycle_utc"] = "2026-10-01T00:00:00Z"
-    elif fault == "dateline": request["point"]["lon"] = 179.99
     elif fault == "unknown": request["gfs"] = {}
     elif fault == "backend": request["compute_backend"] = "gpu"
     elif fault == "ec-cache": request["ec"]["cache_dir"] = ""

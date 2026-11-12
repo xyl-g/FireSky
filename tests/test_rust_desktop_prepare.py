@@ -130,8 +130,39 @@ def test_native_prepare_both_models_keeps_model_results_separate(monkeypatch, tm
     assert all(item["status"] == "ready" for item in result["models"].values())
 
 
+CONTINENTS = [
+    ("africa", [38.0, -18.0, -35.0, 52.0]),
+    ("asia", [81.0, 26.0, -11.0, 180.0]),
+    ("europe", [72.0, -25.0, 34.0, 45.0]),
+    ("north_america", [84.0, -179.0, 7.0, -52.0]),
+    ("south_america", [13.0, -92.0, -56.0, -34.0]),
+    ("oceania", [6.0, 110.0, -50.0, 180.0]),
+    ("antarctica", [-60.0, -180.0, -90.0, 180.0]),
+]
+
+
+def envelope_for(area):
+    """Mirror engine/src/continents.rs: smallest containing continent, else
+    the union bbox of intersecting continents, else the request area."""
+    def contains(box):
+        return (box[1][0] + 1e-9 >= area[0] and box[1][1] - 1e-9 <= area[1]
+                and box[1][2] - 1e-9 <= area[2] and box[1][3] + 1e-9 >= area[3])
+    def intersects(box):
+        return (box[1][2] <= area[0] + 1e-9 and area[2] <= box[1][0] + 1e-9
+                and box[1][1] <= area[3] + 1e-9 and area[1] <= box[1][3] + 1e-9)
+    containing = [box for box in CONTINENTS if contains(box)]
+    if containing:
+        return min(containing, key=lambda box: (box[1][0] - box[1][2]) * (box[1][3] - box[1][1]))[1]
+    matched = [box[1] for box in CONTINENTS if intersects(box)]
+    if not matched:
+        return list(area)
+    return [max(b[0] for b in matched), min(b[1] for b in matched),
+            min(b[2] for b in matched), max(b[3] for b in matched)]
+
+
+@pytest.mark.parametrize("scope,use_envelope", [(None, True), ("request", False)])
 def test_native_prepare_resolves_local_gfs_and_cams_without_python_provider(
-    engine_binary, monkeypatch, tmp_path
+    engine_binary, monkeypatch, tmp_path, scope, use_envelope
 ):
     pytest.importorskip("eccodes")
     from test_rust_cams import write_cams
@@ -152,6 +183,8 @@ def test_native_prepare_resolves_local_gfs_and_cams_without_python_provider(
         "target_date": "2026-11-09",
         "gfs_cycle_override": "2026-11-09T00:00:00Z",
     }
+    if scope is not None:
+        request["cams_download_scope"] = scope
     context = rust_desktop_data.model_context(request, config=config, fast=False)
     client = GfsNomadsClient(cache_dir=config.gfs_cache_dir, resolution="0p25")
     cycle = datetime(2026, 11, 9, tzinfo=timezone.utc)
@@ -171,7 +204,11 @@ def test_native_prepare_resolves_local_gfs_and_cams_without_python_provider(
             }),
             encoding="utf-8",
         )
-    key = cams_area_key(context["area"])
+    # Full-cycle scope (2026-11-12) downloads the continental envelope; the
+    # offline prepare cache is seeded with exactly the identity the engine
+    # derives from the request area.
+    download_area = envelope_for(context["area"]) if use_envelope else context["area"]
+    key = cams_area_key(download_area)
     targets = sorted({
         bracket
         for sample in context["times"]

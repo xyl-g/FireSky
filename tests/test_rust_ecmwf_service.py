@@ -137,6 +137,20 @@ def test_invalid_html_keeps_rpc_alive(engine_binary, core_case, fault):
     assert responses[1]["type"] == "result"
 
 
+@pytest.mark.parametrize("count", [None, 3, 3.0])
+@pytest.mark.parametrize("duration", [None, 30, 30.0])
+def test_html_optional_counts_and_integral_float_duration(
+    engine_binary, core_case, count, duration,
+):
+    payload = example_report(core_case).to_dict()
+    payload["steps"][0]["burning_cloud_count"] = count
+    payload["potential_duration_minutes"] = duration
+    result = call(engine_binary, "render_html_report",
+                  dict(report=payload, generated_local=GENERATED))
+    assert result["type"] == "result", result
+    assert ("未提供" in result["result"]["html"]) == (count is None)
+
+
 def service_forecast(binary, root, endpoint, phenomenon):
     request = recipe(root, endpoint, phenomenon)
     request["point"]["name"] = 'EC 湖畔 <>&"\''

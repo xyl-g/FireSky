@@ -34,6 +34,21 @@ fn number(value: &Value, key: &str) -> Result<f64, String> {
         .filter(|v| v.is_finite())
         .ok_or_else(|| format!("HTML report missing finite {key}"))
 }
+fn whole(value: &Value) -> Option<u64> {
+    value
+        .as_f64()
+        .filter(|v| v.is_finite() && *v >= 0.0 && *v <= 9_007_199_254_740_991.0 && v.fract() == 0.0)
+        .map(|v| v as u64)
+}
+fn optional_whole(value: &Value, label: &str) -> Result<Option<u64>, String> {
+    if value.is_null() {
+        Ok(None)
+    } else {
+        whole(value)
+            .map(Some)
+            .ok_or_else(|| format!("invalid HTML {label}: expected a nonnegative safe integer"))
+    }
+}
 fn escape(value: &str) -> String {
     value
         .replace('&', "&amp;")
@@ -211,12 +226,17 @@ pub(crate) fn render(report: &Value, generated: &str) -> Result<String, String> 
         let extent = number(step, "extent_score")? * 100.0;
         let vividness = number(step, "vividness_score")? * 100.0;
         let visibility = number(step, "visibility_score")? * 100.0;
-        let count = step["burning_cloud_count"]
-            .as_u64()
-            .ok_or("invalid HTML cloud count")?;
+        let count = optional_whole(&step["burning_cloud_count"], "cloud count")?
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "未提供".to_owned());
         write!(table_rows, "<tr class=\"{class}\"><td>{label}</td><td>{solar:.1}°</td><td>{burn:.0}</td><td>{intensity:.0}</td><td>{extent:.0}</td><td>{vividness:.0}</td><td>{visibility:.0}</td><td>{cloud}</td><td>{count}</td></tr>").unwrap();
         let detail_cloud = escape(candidate.unwrap_or("无明确目标云"));
-        write!(details,"<details><summary>{label} · 存在 {burn:.0} · {detail_cloud}</summary><ul>{}</ul></details>",items(&step["reasons"])?).unwrap();
+        let reasons = if step["reasons"].is_null() {
+            "<li>逐云候选诊断不可用。</li>".to_owned()
+        } else {
+            items(&step["reasons"])?
+        };
+        write!(details,"<details><summary>{label} · 存在 {burn:.0} · {detail_cloud}</summary><ul>{reasons}</ul></details>").unwrap();
     }
     let chart = chart(steps, &times, best, zone)?;
     let legend: String = SERIES
@@ -232,10 +252,9 @@ pub(crate) fn render(report: &Value, generated: &str) -> Result<String, String> 
     let duration = if report["potential_duration_minutes"].is_null() {
         "None".to_owned()
     } else {
-        report["potential_duration_minutes"]
-            .as_i64()
-            .ok_or("invalid HTML duration")?
-            .to_string()
+        optional_whole(&report["potential_duration_minutes"], "duration")?
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| "未知".to_owned())
     };
     let aod = number(&report["aerosol"], "aod550")?;
     let quality = escape(text(&report["aerosol"], "quality")?);
@@ -320,4 +339,32 @@ fn chart(
 // including fold-zero/fold-one equality at a daylight-saving rollback.
 fn wall_time(time: DateTime<FixedOffset>, zone: chrono_tz::Tz) -> chrono::NaiveDateTime {
     time.with_timezone(&zone).naive_local()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn integral_float_counts_are_accepted_without_truncation() {
+        assert_eq!(whole(&json!(3)).unwrap(), 3);
+        assert_eq!(whole(&json!(3.0)).unwrap(), 3);
+        for value in [json!(-1), json!(1.5), json!(1e30), Value::Null, json!(true)] {
+            assert!(whole(&value).is_none());
+        }
+    }
+    #[test]
+    fn optional_counts_distinguish_missing_from_invalid() {
+        assert_eq!(optional_whole(&Value::Null, "count").unwrap(), None);
+        assert_eq!(optional_whole(&json!(3.0), "count").unwrap(), Some(3));
+        for value in [
+            json!(-1),
+            json!(1.5),
+            json!(1e30),
+            json!(true),
+            json!("30"),
+            json!([]),
+        ] {
+            assert!(optional_whole(&value, "count").is_err(), "{value}");
+        }
+    }
 }

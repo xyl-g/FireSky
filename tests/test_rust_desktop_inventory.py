@@ -347,9 +347,12 @@ def test_real_swift_data_page_inventory_bypasses_python(
     stub.chmod(0o755)
     settings,record=tmp_path/"settings.json",tmp_path/"calls.jsonl"
     settings.write_text(json.dumps(dict(location=location,inventory=roots)))
-    process=subprocess.run([str(swift_location_probe),str(root),str(stub),
+    workspace=tmp_path/"workspace"
+    workspace.mkdir()
+    process=subprocess.run([str(swift_location_probe),str(workspace),str(engine_binary),
         "inventoryfailure" if failure else "inventory"],
-        env=dict(os.environ,FIRESKY_LOCATION_ENGINE_BIN=str(engine_binary),
+        env=dict(os.environ,FIRESKY_RUST_ENGINE_BIN=str(engine_binary),
+            FIRESKY_LOCATION_ENGINE_BIN=str(engine_binary),FIRESKY_PYTHON=str(stub),
             FIRESKY_LOCATION_CONFIG=str(settings),FIRESKY_NATIVE_LOG_DIR=str(tmp_path/"logs"),
             FIRESKY_PROBE_PYTHON_RECORD=str(record)),
         capture_output=True,text=True,timeout=15)
@@ -359,7 +362,7 @@ def test_real_swift_data_page_inventory_bypasses_python(
         assert "regular" in value["nativeFailure"]
     else:
         assert canonical(value["inventory"])==canonical(legacy(roots))
-    assert [json.loads(v) for v in record.read_text().splitlines()]==["hello","probe"]
+    assert not record.exists(), "native inventory started the forbidden Python sidecar"
 
 
 @pytest.mark.parametrize("config", [

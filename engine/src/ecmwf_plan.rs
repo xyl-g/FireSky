@@ -10,7 +10,7 @@ use firesky_native::timeline;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
     time::Instant,
 };
@@ -48,6 +48,50 @@ struct Prepared {
     source: SourceIdentity,
     summary: Value,
     codes: Option<crate::grib::EcCodes>,
+}
+
+struct CamsPlan {
+    areas: Vec<[f64; 4]>,
+    selected: BTreeMap<DateTime<Utc>, Vec<cams_cache::Selection>>,
+    download_reports: Vec<Value>,
+}
+
+fn cams_plan(
+    root: &Path,
+    area: [f64; 4],
+    targets: &BTreeSet<DateTime<Utc>>,
+    download: Option<&crate::ads::Config>,
+) -> Result<CamsPlan, String> {
+    let areas = cams_data::split_areas(area)?;
+    let mut selected_by_time = BTreeMap::<DateTime<Utc>, Vec<cams_cache::Selection>>::new();
+    let mut download_reports = Vec::new();
+    for sub_area in &areas {
+        let mut selected = cams_cache::select(root, *sub_area, targets)?;
+        if selected.len() < targets.len() {
+            if let Some(config) = download {
+                download_reports.push(cams_data::resolve(
+                    root,
+                    *sub_area,
+                    targets.iter().copied().collect(),
+                    config.clone(),
+                )?);
+                selected = cams_cache::select(root, *sub_area, targets)?;
+            }
+        }
+        for target in targets {
+            if let Some(value) = selected.get(target) {
+                selected_by_time
+                    .entry(*target)
+                    .or_default()
+                    .push(value.clone());
+            }
+        }
+    }
+    Ok(CamsPlan {
+        areas,
+        selected: selected_by_time,
+        download_reports,
+    })
 }
 pub fn execute(params: Params) -> Result<Value, String> {
     Ok(prepare(&params.path)?.summary)
@@ -225,10 +269,8 @@ fn context(path: &Path) -> Result<Context, String> {
         (p.lat + lat_pad).min(90.0),
         (p.lat - lat_pad).max(-90.0),
     ];
-    // The decoder supports wraparound crops, but the assessment's rectangular
-    // longitude layout does not yet support an antimeridian source domain.
-    if bbox[0] >= bbox[1] {
-        return Err("EC point source domain crosses the dateline".into());
+    if bbox[0] == bbox[1] {
+        return Err("EC point planning requires a nonempty source bbox".into());
     }
     let absolute = std::path::absolute(path).map_err(|e| e.to_string())?;
     let base = absolute.parent().unwrap_or(Path::new("."));
@@ -360,8 +402,8 @@ fn prepare_context(
     required.extend([a, b]);
     let phase = Instant::now();
     let mut area = None;
-    let mut selected = std::collections::BTreeMap::new();
-    let mut cams_download = None;
+    let mut cams_selection = None;
+    let mut cams_download = Value::Null;
     if missing.is_empty() {
         let selected_bbox = codes
             .as_ref()
@@ -375,32 +417,54 @@ fn prepare_context(
             round(selected_bbox[3] + 0.6),
         ];
         area = Some(value);
-        selected = cams_cache::select(&input.cams_cache_dir, value, &required)?;
-        if selected.len() < required.len() {
-            if let Some(config) = &input.cams_download {
-                cams_download = Some(cams_data::resolve(
-                    &input.cams_cache_dir,
-                    value,
-                    required.iter().copied().collect(),
-                    config.clone(),
-                )?);
-                selected = cams_cache::select(&input.cams_cache_dir, value, &required)?;
-            }
+        let plan = cams_plan(
+            &input.cams_cache_dir,
+            value,
+            &required,
+            input.cams_download.as_ref(),
+        )?;
+        if plan.download_reports.len() == 1 {
+            cams_download = plan.download_reports[0].clone();
+        } else if !plan.download_reports.is_empty() {
+            cams_download = Value::Array(plan.download_reports.clone());
         }
+        cams_selection = Some(plan);
     }
+    let empty_selected = BTreeMap::new();
+    let selected = cams_selection
+        .as_ref()
+        .map(|plan| &plan.selected)
+        .unwrap_or(&empty_selected);
+    let cams_areas = cams_selection
+        .as_ref()
+        .map(|plan| plan.areas.clone())
+        .unwrap_or_default();
     let missing_cams: Vec<_> = required
         .iter()
-        .filter(|v| !selected.contains_key(v))
+        .filter(|v| {
+            selected
+                .get(v)
+                .is_none_or(|values| values.len() != cams_areas.len())
+        })
         .copied()
         .map(time_contract::iso)
         .collect();
     let optics: Vec<_> = selected
         .values()
-        .map(|s| OpticalFile {
-            valid_time: time_contract::iso(s.valid_time),
-            path: s.path.clone(),
+        .filter(|values| values.len() == cams_areas.len())
+        .map(|values| {
+            let paths = values.iter().map(|s| s.path.clone()).collect::<Vec<_>>();
+            OpticalFile {
+                valid_time: time_contract::iso(values[0].valid_time),
+                path: paths[0].clone(),
+                paths: paths.into_iter().skip(1).collect(),
+            }
         })
         .collect();
+    let cams_area_keys = cams_areas
+        .iter()
+        .map(|area| cams_cache::area_key(*area))
+        .collect::<Result<Vec<_>, _>>()?;
     let summary = json!({
         "contract":"rust-ecmwf-input-plan-v1","model_source":"ec","cycle_utc":time_contract::iso(cycle),
         "provider":{"model":"ifs","member":"ecmwf-ifs-basic","source":input.ec.source,"resolution":input.ec.resolution},
@@ -411,9 +475,13 @@ fn prepare_context(
         "forecast_hours":hours,"model_files":frames,"missing_hours":missing,
         "requested_radius_km":input.radius_km,"candidate_radius_km":domain[0],"native_solar_trace_radius_km":domain[1],
         "source_domain_radius_km":domain[2],"bbox":bbox,"cams_area":area,
+        "cams_areas":cams_areas,
+        "cams_area_key":if cams_area_keys.len() == 1 {json!(cams_area_keys[0])} else {Value::Null},
+        "cams_area_keys":cams_area_keys,
         "cams_valid_times":required.iter().copied().map(time_contract::iso).collect::<Vec<_>>(),
         "cams_model_forecast_hours":optical_hours,
-        "cams_files":optics,"cams_selections":selected.values().collect::<Vec<_>>(),
+        "cams_files":optics,
+        "cams_selections":selected.values().flatten().collect::<Vec<_>>(),
         "missing_cams_valid_times":missing_cams,"cams_download":cams_download,
         "ec_download_enabled":input.allow_ec_download,"cams_download_enabled":input.cams_download.is_some(),
         "ec_resolution":resolved.as_ref().unwrap_or(&plan),

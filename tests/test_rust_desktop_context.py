@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from firesky import desktop_data
 from firesky.web_server import WebServerConfig
-from test_rust_migration import engine_binary
+from test_rust_migration import ec_grib_fixture, engine_binary
 
 
 @pytest.fixture
@@ -1828,3 +1828,70 @@ def test_unified_retrieval_file_receipt_exceeds_line_limit(monkeypatch, tmp_path
     assert columns == []
     assert len(priors) == 150
     assert metrics["diagnostic"].startswith("x")
+
+
+def test_terrain_sampler_searches_the_prepass_envelope_edge(
+    engine_binary, monkeypatch, config
+):
+    """The prepare prepass downloads only the first envelope hour; the terrain
+    sampler must search the ±2 h envelope, not just the core evaluation hours,
+    or that file never hits and preparation fails closed on real downloads."""
+    pytest.importorskip("eccodes")
+    from test_rust_assessment import write_gfs
+    from test_rust_gfs_data import metadata
+
+    monkeypatch.setenv("FIRESKY_RUST_ENGINE_BIN", str(engine_binary))
+    monkeypatch.setenv("FIRESKY_DESKTOP_DATA_BACKEND", "rust")
+    payload = {
+        "name": "terrain-envelope-edge",
+        "lat": 30.2741,
+        "lon": 120.1551,
+        "elevation_m": 50.0,
+        "timezone_name": "Asia/Shanghai",
+        "target_date": "2026-11-09",
+        "phenomenon": "dusk",
+        "radius_km": 200.0,
+        "model_source": "gfs",
+        "gfs_cycle_override": "2026-11-09T00:00:00Z",
+    }
+    context = desktop_data.model_context(payload, config=config, fast=False)
+    assert context["terrain_pending"] is True
+    first = context["hours"][0]
+    path, _ = metadata(
+        config.gfs_cache_dir, f"f{first:03}.grib2",
+        hour=first, bbox=list(context["bbox"]),
+    )
+    write_gfs(path, first)
+    resolved = desktop_data.model_context(payload, config=config, fast=False)
+    assert resolved["terrain_pending"] is False
+    assert resolved["points"][0]["elevation_m"] > 0
+
+
+@pytest.mark.parametrize("nested", [True, False])
+def test_ec_terrain_sampler_reads_production_and_legacy_cache_layouts(
+    engine_binary, ec_grib_fixture, monkeypatch, config, nested
+):
+    pytest.importorskip("eccodes")
+    from test_rust_assessment import rewrite_time
+
+    monkeypatch.setenv("FIRESKY_RUST_ENGINE_BIN", str(engine_binary))
+    monkeypatch.setenv("FIRESKY_DESKTOP_DATA_BACKEND", "rust")
+    payload = {
+        "regions": ["custom"],
+        "custom_bounds": {"west": 100.0, "east": 100.25, "south": 0.0, "north": 0.25},
+        "custom_timezone_name": "Asia/Shanghai",
+        "target_date": "2026-11-09", "phenomenon": "dusk",
+        "radius_km": 200.0, "model_source": "ec",
+        "ec_cycle_override": "2026-11-09T00:00:00Z",
+    }
+    context = desktop_data.model_context(payload, config=config, regional=True, fast=False)
+    assert context["terrain_pending"] is True
+    hour = context["hours"][0]
+    directory = config.ecmwf_cache_dir / "2026-11-09" / "00Z" if nested else config.ecmwf_cache_dir
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"ifs-basic-v2-2026110900-f{hour:03}.grib2"
+    ec_grib_fixture(path, clipped=False)
+    rewrite_time(path, hour)
+    resolved = desktop_data.model_context(payload, config=config, regional=True, fast=False)
+    assert resolved["terrain_pending"] is False
+    assert all(point["_elevation_source"] == "model-grid" for point in resolved["points"])

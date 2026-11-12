@@ -17,7 +17,7 @@ use std::{
 
 const MAX_POINTS: usize = 500_000;
 const MAX_JSON: u64 = 128 * 1024 * 1024;
-const REGIONS: [(&str, &str, [f64; 4]); 10] = [
+pub(crate) const REGIONS: [(&str, &str, [f64; 4]); 10] = [
     ("east-asia", "EA", [63., 155., 60., 12.]),
     ("southeast-asia", "SE", [85., 155., 35., -20.]),
     ("south-asia", "SA", [55., 110., 45., -5.]),
@@ -122,6 +122,14 @@ fn number(value: &Value, low: f64, high: f64) -> Result<f64, String> {
         Err("coordinate/elevation/radius exceeds supported bounds".into())
     }
 }
+fn longitude_timezone(lon: f64) -> String {
+    let offset = (lon / 15.0).round() as i32;
+    if offset >= 0 {
+        format!("Etc/GMT-{}", offset)
+    } else {
+        format!("Etc/GMT+{}", -offset)
+    }
+}
 fn zone(value: &Value) -> Result<String, String> {
     let name = text(&json!({"zone":value}), "zone", "").trim().to_owned();
     if name.len() > 128 || name.parse::<chrono_tz::Tz>().is_err() {
@@ -135,17 +143,91 @@ fn truncate(value: String, length: usize) -> String {
 fn region(name: &str) -> Option<(&'static str, &'static str, [f64; 4])> {
     REGIONS.iter().copied().find(|v| v.0 == name)
 }
-fn longitude_timezone(lon: f64) -> String {
-    let offset = (lon / 15.0).round() as i32;
-    if offset >= 0 {
-        format!("Etc/GMT-{}", offset)
+pub(crate) fn longitude_contains(west: f64, east: f64, longitude: f64) -> bool {
+    if west <= east {
+        longitude >= west - 1e-6 && longitude <= east + 1e-6
     } else {
-        format!("Etc/GMT+{}", -offset)
+        longitude >= west - 1e-6 || longitude <= east + 1e-6
     }
 }
+
 fn contains(b: [f64; 4], p: &Point) -> bool {
-    // Owning bbox_contains allows a microdegree at the boundary.
-    p.lon >= b[0] - 1e-6 && p.lon <= b[1] + 1e-6 && p.lat <= b[2] + 1e-6 && p.lat >= b[3] - 1e-6
+    longitude_contains(b[0], b[1], p.lon)
+        && p.lat <= b[2] + 1e-6
+        && p.lat >= b[3] - 1e-6
+}
+
+fn longitude_ranges(west: f64, east: f64) -> Vec<(f64, f64)> {
+    if west <= east {
+        vec![(west, east)]
+    } else {
+        vec![(west, 180.0), (-180.0, east)]
+    }
+}
+
+/// Union circular longitude intervals and return the shortest public interval.
+///
+/// The result intentionally keeps `west > east` when the shortest interval
+/// crosses the antimeridian.  This preserves the request identity all the way
+/// through GFS/EC decoding instead of expanding a small dateline region into a
+/// near-global rectangle.
+fn union_longitudes(intervals: impl IntoIterator<Item = (f64, f64)>) -> [f64; 2] {
+    let mut segments = intervals
+        .into_iter()
+        .flat_map(|(west, east)| longitude_ranges(west, east))
+        .collect::<Vec<_>>();
+    segments.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+    let mut merged: Vec<(f64, f64)> = Vec::with_capacity(segments.len());
+    for (left, right) in segments {
+        if let Some(last) = merged.last_mut() {
+            if left <= last.1 + 1e-9 {
+                last.1 = last.1.max(right);
+                continue;
+            }
+        }
+        merged.push((left, right));
+    }
+    if merged.is_empty() {
+        return [-180., 180.];
+    }
+    if merged.len() == 1 && merged[0].0 <= -180. + 1e-9 && merged[0].1 >= 180. - 1e-9 {
+        return [-180., 180.];
+    }
+    let mut largest_gap = -1.0;
+    let mut gap_index = 0usize;
+    for index in 0..merged.len() {
+        let next = (index + 1) % merged.len();
+        let gap = if next == 0 {
+            merged[0].0 + 360.0 - merged[index].1
+        } else {
+            merged[next].0 - merged[index].1
+        };
+        if gap > largest_gap {
+            largest_gap = gap;
+            gap_index = index;
+        }
+    }
+    let start_index = (gap_index + 1) % merged.len();
+    let west = merged[start_index].0;
+    let east = merged[gap_index].1;
+    [west, if east > 180. { east - 360. } else { east }]
+}
+
+fn union_bbox(points: &[Point], radius: f64) -> Result<[f64; 4], String> {
+    let mut longitude_intervals = Vec::with_capacity(points.len());
+    let mut north: f64 = -90.0;
+    let mut south: f64 = 90.0;
+    for point in points {
+        let bbox = bounding(point, radius);
+        longitude_intervals.push((bbox[0], bbox[1]));
+        north = north.max(bbox[2]);
+        south = south.min(bbox[3]);
+    }
+    if points.is_empty() {
+        return Err("cannot union an empty point set".into());
+    }
+    let [west, east] = union_longitudes(longitude_intervals);
+    Ok([west, east, north, south])
 }
 fn round4(v: f64) -> f64 {
     // These values are bounded coordinates; decimal formatting retains Python's
@@ -256,10 +338,18 @@ fn generated(payload: &Value, config: &Config) -> Result<Vec<Point>, String> {
                 number(bounds.get("north").unwrap_or(&Value::Null), -90., 90.)?,
                 number(bounds.get("south").unwrap_or(&Value::Null), -90., 90.)?,
             ];
-            if b[0] >= b[1] || b[3] >= b[2] {
+            if b[0] == b[1] || b[3] >= b[2] {
                 return Err("invalid custom bounds".into());
             }
-            ("CUSTOM", b, Some(zone(&payload["custom_timezone_name"])?))
+            // A custom area may span multiple IANA zones. Prefer deriving
+            // every grid point from the bundled geographic timezone data.
+            // The explicit field remains an input-compatibility fallback for
+            // older callers; the native macOS UI no longer sends it.
+            let timezone = match payload.get("custom_timezone_name") {
+                Some(value) if !value.is_null() => Some(zone(value)?),
+                _ => None,
+            };
+            ("CUSTOM", b, timezone)
         } else {
             let (_, prefix, b) = region(&name).ok_or("unknown regional domain")?;
             (
@@ -277,25 +367,34 @@ fn generated(payload: &Value, config: &Config) -> Result<Vec<Point>, String> {
         }
         let mut lat = b[3];
         while lat <= b[2] + 1e-9 {
-            let mut lon = b[0];
-            while lon <= b[1] + 1e-9 {
-                let (a, o) = (round4(lat), round4(lon));
-                // Normalize signed zero as Python tuple equality does.
-                let bits = |v: f64| if v == 0. { 0 } else { v.to_bits() };
-                if seen_points.insert((bits(a), bits(o))) {
-                    if points.len() == MAX_POINTS {
-                        return Err("regional point count exceeds 500000".into());
+            for (range_index, (west, east)) in longitude_ranges(b[0], b[1]).into_iter().enumerate()
+            {
+                let mut lon = west;
+                while lon <= east + 1e-9 {
+                    // 180E and 180W are the same meridian. Keep the first
+                    // representation only when a wrapped range is split.
+                    if range_index > 0 && lon == -180.0 && b[0] > b[1] {
+                        lon += 0.25;
+                        continue;
                     }
-                    points.push(Point {
-                        name: format!("{prefix}-{lat:.2}-{lon:.2}"),
-                        lat: a,
-                        lon: o,
-                        elevation_m: 0.,
-                        timezone_name: timezone.clone().unwrap_or_default(),
-                        source: "model-grid".into(),
-                    });
+                    let (a, o) = (round4(lat), round4(lon));
+                    // Normalize signed zero as Python tuple equality does.
+                    let bits = |v: f64| if v == 0. { 0 } else { v.to_bits() };
+                    if seen_points.insert((bits(a), bits(o))) {
+                        if points.len() == MAX_POINTS {
+                            return Err("regional point count exceeds 500000".into());
+                        }
+                        points.push(Point {
+                            name: format!("{prefix}-{lat:.2}-{lon:.2}"),
+                            lat: a,
+                            lon: o,
+                            elevation_m: 0.,
+                            timezone_name: timezone.clone().unwrap_or_default(),
+                            source: "model-grid".into(),
+                        });
+                    }
+                    lon += 0.25;
                 }
-                lon += 0.25;
             }
             lat += 0.25;
         }
@@ -306,6 +405,7 @@ fn generated(payload: &Value, config: &Config) -> Result<Vec<Point>, String> {
         .filter_map(|(i, p)| p.timezone_name.is_empty().then_some(i))
         .collect();
     if !indices.is_empty() {
+        let strict = crate::app_resources::strict_required() || config.timezone_manifest.is_some();
         if let Some(path) = config.timezone_manifest.as_ref() {
             for chunk in indices.chunks(4096) {
                 let coords: Vec<_> = chunk
@@ -318,6 +418,7 @@ fn generated(payload: &Value, config: &Config) -> Result<Vec<Point>, String> {
                             points[i].timezone_name = zone;
                         }
                     }
+                    Err(error) if strict => return Err(error),
                     Err(_) => {
                         for &i in chunk {
                             points[i].timezone_name = longitude_timezone(points[i].lon);
@@ -325,6 +426,8 @@ fn generated(payload: &Value, config: &Config) -> Result<Vec<Point>, String> {
                     }
                 }
             }
+        } else if strict {
+            return Err("regional timezone data is not configured".into());
         } else {
             for &i in &indices {
                 points[i].timezone_name = longitude_timezone(points[i].lon);
@@ -353,7 +456,7 @@ fn regional_points(payload: &Value, config: &Config) -> Result<Vec<Point>, Strin
             .filter(|v| v.len() == 695)
             .ok_or("city catalog must contain 695 cities")?;
         let mut names = HashSet::new();
-        return rows
+        let mut points = rows
             .iter()
             .map(|row| {
                 let name = text(row, "short_name", &text(row, "name", ""))
@@ -371,7 +474,17 @@ fn regional_points(payload: &Value, config: &Config) -> Result<Vec<Point>, Strin
                     source: "model-grid".into(),
                 })
             })
-            .collect();
+            .collect::<Result<Vec<Point>, String>>()?;
+        if let Some(path) = config.timezone_manifest.as_ref() {
+            for chunk in points.chunks_mut(4096) {
+                let coords: Vec<_> = chunk.iter().map(|p| [p.lat, p.lon]).collect();
+                let (zones, _) = timezone_lookup::lookup_batch(path, &coords)?;
+                for (point, zone) in chunk.iter_mut().zip(zones) {
+                    point.timezone_name = zone;
+                }
+            }
+        }
+        return Ok(points);
     }
     if payload["points"].is_null() {
         return generated(payload, config);
@@ -406,6 +519,69 @@ fn regional_points(payload: &Value, config: &Config) -> Result<Vec<Point>, Strin
         })
         .collect()
 }
+
+/// Return the immutable city-catalog observers that belong to the requested
+/// (non-wrapping) regional bounds.  The assessment input intentionally
+/// contains only its strict observer fields; catalog metadata is kept out of
+/// the calculation contract and can be attached by the caller after scoring.
+pub(crate) fn city_catalog_points(
+    path: &Path,
+    timezone_manifest: Option<&Path>,
+    bounds: &[[f64; 4]],
+) -> Result<Vec<Value>, String> {
+    let (catalog, _) = request_file::read::<Value>(path, 4 * 1024 * 1024)?;
+    let rows = catalog["cities"]
+        .as_array()
+        .filter(|v| v.len() == 695)
+        .ok_or("city catalog must contain 695 cities")?;
+    let mut names = HashSet::new();
+    let mut points = Vec::new();
+    for row in rows {
+        let name = text(row, "short_name", &text(row, "name", ""))
+            .trim()
+            .to_owned();
+        if name.is_empty() || !names.insert(name.clone()) {
+            return Err("invalid city catalog name".into());
+        }
+        let lat = number(&row["lat"], -90., 90.)?;
+        let lon = number(&row["lon"], -180., 180.)?;
+        if !bounds.is_empty()
+            && !bounds.iter().any(|bound| {
+                longitude_contains(bound[0], bound[1], lon)
+                    && lat >= bound[3] - 1e-6
+                    && lat <= bound[2] + 1e-6
+            })
+        {
+            continue;
+        }
+        points.push(json!({
+            "name":truncate(name, 120),
+            "lat":lat,
+            "lon":lon,
+            "timezone_name":"Asia/Shanghai",
+            "elevation_source":"model-grid",
+        }));
+    }
+    if let Some(path) = timezone_manifest {
+        for chunk in points.chunks_mut(4096) {
+            let coords: Vec<_> = chunk
+                .iter()
+                .map(|point| {
+                    [
+                        point["lat"].as_f64().unwrap(),
+                        point["lon"].as_f64().unwrap(),
+                    ]
+                })
+                .collect();
+            let (zones, _) = timezone_lookup::lookup_batch(path, &coords)?;
+            for (point, zone) in chunk.iter_mut().zip(zones) {
+                point["timezone_name"] = json!(zone);
+            }
+        }
+    }
+    Ok(points)
+}
+
 fn bounding(p: &Point, radius: f64) -> [f64; 4] {
     let lat = radius / 111.;
     let lon = radius / (111. * p.lat.to_radians().cos()).max(25.);
@@ -428,16 +604,16 @@ fn union_boxes(points: &[Point], radius: f64) -> Result<[f64; 4], String> {
     let mut result = [180_f64, -180_f64, -90_f64, 90_f64];
     for p in points {
         let b = bounding(p, radius);
-        if b[0] > b[1] {
-            return Err("source domain crosses the dateline".into());
-        }
-        result = [
-            result[0].min(b[0]),
-            result[1].max(b[1]),
-            result[2].max(b[2]),
-            result[3].min(b[3]),
-        ];
+        result[2] = result[2].max(b[2]);
+        result[3] = result[3].min(b[3]);
     }
+    let intervals = points.iter().map(|p| {
+        let b = bounding(p, radius);
+        (b[0], b[1])
+    });
+    let [west, east] = union_longitudes(intervals);
+    result[0] = west;
+    result[1] = east;
     Ok(result)
 }
 fn corners(b: [f64; 4]) -> Vec<Point> {
@@ -493,23 +669,7 @@ fn domain(
         !payload["points"].is_null() || code(payload, "point_mode", "") == "china-city-catalog";
     let bbox = if model == "ec" && explicit && forced.is_empty() {
         selected = None;
-        let lon_min = points.iter().map(|p| p.lon).fold(f64::INFINITY, f64::min);
-        let lon_max = points
-            .iter()
-            .map(|p| p.lon)
-            .fold(f64::NEG_INFINITY, f64::max);
-        if lon_max - lon_min >= 180. {
-            return Err("explicit EC envelope crosses the dateline".into());
-        }
-        [
-            lon_min,
-            lon_max,
-            points
-                .iter()
-                .map(|p| p.lat)
-                .fold(f64::NEG_INFINITY, f64::max),
-            points.iter().map(|p| p.lat).fold(f64::INFINITY, f64::min),
-        ]
+        union_bbox(points, 0.)?
     } else if selected.as_deref() == Some("china") && model == "gfs" {
         gfs_data::canonical_bbox(
             union_boxes(&corners(region("china").unwrap().2), source_radius(radius))?,
@@ -826,10 +986,13 @@ fn terrain(
         }
     } else {
         for &hour in hours {
-            let path = input.config.ecmwf_cache_dir.join(format!(
-                "ifs-basic-v2-{}-f{hour:03}.grib2",
-                cycle.format("%Y%m%d%H")
-            ));
+            let mut path = ecmwf_data::path(&input.config.ecmwf_cache_dir, cycle, i64::from(hour));
+            if !path.exists() {
+                path = input.config.ecmwf_cache_dir.join(format!(
+                    "ifs-basic-v2-{}-f{hour:03}.grib2",
+                    cycle.format("%Y%m%d%H")
+                ));
+            }
             if path.is_file() && path.metadata().is_ok_and(|m| m.len() > 0) {
                 let tensor = ecmwf::decode_basic(
                     &codes,
@@ -916,10 +1079,7 @@ fn resolve(mut input: Input) -> Result<Value, String> {
         )
     };
     let area_bbox = if model == "ec" && !ec_point {
-        if bbox[0] > bbox[1] {
-            return Err("EC prepared bbox crosses the dateline".into());
-        }
-        union_boxes(&corners(bbox), ecmwf_point::domain(radius)?[2])?
+        ec_regional_model_bbox(bbox, radius)?
     } else {
         bbox
     };
@@ -942,7 +1102,20 @@ fn resolve(mut input: Input) -> Result<Value, String> {
     )?;
     let mut terrain_pending = points.iter().any(|p| p.source == "model-grid");
     if terrain_pending && !input.fast {
-        let hours = required(&model, cycle, &evaluation)?;
+        // The preparation prepass downloads the first hour of the reported
+        // envelope, so the sampler must search that same ±2 h envelope rather
+        // than only the core evaluation hours, or the prepass file never hits.
+        let mut envelope = evaluation.clone();
+        for t in &evaluation {
+            for offset in [-2, 2] {
+                if let Some(shifted) = t.checked_add_signed(Duration::hours(offset)) {
+                    if shifted >= cycle {
+                        envelope.push(shifted);
+                    }
+                }
+            }
+        }
+        let hours = required(&model, cycle, &envelope)?;
         if terrain(
             &input,
             &model,
@@ -1008,6 +1181,9 @@ fn resolve(mut input: Input) -> Result<Value, String> {
         "times":check_times.into_iter().map(iso).collect::<Vec<_>>(),"ec_point":ec_point,"terrain_pending":terrain_pending}),
     )
 }
+pub(crate) fn ec_regional_model_bbox(bbox: [f64; 4], radius: f64) -> Result<[f64; 4], String> {
+    union_boxes(&corners(bbox), ecmwf_point::domain(radius)?[2])
+}
 pub fn execute(params: Params) -> Result<Value, String> {
     let (input, source): (Input, _) = request_file::read(&params.path, MAX_JSON)?;
     let context = resolve(input)?;
@@ -1034,4 +1210,85 @@ pub fn execute(params: Params) -> Result<Value, String> {
         "bytes":bytes.len(),"sha256":Sha256::digest(&bytes).iter().map(|b| format!("{b:02x}")).collect::<String>(),
         "source":source,"runtime_python_used":false}),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn city_catalog() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../resources/app-data/cities/china-city-catalog.json")
+    }
+
+    #[test]
+    fn city_catalog_points_are_deterministic_and_region_scoped() {
+        let all = city_catalog_points(&city_catalog(), None, &[]).expect("bundled city catalog");
+        assert_eq!(all.len(), 695);
+        let names = all
+            .iter()
+            .map(|row| row["name"].as_str().unwrap())
+            .collect::<BTreeSet<_>>();
+        assert_eq!(names.len(), 695);
+        assert!(all
+            .iter()
+            .all(|row| row["elevation_source"] == "model-grid"));
+
+        let shanghai = city_catalog_points(&city_catalog(), None, &[[120., 122., 32., 30.]])
+            .expect("scoped city catalog");
+        assert!(!shanghai.is_empty());
+        assert!(shanghai.iter().all(|row| {
+            let lat = row["lat"].as_f64().unwrap();
+            let lon = row["lon"].as_f64().unwrap();
+            (30. - 1e-6..=32. + 1e-6).contains(&lat) && (120. - 1e-6..=122. + 1e-6).contains(&lon)
+        }));
+    }
+
+    #[test]
+    fn regional_custom_context_uses_a_valid_cams_area() {
+        let dir = tempfile::tempdir().unwrap();
+        let payload = json!({
+            "name":"Hangzhou test area","lat":30.2741,"lon":120.1551,"elevation_m":8,
+            "timezone_name":"Asia/Shanghai","target_date":"2026-11-12",
+            "phenomenon":"dusk","model_source":"gfs","forecast_mode":"model",
+            "satellite_source":"off","regions":["custom"],
+            "custom_bounds":{
+                "west":120.0,"east":122.0,"north":32.0,"south":30.0
+            },"spacing_deg":0.25,
+            "ecmwf_source":"ecmwf",
+        });
+        for model in ["gfs", "ec"] {
+            let mut request = payload.clone();
+            request["model_source"] = json!(model);
+            let context = resolve(Input {
+                payload: request,
+                regional: true,
+                fast: true,
+                config: Config {
+                    gfs_cache_dir: dir.path().join("gfs"),
+                    ecmwf_cache_dir: dir.path().join("ecmwf"),
+                    cams_cache_dir: Some(dir.path().join("cams")),
+                    timezone_manifest: Some(
+                        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                            .join("../resources/app-data/timezones/manifest.json"),
+                    ),
+                    city_catalog_path: city_catalog(),
+                },
+                now_utc: Some("2026-11-12T00:00:00Z".into()),
+            })
+            .expect(model);
+            eprintln!("{model} area={}", context["area"]);
+            crate::cams_data::area_identity(context["area"].clone()).expect(model);
+            let points = context["points"].as_array().expect("regional points");
+            assert!(!points.is_empty());
+            assert!(points.iter().all(|point| {
+                point["timezone_name"]
+                    .as_str()
+                    .is_some_and(|value| !value.is_empty())
+            }));
+            assert!(points
+                .iter()
+                .any(|point| point["timezone_name"] == "Asia/Shanghai"));
+        }
+    }
 }

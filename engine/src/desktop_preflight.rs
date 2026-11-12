@@ -67,13 +67,16 @@ fn iso(time: DateTime<Utc>) -> String {
         format!("{base}.{:06}+00:00", time.timestamp_subsec_micros())
     }
 }
+struct CamsArea {
+    bounds: [f64; 4],
+    key: String,
+    tuple: String,
+}
 struct ResolvedPlan {
     input: Plan,
     cycle: DateTime<Utc>,
     event_start: DateTime<Utc>,
-    area: [f64; 4],
-    area_key: String,
-    area_tuple: String,
+    areas: Vec<CamsArea>,
     targets: BTreeSet<DateTime<Utc>>,
 }
 impl ResolvedPlan {
@@ -93,15 +96,31 @@ impl ResolvedPlan {
         let bbox = input.bbox;
         if bbox.iter().any(|v| !v.is_finite())
             || bbox[0] < -180.0
+            || bbox[0] > 180.0
+            || bbox[1] < -180.0
             || bbox[1] > 180.0
-            || bbox[0] > bbox[1]
+            || bbox[0] == bbox[1]
+            || (bbox[0] == 180.0 && bbox[1] == -180.0)
             || bbox[2] > 90.0
+            || bbox[2] < -90.0
             || bbox[3] < -90.0
             || bbox[3] > bbox[2]
         {
             return Err("invalid desktop plan bbox".into());
         }
-        let (area, area_key, area_tuple) = cams_data::area_identity(input.area.clone())?;
+        let (bounds, key, tuple) = cams_data::area_identity(input.area.clone())?;
+        let split = cams_data::split_areas(bounds)?;
+        let areas = if split.len() == 1 && split[0] == bounds {
+            vec![CamsArea { bounds, key, tuple }]
+        } else {
+            split
+                .into_iter()
+                .map(|bounds| {
+                    let (bounds, key, tuple) = cams_data::area_identity(json!(bounds))?;
+                    Ok(CamsArea { bounds, key, tuple })
+                })
+                .collect::<Result<Vec<_>, String>>()?
+        };
         let cycle = time_contract::parse_utc(&input.cycle_utc)?;
         let event_start = time_contract::parse_utc(&input.event_start)?;
         if event_start < cycle {
@@ -126,9 +145,7 @@ impl ResolvedPlan {
             input,
             cycle,
             event_start,
-            area,
-            area_key,
-            area_tuple,
+            areas,
             targets,
         })
     }
@@ -151,10 +168,11 @@ impl CamsCatalog {
     fn select(
         &mut self,
         plan: &ResolvedPlan,
+        area: &CamsArea,
         fast: bool,
         cancel: &AtomicBool,
     ) -> Result<BTreeMap<DateTime<Utc>, cams_cache::Selection>, String> {
-        let suffix = format!("-{}.grib", plan.area_key);
+        let suffix = format!("-{}.grib", area.key);
         let mut candidates: Vec<_> = self
             .candidates
             .iter()
@@ -172,6 +190,10 @@ impl CamsCatalog {
         let mut selected = BTreeMap::new();
         for (candidate, exact) in candidates {
             check(cancel)?;
+            // Normalized min/max bounds cannot prove continuity at +/-180.
+            if plan.areas.len() > 1 && !exact {
+                continue;
+            }
             if selected.contains_key(&candidate.valid_time) {
                 continue;
             }
@@ -187,10 +209,10 @@ impl CamsCatalog {
                     continue;
                 };
                 let tolerance = 0.2 + 1e-9;
-                if north + tolerance < plan.area[0]
-                    || west - tolerance > plan.area[1]
-                    || south - tolerance > plan.area[2]
-                    || east + tolerance < plan.area[3]
+                if north + tolerance < area.bounds[0]
+                    || west - tolerance > area.bounds[1]
+                    || south - tolerance > area.bounds[2]
+                    || east + tolerance < area.bounds[3]
                 {
                     continue;
                 }
@@ -284,17 +306,23 @@ fn report(
             }
         }
     }
-    let selected = catalog.select(plan, fast, cancel)?;
-    let missing_cams: Vec<_> = plan
-        .targets
-        .iter()
-        .filter(|t| !selected.contains_key(t))
-        .copied()
-        .collect();
-    let cams_cycles: BTreeSet<_> = selected
-        .values()
-        .map(|s| s.run_time_utc.format("%Y-%m-%d %HZ").to_string())
-        .collect();
+    let mut missing_cams = BTreeSet::new();
+    let mut missing_cams_keys = BTreeSet::new();
+    let mut cams_cycles = BTreeSet::new();
+    for area in &plan.areas {
+        let selected = catalog.select(plan, area, fast, cancel)?;
+        for target in &plan.targets {
+            if !selected.contains_key(target) {
+                missing_cams.insert(*target);
+                missing_cams_keys.insert(format!("{}:{}", area.tuple, iso(*target)));
+            }
+        }
+        cams_cycles.extend(
+            selected
+                .values()
+                .map(|s| s.run_time_utc.format("%Y-%m-%d %HZ").to_string()),
+        );
+    }
     let requested_cams = if cams_cycles.is_empty() {
         "无可用事件数据".into()
     } else {
@@ -303,7 +331,7 @@ fn report(
     let mut datasets = Vec::new();
     for (key, requested, missing_count) in [
         (source, cycle_label, missing.len()),
-        ("cams", requested_cams, missing_cams.len()),
+        ("cams", requested_cams, missing_cams_keys.len()),
     ] {
         let publication = publications.get(key);
         let verified = publication.is_some_and(|p| p.verified);
@@ -325,7 +353,7 @@ fn report(
             "verified":verified,"is_latest":latest,"missing_count":missing_count,
             "missing_hours":if key=="cams" { vec![] } else { missing.clone() },
             "missing_valid_times":if key=="cams" {missing_cams.iter().map(|t|iso(*t)).collect::<Vec<_>>()} else {vec![]},
-            "missing_keys":if key=="cams" {missing_cams.iter().map(|t|format!("{}:{}",plan.area_tuple,iso(*t))).collect::<Vec<_>>()} else {vec![]},
+            "missing_keys":if key=="cams" {missing_cams_keys.iter().cloned().collect::<Vec<_>>()} else {vec![]},
             "ready":missing_count==0,
         }));
     }
@@ -499,11 +527,65 @@ pub(crate) fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nowcast_dateline_preflight_uses_the_context_frozen_split() {
+        let context = crate::desktop_nowcast::execute(crate::desktop_nowcast::Params {
+            payload: json!({
+                "lat":10.0,"lon":179.0,"elevation_m":0,"timezone_name":"UTC",
+                "target_date":"2026-11-12","phenomenon":"dusk","radius_km":1000,
+                "reference_time_utc":"2026-11-13T00:00:00Z",
+                "_gfs_cycle_override":"2026-11-11T00:00:00Z",
+            }),
+            fast: true,
+        })
+        .unwrap();
+        let plan: Plan = serde_json::from_value(json!({
+            "model_source":"gfs","cycle_utc":context["cycle"],
+            "event_start":context["times"][0],"bbox":context["bbox"],
+            "area":context["area"],"hours":[24,25],"cams_valid_times":context["cams_valid_times"],
+            "point_count":1,"terrain_pending":false,"compute_region":context["region"],
+        }))
+        .unwrap();
+        let resolved = ResolvedPlan::new(plan).unwrap();
+        assert_eq!(
+            json!(resolved
+                .areas
+                .iter()
+                .map(|area| area.bounds)
+                .collect::<Vec<_>>()),
+            json!(crate::desktop_nowcast::cams_areas(&context).unwrap()),
+        );
+        assert_eq!(resolved.areas.len(), 2);
+    }
+
     #[test]
     fn cancellation_precedes_plan_or_filesystem_work() {
         let input = serde_json::from_value(json!({"plans":[]})).unwrap();
         assert!(execute_cancellable(input, &AtomicBool::new(true))
             .unwrap_err()
             .contains("cancelled"));
+    }
+
+    #[test]
+    fn wrapped_longitude_bbox_is_valid_but_zero_width_is_not() {
+        let base = json!({
+            "model_source": "gfs",
+            "cycle_utc": "2026-11-12T00:00:00Z",
+            "event_start": "2026-11-12T06:00:00Z",
+            "bbox": [170.0, -170.0, 1.0, -1.0],
+            "area": [1.0, 170.0, -1.0, -170.0],
+            "hours": [0],
+            "cams_valid_times": ["2026-11-12T06:00:00Z"],
+            "point_count": 2,
+            "terrain_pending": false
+        });
+        let wrapped: Plan = serde_json::from_value(base.clone()).unwrap();
+        assert!(ResolvedPlan::new(wrapped).is_ok());
+
+        let mut zero = base;
+        zero["bbox"] = json!([180.0, 180.0, 1.0, -1.0]);
+        let zero: Plan = serde_json::from_value(zero).unwrap();
+        assert!(ResolvedPlan::new(zero).is_err());
     }
 }

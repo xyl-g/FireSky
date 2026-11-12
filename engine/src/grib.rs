@@ -20,6 +20,48 @@ type GetDoubles =
 type ErrorMessage = unsafe extern "C" fn(c_int) -> *const c_char;
 type GetMessage = unsafe extern "C" fn(*const c_void, *mut *const c_void, *mut usize) -> c_int;
 
+fn loaded_module_path(address: *const c_void) -> Result<std::path::PathBuf, String> {
+    #[cfg(unix)]
+    {
+        let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
+        if unsafe { libc::dladdr(address, &mut info) } == 0 || info.dli_fname.is_null() {
+            return Err("cannot identify loaded decoder module".into());
+        }
+        let path = unsafe { CStr::from_ptr(info.dli_fname) }
+            .to_str()
+            .map_err(|e| e.to_string())?;
+        Path::new(path).canonicalize().map_err(|e| e.to_string())
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        #[link(name = "kernel32")]
+        extern "system" {
+            fn GetModuleHandleExW(flags: u32, name: *const u16, module: *mut *mut c_void) -> i32;
+            fn GetModuleFileNameW(module: *mut c_void, name: *mut u16, size: u32) -> u32;
+        }
+        let mut module = ptr::null_mut();
+        // FROM_ADDRESS | UNCHANGED_REFCOUNT; the owning Library remains alive.
+        if unsafe { GetModuleHandleExW(0x6, address.cast(), &mut module) } == 0 {
+            return Err(std::io::Error::last_os_error().to_string());
+        }
+        let mut buffer = vec![0u16; 32768];
+        let size = unsafe { GetModuleFileNameW(module, buffer.as_mut_ptr(), buffer.len() as u32) }
+            as usize;
+        if size == 0 || size >= buffer.len() {
+            return Err("cannot resolve loaded decoder DLL path".into());
+        }
+        std::path::PathBuf::from(std::ffi::OsString::from_wide(&buffer[..size]))
+            .canonicalize()
+            .map_err(|e| e.to_string())
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = address;
+        Err("loaded decoder module paths are unsupported on this platform".into())
+    }
+}
+
 pub struct EcCodes {
     new_handle: NewHandle,
     delete_handle: DeleteHandle,
@@ -38,26 +80,14 @@ impl EcCodes {
     /// Bind derived results to the loaded decoder and the actual definitions
     /// and samples. Hash resources on each cache-enabled request, not just
     /// their version string or mutable directory timestamps.
-    #[cfg(unix)]
     pub(crate) fn cache_identity(&self) -> Result<String, String> {
         use sha2::{Digest, Sha256};
         let mut hash = Sha256::new();
-        #[cfg(unix)]
-        {
-            let mut info: libc::Dl_info = unsafe { std::mem::zeroed() };
-            if unsafe { libc::dladdr(self.new_handle as *const c_void, &mut info) } == 0
-                || info.dli_fname.is_null()
-            {
-                return Err("cannot identify loaded ecCodes library for derived cache".into());
-            }
-            let path = unsafe { CStr::from_ptr(info.dli_fname) }
-                .to_str()
-                .map_err(|e| e.to_string())?;
-            let identity = crate::tensor_bundle::source_identity(
-                &Path::new(path).canonicalize().map_err(|e| e.to_string())?,
-            )?;
-            hash.update(serde_json::to_vec(&identity).map_err(|e| e.to_string())?);
-        }
+        let library_path = loaded_module_path(self.new_handle as *const c_void)?;
+        let identity = crate::tensor_bundle::source_identity(&library_path)?;
+        hash.update(serde_json::to_vec(&identity).map_err(|e| e.to_string())?);
+        let mut modules = std::collections::BTreeMap::new();
+        modules.insert(library_path.clone(), identity);
         type ResourcePath = unsafe extern "C" fn(*const c_void) -> *const c_char;
         let mut total = 0u64;
         let mut seen = std::collections::BTreeSet::new();
@@ -126,8 +156,61 @@ impl EcCodes {
                 .map_err(|e| e.to_string())?;
             hash.update(symbol);
             for path in std::env::split_paths(paths) {
+                if matches!(path.to_str(), Some("/MEMFS/definitions" | "/MEMFS/samples")) {
+                    type MemfsExists = unsafe extern "C" fn(*const c_char) -> c_int;
+                    // ecCodes generates all embedded resources into eccodes_memfs.
+                    // Fingerprint that actual module, not a version or virtual name.
+                    let symbol =
+                        unsafe { self._library.get::<MemfsExists>(b"codes_memfs_exists\0") };
+                    let dependency;
+                    let exists = if let Ok(symbol) = symbol {
+                        *symbol
+                    } else {
+                        #[cfg(windows)]
+                        let filename = "eccodes_memfs.dll";
+                        #[cfg(target_os = "macos")]
+                        let filename = "libeccodes_memfs.dylib";
+                        #[cfg(not(any(windows, target_os = "macos")))]
+                        let filename = "libeccodes_memfs.so";
+                        let adjacent = library_path
+                            .parent()
+                            .ok_or("decoder has no parent")?
+                            .join(filename);
+                        dependency =
+                            unsafe { Library::new(adjacent) }.map_err(|e| e.to_string())?;
+                        *unsafe { dependency.get::<MemfsExists>(b"codes_memfs_exists\0") }
+                            .map_err(|e| e.to_string())?
+                    };
+                    let probe = if path.ends_with("definitions") {
+                        "/MEMFS/definitions/boot.def"
+                    } else {
+                        "/MEMFS/samples/GRIB2.tmpl"
+                    };
+                    let probe = CString::new(probe).map_err(|e| e.to_string())?;
+                    if unsafe { exists(probe.as_ptr()) } == 0 {
+                        return Err("decoder advertises unavailable embedded resources".into());
+                    }
+                    let module = loaded_module_path(exists as *const c_void)?;
+                    if !modules.contains_key(&module) {
+                        modules.insert(
+                            module.clone(),
+                            crate::tensor_bundle::source_identity(&module)?,
+                        );
+                    }
+                    hash.update(b"eccodes-embedded-resources-v1");
+                    hash.update(path.to_str().unwrap().as_bytes());
+                    hash.update(serde_json::to_vec(&modules[&module]).map_err(|e| e.to_string())?);
+                    if !path.exists() {
+                        continue;
+                    }
+                }
                 tree(
-                    &path.canonicalize().map_err(|e| e.to_string())?,
+                    &path.canonicalize().map_err(|e| {
+                        format!(
+                            "cannot fingerprint decoder resource {}: {e}",
+                            path.display()
+                        )
+                    })?,
                     &mut hash,
                     &mut total,
                     &mut seen,
@@ -188,11 +271,6 @@ impl EcCodes {
             hash.update(value);
         }
         Ok(hash.finalize().iter().map(|b| format!("{b:02x}")).collect())
-    }
-
-    #[cfg(not(unix))]
-    pub(crate) fn cache_identity(&self) -> Result<String, String> {
-        Err("derived decoder fingerprint is not implemented on this platform".into())
     }
 
     pub fn load() -> Result<Self, String> {
@@ -695,4 +773,22 @@ pub struct GribField {
     pub latitudes: Option<Vec<f64>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub longitudes: Option<Vec<f64>>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn installed_decoder_resources_have_content_identity() {
+        let Ok(decoder) = EcCodes::load() else {
+            return;
+        };
+        let identity = decoder.cache_identity().unwrap();
+        assert_eq!(identity.len(), 64);
+        assert!(identity.bytes().all(|c| c.is_ascii_hexdigit()));
+        assert!(loaded_module_path(decoder.new_handle as *const c_void)
+            .unwrap()
+            .is_file());
+    }
 }
