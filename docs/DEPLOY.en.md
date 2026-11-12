@@ -3,6 +3,14 @@
 > Deploying the firesky burning-sunset engine. Physics: [PRINCIPLES.en.md](PRINCIPLES.en.md);
 > usage & data-source registration: [README.en.md](../README.en.md). 中文版: [DEPLOY.md](DEPLOY.md)
 
+November 11, 2026: the default service is `firesky-engine http`, without Python.
+The [native cutover audit](RUST_RUNTIME_CUTOVER.zh-CN.md) defines implemented
+routes, configuration and acceptance limits. Legacy YAML and refresh/warmup
+tasks do not automatically work with the native runtime. Sections marked legacy
+apply only to an explicitly deployed Python service. Docker, Windows/Linux and
+clean-machine release acceptance remain outstanding; launch configuration is
+not evidence of platform acceptance.
+
 ## 1. Deployment shapes
 
 | Shape | Platforms | Best for | Section |
@@ -11,12 +19,10 @@
 | **Bare-metal Linux** + systemd | Linux servers | production, boot-persistent | §4.1 |
 | **Bare-metal macOS** + launchd | always-on Macs (Mac mini…) | local device, long-running | §4.2 |
 | **Bare-metal Windows** | Windows 10/11 / Server | desktop-resident, ad-hoc runs | §4.3 |
-| Development mode | any | local debugging (uvicorn + vite dev) | README "Usage" |
+| Development mode | any | local debugging (Rust HTTP + vite dev) | README "Usage" |
 
-All shapes share the same contract: **one FastAPI process serves both the API
-(:8765) and the frontend SPA**; the only stateful thing on disk is the cache
-tree. Docker is the low-effort path on every platform; pick bare metal only
-when you want minimal footprint or already run the host stack.
+One Rust/Axum process serves the API (:8765) and frontend SPA. Jobs are held in
+memory and are not restored after restart. Persist caches, reports and credentials.
 
 ## 2. Prerequisites
 
@@ -30,7 +36,7 @@ when you want minimal footprint or already run the host stack.
 | Directory | Contents | Size |
 |---|---|---|
 | GFS cache | GRIB2 subsets + mmap decode | ~50–200 MB/day rolling |
-| Regional results | v125 results + summaries + diagnostics | ~20–100 MB/day |
+| Regional results | native independent result contract + compact frames | measure for your workload |
 | Satellite HSD segments | nowcast footprint segments (10-min scans × bands) | medium: ~65 MB per event window — always configure pruning |
 | CAMS | optical GRIB | ~50–200 MB/day |
 | Map frames / logs | v25 frames / text | small |
@@ -39,19 +45,17 @@ when you want minimal footprint or already run the host stack.
 
 | Tool | Linux | macOS | Windows |
 |---|---|---|---|
-| Python | ≥3.11 (distro / pyenv) | ≥3.11 (Homebrew / python.org) | ≥3.11 (python.org, tick *Add to PATH*) |
+| Python | not needed for native build/run | not needed for native build/run | not needed for native build/run |
 | Rust | rustup script | `brew install rustup` or rustup script | [rustup-init.exe](https://rustup.rs); needs VS C++ Build Tools (linker) |
 | Node | ≥20 (nodesource/nvm) | `brew install node@20` | ≥20 (nodejs.org MSI) |
 | Make (optional) | built-in | built-in | not recommended; use §4.3 direct commands or WSL2 |
 | bash (build script) | built-in | built-in | WSL2/Git Bash only; native Windows uses the two manual steps in §4.3 |
 
-> **Native library naming (per platform, handled automatically)**: the cargo
-> artifact is `libfiresky_native.dylib` on macOS, `libfiresky_native.so` on
-> Linux, and `firesky_native.dll` on Windows; the loader
-> (`src/firesky/native_core.py`) matches per platform, or set
-> `FIRESKY_NATIVE_LIBRARY_PATH` explicitly.
-> The `eccodes` dependency ships as pip wheels (≥2.37 bundle the binaries) —
-> no separate C library needed on any of the three OSes.
+The Rust engine loads C ecCodes and needs its shared library plus
+definitions/samples. Use `FIRESKY_ECCODES_LIBRARY`, `ECCODES_DEFINITION_PATH`
+and `ECCODES_SAMPLES_PATH` when required. It does not use the Python eccodes
+wheel or `native_core.py`. macOS app packaging collects decoder resources;
+Windows packaging still needs explicit resources and target-platform acceptance.
 
 ## 3. Docker Compose (recommended, cross-platform)
 
@@ -67,16 +71,40 @@ Windows PowerShell:
 $env:FIRESKY_IMAGE_TAG = "local"; docker compose up -d --build
 ```
 
-- `docker/Dockerfile` is three-stage: Rust builds the native scorer → Node
-  builds the frontend → python:3.13-slim runtime (apt `libeccodes0`, non-root
-  uid 10001);
+- Without a local Docker daemon, run `make docker-contract` first. It checks the
+  Dockerfile, immutable resource manifest, Compose volumes and dual-architecture
+  CI contract without claiming that an image actually ran;
+- For a local single-platform image use
+  `make docker-buildx FIRESKY_DOCKER_PLATFORMS=linux/amd64` (or `linux/arm64`);
+  publish both platforms with
+  `FIRESKY_IMAGE_TAG=registry.example/firesky:tag FIRESKY_PUSH=1 make docker-buildx`.
+  Docker `--load` cannot import a multi-platform manifest list;
+- `docker/Dockerfile` is three-stage: Rust builds the standalone engine → Node
+  builds the shared Web UI in `apps/desktop-tauri` → Debian slim runtime (apt `libeccodes0`, non-root
+  uid 10001, no Python);
+- The image explicitly uses `libeccodes.so.0`, `/usr/share/eccodes/definitions`
+  and `/usr/share/eccodes/samples`; Debian's `libeccodes-data` dependency provides
+  those data paths;
+- Docker and Tauri use the same business pages. Browsers connect through same-origin
+  desktop HTTP jobs, without a Tauri shell, server-directory opening or CAMS key writes;
 - Persistent volumes: `firesky-cache`, `firesky-cams`, `firesky-reports`,
   `firesky-logs`;
-- The in-container config `docker/web_server.yaml` already points all cache
-  dirs to `/data`;
-- **Redis is optional**: it only caches the latest-cycle probe for
-  `/data/latest/refresh`. Remove the redis service and leave
-  `FIRESKY_REDIS_ADDR` empty — every Redis failure degrades gracefully.
+- Dockerfile/Compose environment variables point caches and reports at `/data`;
+  legacy Python YAML is not loaded;
+- The published port defaults to `127.0.0.1:8765`. On first startup the container
+  creates `/data/state/http-token` (`0600`) in the persistent state volume.
+  Sign in using username `firesky` and the file contents as the password.
+  Read it locally with `docker compose exec firesky cat /data/state/http-token`;
+  never paste the output into logs or public discussions. Container recreation
+  preserves this password. Pages, business APIs, reports and maps require
+  authentication; health checks remain public. API clients can instead send
+  `Authorization: Bearer <token>`; query-string tokens are not accepted;
+- LAN publishing through `FIRESKY_HTTP_HOST=0.0.0.0` keeps authentication enabled.
+  Basic/Bearer authentication does not encrypt transport: use a trusted TLS proxy
+  or a private encrypted tunnel across hosts. Do not expose it publicly.
+  Preserve Host/Origin at the proxy; forwarded headers never grant authority;
+- Redis starts only with `--profile legacy-cache`, not by default. Native `/data/latest/refresh`
+  is not wired; do not schedule that endpoint as a native capability.
 
 Platform notes:
 
@@ -93,33 +121,40 @@ Rebind the port: `FIRESKY_HTTP_PORT=80 docker compose up -d`.
 ### 4.0 Common build steps (all OSes)
 
 ```bash
-# 1) Python deps (eccodes ships as a wheel)
-python3 -m venv .venv
-source .venv/bin/activate            # Windows: .venv\Scripts\activate
-pip install -e ".[dev,cams,nowcast,ec]"
+# 1) Standalone engine (also install system ecCodes)
+cargo build --manifest-path engine/Cargo.toml --release --locked
 
-# 2) Native scorer (Linux/macOS)
-./scripts/build_native_variants.sh   # artifacts in native/target/release/
-
-# 3) Frontend
+# 2) Frontend
 cd frontend && npm ci && npm run build && cd ..
 
-# 4) Smoke run
-python -m uvicorn firesky.api:create_app --factory --host 127.0.0.1 --port 8765
+# 3) Smoke run
+engine/target/release/firesky-engine http --workspace "$PWD" --host 127.0.0.1 --port 8765
+# In another terminal:
 curl http://127.0.0.1:8765/api/v1/firesky/health   # {"status":"ok"}
 ```
 
-Config: copy `src/firesky/config/web_server.yaml` to `etc/web_server.yaml`,
-point the `*_cache_dir` entries at a data disk and keep `host: 127.0.0.1`
-(expose via the reverse proxy); point `FIRESKY_CONFIG=$PWD/etc/web_server.yaml`
-at it.
+Use [native environment variables](RUST_RUNTIME_CUTOVER.zh-CN.md#配置), such as
+`FIRESKY_GFS_CACHE_DIR`, `FIRESKY_CAMS_CACHE_DIR` and `FIRESKY_REPORT_DIR`.
+`FIRESKY_CONFIG` and Python YAML do not configure the native process.
+Provide ADS credentials via a permission-protected `~/.cdsapirc` or a file
+selected by `CDSAPI_RC`, readable by the service account. Never put keys in
+public configuration or command logs.
+
+HTTP listens on loopback by default and checks local Host and same-origin requests
+to prevent unrelated websites from triggering downloads, cleanup or computation.
+A non-loopback bind requires both `FIRESKY_HTTP_ALLOW_REMOTE=1` and
+`FIRESKY_HTTP_TOKEN_FILE` (a service-account-owned `0600` file is recommended), or
+`FIRESKY_HTTP_TOKEN`; configuring both token sources is an error. Tokens must
+contain 32–4096 ASCII letters, digits or `-_.~` and should be randomly generated.
+Errors never include token contents. A configured token also protects loopback
+listeners. This is a shared-instance secret, not an account system: its holders
+have full instance permissions. Browser-side CAMS credential writes remain disabled.
 
 ### 4.1 Linux + systemd
 
 ```bash
-cd /opt/firesky && python3 -m venv .venv
-.venv/bin/pip install -e ".[dev,cams,nowcast,ec]"
-./scripts/build_native_variants.sh
+cd /opt/firesky
+cargo build --manifest-path engine/Cargo.toml --release --locked
 cd frontend && npm ci && npm run build && cd ..
 ```
 
@@ -134,10 +169,16 @@ Wants=network-online.target
 [Service]
 User=www-data
 WorkingDirectory=/opt/firesky
-Environment=FIRESKY_CONFIG=/opt/firesky/etc/web_server.yaml
-Environment=FIRESKY_NATIVE_VARIANT=cpu
-ExecStart=/opt/firesky/.venv/bin/uvicorn firesky.api:create_app \
-    --factory --host 127.0.0.1 --port 8765
+Environment=FIRESKY_CACHE_ROOT=/var/lib/firesky
+Environment=FIRESKY_GFS_CACHE_DIR=/var/lib/firesky/gfs
+Environment=FIRESKY_ECMWF_CACHE_DIR=/var/lib/firesky/ecmwf
+Environment=FIRESKY_CAMS_CACHE_DIR=/var/lib/firesky/cams
+Environment=FIRESKY_HSD_CACHE_DIR=/var/lib/firesky/himawari-hsd
+Environment=FIRESKY_POINT_CACHE_DIR=/var/lib/firesky/point-forecasts
+Environment=FIRESKY_REGIONAL_CACHE_DIR=/var/lib/firesky/regional-forecasts
+Environment=FIRESKY_MAP_CACHE_DIR=/var/lib/firesky/map-frames
+Environment=FIRESKY_REPORT_DIR=/var/lib/firesky/reports
+ExecStart=/opt/firesky/engine/target/release/firesky-engine http --workspace /opt/firesky --host 127.0.0.1 --port 8765
 Restart=always
 RestartSec=5
 
@@ -145,15 +186,19 @@ RestartSec=5
 WantedBy=multi-user.target
 ```
 
+Create `/var/lib/firesky` with write access for `www-data`, install ecCodes and
+provide ADS credentials to that account before starting. Health does not prove
+forecast inputs are ready.
+
 ```bash
 sudo systemctl daemon-reload && sudo systemctl enable --now firesky
 ```
 
 ### 4.2 macOS + launchd
 
-Build as in §4.0 (Homebrew for python/rust/node; the ad-hoc signing
-identifier conflict for `libfiresky_native_cpu.dylib` is already handled
-inside the build script — no manual codesign needed).
+Build as in §4.0 with Rust, Node and C ecCodes; Python is not needed.
+For the native desktop app use `bash scripts/build_macos_native.sh`.
+This launchd example runs the HTTP service, not the desktop application.
 
 `~/Library/LaunchAgents/top.firesky.server.plist`:
 
@@ -165,21 +210,24 @@ inside the build script — no manual codesign needed).
   <key>Label</key><string>top.firesky.server</string>
   <key>WorkingDirectory</key><string>/Users/YOU/firesky</string>
   <key>ProgramArguments</key><array>
-    <string>/Users/YOU/firesky/.venv/bin/uvicorn</string>
-    <string>firesky.api:create_app</string>
-    <string>--factory</string><string>--host</string><string>127.0.0.1</string>
+    <string>/Users/YOU/firesky/engine/target/release/firesky-engine</string>
+    <string>http</string>
+    <string>--workspace</string><string>/Users/YOU/firesky</string>
+    <string>--host</string><string>127.0.0.1</string>
     <string>--port</string><string>8765</string>
   </array>
   <key>EnvironmentVariables</key><dict>
-    <key>FIRESKY_CONFIG</key><string>/Users/YOU/firesky/etc/web_server.yaml</string>
-    <key>FIRESKY_NATIVE_VARIANT</key><string>cpu</string>
+    <key>FIRESKY_ECCODES_LIBRARY</key><string>/ABSOLUTE/PATH/libeccodes.dylib</string>
   </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>/Users/YOU/firesky/logs/uvicorn.log</string>
-  <key>StandardErrorPath</key><string>/Users/YOU/firesky/logs/uvicorn.err.log</string>
+  <key>StandardOutPath</key><string>/Users/YOU/firesky/logs/engine.log</string>
+  <key>StandardErrorPath</key><string>/Users/YOU/firesky/logs/engine.err.log</string>
 </dict></plist>
 ```
+
+Replace the ecCodes placeholder with its actual path and configure
+definitions/samples if necessary. launchd does not inherit interactive shell settings.
 
 ```bash
 mkdir -p logs
@@ -193,29 +241,24 @@ launchctl list | grep firesky                                     # verify
 
 ```powershell
 git clone https://github.com/xyl-g/FireSky.git; cd FireSky
-python -m venv .venv
-.venv\Scripts\activate
-pip install -e ".[dev,cams,nowcast,ec]"
-
-# Native scorer: the build script needs bash; on native Windows use the
-# equivalent two commands
-cd native; cargo build --release
-Copy-Item target\release\firesky_native.dll target\release\firesky_native_cpu.dll
-cd ..
+cargo build --manifest-path engine/Cargo.toml --release --locked
 
 cd frontend; npm ci; npm run build; cd ..
 
-$env:FIRESKY_CONFIG = "$PWD\etc\web_server.yaml"
-python -m uvicorn firesky.api:create_app --factory --host 127.0.0.1 --port 8765
+$env:FIRESKY_ECCODES_LIBRARY = "C:\ecCodes\bin\eccodes.dll"
+$env:ECCODES_DEFINITION_PATH = "C:\ecCodes\share\eccodes\definitions"
+$env:ECCODES_SAMPLES_PATH = "C:\ecCodes\share\eccodes\samples"
+$env:PATH = "C:\ecCodes\bin;$env:PATH"
+.\engine\target\release\firesky-engine.exe http --workspace "$PWD" --host 127.0.0.1 --port 8765
 ```
 
-Copy `src\firesky\config\web_server.yaml` to `etc\web_server.yaml` and point
-the cache dirs at a data disk (use raw strings or forward slashes). Open
-`http://127.0.0.1:8765` in a browser.
+Replace ecCodes paths with the actual installation and use §4.0 environment
+variables for caches. Open `http://127.0.0.1:8765`. Windows build/run acceptance
+still requires testing on the target platform.
 
 **Option B: auto-start** — Task Scheduler with an "at log on" trigger:
-program `.venv\Scripts\python.exe`, arguments
-`-m uvicorn firesky.api:create_app --factory --host 127.0.0.1 --port 8765`,
+program `...\engine\target\release\firesky-engine.exe`, arguments
+`http --workspace C:\FireSky --host 127.0.0.1 --port 8765`,
 start-in the repo root; or register a Windows service via
 [NSSM](https://nssm.cc) (`nssm install firesky ...`) with restart-on-crash.
 
@@ -235,7 +278,7 @@ first start.
 server {
     listen 80;
     server_name firesky.example.com;
-    client_max_body_size 8m;
+    client_max_body_size 1m;
 
     location / {
         proxy_pass http://127.0.0.1:8765;
@@ -252,7 +295,12 @@ server {
 > with certbot or your gateway. Home deployments on macOS/Windows that stay
 > off the public internet can skip this section entirely.
 
-### Scheduled refresh after each GFS cycle (cron / schtasks)
+### Legacy scheduled refresh reference (Python service only)
+
+This is not a native deployment procedure: `data/latest/refresh` and national
+refresh are not wired in the native runtime. Do not copy these old schedules to
+the new service. Submit native jobs against the implemented contract after input
+preparation and poll their status; restart does not restore jobs.
 
 NOMADS publishes each cycle with a **~5h45m** lag. Cron examples:
 
@@ -273,7 +321,7 @@ NOMADS publishes each cycle with a **~5h45m** lag. Cron examples:
 > `GET /api/v1/firesky/forecasts/results/{job_id}` first.
 
 **Windows**: there is no cron — create two basic tasks in Task Scheduler at
-the same times (action: run `.venv\Scripts\curl.exe` with the URLs above;
+the same times (action: run system `curl.exe` with the URLs above;
 Windows 10+ ships curl.exe), or use cron inside WSL2.
 
 ### Disk hygiene
@@ -288,42 +336,43 @@ Windows 10+ ships curl.exe), or use cron inside WSL2.
 ## 6. Upgrade flow
 
 1. `git pull`;
-2. If `native/src/**` changed: rebuild the native scorer
-   (Linux/macOS `./scripts/build_native_variants.sh`; Windows the two cargo
-   commands from §4.3 Option A; automatic in container builds);
+2. If `engine/` or `native/` changed, rebuild the standalone engine with
+   `cargo build --manifest-path engine/Cargo.toml --release --locked`
+   (automatic in container builds);
 3. If the frontend changed: `cd frontend && npm ci && npm run build`
    (automatic in container builds);
-4. Restart the process; **algorithm/cache-version bumps invalidate old caches
-   automatically** (keys embed the algorithm version) — no manual cleanup;
-   regional/point results recompute on the next request.
+4. Restart the process. Native caches validate source/request/input identities;
+   legacy Python caches cannot substitute for them. Restart loses jobs and desktop
+   sessions; wait for completion or cancel work first.
 
 ## 7. Security checklist
 
 - Public exposure only via a reverse proxy + HTTPS; keep the backend on
   127.0.0.1;
-- `satellite_warmup_token`: satellite warmup is expensive — **always**
-  set the token for public deployments;
+- The native runtime has no new remote authentication. Protect download, prune,
+  credential and desktop preparation APIs at the gateway; the legacy
+  `satellite_warmup_token` does not protect native endpoints;
 - CORS/rate limiting: no auth by default (intranet product); add gateway-level
   basic auth / rate limits for public use;
-- No database, no user system — the only sensitive surface is the cache tree
-  content.
+- Protect ADS credentials, reports and cache directories; do not log keys or
+  token-bearing URLs.
 
 ## 8. Health checks & monitoring
 
 | Item | Method |
 |---|---|
 | Liveness | `GET /api/v1/firesky/health` → `{"status":"ok"}` |
-| Version contract | `GET /api/v1/firesky/forecasts/national/contract` → algorithm/summary_version/cache_version |
-| Logs | container stdout / daily-rotated files under `logging.dir` |
+| Version contract | `GET /api/v1/firesky/runtime` and `/forecasts/national/contract`; native contracts do not impersonate legacy versions |
+| Logs | container stdout/stderr, systemd journal or launchd files; legacy `logging.dir` does not configure native logs |
 | Cache footprint | `du -sh /data/cache/firesky/* /data/cams` (Explorer folder sizes on Windows) |
 
 ## 9. Troubleshooting
 
 | Symptom | Fix |
 |---|---|
-| container exits immediately / `libfiresky_native not found` | check stage-1 build logs; verify `FIRESKY_NATIVE_LIBRARY_PATH` points to an existing library (platform names in §2.2) |
+| container exits immediately / ecCodes loading fails | check engine build and `libeccodes0`; on bare metal check the shared library and definitions/samples paths |
 | Windows `cargo build` linker error | install Visual Studio C++ Build Tools (MSVC link.exe), reopen the terminal |
-| Windows `pip install eccodes` fails | upgrade pip (`python -m pip install -U pip`) to get the binary-bundled eccodes wheel |
+| Windows ecCodes loading fails | check DLL architecture, dependent DLL search paths and definitions/samples; native runtime does not use pip eccodes |
 | macOS launchd job not starting | `launchctl list \| grep firesky`; keep literal spaces in plist paths; the `logs/` directory must exist first |
 | `/` returns 404 | frontend build missing (bundled in the container; run `npm run build` on bare metal) |
 | forecasts say "GFS cycle unavailable" | NOMADS lag ~5h45m — wait or use an older cycle |

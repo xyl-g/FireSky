@@ -3239,9 +3239,9 @@ The opt-in `desktop_nowcast_assessment` engine operation (Stage 54 of the
 migration) scores both fixture scans in one call and applies the radar
 constraints inside the engine, using the same 27-column
 `hsd-assessment-feature-row-v2` rows and the satellite probability semantics
-that the legacy 20-field buffer cannot carry. The measured binary is the same
-release as the baseline tables above, so the comparison is like-for-like. The
-same pinned fixture and seven warm trials produced:
+that the legacy 20-field buffer cannot carry. The release identity is recorded
+below; do not assume it is identical to the earlier baseline release.
+The same pinned fixture and seven warm trials produced:
 
 | Measurement | p50 | p90 |
 | --- | ---: | ---: |
@@ -3272,3 +3272,102 @@ report serialization, packaging, and cross-platform execution. Reproduce with:
 
 Release SHA-256:
 `aebb2fd7f6968d60788ac41b9cf579b5dd74b61f665789516040c76a6ef0c50b`.
+
+### 2026-11-11 Python Hot-Path Optimization And Contract v2 Follow-Up
+
+Two bit-identical redundancy eliminations landed in the Python assessment
+path after the tables above. `assess_timestep` now reuses
+`forward_burnable_cloud_field_amount` as `raw_extent` instead of calling
+`candidate_angular_cloud_coverage` a second time per scan (scoring.py:3877),
+and `path_clearance_weight` hoists the previously triple-computed
+`estimated_cloud_base_m(candidate)` into one local (scoring.py:1924). cProfile
+on `scripts/_profile_nowcast_assessment.py` ranked the per-scan repeated
+angular-coverage grid first; the second hoist measured below trial noise.
+Focused pytest run: 60 passed, 57 deselected.
+
+The engine contract also moved to `rust-desktop-nowcast-assessment-v2` with a
+request `detail` level: `"full"` keeps every diagnostic list for acceptance
+differencing, `"model"` drops the lists the service-side
+`TimeStepAssessment` reconstruction never reads, and unknown levels are
+rejected. The service hot path uses `detail="model"` (service.py:1405); the
+18-value ledger rows and the event/instant quality wrapper are identical on
+both levels. The engine binary was rebuilt for this contract; the same pinned
+fixture and seven warm trials then measured:
+
+| Measurement | p50 | p90 |
+| --- | ---: | ---: |
+| Python per-scan assessments | 66.88 ms | 70.41 ms |
+| Python observation/radar constraints | 9.99 ms | — |
+| Rust event-quality wrapper | 0.62 ms | — |
+| Python post-retrieval total | 81.25 ms | — |
+| Native batch assessment (one call, constraints included) | 34.02 ms | 36.54 ms |
+| Native batch assessment + event quality | 34.63 ms | — |
+
+Earlier runs on the same binary and fixture measured the native batch at
+**33.34 ms** p50 (**33.77 ms** p50 including event quality) with the Python
+post-retrieval total at **78.75 ms** p50; the multi-run native/Python ratio
+stays between roughly **43%** and **46%** of the Python assessment-plus-
+constraint segment. Feature rows (**616**/**641**), candidate counts
+(**169**/**153**) and reason counts (**21**/**21**) match the Python baseline
+in every run, and the benchmark asserts structural equality between the two
+paths before timing. The two optimization rounds are bit-identical by
+construction (pure-function reuse; no numeric or failure-semantics change),
+so the Python and native columns remain directly comparable across the
+measurement dates.
+
+These are warm local cache component measurements, not a forecast-latency
+claim. They exclude provider discovery, downloads, calibration, cache
+warming, HTTP/report serialization, packaging and cross-platform execution.
+At the time of these measurements the production backend remained Python and
+the native path was opt-in. The subsequent default-runtime cutover on
+2026-11-11 is documented in `RUST_RUNTIME_CUTOVER.zh-CN.md`; it does not
+retroactively turn these component timings into end-to-end measurements.
+Reproduce with the same command above.
+
+Release SHA-256:
+`983894e36756de6aa6193fa6ea2c2964339941d131d4ff91f6100b31bbe9bdb7`.
+
+### 2026-11-11 Final Native Runtime Build
+
+After compilation, test runs and the macOS bundle build finished, seven warm
+trials on the same pinned two-scan fixture produced:
+
+| Measurement | p50 | p90 |
+| --- | ---: | ---: |
+| Python per-scan assessments | 63.28 ms | 63.58 ms |
+| Python observation/radar constraints | 8.43 ms | 8.78 ms |
+| Rust event-quality wrapper | 0.596 ms | 0.669 ms |
+| Python post-retrieval total | 73.10 ms | 73.64 ms |
+| Native batch assessment | 31.98 ms | 32.17 ms |
+| Native post-retrieval total | 33.31 ms | 33.40 ms |
+
+The measured segment is **2.19 times faster**, or **54.4% less elapsed time**.
+The benchmark asserts equality of the Python and native assessment steps
+before timing. Feature rows remain 616/641, candidates 169/153 and diagnostic
+reason counts 21/21. The target is 2026-11-07 09:00 UTC at Hangzhou, using
+observations five minutes before and after that time.
+
+This is a frozen component fixture, not an ordinary live service request:
+it uses explicit AOD550 0.15 and the historical fixture's pinned GFS prior
+selection (including its latest-frame f009/zero interpolation fraction).
+It does not validate a live CAMS pipeline. Discovery, downloads, calibration,
+retrieval, cache warming, HTTP/report serialization, packaging and
+cross-platform execution are excluded. The benchmark calls the native batch
+operation through the Python differential harness; this is not a measurement
+of the entire native HTTP request.
+
+The default production runtime is now Rust. Internal `Value` conversions in
+the quality/assessment interface remain an optimization opportunity; this
+result does not establish zero serialization overhead or whole-site speedup.
+
+Reproduce:
+
+```sh
+.venv/bin/python scripts/bench_nowcast_assessment.py --trials 7
+```
+
+Final release SHA-256:
+`df88af4cc525210d12d48f4f09c98ae5568f1b47a606e437c75fcbfe2ad28aa7`.
+
+Source identity:
+`6b62145a51032e44b7ba07f02a3b1a358aafca04a551903f99d4071074e5fbe6`.

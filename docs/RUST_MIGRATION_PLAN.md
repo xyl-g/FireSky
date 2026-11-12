@@ -1,5 +1,11 @@
 # Python Runtime Retirement
 
+2026-11-11 update: default build/HTTP/CLI/native desktop launch and container
+commands now target the Rust runtime. See
+[RUST_RUNTIME_CUTOVER.zh-CN.md](RUST_RUNTIME_CUTOVER.zh-CN.md) for the implemented
+routes, actual validation and remaining compatibility gaps. The inventory below
+is the earlier routing baseline, not a statement that current defaults launch Python.
+
 ## Objective
 
 Complete the Python-to-Rust migration without reducing existing forecast,
@@ -17,7 +23,8 @@ of the reference implementation is justified by helper tests alone.
 ## Current Evidence
 
 See [RUST_MIGRATION.md](RUST_MIGRATION.md) for commands, contracts and observed
-stage results. Current production entrypoints still depend on Python.
+stage results. Explicit legacy entrypoints still depend on Python; default native
+entrypoints no longer launch it, but full behavior retirement is not yet accepted.
 See [RUST_PERFORMANCE.md](RUST_PERFORMANCE.md) for the stored-input benchmark
 and implemented packing/coordinate optimizations. Full-forecast performance
 acceptance remains outstanding.
@@ -543,29 +550,80 @@ measured **75.13 ms** through the complete Python wrapper versus **3063.54 ms**
 for the Python reference path. This is a cache-local adjustment-assembly
 measurement, not complete download-to-response latency.
 
+Stage 54 adds the opt-in native batch per-observation assessment operation
+`desktop_nowcast_assessment` (contract `rust-desktop-nowcast-assessment-v2`
+inline, `rust-desktop-nowcast-assessment-file-v1` for the file receipt), covering
+one to sixteen observed scans in a single engine call. Rust now owns, per scan:
+the conditional-probability cloud-column construction, the `FeatureSpatialIndex`
+query family, `candidate_signals` with the dual-segment aerosol path and dawn
+branch, the local-deck-edge, remote-boundary-lightpath and cloud-hole signal
+families, `diagnose_solar_inflow_blockage`, both weather penalties and the full
+solar-path cross section with profile samples, then the `assess_timestep`
+composition (extent, angular coverage, vividness, regime/scene/color/phase
+diagnostics, boundary uncertainty, structure gate, duration, all reason lines,
+map cells) and the radar constraints with the same field semantics as
+`apply_nowcast_observation_constraints`. The operation also emits the 18-value
+ledger rows with the same float32 quantization chain as
+`fire_cloud_quality_from_assessments` and the canonical event/instant ledger.
+Python keeps the service-side scan assembly, the `assess_satellite_snapshot`
+wrapper semantics, the nowcast-side radar diagnosis, event `best_index`
+and core-window selection, and the production default backend.
+
+The feature contract extends the legacy 20-column buffer to the versioned
+27-column `hsd-assessment-feature-row-v2` (adding surface temperature/dewpoint,
+footprint geometry and `horizontal_cloud_probability` /
+`cloud_probability_given_cloud`; absent cells travel as NaN and are never
+backfilled to 0). The v2 buffer enables the native metric path that the legacy
+buffer refused for satellite probabilities; kernels still consuming the 20-column
+ABI (candidate/boundary prefilter, path/boundary clearance, aggregation,
+interpolation, grid indexing) stay explicit Python or fail closed for v2 buffers.
+The request carries a `detail` level: `"full"` keeps every diagnostic list for
+acceptance differencing, `"model"` drops the lists only the service's
+`TimeStepAssessment` reconstruction never reads, and unknown levels are rejected.
+
+`FIRESKY_NOWCAST_ASSESSMENT_BACKEND` selects the path per process with
+`python` as the default; an invalid value raises, and a native failure after
+Rust execution propagates instead of falling back to Python. Differential
+coverage on the pinned 2026-11-07 two-scan fixture and synthetic batteries
+includes complete `TimeStepAssessment` field equality against the Python
+reference (scores, counts, all signal tops, boundary uncertainty, cross section
+with profile and summary strings, solar inflow blockage, color diagnosis, every
+reason line), rows equality against the `national_batch` float32 oracle at
+`rtol=3e-11`, missing-prior/no-usable-column/radar-absent/radar-low-coverage
+semantics, stable-sort and boundary-merge ties, event-time selection rules,
+empty scans, receipt and payload tampering rejected, and the slim `model`
+projection rebuilding identical `TimeStepAssessment` objects. The complete
+Python suite passed **1989 tests** after this stage.
+
+This stage does not make the production nowcast Python-free. The backend
+selector defaults to `python`, production routing is not switched, and
+end-to-end forecast latency is not established. HSD/CAMS/GFS downloads and
+cache warming, main-scan selection, event `best_index`/window rules,
+HTTP/CLI/UI ownership, packaging and clean-machine validation remain outside
+the migrated boundary. The per-scan timing in
+[RUST_PERFORMANCE.md](RUST_PERFORMANCE.md#stage-54-nowcast-assessment-baseline)
+is the Python baseline table; the "Stage 54: Native Batch Nowcast Assessment"
+section there measures the new operation against that baseline with the same
+pinned fixture — the two tables share the Stage 54 name but measure different
+paths. Release SHA-256 of the measured binary is
+`983894e36756de6aa6193fa6ea2c2964339941d131d4ff91f6100b31bbe9bdb7`; an earlier
+intermediate measurement in that section used
+`aebb2fd7f6968d60788ac41b9cf579b5dd74b61f665789516040c76a6ef0c50b` before the
+`detail`-level contract bump.
+
 ## Next Nowcast Assessment Boundary
 
-The current Rust `score_nowcast_fields` operation receives an already-computed
-18-value ledger row. It owns event/instant quality composition, not the
-per-observation `TimeStepAssessment` that produces those inputs.
-`JmaNowcastAnalyzer.analyze` still builds one Python `DomainSnapshot` per
-observed scan, calls `scoring.assess_timestep`, applies radar/path constraints,
-then assembles selected diagnostics and the report. That assessment includes
-candidate and local-deck selection, cloud-hole and boundary-lightpath
-diagnostics, cross-section geometry, aerosol paths, visibility/solar gates,
-and the full step/reason payload. Moving only one formula would leave the
-important ownership and compatibility boundary in Python.
-
-The next meaningful nowcast stage is a bounded batch assessment operation for
-the complete set of observed scans, with explicit solar, observer, aerosol
-and radar inputs and a versioned file-backed response. It must preserve
-missing/unknown semantics, event-time selection, all publicly consumed
-`TimeStepAssessment` fields and diagnostic provenance, then feed its native
-rows directly into the Rust event/instant scorer. Before switching production
-routing, compare whole-step outputs against the Python reference on pinned
-HSD/GFS fixtures, including missing priors, no usable columns, radar
-absence/low coverage and tied event windows. Remote HSD acquisition and raw
-calibration remain separate provider work.
+Stage 54 resolved the bounded batch assessment this section previously called
+for: the engine
+operation exists, is differential-tested against the Python reference on
+pinned HSD/GFS fixtures (including missing priors, no usable columns, radar
+absence/low coverage and tied event windows), and feeds its native rows
+directly into the Rust event/instant scorer. What remains before production
+routing changes is acceptance of the two backends on real service traffic and
+a default-backend switch decision; the selector still defaults to `python`.
+Remote HSD acquisition and raw calibration remain separate provider work, and
+main-scan selection plus event `best_index`/window rules remain Python-owned
+by design for this stage.
 
 ## Completion Gates
 

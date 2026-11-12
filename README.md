@@ -1,9 +1,9 @@
 # firesky
 
-独立自足的火烧云（朝晚霞）物理预测栈：**预测引擎（Python + Rust 光线追踪）+ FastAPI 后端 + SvelteKit 最小前端**。
+独立自足的火烧云（朝晚霞）物理预测栈：**Rust 原生预测引擎与 HTTP 服务 + SvelteKit 前端 + 原生桌面**。
 物理与算法基于 [SunsetBot 教程](https://www.sunsetbot.top/halo/) 的方法论独立实现。
 
-An independent, self-contained burning-sunset prediction stack: **prediction engine (Python + Rust ray tracing) + FastAPI backend + minimal SvelteKit frontend**.
+An independent burning-sunset prediction stack: **native Rust prediction engine and HTTP service + SvelteKit frontend + native desktop clients**.
 
 > English documentation: [README.en.md](README.en.md)
 
@@ -31,9 +31,10 @@ An independent, self-contained burning-sunset prediction stack: **prediction eng
 - **点预测**：单观测点朝/晚霞逐五分钟质量台账（指数 + 档位：无明显火烧云 → 世纪大烧）
 - **区域预测**：中国/东亚等区域批量观测点评分 + 地图帧 + 大气剖面
 - **实况 nowcast**：向日葵 9 号卫星（HSD 分段）云柱反演 + 天气雷达对流修正
-- **后端服务**：FastAPI 异步 job + SSE + gzip + 持久缓存（点/区域/地图帧/卫星）
+- **后端服务**：Rust/Axum 异步 job + SSE + gzip + 严格输入身份缓存；旧 FastAPI 入口仅用于兼容和对照
 - **最小前端**：`/forecast`（点/区域预测）、`/now`（实况）、`/outlook`（形势图）、`/admin`（管理控制台）
-- **原生桌面**：macOS SwiftUI/AppKit + Windows WinUI 3，共用 Python/Rust 引擎；[构建与迁移状态](apps/README.md)。PySide6 入口保留兼容。
+- **原生桌面**：正式路线是 macOS SwiftUI/AppKit + Rust FFI，Windows WinUI 3 和 Linux 原生 UI
+  按同一 ABI 后续对齐；[构建与迁移状态](apps/README.md)。PySide6 入口保留兼容。
 
 ## 架构与物理原理
 
@@ -70,7 +71,7 @@ $$\Delta\tau_c=b^{1.35}\frac{\Delta s}{140\ \mathrm{km}},\qquad
 $$\mathrm{pre}=q_{\rm cov} f_m \iota c f_D,\qquad
   q=\min\left(2.5, 1.225 \mathrm{pre}^{1.2}\right)$$
 
-   算法版本 `2026.11.04.87`（`src/firesky/version.py`）。完整推导见[原理文档](docs/PRINCIPLES.md)。
+   算法版本 `2026.11.04.87`。评分实现位于 `native/` 和 `engine/`，Python 对照版本保留在 `src/firesky/`。完整推导见[原理文档](docs/PRINCIPLES.md)。
    The empirical layer: amount anchors $q_{\rm cov}$ → material factor $f_m=m/0.72$ → inflow AOD illumination
    $\iota$ → return-leg AOD contrast $c$ → best-continuous-20-minute window integral with duration factor $f_D$
    → calibrated response curve → level labels, as in the formula above. Algorithm version `2026.11.04.87`.
@@ -78,28 +79,25 @@ $$\mathrm{pre}=q_{\rm cov} f_m \iota c f_D,\qquad
 
 ## 系统要求与安装
 
+2026-11-11：默认服务/CLI/原生桌面启动已改为 Rust，无 Python 运行时依赖。
+已实现范围、旧接口差异和验收缺口见 [原生运行时切换](docs/RUST_RUNTIME_CUTOVER.zh-CN.md)；
+不应把切换默认入口等同于全部旧功能已验收。
+
 | 依赖 | 版本 | 用途 | 必需? |
 |---|---|---|---|
-| Python | ≥ 3.11 | 引擎 + 后端 | ✅ |
-| Rust (cargo) | 稳定版 ≥ 1.75 | 原生评分器编译 | ✅ |
+| Python | ≥ 3.11 | 旧版入口、差分 oracle / 测试 | 原生运行不需要 |
+| Rust (cargo) | 当前稳定版 | 独立原生引擎编译 | 构建需要 |
 | Node.js + npm | ≥ 20 | 前端构建 | 前端需要 |
-| numpy / requests / astral / eccodes | 见 `pyproject.toml` | 数值 / 下载 / 太阳几何 / GRIB2 解码 | ✅ |
-| fastapi / uvicorn / pyyaml / httpx | 同上 | 后端服务 | ✅ |
-| pillow / h5py | 同上 | 雷达 PNG / 卫星 HDF5 | ✅ |
-| cdsapi | ≥ 0.7 | **CAMS 下载**（需注册，见下） | 想自动下载 CAMS 时 |
-| eccodes 二进制库 | ecCodes ≥ 2.33 | eccodes Python 包依赖的原生库（`brew install eccodes` / apt `libeccodes-data`） | ✅ |
+| numpy / requests / astral / eccodes | 见 `pyproject.toml` | Python 对照实现 | 仅旧版/测试 |
+| fastapi / uvicorn / pyyaml / httpx | 同上 | 旧后端服务 | 仅旧版 |
+| pillow / h5py / cdsapi | 同上 | Python 雷达 / 卫星 / ADS 对照 | 仅旧版/测试 |
+| eccodes 二进制库 | ecCodes ≥ 2.33 | Rust 通过 C ABI 解码 GRIB；需 definitions/samples | ✅ |
 
 ```bash
-# 1) 引擎与后端
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev,cams,nowcast,ec]"
-./scripts/build_native_variants.sh        # 构建 libfiresky_native(_cpu) dylib
-
-# 2) 前端
-cd frontend && npm install && npm run build && cd ..
-
-# 3) 启动后端（托管前端 SPA，默认 127.0.0.1:8765）
-uvicorn firesky.api:create_app --factory --host 127.0.0.1 --port 8765
+# 构建引擎与前端，不安装 Python 包
+make install
+# Rust HTTP + SPA，默认 127.0.0.1:8765
+make serve
 # 浏览器打开 http://127.0.0.1:8765
 ```
 
@@ -109,7 +107,7 @@ uvicorn firesky.api:create_app --factory --host 127.0.0.1 --port 8765
 
 | 数据源 | 用途 | 注册/密钥 | 免费额度 |
 |---|---|---|---|
-| **CAMS 全球大气成分预报**（ADS） | 气溶胶 AOD550 + 11 层消光（决定霞色与通透度） | ⚠️ **必须注册**：① 在 [ADS](https://ads.atmosphere.copernicus.eu) 注册账号；② 在个人页面接受 `cams-global-atmospheric-composition-forecasts` 数据集许可；③ 生成 API key，写入 `~/.cdsapirc`（标准 CDS 格式：`url: https://ads.atmosphere.copernicus.eu/api` + `key: 你的UID:你的KEY`——新版 ADS 只有一串 key，填 `key: <KEY>` 即可）；④ `pip install cdsapi` | 免费，有排队 |
+| **CAMS 全球大气成分预报**（ADS） | 气溶胶 AOD550 + 11 层消光（决定霞色与通透度） | ⚠️ **必须注册**：① 在 [ADS](https://ads.atmosphere.copernicus.eu) 注册账号；② 接受数据集许可；③ 在桌面设置中保存 API key，或配置 `~/.cdsapirc`。Rust 直接访问 ADS，不需要 cdsapi | 免费，有排队 |
 | GFS（NOAA NOMADS） | 主数值模式（云/湿/温/风/边界） | 无需注册，公开 GRIB2 | 免费，请保留 User-Agent |
 | ECMWF open data | 第二模式（`model_source: ec`） | 无需注册（公开 S3/GCS 桶） | 免费 |
 | 向日葵 9 号（NOAA S3 + NICT + JMA） | nowcast 卫星云柱（HSD 分段足迹） | 无需注册，公开桶 | 免费 |
@@ -120,30 +118,32 @@ uvicorn firesky.api:create_app --factory --host 127.0.0.1 --port 8765
 
 CAMS API key 配置（`~/.cdsapirc`）示例：
 
-```ini
-url = https://ads.atmosphere.copernicus.eu/api
-key = 你的APIKEY
+```yaml
+url: https://ads.atmosphere.copernicus.eu/api
+key: 你的APIKEY
 ```
 
 拿到 CAMS 权限后，预热缓存的两种方式：
 
 ```bash
-# 方式 A：数据下载计划器（异步 job；cams 源走 cdsapi，需要 ADS key）
+# 方式 A：Rust 数据下载计划器（异步 job；需要 ADS key，不需要 cdsapi）
 curl -X POST http://127.0.0.1:8765/api/v1/firesky/data/fetch -H 'Content-Type: application/json' \
-  -d '{"target_date": "2026-11-05", "phenomenon": "dusk", "region": "china", "sources": ["cams"]}'
+  -d '{"target_date": "2026-11-12", "phenomenon": "dusk", "region": "china", "timezone": "Asia/Shanghai", "sources": ["cams"]}'
 # 轮询：GET /api/v1/firesky/data/fetch/status?job_id=...
 
 # 方式 B：从其他部署复制已下载好的 CAMS 缓存目录（文件格式一致）
 #   直接拷贝或软链到本项目 .cache/cams
 ```
 
-> 注意：引擎本身**只读** CAMS 缓存（fail-closed，缺缓存时明确报错而不虚构 AOD）；
-> 下载由后端预热端点（cdsapi）或你自己准备。`satellite_warmup_token` 是本地管理
-> 令牌（yaml 配置），与任何第三方注册无关。
+> 评分读取严格校验的 CAMS 缓存，缺少完整时空覆盖时明确报错，不虚构 AOD。
+> 数据准备由 Rust 直接访问 ADS，仍需账号和许可。旧 YAML 的
+> `satellite_warmup_token` 仅适用于显式 Python 服务，不为原生服务提供鉴权。
 
 ## 配置说明
 
-配置文件：`src/firesky/config/web_server.yaml`，可用环境变量 `FIRESKY_CONFIG` 指向自定义副本。
+原生运行时使用 [环境变量](docs/RUST_RUNTIME_CUTOVER.zh-CN.md#配置) 和命令行参数。
+以下 YAML 字段仅适用于显式旧 Python 入口：
+`src/firesky/config/web_server.yaml`，可用 `FIRESKY_CONFIG` 指向自定义副本。
 
 | 字段 | 默认 | 说明 |
 |---|---|---|
@@ -160,7 +160,7 @@ curl -X POST http://127.0.0.1:8765/api/v1/firesky/data/fetch -H 'Content-Type: a
 ### 后端 + 前端（推荐）
 
 ```bash
-uvicorn firesky.api:create_app --factory --host 127.0.0.1 --port 8765
+make serve
 # 前端已构建时直接访问 http://127.0.0.1:8765/forecast
 # 开发模式前端：cd frontend && npm run dev -- --host 5173（API 走 /api 代理到 8765）
 ```
@@ -168,11 +168,11 @@ uvicorn firesky.api:create_app --factory --host 127.0.0.1 --port 8765
 ### CLI（引擎直用，不起服务）
 
 ```bash
-python -m firesky predict --lat 30.27 --lon 120.15 --date 2026-11-05 \
-    --phenomenon dusk --cams-cache-dir .cache/cams
+engine/target/release/firesky-engine forecast --input request.json --workspace "$PWD"
+# JSON 请求示例及字段见原生运行时文档
 ```
 
-### Python API
+### Python API（保留的旧版/对照入口）
 
 ```python
 from datetime import datetime, timezone
@@ -191,7 +191,8 @@ print(result["points"][0]["peak"]["quality_level"])
 
 ## API 端点清单
 
-单点、区域、实况的请求参数、返回字段、数据边界与调用示例见 [预测接口与后端数据能力说明](docs/FORECAST_API.md)。
+原生已注册接口及未完成清单见 [原生运行时切换](docs/RUST_RUNTIME_CUTOVER.zh-CN.md#http-范围)。
+以下为旧版完整 API 清单；不能据此假定每个接口已移植。旧版参数、返回字段与调用示例见 [预测接口说明](docs/FORECAST_API.md)。
 
 | 端点 | 方法 | 说明 |
 |---|---|---|
@@ -212,7 +213,8 @@ print(result["points"][0]["peak"]["quality_level"])
 ## 测试与不变量回归
 
 ```bash
-.venv/bin/python -m pytest tests/ -q          # 29 passed
+make test-rust
+make test                                  # 需要 Python 差分依赖
 cd frontend && npm run check && npm run build # 0 errors
 ```
 
@@ -224,8 +226,14 @@ cd frontend && npm run check && npm run build # 0 errors
 
 ## 桌面应用（本地单机）
 
-不想部署服务的话，可以直接用 PySide6 桌面应用（与 Web 服务共用同一条
-预测核心路径，数值完全一致）：
+当前正式桌面先交付 macOS SwiftUI/AppKit + Rust FFI；Windows WinUI 和 Linux
+原生 UI 只按 macOS 的 ABI、预检和任务生命周期合同扩展。[构建与迁移状态](apps/README.md)
+记录各平台的实际验收边界。Tauri 桌面壳已冻结，仅保留为共享 Web/合同参考，不是正式桌面发布路径。
+
+### 旧 PySide6 兼容版（legacy）
+
+以下命令仅构建或运行旧 Python 桌面，不是默认原生发布流程。它仍需要 Python
+及对应依赖，不能用来证明整个桌面产品已 Python-free。
 
 ```bash
 # 开发运行
@@ -239,14 +247,12 @@ pyinstaller desktop/FireSky.spec --noconfirm
 hdiutil create -volname FireSky -srcfolder dist/FireSky.app -ov -format UDZO FireSky.dmg
 ```
 
-界面：观测点表单（含常用城市）、日期/现象/模式选择、进度日志、峰值
-档位卡片、逐五分钟质量曲线与台账表。CI 的 `desktop` job 在
-macOS/Windows 上自动打包并上传产物（未签名：macOS 首开需右键→打开，
-Windows SmartScreen 提示后选「仍要运行」）。
+上述 PySide6 兼容界面包含观测点表单、日期/现象/模式选择、进度和曲线。
+其 PyInstaller 产物不属于当前 Rust 原生发布验收。
 
 ### 地图底图与天地图 Key
 
-桌面端的选点地图是本地 Leaflet（`desktop/assets/`，随包分发）+ QWebEngine，
+旧 PySide6 兼容版的选点地图是本地 Leaflet（`desktop/assets/`，随包分发）+ QWebEngine，
 双底图源，**地图只用于选点，不叠加任何预报结果**：
 
 | 底图源 | 适用区域 | 底图类型 | Key |

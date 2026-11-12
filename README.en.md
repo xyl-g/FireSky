@@ -1,8 +1,8 @@
 # firesky
 
 An independent, self-contained burning-sunset (sunset/sunrise glow) prediction
-stack: **prediction engine (Python + Rust ray tracing) + FastAPI backend +
-minimal SvelteKit frontend**. The physics follows the methodology of the
+stack: **native Rust prediction engine and HTTP service + SvelteKit frontend +
+native desktop clients**. The physics follows the methodology of the
 [SunsetBot tutorial](https://www.sunsetbot.top/halo/).
 
 > 中文文档：[README.md](README.md)
@@ -34,10 +34,9 @@ minimal SvelteKit frontend**. The physics follows the methodology of the
   with map frames and atmospheric cross-sections.
 - **Nowcast**: Himawari-9 satellite (HSD segments) cloud-column retrieval + weather
   radar convective correction.
-- **Backend service**: FastAPI async jobs + SSE + gzip + persistent caches
-  (point / regional / map frames / satellite).
+- **Backend service**: Rust/Axum jobs + SSE + gzip + checked input caches.
 - **Minimal frontend**: `/forecast`, `/now`, `/outlook`, `/admin`.
-- **Native desktop**: macOS SwiftUI/AppKit and Windows WinUI 3, sharing the Python/Rust engine. See [build instructions and migration status](apps/README.md). The PySide6 entry point remains available.
+- **Native desktop**: macOS SwiftUI/AppKit and Windows WinUI 3, directly launching Rust. See [build instructions and migration status](apps/README.md). The old PySide6 entry point remains available.
 
 ## Architecture & physics
 
@@ -80,28 +79,27 @@ $$\mathrm{pre}=q_{\rm cov} f_m \iota c f_D,\qquad
 
 ## Requirements & installation
 
+As of November 11, 2026, default builds, HTTP/CLI and native desktop launchers
+do not require Python. The [cutover audit](docs/RUST_RUNTIME_CUTOVER.zh-CN.md)
+records implemented paths, unsupported legacy endpoints and validation limits.
+Later Python API/configuration examples in this document describe the explicit
+legacy implementation, not the native runtime.
+
 | Dependency | Version | Purpose | Required? |
 |---|---|---|---|
-| Python | ≥ 3.11 | engine + backend | ✅ |
-| Rust (cargo) | stable ≥ 1.75 | native scorer build | ✅ |
+| Python | ≥ 3.11 | legacy backend and differential tests | not for native runtime |
+| Rust (cargo) | current stable | engine build | build only |
 | Node.js + npm | ≥ 20 | frontend build | frontend only |
-| numpy / requests / astral / eccodes | see `pyproject.toml` | numerics / downloads / solar geometry / GRIB2 decode | ✅ |
-| fastapi / uvicorn / pyyaml / httpx | same | backend service | ✅ |
-| pillow / h5py | same | radar PNG / satellite HDF5 | ✅ |
-| cdsapi | ≥ 0.7 | **CAMS downloads** (registration required, see below) | only to auto-download CAMS |
-| ecCodes binary library | ≥ 2.33 | native library behind the eccodes Python package (`brew install eccodes` / apt `libeccodes-data`) | ✅ |
+| numpy / requests / astral / eccodes | see `pyproject.toml` | Python reference implementation | legacy/tests only |
+| fastapi / uvicorn / pyyaml / httpx | same | old backend service | legacy only |
+| pillow / h5py / cdsapi | same | Python satellite/radar/ADS reference | legacy/tests only |
+| ecCodes binary library | ≥ 2.33 | direct GRIB C ABI with definitions/samples | yes |
 
 ```bash
-# 1) Engine + backend
-python3 -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev,cams,nowcast,ec]"
-./scripts/build_native_variants.sh        # builds libfiresky_native(_cpu) dylib
-
-# 2) Frontend
-cd frontend && npm install && npm run build && cd ..
-
-# 3) Start the backend (serves the frontend SPA, default 127.0.0.1:8765)
-uvicorn firesky.api:create_app --factory --host 127.0.0.1 --port 8765
+# Build Rust engine and frontend
+make install
+# Serve native HTTP and SPA
+make serve
 # open http://127.0.0.1:8765
 ```
 
@@ -112,7 +110,7 @@ registration.** Everything else is public and key-free.
 
 | Source | Used for | Registration / key | Free tier |
 |---|---|---|---|
-| **CAMS global atmospheric composition forecasts** (ADS) | aerosol AOD550 + 11-level extinction (drives glow colour and clarity) | ⚠️ **Registration required**: ① register at [ADS](https://ads.atmosphere.copernicus.eu); ② accept the `cams-global-atmospheric-composition-forecasts` dataset licence on your profile page; ③ create an API key and write it to `~/.cdsapirc` (standard CDS format: `url: https://ads.atmosphere.copernicus.eu/api` + `key: <YOUR-KEY>`); ④ `pip install cdsapi` | free, queued |
+| **CAMS global atmospheric composition forecasts** (ADS) | aerosol AOD550 + 11-level extinction (drives glow colour and clarity) | ⚠️ **Registration required**: register at [ADS](https://ads.atmosphere.copernicus.eu), accept the dataset licence, then save the key in desktop settings or `~/.cdsapirc`. Rust accesses ADS directly; cdsapi is not required | free, queued |
 | GFS (NOAA NOMADS) | primary NWP model (cloud/RH/temperature/wind/boundaries) | none (public GRIB2); keep a polite User-Agent | free |
 | ECMWF open data | second model (`model_source: ec`) | none (public S3/GCS buckets) | free |
 | Himawari-9 (NOAA S3 + NICT + JMA) | nowcast satellite cloud columns (HSD segments) | none (public buckets) | free |
@@ -123,35 +121,35 @@ registration.** Everything else is public and key-free.
 
 `~/.cdsapirc` example:
 
-```ini
-url = https://ads.atmosphere.copernicus.eu/api
-key = YOUR-API-KEY
+```yaml
+url: https://ads.atmosphere.copernicus.eu/api
+key: YOUR-API-KEY
 ```
 
 Once CAMS access works, warm the cache either way:
 
 ```bash
-# Option A: the data-download planner (async job; the cams source uses
-# cdsapi and requires an ADS key)
+# Option A: native Rust data planner (async job; ADS key required, no cdsapi)
 curl -X POST http://127.0.0.1:8765/api/v1/firesky/data/fetch \
   -H 'Content-Type: application/json' \
-  -d '{"target_date": "2026-11-05", "phenomenon": "dusk", "region": "china", "sources": ["cams"]}'
+  -d '{"target_date": "2026-11-12", "phenomenon": "dusk", "region": "china", "timezone": "Asia/Shanghai", "sources": ["cams"]}'
 # poll: GET /api/v1/firesky/data/fetch/status?job_id=...
 
 # Option B: reuse an already-downloaded cache (the file format is
 # identical): copy/symlink an existing CAMS cache into this project.
 ```
 
-> The engine itself only **reads** the CAMS cache (fail-closed — it raises a
-> clear error instead of inventing AOD when the cache is missing). Downloads
-> happen through the backend warmup endpoint (cdsapi) or whatever you prepare.
-> `satellite_warmup_token` is a local admin token configured in the YAML — it
-> is unrelated to any third-party registration.
+> Scoring reads strictly validated CAMS caches and fails when required
+> space/time coverage is missing instead of inventing AOD. Rust preparation
+> accesses ADS directly and still requires an account and accepted licence.
+> Legacy YAML `satellite_warmup_token` applies only to the explicit Python
+> service; it does not authenticate native endpoints.
 
 ## Configuration
 
-Config file: `src/firesky/config/web_server.yaml`; point the env var
-`FIRESKY_CONFIG` at your own copy to override.
+The native runtime uses [environment variables and CLI arguments](docs/RUST_RUNTIME_CUTOVER.zh-CN.md#配置).
+The following YAML fields apply only to the explicit legacy Python service:
+`src/firesky/config/web_server.yaml`, optionally selected by `FIRESKY_CONFIG`.
 
 | Field | Default | Meaning |
 |---|---|---|
@@ -168,7 +166,7 @@ Config file: `src/firesky/config/web_server.yaml`; point the env var
 ### Backend + frontend (recommended)
 
 ```bash
-uvicorn firesky.api:create_app --factory --host 127.0.0.1 --port 8765
+make serve
 # with the frontend built: open http://127.0.0.1:8765/forecast
 # frontend dev mode: cd frontend && npm run dev -- --host 5173 (API proxied to 8765)
 ```
@@ -176,11 +174,11 @@ uvicorn firesky.api:create_app --factory --host 127.0.0.1 --port 8765
 ### CLI (engine only, no server)
 
 ```bash
-python -m firesky predict --lat 30.27 --lon 120.15 --date 2026-11-05 \
-    --phenomenon dusk --cams-cache-dir .cache/cams
+engine/target/release/firesky-engine forecast --input request.json --workspace "$PWD"
+# JSON request examples and fields are in the native runtime audit
 ```
 
-### Python API
+### Python API (legacy/reference only)
 
 ```python
 from datetime import datetime, timezone
@@ -198,6 +196,10 @@ print(result["points"][0]["peak"]["quality_level"])
 ```
 
 ## API endpoints
+
+See the [native HTTP contract and outstanding routes](docs/RUST_RUNTIME_CUTOVER.zh-CN.md#http-范围).
+The table below is the legacy full API inventory, not a claim that every endpoint
+has been ported.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
@@ -218,7 +220,8 @@ print(result["points"][0]["peak"]["quality_level"])
 ## Testing & invariant regression
 
 ```bash
-.venv/bin/python -m pytest tests/ -q          # 29 passed
+make test-rust
+make test                                  # Python differential dependencies required
 cd frontend && npm run check && npm run build # 0 errors
 ```
 
@@ -235,8 +238,16 @@ cd frontend && npm run check && npm run build # 0 errors
 
 ## Desktop app (local, single-machine)
 
-The PySide6 desktop app shares the same prediction core as the web service
-(identical numbers, no HTTP hop):
+Current native clients launch the Rust engine directly:
+[macOS SwiftUI / Windows WinUI](apps/README.md) and the
+[Tauri shell](apps/desktop-tauri/README.md). Their documents define build and
+platform acceptance limits.
+
+### Legacy PySide6 compatibility app
+
+These commands run or package the old Python desktop, not the default native
+release. It still requires Python and its dependencies and cannot establish a
+Python-free desktop product.
 
 ```bash
 # run from source
@@ -250,15 +261,12 @@ pyinstaller desktop/FireSky.spec --noconfirm
 hdiutil create -volname FireSky -srcfolder dist/FireSky.app -ov -format UDZO FireSky.dmg
 ```
 
-UI: observer form (with city presets), date/phenomenon/model pickers,
-progress log, peak-level card, five-minute quality curve and ledger table.
-The CI `desktop` job bundles macOS/Windows artifacts automatically
-(unsigned: right-click → Open on first macOS launch; accept the
-SmartScreen prompt on Windows).
+The compatibility UI includes observer/date/model forms, progress and curves.
+Its PyInstaller output is not part of current Rust native release acceptance.
 
 ### Map basemaps and the Tianditu key
 
-The picker map is local Leaflet (`desktop/assets/`, shipped with the bundle)
+The legacy PySide6 picker uses local Leaflet (`desktop/assets/`, shipped with the bundle)
 inside QWebEngine. Two basemap sources, **used for point picking only — no
 forecast layers are drawn on the map**:
 
