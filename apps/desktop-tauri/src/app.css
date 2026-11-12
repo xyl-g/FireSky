@@ -1,0 +1,75 @@
+/* 主壳视觉参考 apps/macos/Sources/FireSkyNative/Workbench.swift。
+   这里的强调色不是预测质量等级色；业务色标另按既定口径迁移。 */
+:root {
+  color-scheme: light;
+  --fs-bg: #f2f2f4;
+  --fs-bg-strong: #fafafa;
+  --fs-backdrop: #f2f2f4;
+  --fs-border: rgba(24, 24, 28, 0.11);
+  --fs-edge: rgba(255, 255, 255, 0.8);
+  --fs-ink: #242426;
+  --fs-ink2: #68686e;
+  --fs-accent: #bc4f43;
+  --fs-on-accent: #ffffff;
+  --fs-accent-2: #cb6b5d;
+  --fs-accent-soft: rgba(188, 79, 67, 0.09);
+  --fs-teal: #287f79;
+  --fs-error: #b42335;
+  --fs-surface: rgba(255, 255, 255, 0.72);
+  --fs-surface-strong: #ffffff;
+  --fs-sidebar: rgba(235, 235, 238, 0.86);
+  --fs-toolbar: rgba(246, 246, 248, 0.9);
+  --fs-selection: rgba(30, 30, 36, 0.075);
+  --fs-hover: rgba(28, 28, 34, 0.045);
+  --fs-control: #ffffff;
+  --fs-control-border: rgba(24, 24, 28, 0.18);
+  --fs-control-shadow: 0 1px 1px rgba(24, 24, 28, 0.045);
+  --fs-panel-shadow: 0 1px 2px rgba(24, 24, 28, 0.035);
+  --fs-segment: rgba(24, 24, 28, 0.065);
+  --fs-segment-shadow: 0 1px 3px rgba(24, 24, 28, 0.12), 0 0 0 0.5px rgba(24, 24, 28, 0.04);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --fs-bg: #202023;
+  --fs-bg-strong: #29292c;
+  --fs-backdrop: #202023;
+  --fs-border: rgba(255, 255, 255, 0.10);
+  --fs-edge: rgba(255, 255, 255, 0.055);
+  --fs-ink: #f1f1f3;
+  --fs-ink2: #b0b0b7;
+  --fs-accent: #ff9586;
+  --fs-on-accent: #241b1a;
+  --fs-accent-2: #e8aba2;
+  --fs-accent-soft: rgba(255, 149, 134, 0.12);
+  --fs-teal: #76c9be;
+  --fs-error: #ff9aaa;
+  --fs-surface: rgba(255, 255, 255, 0.035);
+  --fs-surface-strong: #353538;
+  --fs-sidebar: rgba(42, 42, 46, 0.92);
+  --fs-toolbar: rgba(38, 38, 42, 0.94);
+  --fs-selection: rgba(255, 255, 255, 0.10);
+  --fs-hover: rgba(255, 255, 255, 0.055);
+  --fs-control: #37373b;
+  --fs-control-border: rgba(255, 255, 255, 0.14);
+  --fs-control-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
+  --fs-panel-shadow: 0 1px 2px rgba(0, 0, 0, 0.12);
+  --fs-segment: rgba(0, 0, 0, 0.22);
+  --fs-segment-shadow: 0 1px 3px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+}
+
+* { box-sizing: border-box; }
+html, body, #app { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-size: 12px;
+  color: var(--fs-ink);
+  background: var(--fs-backdrop);
+  -webkit-font-smoothing: antialiased;
+}
+button:focus-visible, summary:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid color-mix(in srgb, var(--fs-accent) 55%, transparent); outline-offset: 2px; }
+[hidden] { display: none !important; }
+button, input, select { letter-spacing: 0; }
+input::placeholder { color: var(--fs-ink2); opacity: .8; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }
+

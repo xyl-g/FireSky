@@ -1,0 +1,233 @@
+/*
+ * 地图页样式 —— 从 desktop/assets/map.html 移植，材质沿用桌面主题。
+ * 命名空间：原文件挂在 :root / html.dark / html.mini / #map 上；
+ * 这里统一收拢到 .fs-map-root / .fs-map-root.dark / .fs-map-root.mini /
+ * .fs-map-root .map，避免泄漏进 App 壳。
+ * 保留十档业务配色与暗色瓦片调色。
+ */
+
+.fs-map-root {
+  --fs-glass: var(--fs-surface);
+  --fs-glass-strong: var(--fs-surface-strong);
+  --fs-ink3: var(--fs-ink2);
+  --fs-shadow: var(--fs-panel-shadow);
+  --fs-highlight: inset 0 1px 0 var(--fs-edge);
+  /* 影像用压暗降饱和；矢量/地形是浅色底图，需要反相才像暗色主题 */
+  --fs-map-tint: none;
+  --fs-map-tint-img: brightness(0.62) saturate(0.78) contrast(1.06);
+
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  color: var(--fs-ink);
+  background: var(--fs-bg-strong);
+  font-family: "PingFang SC", "Microsoft YaHei", -apple-system, system-ui, sans-serif;
+}
+
+.fs-map-root.dark {
+  --fs-map-tint: brightness(0.74) saturate(0.78) contrast(1.06) hue-rotate(178deg) invert(0.86);
+  --fs-map-tint-img: brightness(0.56) saturate(0.72) contrast(1.08);
+
+}
+
+.fs-map-root .map {
+  position: absolute;
+  inset: 0;
+  background: var(--fs-bg-strong);
+}
+
+/* 底图色调：暗色下对瓦片做整体调色，保持地形可读 */
+.fs-map-root .map.tint-dark :global(.leaflet-tile-pane) { filter: var(--fs-map-tint); }
+.fs-map-root .map.tint-dark-img :global(.leaflet-tile-pane) { filter: var(--fs-map-tint-img); }
+.fs-map-root .map.tint-muted :global(.leaflet-tile-pane) { filter: saturate(0.62) brightness(1.04) contrast(0.94); }
+.fs-map-root.dark .map.tint-muted :global(.leaflet-tile-pane) { filter: saturate(0.62) brightness(0.86) contrast(1.02); }
+
+/* 观测点标记（L.divIcon 动态注入，需 :global） */
+:global(.fs-marker) { position: relative; width: 30px; height: 30px; }
+:global(.fs-marker .halo) {
+  position: absolute; left: 50%; top: 50%; width: 34px; height: 34px;
+  transform: translate(-50%, -50%); border-radius: 50%;
+  background: radial-gradient(circle, rgba(242, 124, 66, 0.3), rgba(242, 124, 66, 0) 70%);
+}
+:global(.fs-marker .drop) {
+  position: absolute; left: 50%; top: 3px; width: 18px; height: 18px;
+  transform: translate(-50%, 0) rotate(45deg); border-radius: 50% 50% 50% 4px;
+  background: linear-gradient(140deg, #ffc169, #e2683f);
+  border: 2px solid rgba(255, 255, 255, 0.95);
+  box-shadow: 0 3px 10px rgba(120, 50, 20, 0.42);
+}
+:global(.fs-marker .core) {
+  position: absolute; left: 50%; top: 9px; width: 5px; height: 5px;
+  transform: translate(-50%, 0); background: #fff; border-radius: 50%;
+}
+:global(.fs-marker .ring) {
+  position: absolute; left: 50%; top: 26px; width: 9px; height: 3px;
+  transform: translate(-50%, 0); border-radius: 50%;
+  background: rgba(60, 40, 30, 0.28); filter: blur(1px);
+}
+
+/* 玻璃浮层 */
+.fs-map-root :global(.fs-panel) {
+  position: absolute; z-index: 800; color: var(--fs-ink);
+  background: var(--fs-glass); backdrop-filter: blur(18px) saturate(140%);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  border: 1px solid var(--fs-border); border-radius: 8px;
+  box-shadow: var(--fs-shadow), var(--fs-highlight);
+}
+
+.fs-map-root .fs-layers { top: 14px; right: 14px; width: 202px; padding: 10px; }
+.fs-map-root .fs-layers h4 {
+  margin: 0 0 8px; font-size: 11px; font-weight: 650; letter-spacing: 0;
+  color: var(--fs-ink3); text-transform: uppercase;
+  display: flex; align-items: center; justify-content: space-between;
+}
+.fs-map-root .fs-layers h4 span { font-weight: 500; letter-spacing: 0; text-transform: none; }
+
+.fs-map-root .fs-seg {
+  display: flex; gap: 3px; padding: 3px; border-radius: 6px;
+  background: var(--fs-segment);
+}
+.fs-map-root .fs-seg + .fs-seg { margin-top: 4px; }
+.fs-map-root.dark .fs-seg { background: var(--fs-segment); }
+
+.fs-map-root .fs-seg button {
+  flex: 1; padding: 6px 2px; border: 0; border-radius: 7px; cursor: pointer;
+  background: transparent; color: var(--fs-ink2); font-size: 11px; font-family: inherit;
+  transition: background 0.18s, color 0.18s;
+}
+.fs-map-root .fs-seg button.on {
+  background: var(--fs-glass-strong); color: var(--fs-accent); font-weight: 650;
+  box-shadow: 0 1px 5px rgba(92, 58, 30, 0.13), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+.fs-map-root.dark .fs-seg button.on {
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.3), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+.fs-map-root .fs-seg button[disabled] { opacity: 0.38; cursor: not-allowed; }
+
+.fs-map-root .fs-hint {
+  margin: 8px 2px 1px; font-size: 10.5px; line-height: 1.6; color: var(--fs-ink3);
+}
+.fs-map-root .fs-hint b { color: var(--fs-ink2); font-weight: 600; }
+
+.fs-map-root .fs-warn {
+  margin: 7px 0 0; padding: 5px 7px; border-radius: 7px; font-size: 10px;
+  line-height: 1.55; color: #a2551f; background: rgba(226, 104, 63, 0.1);
+  border: 1px solid rgba(226, 104, 63, 0.2);
+}
+.fs-map-root.dark .fs-warn {
+  color: #f0b083; background: rgba(247, 163, 92, 0.1); border-color: rgba(247, 163, 92, 0.22);
+}
+
+.fs-map-root .fs-status {
+  left: 14px; bottom: 14px; padding: 8px 12px; font-size: 11px;
+  color: var(--fs-ink2); line-height: 1.55; max-width: 340px;
+}
+.fs-map-root .fs-status b {
+  color: var(--fs-ink); font-weight: 650; font-variant-numeric: tabular-nums;
+}
+.fs-map-root .fs-status .dot { color: var(--fs-accent); }
+.fs-map-root .fs-coord {
+  font-family: "JetBrains Mono", "SF Mono", ui-monospace, monospace; font-size: 10.5px;
+}
+
+/* 顶部提示条 */
+.fs-map-root .fs-toast {
+  left: 50%; top: 14px; transform: translateX(-50%);
+  padding: 7px 14px; font-size: 11.5px; color: var(--fs-ink);
+  pointer-events: none; white-space: nowrap;
+}
+
+/* Key 未配置引导 */
+.fs-map-root .fs-key {
+  position: absolute; inset: 0; z-index: 900;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(130deg, rgba(238, 232, 220, 0.72), rgba(226, 216, 202, 0.72));
+}
+.fs-map-root.dark .fs-key { background: linear-gradient(130deg, rgba(22, 26, 38, 0.76), rgba(30, 36, 50, 0.76)); }
+
+.fs-map-root .fs-key-card {
+  max-width: 430px; padding: 22px 24px; text-align: left;
+  color: var(--fs-ink); background: var(--fs-glass-strong);
+  backdrop-filter: blur(22px) saturate(140%);
+  -webkit-backdrop-filter: blur(22px) saturate(140%);
+  border: 1px solid var(--fs-border); border-radius: 16px;
+  box-shadow: var(--fs-shadow), var(--fs-highlight);
+}
+.fs-map-root .fs-key-card h3 { margin: 0 0 8px; font-size: 16px; font-weight: 700; }
+.fs-map-root .fs-key-card p { margin: 0 0 9px; font-size: 12px; line-height: 1.7; color: var(--fs-ink2); }
+.fs-map-root .fs-key-card code {
+  display: block; padding: 9px 11px; margin: 10px 0; font-size: 10.5px;
+  font-family: "JetBrains Mono", ui-monospace, monospace; line-height: 1.6;
+  border-radius: 8px; color: var(--fs-accent);
+  background: rgba(226, 104, 63, 0.09); border: 1px solid rgba(226, 104, 63, 0.18);
+  word-break: break-all;
+}
+.fs-map-root .fs-key-card .steps { padding-left: 16px; margin: 6px 0 0; }
+.fs-map-root .fs-key-card .steps li { font-size: 11.5px; line-height: 1.9; color: var(--fs-ink2); }
+.fs-map-root .fs-key-card .alt {
+  margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--fs-border);
+  display: flex; align-items: center; gap: 10px;
+}
+.fs-map-root .fs-key-card .alt p { margin: 0; flex: 1; font-size: 11px; }
+.fs-map-root .fs-key-card .alt button {
+  flex: 0 0 auto; padding: 7px 13px; border-radius: 8px; cursor: pointer;
+  border: 1px solid rgba(226, 104, 63, 0.32); background: rgba(226, 104, 63, 0.1);
+  color: var(--fs-accent); font-size: 11.5px; font-family: inherit; font-weight: 600;
+}
+.fs-map-root .fs-key-card .alt button:hover { background: rgba(226, 104, 63, 0.18); }
+
+/* Leaflet 控件本地化 */
+.fs-map-root :global(.leaflet-control-zoom) {
+  border: 1px solid var(--fs-border) !important; border-radius: 10px !important;
+  overflow: hidden; box-shadow: var(--fs-shadow) !important;
+}
+.fs-map-root :global(.leaflet-control-zoom a) {
+  background: var(--fs-glass) !important; color: var(--fs-ink) !important;
+  width: 30px !important; height: 30px !important; line-height: 30px !important;
+  font-size: 17px !important; border-bottom-color: var(--fs-border) !important;
+  backdrop-filter: blur(12px);
+}
+.fs-map-root :global(.leaflet-control-zoom a:hover) {
+  background: var(--fs-glass-strong) !important; color: var(--fs-accent) !important;
+}
+.fs-map-root :global(.leaflet-control-attribution) {
+  background: var(--fs-glass) !important; color: var(--fs-ink3) !important;
+  font-size: 9.5px !important; border-radius: 7px 0 0 0;
+  backdrop-filter: blur(10px);
+}
+.fs-map-root :global(.leaflet-control-attribution a) { color: var(--fs-accent) !important; }
+.fs-map-root :global(.leaflet-control-scale-line) {
+  background: var(--fs-glass) !important; border-color: var(--fs-ink2) !important;
+  color: var(--fs-ink2) !important; font-size: 10px !important;
+}
+
+.fs-map-root :global(.leaflet-container) {
+  background: #dfe4e3; font-family: inherit;
+}
+.fs-map-root.dark :global(.leaflet-container) { background: #232a35; }
+
+/* 小地图模式（单点预测页的内嵌卡片，高约 148px）：
+   只保留底图 + 观测点标记 + 点击落点，浮层面板与缩放控件全部隐藏。
+   署名必须保留 —— 天地图 / OpenFreeMap/OpenMapTiles/OSM 的使用条款要求。 */
+.fs-map-root.mini :global(.fs-layers),
+.fs-map-root.mini :global(.fs-status),
+.fs-map-root.mini :global(.leaflet-control-zoom),
+.fs-map-root.mini :global(.leaflet-control-scale) { display: none !important; }
+.fs-map-root.mini :global(.leaflet-control-attribution) {
+  font-size: 8.5px !important; padding: 1px 5px !important;
+  border-radius: 6px 0 0 0; opacity: 0.82;
+}
+.fs-map-root.mini .fs-toast {
+  left: 10px; top: auto; bottom: 10px; font-size: 10px; padding: 5px 9px;
+}
+/* 小地图里的 Key 引导只留标题，长说明在浮层/设置页查看 */
+.fs-map-root.mini .fs-key { padding: 10px; }
+.fs-map-root.mini .fs-key-card { padding: 12px 14px; border-radius: 12px; max-width: none; }
+.fs-map-root.mini .fs-key-card h3 { margin: 0 0 6px; font-size: 12px; }
+.fs-map-root.mini .fs-key-card p,
+.fs-map-root.mini .fs-key-card code,
+.fs-map-root.mini .fs-key-card .steps,
+.fs-map-root.mini .fs-key-card .alt p { display: none; }
+.fs-map-root.mini .fs-key-card .alt { margin-top: 0; padding-top: 0; border-top: 0; }
+.fs-map-root.mini .fs-key-card .alt button { padding: 5px 11px; font-size: 11px; }

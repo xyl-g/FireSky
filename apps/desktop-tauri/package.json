@@ -1,0 +1,39 @@
+{
+  "name": "firesky-desktop-tauri",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "FireSky 桌面端 Tauri 2 + Svelte 5 + Vite 骨架（docs/TAURI_DESKTOP_PLAN.md M0/M1）",
+  "scripts": {
+    "dev": "npm run check:version && vite",
+    "build": "npm run check:version && vite build",
+    "preview": "vite preview",
+    "check:version": "node scripts/check-version.mjs",
+    "check": "npm run check:version && svelte-check --tsconfig ./tsconfig.json",
+    "test": "node --test scripts/*.test.mjs src/lib/*.test.mjs",
+    "test:ui": "playwright test",
+    "smoke:rpc": "node scripts/smoke-desktop-rpc.mjs",
+    "smoke:data": "node scripts/smoke-data-rpc.mjs",
+    "native:prepare": "node scripts/prepare-engine.mjs",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@lucide/svelte": "^1.71.0",
+    "@maplibre/maplibre-gl-leaflet": "^0.1.4",
+    "@tauri-apps/api": "^2.0.0",
+    "leaflet": "^1.9.4",
+    "leaflet-draw": "^1.0.4",
+    "maplibre-gl": "^6.17.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.0",
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@tauri-apps/cli": "^2.0.0",
+    "@types/leaflet": "^1.9.21",
+    "@types/leaflet-draw": "^1.0.13",
+    "svelte": "^5.28.0",
+    "svelte-check": "^4.2.1",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}

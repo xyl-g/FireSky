@@ -1,0 +1,59 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.19041.0</TargetPlatformMinVersion>
+    <RootNamespace>FireSky</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <UseWinUI>true</UseWinUI>
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsPackageType>None</WindowsPackageType>
+    <WindowsAppSDKSelfContained>true</WindowsAppSDKSelfContained>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <FireSkyEngineRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\engine'))</FireSkyEngineRoot>
+    <FireSkyRustTarget Condition="'$(RuntimeIdentifier)' == 'win-arm64' Or '$(Platform)' == 'ARM64'">aarch64-pc-windows-msvc</FireSkyRustTarget>
+    <FireSkyRustTarget Condition="'$(FireSkyRustTarget)' == ''">x86_64-pc-windows-msvc</FireSkyRustTarget>
+    <FireSkyEngineBinary Condition="'$(FireSkyEngineBinary)' == '' And '$(FIRESKY_RUST_ENGINE_BIN)' != ''">$(FIRESKY_RUST_ENGINE_BIN)</FireSkyEngineBinary>
+    <FireSkyBuildEngine Condition="'$(FireSkyEngineBinary)' == ''">true</FireSkyBuildEngine>
+    <FireSkyEngineBinary Condition="'$(FireSkyEngineBinary)' == ''">$(FireSkyEngineRoot)\target\$(FireSkyRustTarget)\release\firesky-engine.exe</FireSkyEngineBinary>
+    <FireSkyFfiBinary Condition="'$(FireSkyFfiBinary)' == '' And '$(FIRESKY_ENGINE_FFI_LIBRARY)' != ''">$(FIRESKY_ENGINE_FFI_LIBRARY)</FireSkyFfiBinary>
+    <FireSkyFfiBinary Condition="'$(FireSkyFfiBinary)' == ''">$(FireSkyEngineRoot)\target\$(FireSkyRustTarget)\release\firesky_engine.dll</FireSkyFfiBinary>
+    <FireSkyEcCodesRoot Condition="'$(FireSkyEcCodesRoot)' == ''">$(FIRESKY_ECCODES_ROOT)</FireSkyEcCodesRoot>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
+    <Content Include="..\..\shared\map.html" Link="Assets\Map\map.html"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\..\desktop\assets\leaflet\**\*"
+             Link="Assets\Map\leaflet\%(RecursiveDir)%(Filename)%(Extension)"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\..\desktop\assets\firesky.png" Link="Assets\firesky.png"
+             CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(FireSkyEngineBinary)" Link="Resources\firesky-engine.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(FireSkyFfiBinary)" Link="Resources\firesky_engine.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="..\..\..\resources\app-data\**\*" Link="Resources\app-data\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <Content Include="$(FireSkyEcCodesRoot)\**\*" Condition="'$(FireSkyEcCodesRoot)' != ''" Link="Resources\eccodes\%(RecursiveDir)%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+    <FireSkyRustSource Include="$(FireSkyEngineRoot)\src\**\*.rs;$(FireSkyEngineRoot)\src\**\*.css;$(FireSkyEngineRoot)\Cargo.toml;$(FireSkyEngineRoot)\Cargo.lock;$(FireSkyEngineRoot)\build.rs;$(FireSkyEngineRoot)\..\native\src\**\*.rs;$(FireSkyEngineRoot)\..\native\Cargo.toml;$(FireSkyEngineRoot)\..\native\Cargo.lock" />
+  </ItemGroup>
+  <Target Name="BuildFireSkyRustEngine"
+          BeforeTargets="PrepareForBuild"
+          Condition="'$(DesignTimeBuild)' != 'true' And '$(FireSkyBuildEngine)' == 'true'"
+          Inputs="@(FireSkyRustSource)"
+          Outputs="$(FireSkyEngineBinary);$(FireSkyFfiBinary)">
+    <Exec WorkingDirectory="$(FireSkyEngineRoot)"
+          Command="cargo build --locked --release --bin firesky-engine --lib --target $(FireSkyRustTarget)" />
+  </Target>
+  <Target Name="ValidateFireSkyRustEngine"
+          BeforeTargets="PrepareForBuild"
+          DependsOnTargets="BuildFireSkyRustEngine"
+          Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="!Exists('$(FireSkyEngineBinary)')"
+           Text="Rust engine not found: $(FireSkyEngineBinary). Install Rust or set FireSkyEngineBinary to a prebuilt firesky-engine.exe." />
+    <Error Condition="!Exists('$(FireSkyFfiBinary)')"
+           Text="Rust FFI library not found: $(FireSkyFfiBinary). Install Rust or set FireSkyFfiBinary to a prebuilt firesky_engine.dll." />
+  </Target>
+</Project>

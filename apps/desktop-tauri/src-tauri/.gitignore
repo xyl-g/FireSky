@@ -1,0 +1,3 @@
+# Rust 构建产物已由根 .gitignore 的 target/ 覆盖；
+# 此处补充 Tauri 生成物（capabilities schema 快照）。Cargo.lock 按惯例入库。
+gen/schemas/

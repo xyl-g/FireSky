@@ -1,0 +1,43 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "FireSky",
+  "version": "0.1.0",
+  "identifier": "cn.firesky.desktop",
+  "build": {
+    "beforeDevCommand": "npm run native:prepare && npm run dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "npm run native:prepare && npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "FireSky",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 980,
+        "minHeight": 640
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "resources": {
+      "resources/native/": "native/",
+      "resources/app-data/": "app-data/"
+    },
+    "icon": [],
+    "macOS": {
+      "minimumSystemVersion": "12.0"
+    },
+    "windows": {
+      "webviewInstallMode": {
+        "type": "offlineInstaller"
+      }
+    }
+  }
+}
