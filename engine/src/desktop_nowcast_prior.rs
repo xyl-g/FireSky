@@ -601,6 +601,126 @@ fn validate_common(
     Ok(())
 }
 
+fn haversine_km(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
+    let (phi1, phi2) = (lat1.to_radians(), lat2.to_radians());
+    let delta_phi = phi2 - phi1;
+    let delta_lambda = (lon2.to_radians() - lon1.to_radians() + std::f64::consts::PI)
+        .rem_euclid(2.0 * std::f64::consts::PI)
+        - std::f64::consts::PI;
+    let a = (delta_phi / 2.0).sin().powi(2)
+        + phi1.cos() * phi2.cos() * (delta_lambda / 2.0).sin().powi(2);
+    EARTH_RADIUS_KM * 2.0 * a.sqrt().atan2((1.0 - a).max(0.0).sqrt())
+}
+
+/// Downscale the coarse GFS columns to the target by inverse-distance weighting the
+/// nearest grid columns, mirroring the terrain interpolation. Shared weights across
+/// pressure levels preserve the strict height/pressure ordering of every column. A
+/// lone column, or a grid point exactly at the target, is returned unchanged.
+fn downscaled_column(
+    features: &[Feature],
+    target_lat: f64,
+    target_lon: f64,
+) -> Result<Vec<Feature>, String> {
+    let mut columns: BTreeMap<(i64, i64), Vec<&Feature>> = BTreeMap::new();
+    for feature in features
+        .iter()
+        .filter(|feature| finite(feature.lat) && finite(feature.lon))
+    {
+        let key = (
+            (feature.lat * 100_000.0).round() as i64,
+            (feature.lon * 100_000.0).round() as i64,
+        );
+        columns.entry(key).or_default().push(feature);
+    }
+    let mut located: Vec<(f64, &Vec<&Feature>)> = columns
+        .values()
+        .map(|column| {
+            let head = column[0];
+            (
+                haversine_km(target_lat, target_lon, head.lat, head.lon),
+                column,
+            )
+        })
+        .filter(|(distance, _)| distance.is_finite())
+        .collect();
+    if located.is_empty() {
+        return Err("GFS vertical prior has no horizontal samples".into());
+    }
+    located.sort_by(|left, right| left.0.total_cmp(&right.0));
+    let nearest = &located[..located.len().min(4)];
+    if nearest[0].0 <= 1e-6 {
+        return Ok(nearest[0]
+            .1
+            .iter()
+            .map(|feature| (*feature).clone())
+            .collect());
+    }
+    let weights: Vec<f64> = nearest
+        .iter()
+        .map(|(distance, _)| 1.0 / distance.max(1e-3))
+        .collect();
+    let weight_sum: f64 = weights.iter().sum();
+    if !weight_sum.is_finite() || weight_sum <= 0.0 {
+        return Err("GFS vertical prior has invalid local weights".into());
+    }
+    let maps: Vec<BTreeMap<i64, &Feature>> = nearest
+        .iter()
+        .map(|(_, column)| {
+            column
+                .iter()
+                .map(|feature| (feature.pressure_hpa, *feature))
+                .collect()
+        })
+        .collect();
+    let mut pressures: Vec<i64> = maps[0].keys().copied().collect();
+    for map in &maps[1..] {
+        pressures.retain(|pressure| map.contains_key(pressure));
+    }
+    if pressures.is_empty() {
+        return Err("GFS vertical prior columns share no pressure levels".into());
+    }
+    let mut output = Vec::with_capacity(pressures.len());
+    for pressure in pressures {
+        let entries: Vec<&Feature> = maps.iter().map(|map| map[&pressure]).collect();
+        let head = entries[0];
+        let weighted = |get: fn(&Feature) -> f64| -> f64 {
+            entries
+                .iter()
+                .zip(&weights)
+                .map(|(feature, weight)| get(feature) * weight)
+                .sum::<f64>()
+                / weight_sum
+        };
+        let optional = |get: fn(&Feature) -> Option<f64>| -> Option<f64> {
+            let values: Vec<Option<f64>> = entries.iter().map(|feature| get(feature)).collect();
+            if values.iter().all(Option::is_some) {
+                Some(
+                    values
+                        .iter()
+                        .zip(&weights)
+                        .map(|(value, weight)| value.unwrap() * weight)
+                        .sum::<f64>()
+                        / weight_sum,
+                )
+            } else if values.iter().all(Option::is_none) {
+                None
+            } else {
+                get(head)
+            }
+        };
+        output.push(Feature {
+            lat: target_lat,
+            lon: target_lon,
+            pressure_hpa: pressure,
+            geopotential_height_m: weighted(|feature| feature.geopotential_height_m),
+            rh_percent: weighted(|feature| feature.rh_percent),
+            temperature_k: optional(|feature| feature.temperature_k),
+            cloud_fraction_percent: optional(|feature| feature.cloud_fraction_percent),
+        });
+    }
+    Ok(output)
+}
+
 pub(crate) fn build_prior(
     context: &PriorContext<'_>,
     identity: &str,
@@ -622,27 +742,10 @@ pub(crate) fn build_prior(
     }
     let terrain =
         terrain_left_asl_m + context.fraction * (terrain_right_asl_m - terrain_left_asl_m);
-    let nearest = context
-        .features
+    let column = downscaled_column(context.features, target_lat, target_lon)?;
+    let mut levels: Vec<&Feature> = column
         .iter()
-        .filter(|feature| finite(feature.lat) && finite(feature.lon))
-        .min_by(|left, right| {
-            let left_distance = (left.lat - target_lat).powi(2) + (left.lon - target_lon).powi(2);
-            let right_distance =
-                (right.lat - target_lat).powi(2) + (right.lon - target_lon).powi(2);
-            left_distance
-                .partial_cmp(&right_distance)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
-        .ok_or("GFS vertical prior has no horizontal samples")?;
-    let mut levels: Vec<&Feature> = context
-        .features
-        .iter()
-        .filter(|feature| {
-            (feature.lat - nearest.lat).abs() <= 1e-5
-                && (feature.lon - nearest.lon).abs() <= 1e-5
-                && feature.geopotential_height_m >= terrain - 100.0
-        })
+        .filter(|feature| feature.geopotential_height_m >= terrain - 100.0)
         .collect();
     levels.sort_by(|left, right| {
         left.geopotential_height_m
@@ -895,4 +998,110 @@ pub fn execute_decoded_batch(params: DecodedBatchParams) -> Result<Value, String
         "source": params.source,
         "results": results,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn feature(lat: f64, lon: f64, pressure_hpa: i64, height: f64) -> Feature {
+        Feature {
+            lat,
+            lon,
+            pressure_hpa,
+            geopotential_height_m: height,
+            rh_percent: 60.0,
+            temperature_k: Some(280.0),
+            cloud_fraction_percent: Some(50.0),
+        }
+    }
+
+    fn column(lat: f64, lon: f64, base_height: f64) -> Vec<Feature> {
+        vec![
+            feature(lat, lon, 850, base_height),
+            feature(lat, lon, 500, base_height + 4000.0),
+            feature(lat, lon, 200, base_height + 10500.0),
+        ]
+    }
+
+    fn level_at(column: &[Feature], pressure_hpa: i64) -> &Feature {
+        column
+            .iter()
+            .find(|feature| feature.pressure_hpa == pressure_hpa)
+            .unwrap()
+    }
+
+    #[test]
+    fn downscale_returns_a_lone_column_unchanged() {
+        let features = column(30.0, 120.0, 1500.0);
+        let result = downscaled_column(&features, 30.1, 120.1).unwrap();
+        assert_eq!(result.len(), features.len());
+        assert_eq!(level_at(&result, 850).geopotential_height_m, 1500.0);
+    }
+
+    #[test]
+    fn downscale_returns_the_exact_grid_column_unchanged() {
+        let mut features = column(30.0, 120.0, 1500.0);
+        features.extend(column(30.0, 120.25, 1600.0));
+        let result = downscaled_column(&features, 30.0, 120.25).unwrap();
+        assert_eq!(level_at(&result, 850).geopotential_height_m, 1600.0);
+        assert_eq!(level_at(&result, 850).lat, 30.0);
+    }
+
+    #[test]
+    fn downscale_blends_nearest_columns_toward_the_closer_one() {
+        let mut features = column(30.0, 120.0, 1500.0);
+        features.extend(column(30.0, 120.25, 1600.0));
+        // Target sits near the first column, so the blend must favor 1500 m.
+        let result = downscaled_column(&features, 30.0, 120.05).unwrap();
+        let height = level_at(&result, 850).geopotential_height_m;
+        assert!(height > 1500.0 && height < 1550.0, "height was {height}");
+        assert_eq!(level_at(&result, 850).lat, 30.0);
+        assert_eq!(level_at(&result, 850).lon, 120.05);
+    }
+
+    #[test]
+    fn downscale_falls_back_to_nearest_for_mixed_optional_fields() {
+        let mut near = column(30.0, 120.0, 1500.0);
+        let mut far = column(30.0, 120.25, 1600.0);
+        for feature in &mut far {
+            feature.temperature_k = None;
+        }
+        near.extend(far);
+        let result = downscaled_column(&near, 30.0, 120.05).unwrap();
+        // Mixed presence resolves to the nearer column's value, not a blend.
+        assert_eq!(level_at(&result, 850).temperature_k, Some(280.0));
+    }
+
+    #[test]
+    fn build_prior_downscales_and_keeps_levels_ordered() {
+        let mut features = column(30.0, 120.0, 1500.0);
+        features.extend(column(30.0, 120.25, 1600.0));
+        let valid_time = crate::time_contract::parse_utc("2026-11-10T08:00:00Z").unwrap();
+        let prior = build_prior(
+            &PriorContext {
+                valid_time,
+                cycle_time: valid_time,
+                forecast_hour: 0,
+                source: "gfs-interpolated-vertical-prior",
+                fraction: 0.0,
+                features: &features,
+            },
+            "gfs-prior:test",
+            0.0,
+            0.0,
+            30.0,
+            120.05,
+        )
+        .unwrap();
+        assert_eq!(prior["contract"], "rust-desktop-nowcast-gfs-prior-v1");
+        let levels = prior["levels"].as_array().unwrap();
+        assert_eq!(levels.len(), 3);
+        for window in levels.windows(2) {
+            assert!(window[0]["pressure_hpa"].as_i64() > window[1]["pressure_hpa"].as_i64());
+            assert!(window[0]["height_asl_m"].as_f64() < window[1]["height_asl_m"].as_f64());
+        }
+        let base = levels[0]["height_asl_m"].as_f64().unwrap();
+        assert!(base > 1500.0 && base < 1550.0, "base was {base}");
+    }
 }

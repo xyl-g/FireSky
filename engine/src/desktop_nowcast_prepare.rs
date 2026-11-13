@@ -99,7 +99,7 @@ fn hsd_frames(input: &Input, context: &Value) -> Result<Value, String> {
         lat: request_number(context, "lat")?,
         lon: request_number(context, "lon")?,
         radius_km: request_number(context, "radius_km")?,
-        count: 2,
+        count: 4,
         max_age_minutes: 30.0,
         output_dir: None,
     })?;
@@ -114,7 +114,7 @@ fn hsd_frames(input: &Input, context: &Value) -> Result<Value, String> {
             "lat":request_number(context,"lat")?,
             "lon":request_number(context,"lon")?,
             "radius_km":request_number(context,"radius_km")?,
-            "count":2,"max_age_minutes":30.0
+            "count":4,"max_age_minutes":30.0
         }))?;
     }
     if result["frames"]

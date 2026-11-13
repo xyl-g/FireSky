@@ -194,49 +194,13 @@ fn decoded_prior_grid(
     Ok(target)
 }
 
-fn aerosol_reading(
-    payload: &Value,
-    context: &Value,
+fn corridor_aod(
+    optics: &crate::cams::Optics,
+    lat: f64,
+    lon: f64,
+    radius: f64,
     azimuth: f64,
-    allow_download: bool,
-) -> Result<Value, String> {
-    if let Some(aerosol) = payload.get("aerosol").filter(|v| v.is_object()) {
-        return Ok(aerosol.clone());
-    }
-    let areas = crate::desktop_nowcast::cams_areas(context)?;
-    let cache_dir = config_path(
-        payload,
-        "cams_cache_dir",
-        "FIRESKY_CAMS_CACHE_DIR",
-        ".cache/cams",
-    )?;
-    let mut paths = Vec::new();
-    for area in areas {
-        let params = serde_json::from_value(json!({
-            "operation":"resolve", "cache_dir":cache_dir.clone(),
-            "area":area, "target_utc":context["anchor"],
-            "allow_download":allow_download,"require_exact_valid_time":false,
-        }))
-        .map_err(|e| e.to_string())?;
-        let result = crate::cams_data::execute(params)?;
-        let file = result["files"].as_array().and_then(|v| v.first()).ok_or(
-            "native nowcast requires a usable CAMS optical cache; no clear-air fallback is allowed",
-        )?;
-        paths.push(PathBuf::from(text(file, "path")?));
-        if let Some(extra) = file["paths"].as_array() {
-            for path in extra {
-                paths.push(PathBuf::from(
-                    path.as_str().ok_or("invalid wrapped CAMS file path")?,
-                ));
-            }
-        }
-    }
-    paths.sort();
-    paths.dedup();
-    let optics = crate::cams::decode_many(&crate::grib::EcCodes::load()?, &paths)?;
-    let lat = finite(&context["request"], "lat")?;
-    let lon = finite(&context["request"], "lon")?;
-    let radius = finite(&context["request"], "radius_km")?;
+) -> Option<(f64, Vec<Value>)> {
     let lat1 = lat.to_radians();
     let mut samples = Vec::new();
     let mut nearest = None::<(f64, f64)>;
@@ -280,13 +244,116 @@ fn aerosol_reading(
             "bearing_deg":bearing,"aod550":aod}),
         );
     }
-    let aod = nearest
-        .ok_or("CAMS corridor did not contain usable AOD samples")?
-        .1;
-    Ok(
-        json!({"aod550":aod,"quality":"cams","source":format!("cams-native corridor {}",paths.iter().map(|path| path.display().to_string()).collect::<Vec<_>>().join(",")),
-        "observer_lat":lat,"observer_lon":lon,"path_samples":samples}),
+    nearest.map(|(_, aod)| (aod, samples))
+}
+
+fn cams_paths_for_time(
+    areas: &[Value],
+    cache_dir: &Path,
+    target_iso: &str,
+    exact: bool,
+    allow_download: bool,
+) -> Result<Vec<PathBuf>, String> {
+    let mut paths = Vec::new();
+    for area in areas {
+        let params = serde_json::from_value(json!({
+            "operation":"resolve", "cache_dir":cache_dir,
+            "area":area, "target_utc":target_iso,
+            "allow_download":allow_download,"require_exact_valid_time":exact,
+        }))
+        .map_err(|e| e.to_string())?;
+        let result = crate::cams_data::execute(params)?;
+        let file = result["files"].as_array().and_then(|v| v.first()).ok_or(
+            "native nowcast requires a usable CAMS optical cache; no clear-air fallback is allowed",
+        )?;
+        paths.push(PathBuf::from(text(file, "path")?));
+        if let Some(extra) = file["paths"].as_array() {
+            for path in extra {
+                paths.push(PathBuf::from(
+                    path.as_str().ok_or("invalid wrapped CAMS file path")?,
+                ));
+            }
+        }
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn corridor_source<'a>(paths: impl Iterator<Item = &'a PathBuf>) -> String {
+    format!(
+        "cams-native corridor {}",
+        paths
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(",")
     )
+}
+
+fn aerosol_reading(
+    payload: &Value,
+    context: &Value,
+    azimuth: f64,
+    allow_download: bool,
+) -> Result<Value, String> {
+    if let Some(aerosol) = payload.get("aerosol").filter(|v| v.is_object()) {
+        return Ok(aerosol.clone());
+    }
+    let areas = crate::desktop_nowcast::cams_areas(context)?;
+    let cache_dir = config_path(
+        payload,
+        "cams_cache_dir",
+        "FIRESKY_CAMS_CACHE_DIR",
+        ".cache/cams",
+    )?;
+    let lat = finite(&context["request"], "lat")?;
+    let lon = finite(&context["request"], "lon")?;
+    let radius = finite(&context["request"], "radius_km")?;
+    let anchor = text(context, "anchor")?;
+    let codes = crate::grib::EcCodes::load()?;
+
+    // Interpolate AOD to the event time when both 3-hour brackets resolve; else nearest.
+    let mut interpolated = None;
+    if let Ok((left_time, right_time, weight)) = crate::cams::bracket(anchor) {
+        let left = cams_paths_for_time(
+            &areas,
+            &cache_dir,
+            &time_contract::iso(left_time),
+            true,
+            allow_download,
+        );
+        let right = cams_paths_for_time(
+            &areas,
+            &cache_dir,
+            &time_contract::iso(right_time),
+            true,
+            allow_download,
+        );
+        if let (Ok(left_paths), Ok(right_paths)) = (left, right) {
+            let left_optics = crate::cams::decode_many(&codes, &left_paths)?;
+            let right_optics = crate::cams::decode_many(&codes, &right_paths)?;
+            if let (Some((aod_left, samples)), Some((aod_right, _))) = (
+                corridor_aod(&left_optics, lat, lon, radius, azimuth),
+                corridor_aod(&right_optics, lat, lon, radius, azimuth),
+            ) {
+                let aod = aod_left + (aod_right - aod_left) * f64::from(weight);
+                let source = corridor_source(left_paths.iter().chain(&right_paths));
+                interpolated = Some((aod, samples, source));
+            }
+        }
+    }
+
+    let (aod, samples, source) = if let Some(value) = interpolated {
+        value
+    } else {
+        let paths = cams_paths_for_time(&areas, &cache_dir, anchor, false, allow_download)?;
+        let optics = crate::cams::decode_many(&codes, &paths)?;
+        let (aod, samples) = corridor_aod(&optics, lat, lon, radius, azimuth)
+            .ok_or("CAMS corridor did not contain usable AOD samples")?;
+        (aod, samples, corridor_source(paths.iter()))
+    };
+    Ok(json!({"aod550":aod,"quality":"cams","source":source,
+        "observer_lat":lat,"observer_lon":lon,"path_samples":samples}))
 }
 
 fn ordinary_payload(payload: &Value, cancel: &AtomicBool) -> Result<Value, String> {
@@ -309,7 +376,7 @@ fn ordinary_payload(payload: &Value, cancel: &AtomicBool) -> Result<Value, Strin
     )?;
     let hsd_params = json!({"cache_dir":satellite,"reference_time_utc":context["lookup"],
         "lat":context["request"]["lat"],"lon":context["request"]["lon"],
-        "radius_km":context["request"]["radius_km"],"count":2,"max_age_minutes":30.0});
+        "radius_km":context["request"]["radius_km"],"count":4,"max_age_minutes":30.0});
     let cached = crate::desktop_hsd::execute(
         serde_json::from_value(hsd_params.clone()).map_err(|e| e.to_string())?,
     )?;
@@ -352,10 +419,15 @@ fn ordinary_payload(payload: &Value, cancel: &AtomicBool) -> Result<Value, Strin
     let latest_time = utc(text(&latest, "valid_time_utc")?)?;
     let horizon = ((target - latest_time).num_milliseconds() as f64 / 3_600_000.0).max(0.0);
     let motion = if frames.len() >= 2 {
+        let earlier: Vec<Value> = frames[..frames.len() - 2]
+            .iter()
+            .map(|frame| frame["manifest_path"].clone())
+            .collect();
         crate::desktop_hsd_motion::execute(
             serde_json::from_value(json!({
                 "previous_manifest":frames[frames.len()-2]["manifest_path"],
                 "latest_manifest":latest["manifest_path"],
+                "earlier_manifests":earlier,
             }))
             .map_err(|e| e.to_string())?,
         )?
@@ -389,7 +461,7 @@ fn ordinary_payload(payload: &Value, cancel: &AtomicBool) -> Result<Value, Strin
             "manifest_path":latest["manifest_path"],"output_dir":satellite.join(".rust-advection"),
             "target_time_utc":time_contract::iso(target),"horizon_hours":horizon,"scale":scale,"applied":true,
             "motion_dx_px_per_hour":motion["dx_px_per_hour"],"motion_dy_px_per_hour":motion["dy_px_per_hour"],
-            "motion_quality":quality,"reason":reason,
+            "motion_quality":quality,"reason":reason,"motion_field":motion["motion_field"],
         })).map_err(|e|e.to_string())?)?;
         display["valid_time_utc"] = json!(time_contract::iso(target));
     }
@@ -1238,5 +1310,44 @@ mod tests {
                 .unwrap()
                 > 0.0
         );
+    }
+
+    fn optics(samples: &[(f64, f64, f64)]) -> crate::cams::Optics {
+        crate::cams::Optics {
+            latitudes: samples.iter().map(|sample| sample.0).collect(),
+            longitudes: samples.iter().map(|sample| sample.1).collect(),
+            aod: samples.iter().map(|sample| sample.2).collect(),
+            extinction: vec![0.0; samples.len() * 11],
+            valid_time: time_contract::parse_utc("2026-11-10T08:00:00Z").unwrap(),
+        }
+    }
+
+    #[test]
+    fn corridor_aod_picks_the_nearest_in_corridor_sample() {
+        let grid = optics(&[(30.0, 120.0, 0.5), (30.5, 120.5, 0.9)]);
+        let (aod, samples) = corridor_aod(&grid, 30.0, 120.0, 900.0, 25.0).unwrap();
+        assert_eq!(aod, 0.5);
+        assert_eq!(samples.len(), 2);
+    }
+
+    #[test]
+    fn corridor_aod_rejects_samples_outside_the_corridor() {
+        let grid = optics(&[(30.0, 125.0, 0.5)]);
+        assert!(corridor_aod(&grid, 30.0, 120.0, 100.0, 25.0).is_none());
+        assert!(corridor_aod(&optics(&[]), 30.0, 120.0, 900.0, 25.0).is_none());
+    }
+
+    #[test]
+    fn corridor_aod_blend_matches_the_bracket_weight() {
+        let (_, _, weight) = crate::cams::bracket("2026-11-10T07:30:00Z").unwrap();
+        assert_eq!(weight, 0.5);
+        let left = corridor_aod(&optics(&[(30.0, 120.0, 0.2)]), 30.0, 120.0, 900.0, 25.0)
+            .unwrap()
+            .0;
+        let right = corridor_aod(&optics(&[(30.0, 120.0, 0.6)]), 30.0, 120.0, 900.0, 25.0)
+            .unwrap()
+            .0;
+        let blended = left + (right - left) * f64::from(weight);
+        assert!((blended - 0.4).abs() < 1e-12);
     }
 }
