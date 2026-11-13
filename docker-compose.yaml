@@ -13,6 +13,7 @@ services:
       - "${FIRESKY_HTTP_HOST:-127.0.0.1}:${FIRESKY_HTTP_PORT:-8765}:8765"
     environment:
       FIRESKY_WORKSPACE: /app
+      FIRESKY_WEB_ROOT: /app/frontend/build
       FIRESKY_RESOURCE_DIR: /app/resources/app-data
       FIRESKY_REQUIRE_APP_RESOURCES: "1"
       FIRESKY_GFS_CACHE_DIR: /data/cache/firesky/gfs

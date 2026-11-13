@@ -7,8 +7,13 @@
 > `docs/RETIREMENT_PHASE0_BASELINE.zh-CN.md`。
 > 产品与 UI 基准（2026-11-13，用户明确）：先完善并验收 macOS，其他 UI 最终向
 > macOS 对齐。见[基准规范](../docs/MACOS_UI_BASELINE.zh-CN.md)与
-> [当前计划](../docs/NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。Windows/Linux 开发仍暂停，
-> Docker/Web 部署列入后续交付。
+> [当前计划](../docs/NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。
+> Windows/Linux/Docker 对齐已在 `feat/win-linux-docker-parity` 分支接续
+> （2026-11-14）：Windows 数据页任务历史/结果恢复/重查、Linux 统一预检/
+> 任务历史/结果恢复均已按 macOS 合同接入源码，Docker/Web 页面完成本地
+> 构建与运行冒烟；目标机（Windows x64/ARM64、Linux 桌面会话、双架构镜像
+> 发布）验收仍待。状态见[跨平台基线](../docs/NATIVE_UI_CROSS_PLATFORM_BASELINE.zh-CN.md)
+> 与 [分支记录](../docs/WIN_LINUX_DOCKER_PARITY.zh-CN.md)。
 
 ## Architecture
 

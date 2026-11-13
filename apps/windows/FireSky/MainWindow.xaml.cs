@@ -25,6 +25,15 @@ public sealed partial class MainWindow : Window
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FireSky", "settings.json");
     private int locationRevision;
     private readonly Dictionary<string, TextBlock> metricValues = new();
+    private readonly List<TaskHistoryItem> taskHistory = new();
+    private readonly List<TaskHistoryRow> taskHistoryRows = new();
+    private readonly List<TaskEvent> taskHistoryEvents = new();
+    private CancellationTokenSource? taskEventsOperation;
+    private int taskHistoryTotal, taskHistoryIssues;
+    private bool taskHistoryLoaded, taskHistoryLoading;
+    private bool taskHistoryEventsLoading, taskHistoryEventsTruncated;
+    private string taskHistoryError = "", taskHistoryEventsError = "";
+    private string selectedTaskHistoryId = "", restoringTaskHistoryId = "", forgettingTaskHistoryId = "";
     private static readonly (string Key, string Title, string Caption)[] Metrics =
     [
         ("burnable", "有效可烧云量", "前向可烧云占视野比例"),
@@ -122,6 +131,28 @@ public sealed partial class MainWindow : Window
         return Math.Abs((a - b).TotalSeconds) <= 0.000001;
     }
 
+    // Task history records come from the engine verbatim; every access below
+    // tolerates wrong JSON types the same way Swift's conditional casts do.
+    private static string? StringOrNull(JsonNode? node) =>
+        node is JsonValue value && value.GetValueKind() == JsonValueKind.String
+            ? value.GetValue<string>() : null;
+    private static string StringOf(JsonNode? node) => StringOrNull(node) ?? "";
+    private static bool? BoolValue(JsonNode? node, string key)
+    {
+        if (node?[key] is not JsonValue value) return null;
+        return value.GetValueKind() == JsonValueKind.True ? true
+            : value.GetValueKind() == JsonValueKind.False ? false : null;
+    }
+    private static double? DoubleValue(JsonNode? node) =>
+        node is JsonValue value && value.TryGetValue<double>(out var number)
+            && double.IsFinite(number) ? number : null;
+    private static bool IsTaskId(string value) =>
+        value.Length == 64 && value.All(Uri.IsHexDigit);
+    // Engine task stamps are RFC3339 ("…T…Z", with or without fractional
+    // seconds); requiring the time separator keeps date-only strings invalid.
+    private static bool IsTaskTimestamp(string value) =>
+        value.Contains('T', StringComparison.Ordinal) && TryUtc(value, out _);
+
     private void SetBusy(bool value)
     {
         busy = value;
@@ -132,6 +163,7 @@ public sealed partial class MainWindow : Window
         SaveRetentionButton.IsEnabled = !value && online;
         BusyRing.IsActive = value;
         CancelButton.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
+        UpdateTaskHistoryControls();
     }
 
     private void Fail(Exception error)
@@ -304,7 +336,11 @@ public sealed partial class MainWindow : Window
         }
         RenderResult();
         _ = UpdateMap();
-        if (page == "data") _ = LoadInventory();
+        if (page == "data")
+        {
+            _ = LoadInventory();
+            _ = LoadTaskHistory();
+        }
         if (page == "settings") _ = LoadRetentionSettings();
     }
 
@@ -982,6 +1018,511 @@ public sealed partial class MainWindow : Window
         Navigation.SelectedItem = Navigation.MenuItems[0];
         OnPredict(sender, args);
     }
+
+    // ---- 任务历史（行为对齐 macOS NativeTaskHistoryView 与 Store 的任务历史合同） ----
+
+    private async void OnRefreshTaskHistory(object sender, RoutedEventArgs args) => await LoadTaskHistory();
+
+    private async Task LoadTaskHistory()
+    {
+        if (!online || taskHistoryLoading) return;
+        taskHistoryLoading = true;
+        taskHistoryError = "";
+        RenderTaskHistory();
+        try
+        {
+            var response = await engine.Call("task_history", new() { ["limit"] = 100 });
+            if (StringOf(response["schema"]) != "firesky-task-history-v1"
+                || BoolValue(response, "automatic_restart") != false
+                || response["tasks"] is not JsonArray values
+                || values.Any(node => node is not JsonObject)
+                || Integer(response, "total") is not { } total
+                || total < values.Count || values.Count > 100)
+                throw new InvalidOperationException("任务历史协议不匹配，请重新连接引擎。");
+            var parsed = new List<TaskHistoryItem>();
+            foreach (var node in values.OfType<JsonObject>())
+            {
+                if (TaskHistoryItem.Parse(node) is not { } item)
+                    throw new InvalidOperationException("任务历史包含无效记录，请检查引擎版本。");
+                parsed.Add(item);
+            }
+            if (parsed.Select(row => row.TaskId).Distinct().Count() != parsed.Count)
+                throw new InvalidOperationException("任务历史包含重复记录，请重新连接引擎。");
+            taskHistory.Clear();
+            taskHistory.AddRange(parsed);
+            taskHistoryTotal = (int)total;
+            taskHistoryIssues = (response["issues"] as JsonArray)?.Count ?? 0;
+            taskHistoryLoaded = true;
+            if (selectedTaskHistoryId.Length > 0
+                && !parsed.Any(row => row.TaskId == selectedTaskHistoryId))
+                ClearTaskHistorySelection();
+        }
+        catch (Exception error)
+        {
+            taskHistoryError = error.Message;
+        }
+        finally
+        {
+            taskHistoryLoading = false;
+            RenderTaskHistory();
+        }
+    }
+
+    private void RenderTaskHistory()
+    {
+        TaskHistoryCaption.Text = taskHistoryLoaded
+            ? $"显示最近 {taskHistory.Count} 项，共 {taskHistoryTotal} 项"
+            : "记录数据检查、准备、预测和下载探测任务";
+        TaskHistoryError.Text = taskHistoryError;
+        TaskHistoryError.Visibility = taskHistoryError.Length > 0
+            ? Visibility.Visible : Visibility.Collapsed;
+        TaskHistoryLoadingPanel.Visibility = taskHistoryLoading && taskHistory.Count == 0
+            ? Visibility.Visible : Visibility.Collapsed;
+        TaskHistoryEmpty.Visibility = !taskHistoryLoading && taskHistory.Count == 0
+            ? Visibility.Visible : Visibility.Collapsed;
+        TaskHistoryEmptyText.Text = online
+            ? "完成一次检查或预测后会显示在这里。" : "引擎未连接。";
+        TaskHistoryIssuesNotice.Text = taskHistoryIssues > 0
+            ? $"{taskHistoryIssues} 项记录无法核验，未将未知状态标为中断。" : "";
+        TaskHistoryIssuesNotice.Visibility = taskHistoryIssues > 0
+            ? Visibility.Visible : Visibility.Collapsed;
+        RenderTaskHistoryRows();
+        UpdateTaskHistoryControls();
+    }
+
+    private void RenderTaskHistoryRows()
+    {
+        TaskHistoryRows.Children.Clear();
+        taskHistoryRows.Clear();
+        foreach (var item in taskHistory)
+            TaskHistoryRows.Children.Add(BuildTaskHistoryRow(item));
+    }
+
+    private FrameworkElement BuildTaskHistoryRow(TaskHistoryItem item)
+    {
+        var info = new StackPanel { Spacing = 5 };
+        var titleLine = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 7 };
+        titleLine.Children.Add(new TextBlock
+        {
+            Text = $"{item.KindTitle} · {item.MethodTitle}",
+            FontSize = 13,
+            FontWeight = Microsoft.UI.Text.FontWeights.Medium,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        titleLine.Children.Add(new TextBlock
+        {
+            Text = item.StatusTitle,
+            FontSize = 11,
+            FontWeight = Microsoft.UI.Text.FontWeights.Medium,
+            Foreground = StatusBrush(item.Status),
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        info.Children.Add(titleLine);
+        if (item.ContextTitle.Length > 0)
+            info.Children.Add(new TextBlock
+            {
+                Text = item.ContextTitle, FontSize = 11, Opacity = .7,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        var metaLine = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
+        metaLine.Children.Add(new TextBlock
+        {
+            Text = item.CreatedAtUtc, FontSize = 10, Opacity = .6,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        if (item.Status == "running" && DoubleValue(item.Progress["percent"]) is { } percent)
+            metaLine.Children.Add(new TextBlock
+            {
+                Text = $"{percent:0}%", FontSize = 10, Opacity = .6,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+        if (item.Status == "interrupted")
+            metaLine.Children.Add(new TextBlock
+            {
+                Text = "不会自动重跑", FontSize = 10, Opacity = .6,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+        info.Children.Add(metaLine);
+
+        var actions = new StackPanel
+        {
+            Orientation = Orientation.Horizontal, Spacing = 8,
+            VerticalAlignment = VerticalAlignment.Top,
+        };
+        var restoreResult = new Button { Content = "恢复结果", Padding = new Thickness(8, 3, 8, 3) };
+        ToolTipService.SetToolTip(restoreResult, "恢复已发布结果");
+        restoreResult.Visibility = item.CanRestoreResult ? Visibility.Visible : Visibility.Collapsed;
+        restoreResult.Click += (_, _) => _ = RestoreTaskResult(item);
+        actions.Children.Add(restoreResult);
+        var restoreParameters = new Button { Content = "恢复参数", Padding = new Thickness(8, 3, 8, 3) };
+        ToolTipService.SetToolTip(restoreParameters, "恢复参数并重新检查数据");
+        restoreParameters.Visibility = item.RetryPayload != null
+            ? Visibility.Visible : Visibility.Collapsed;
+        restoreParameters.Click += (_, _) => RestoreTaskParameters(item);
+        actions.Children.Add(restoreParameters);
+        var forget = new Button { Content = "删除", Padding = new Thickness(8, 3, 8, 3) };
+        ToolTipService.SetToolTip(forget, "删除任务记录");
+        forget.Click += (_, _) => _ = ConfirmForgetTask(item.TaskId);
+        actions.Children.Add(forget);
+
+        var row = new Grid { ColumnSpacing = 12 };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        row.Children.Add(new TextBlock
+        {
+            Text = StatusGlyph(item.Status),
+            Foreground = StatusBrush(item.Status),
+            FontSize = 12,
+            Margin = new Thickness(0, 2, 0, 0),
+            VerticalAlignment = VerticalAlignment.Top,
+        });
+        Grid.SetColumn(info, 1);
+        Grid.SetColumn(actions, 2);
+        row.Children.Add(info);
+        row.Children.Add(actions);
+
+        // 点击整行切换事件视图；行内操作按钮自行处理指针事件，不会触发外层点击。
+        var open = new Button
+        {
+            Content = row,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            HorizontalContentAlignment = HorizontalAlignment.Stretch,
+            Padding = new Thickness(0),
+            BorderThickness = new Thickness(0),
+            Background = new SolidColorBrush(Microsoft.UI.Colors.Transparent),
+        };
+        open.Click += (_, _) => OnSelectTaskHistory(item.TaskId);
+        taskHistoryRows.Add(new TaskHistoryRow
+        {
+            Item = item, RestoreResult = restoreResult,
+            RestoreParameters = restoreParameters, Forget = forget,
+        });
+        return new Border
+        {
+            BorderThickness = new Thickness(0, 0, 0, 1),
+            BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+            Child = open,
+        };
+    }
+
+    private static Brush StatusBrush(string status) => status switch
+    {
+        "done" => new SolidColorBrush(Microsoft.UI.Colors.Green),
+        "failed" => new SolidColorBrush(Microsoft.UI.Colors.Red),
+        "interrupted" => new SolidColorBrush(Microsoft.UI.Colors.Orange),
+        _ => new SolidColorBrush(Microsoft.UI.Colors.Gray),
+    };
+
+    private static string StatusGlyph(string status) => status switch
+    {
+        "done" => "✓", "failed" => "!", "cancelled" => "×", "interrupted" => "‖", _ => "○",
+    };
+
+    private void UpdateTaskHistoryControls()
+    {
+        if (TaskHistoryRefresh == null) return;
+        TaskHistoryRefresh.IsEnabled = online && !taskHistoryLoading;
+        var restoring = restoringTaskHistoryId.Length > 0;
+        var forgetting = forgettingTaskHistoryId.Length > 0;
+        foreach (var row in taskHistoryRows)
+        {
+            row.RestoreResult.IsEnabled = !busy && !restoring;
+            row.RestoreParameters.IsEnabled = !busy && !restoring && row.Item.Status != "running";
+            row.Forget.IsEnabled = online && !busy && !forgetting && row.Item.Status != "running";
+        }
+    }
+
+    private void OnSelectTaskHistory(string taskId)
+    {
+        if (selectedTaskHistoryId == taskId)
+        {
+            ClearTaskHistorySelection();
+            return;
+        }
+        if (!taskHistory.Any(row => row.TaskId == taskId)) return;
+        taskEventsOperation?.Cancel();
+        taskEventsOperation?.Dispose();
+        taskEventsOperation = new CancellationTokenSource();
+        var token = taskEventsOperation.Token;
+        selectedTaskHistoryId = taskId;
+        taskHistoryEvents.Clear();
+        taskHistoryEventsError = "";
+        taskHistoryEventsTruncated = false;
+        taskHistoryEventsLoading = true;
+        RenderTaskEvents();
+        _ = LoadTaskEvents(taskId, token);
+    }
+
+    private void ClearTaskHistorySelection()
+    {
+        taskEventsOperation?.Cancel();
+        taskEventsOperation?.Dispose();
+        taskEventsOperation = null;
+        selectedTaskHistoryId = "";
+        taskHistoryEvents.Clear();
+        taskHistoryEventsError = "";
+        taskHistoryEventsLoading = false;
+        taskHistoryEventsTruncated = false;
+        RenderTaskEvents();
+    }
+
+    private async Task LoadTaskEvents(string taskId, CancellationToken token)
+    {
+        try
+        {
+            var response = await engine.Call("task_events",
+                new() { ["task_id"] = taskId, ["after_seq"] = 0 }, cancellation: token);
+            token.ThrowIfCancellationRequested();
+            if (selectedTaskHistoryId != taskId) return;
+            if (StringOf(response["task_id"]) != taskId
+                || response["events"] is not JsonArray values
+                || values.Any(node => node is not JsonObject)
+                || Integer(response, "next_seq") is not { } next || next < 0
+                || BoolValue(response, "truncated") is null)
+                throw new InvalidOperationException("任务事件协议不匹配。");
+            var parsed = new List<TaskEvent>();
+            var previous = 0L;
+            foreach (var node in values.OfType<JsonObject>())
+            {
+                if (Integer(node, "seq") is not { } sequence
+                    || sequence <= previous || sequence > next
+                    || StringOrNull(node["at_utc"]) is not { } atUtc || !IsTaskTimestamp(atUtc)
+                    || StringOrNull(node["event"]) is not { } title)
+                    throw new InvalidOperationException("任务事件顺序或时间无效。");
+                previous = sequence;
+                parsed.Add(new TaskEvent
+                {
+                    Sequence = sequence, AtUtc = atUtc, Event = title,
+                    Data = node["data"] as JsonObject ?? new(),
+                });
+            }
+            taskHistoryEvents.Clear();
+            taskHistoryEvents.AddRange(parsed);
+            taskHistoryEventsTruncated = BoolValue(response, "truncated") == true;
+            taskHistoryEventsError = "";
+            taskHistoryEventsLoading = false;
+            RenderTaskEvents();
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+        catch (Exception error)
+        {
+            if (selectedTaskHistoryId != taskId || token.IsCancellationRequested) return;
+            taskHistoryEventsLoading = false;
+            taskHistoryEventsError = error.Message;
+            RenderTaskEvents();
+        }
+    }
+
+    private void RenderTaskEvents()
+    {
+        TaskEventsPanel.Children.Clear();
+        var item = taskHistory.FirstOrDefault(row => row.TaskId == selectedTaskHistoryId);
+        if (item == null)
+        {
+            TaskEventsPanel.Visibility = Visibility.Collapsed;
+            return;
+        }
+        TaskEventsPanel.Visibility = Visibility.Visible;
+        var header = new Grid();
+        header.Children.Add(new TextBlock
+        {
+            Text = $"{item.KindTitle} · {item.MethodTitle}事件",
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        var close = new Button
+        {
+            Content = new SymbolIcon(Symbol.Clear),
+            Padding = new Thickness(6, 3, 6, 3),
+            HorizontalAlignment = HorizontalAlignment.Right,
+        };
+        ToolTipService.SetToolTip(close, "关闭任务事件");
+        close.Click += (_, _) => ClearTaskHistorySelection();
+        header.Children.Add(close);
+        TaskEventsPanel.Children.Add(header);
+        if (taskHistoryEventsLoading)
+        {
+            TaskEventsPanel.Children.Add(new ProgressRing { Width = 16, Height = 16, IsActive = true });
+            return;
+        }
+        if (taskHistoryEventsError.Length > 0)
+        {
+            TaskEventsPanel.Children.Add(new TextBlock
+            {
+                Text = taskHistoryEventsError, FontSize = 11,
+                Foreground = new SolidColorBrush(Microsoft.UI.Colors.Red),
+                TextWrapping = TextWrapping.Wrap,
+            });
+            return;
+        }
+        if (taskHistoryEventsTruncated)
+            TaskEventsPanel.Children.Add(new TextBlock
+            {
+                Text = "较早事件已超出保留上限。", FontSize = 11, Opacity = .65,
+            });
+        foreach (var entry in taskHistoryEvents)
+        {
+            var line = new Grid { ColumnSpacing = 9, Padding = new Thickness(0, 3, 0, 3) };
+            line.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            line.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            line.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var title = new TextBlock
+            {
+                Text = entry.Title, FontSize = 11,
+                FontWeight = Microsoft.UI.Text.FontWeights.Medium,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            var detail = new TextBlock
+            {
+                Text = entry.Detail, FontSize = 10, Opacity = .65,
+                TextWrapping = TextWrapping.Wrap,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            Grid.SetColumn(title, 1);
+            Grid.SetColumn(detail, 2);
+            line.Children.Add(new TextBlock
+            {
+                Text = entry.AtUtc, FontSize = 10, Opacity = .6,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            line.Children.Add(title);
+            line.Children.Add(detail);
+            TaskEventsPanel.Children.Add(line);
+        }
+    }
+
+    private async Task ConfirmForgetTask(string taskId)
+    {
+        if (!online || busy || forgettingTaskHistoryId.Length > 0) return;
+        var item = taskHistory.FirstOrDefault(row => row.TaskId == taskId);
+        if (item == null || item.Status == "running") return;
+        var dialog = new ContentDialog
+        {
+            Title = "删除任务记录？",
+            Content = new TextBlock
+            {
+                Text = "只删除状态和事件，不删除已发布报告或天气数据。",
+                TextWrapping = TextWrapping.Wrap,
+            },
+            PrimaryButtonText = "删除记录",
+            CloseButtonText = "保留记录",
+            DefaultButton = ContentDialogButton.Close,
+            XamlRoot = Root.XamlRoot,
+        };
+        if (await dialog.ShowAsync() != ContentDialogResult.Primary) return;
+        await ForgetTaskHistory(taskId);
+    }
+
+    private async Task ForgetTaskHistory(string taskId)
+    {
+        if (!online || busy || forgettingTaskHistoryId.Length > 0) return;
+        var item = taskHistory.FirstOrDefault(row => row.TaskId == taskId);
+        if (item == null || item.Status == "running") return;
+        forgettingTaskHistoryId = taskId;
+        UpdateTaskHistoryControls();
+        try
+        {
+            var response = await engine.Call("task_forget", new() { ["task_id"] = taskId });
+            if (BoolValue(response, "forgotten") != true)
+                throw new InvalidOperationException("任务记录没有被删除。");
+            if (selectedTaskHistoryId == taskId) ClearTaskHistorySelection();
+            _ = LoadTaskHistory();
+        }
+        catch (Exception error)
+        {
+            taskHistoryError = error.Message;
+            RenderTaskHistory();
+        }
+        finally
+        {
+            forgettingTaskHistoryId = "";
+            UpdateTaskHistoryControls();
+        }
+    }
+
+    private async Task RestoreTaskResult(TaskHistoryItem item)
+    {
+        if (busy || restoringTaskHistoryId.Length > 0 || !item.CanRestoreResult) return;
+        restoringTaskHistoryId = item.TaskId;
+        UpdateTaskHistoryControls();
+        var kind = item.RetryKind.Length > 0 ? item.RetryKind : "point";
+        try
+        {
+            var response = await engine.Call("result_restore", new() { ["task_id"] = item.TaskId });
+            if (kind != "nowcast" && response["model_results"] is not JsonObject)
+                throw new InvalidOperationException("已发布结果格式无效。");
+            result = response;
+            resultKind = kind;
+            SelectNavigation(kind);
+            if (kind != "nowcast")
+            {
+                var model = StringOrNull(item.RetryPayload?["model_source"]);
+                if (model is not ("gfs" or "ec"))
+                    model = (response["model_results"] as JsonObject)?["gfs"] is null ? "ec" : "gfs";
+                ResultModel.SelectedIndex = model == "ec" ? 1 : 0;
+            }
+            RenderResult();
+            await UpdateMap();
+            Status.Text = "已恢复历史结果";
+            ErrorBar.IsOpen = false;
+        }
+        catch (Exception error)
+        {
+            taskHistoryError = error.Message;
+            RenderTaskHistory();
+        }
+        finally
+        {
+            restoringTaskHistoryId = "";
+            UpdateTaskHistoryControls();
+        }
+    }
+
+    private void RestoreTaskParameters(TaskHistoryItem item)
+    {
+        if (busy || restoringTaskHistoryId.Length > 0
+            || item.Status == "running" || item.RetryPayload == null) return;
+        restoringTaskHistoryId = item.TaskId;
+        ApplyRetryPayload(item.RetryKind, item.RetryPayload);
+        SelectNavigation(item.RetryKind);
+        restoringTaskHistoryId = "";
+        OnPredict(this, new RoutedEventArgs());
+    }
+
+    private void ApplyRetryPayload(string kind, JsonObject payload)
+    {
+        if (StringOrNull(payload["name"]) is { } name) LocationName.Text = name;
+        if (DoubleValue(payload["lat"]) is { } lat) Latitude.Value = lat;
+        if (DoubleValue(payload["lon"]) is { } lon) Longitude.Value = lon;
+        if (DoubleValue(payload["elevation_m"]) is { } elevation) Elevation.Value = elevation;
+        if (StringOrNull(payload["timezone_name"]) is { } timezone) Timezone.Text = timezone;
+        if (StringOrNull(payload["target_date"]) is { } date
+            && DateTimeOffset.TryParseExact(date, "yyyy-MM-dd", CultureInfo.InvariantCulture,
+                DateTimeStyles.None, out var target))
+            TargetDate.Date = target;
+        if (StringOrNull(payload["phenomenon"]) is { } phenomenon
+            && phenomenon is "dawn" or "dusk")
+            Phenomenon.SelectedIndex = phenomenon == "dawn" ? 0 : 1;
+        if (kind == "regional" && payload["custom_bounds"] is JsonObject bounds
+            && DoubleValue(bounds["west"]) is { } west && DoubleValue(bounds["east"]) is { } east
+            && DoubleValue(bounds["south"]) is { } south && DoubleValue(bounds["north"]) is { } north)
+        {
+            West.Value = west; East.Value = east; South.Value = south; North.Value = north;
+        }
+        MetadataReady.IsChecked = true;
+    }
+
+    private void SelectNavigation(string kind)
+    {
+        Navigation.SelectedItem = kind switch
+        {
+            "regional" => Navigation.MenuItems[1],
+            "nowcast" => Navigation.MenuItems[2],
+            _ => Navigation.MenuItems[0],
+        };
+    }
+
     private async void OnReconnect(object sender, RoutedEventArgs args) => await Connect();
     private void OnAppearanceChanged(object sender, SelectionChangedEventArgs args)
     {
@@ -992,5 +1533,134 @@ public sealed partial class MainWindow : Window
     private void OnCancel(object sender, RoutedEventArgs args)
     {
         operation?.Cancel(); Status.Text = "正在取消，等待当前阶段结束";
+    }
+
+    // 校验规则与 Swift NativeTaskHistoryItem 一致：任一字段无效即整条记录无效。
+    private sealed class TaskHistoryItem
+    {
+        internal required string TaskId { get; init; }
+        internal required string Method { get; init; }
+        internal required string Status { get; init; }
+        internal required bool CancelRequested { get; init; }
+        internal required long EventSeq { get; init; }
+        internal required string RetryKind { get; init; }
+        internal required JsonObject? RetryPayload { get; init; }
+        internal required JsonObject? ResultRef { get; init; }
+        internal required JsonObject Progress { get; init; }
+
+        internal static TaskHistoryItem? Parse(JsonObject value)
+        {
+            if (StringOrNull(value["task_id"]) is not { } taskId || !IsTaskId(taskId)
+                || StringOrNull(value["method"]) is not { } method
+                || StringOrNull(value["status"]) is not { } status
+                || status is not ("running" or "done" or "failed" or "cancelled" or "interrupted")
+                || StringOrNull(value["created_at_utc"]) is not { } createdAt
+                || !IsTaskTimestamp(createdAt)
+                || StringOrNull(value["updated_at_utc"]) is not { } updatedAt
+                || !IsTaskTimestamp(updatedAt)
+                || Integer(value, "event_seq") is not { } eventSeq || eventSeq < 1)
+                return null;
+            string retryKind = "";
+            JsonObject? retryPayload = null;
+            if (value["retry_request"] is JsonObject retry
+                && StringOrNull(retry["kind"]) is { } kind
+                && kind is "point" or "regional" or "nowcast"
+                && retry["payload"] is JsonObject payload)
+            {
+                retryKind = kind;
+                retryPayload = payload;
+            }
+            return new TaskHistoryItem
+            {
+                TaskId = taskId, Method = method, Status = status,
+                CancelRequested = BoolValue(value, "cancel_requested") == true,
+                EventSeq = eventSeq, RetryKind = retryKind, RetryPayload = retryPayload,
+                ResultRef = value["result_ref"] as JsonObject,
+                Progress = value["progress"] as JsonObject ?? new(),
+            };
+        }
+
+        internal string KindTitle => RetryKind switch
+        {
+            "point" => "单点", "regional" => "区域", "nowcast" => "实况", _ => MethodTitle,
+        };
+
+        internal string MethodTitle => Method switch
+        {
+            "check" => "数据检查", "prepare" => "数据准备", "forecast" => "预测计算",
+            "publications" => "发布核验", "network_probe" => "下载探测", _ => "任务",
+        };
+
+        internal string StatusTitle => Status switch
+        {
+            "running" => CancelRequested ? "取消中" : "运行中",
+            "done" => "已完成", "failed" => "失败",
+            "cancelled" => "已取消", "interrupted" => "已中断", _ => Status,
+        };
+
+        internal string ContextTitle
+        {
+            get
+            {
+                if (RetryPayload == null) return "";
+                var name = StringOrNull(RetryPayload["name"]);
+                if (name == null && RetryPayload["regions"] is JsonArray regions
+                    && regions.All(node => node is JsonValue value
+                        && value.GetValueKind() == JsonValueKind.String))
+                    name = string.Join("、", regions.Select(node => StringOf(node))
+                        .Where(text => text.Length > 0));
+                var date = StringOf(RetryPayload["target_date"]);
+                var phenomenon = StringOf(RetryPayload["phenomenon"]) switch
+                {
+                    "dawn" => "朝霞", "dusk" => "晚霞", _ => "",
+                };
+                return string.Join(" · ", new[] { name ?? "", date, phenomenon }
+                    .Where(part => part.Length > 0));
+            }
+        }
+
+        internal bool CanRestoreResult =>
+            Status == "done"
+            && ResultRef?["snapshot"] is JsonObject snapshot
+            && StringOf(snapshot["contract"]) == "firesky-result-snapshot-v1"
+            && snapshot["sha256"] is JsonValue sha
+            && sha.GetValueKind() == JsonValueKind.String;
+    }
+
+    private sealed class TaskEvent
+    {
+        internal required long Sequence { get; init; }
+        internal required string AtUtc { get; init; }
+        internal required string Event { get; init; }
+        internal required JsonObject Data { get; init; }
+
+        internal string Title => Event switch
+        {
+            "running" => "开始", "progress" => "进度", "cancel_requested" => "请求取消",
+            "done" => "完成", "failed" => "失败", "cancelled" => "已取消",
+            "interrupted" => "已中断", _ => "状态更新",
+        };
+
+        internal string Detail
+        {
+            get
+            {
+                var values = new List<string>();
+                foreach (var node in new[] { Data["stage"], Data["source"] })
+                    if (StringOrNull(node) is { } text && text.Length > 0)
+                        values.Add(text.Length > 128 ? text.Substring(0, 128) : text);
+                if (DoubleValue(Data["percent"]) is { } percent)
+                    values.Add($"{percent:0}%");
+                return string.Join(" · ", values);
+            }
+        }
+    }
+
+    private sealed class TaskHistoryRow
+    {
+        internal required TaskHistoryItem Item { get; init; }
+        internal required Button RestoreResult { get; init; }
+        internal required Button RestoreParameters { get; init; }
+        internal required Button Forget { get; init; }
     }
 }

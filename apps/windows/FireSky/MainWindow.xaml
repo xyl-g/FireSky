@@ -218,6 +218,36 @@
                             </StackPanel>
                         </Grid>
                         <StackPanel x:Name="InventoryRows" Spacing="16"/>
+                        <StackPanel Spacing="14">
+                            <Grid>
+                                <StackPanel Spacing="4">
+                                    <TextBlock Text="任务历史" FontSize="20" FontWeight="SemiBold"/>
+                                    <TextBlock x:Name="TaskHistoryCaption" FontSize="11" Opacity=".65"
+                                               Text="记录数据检查、准备、预测和下载探测任务"/>
+                                </StackPanel>
+                                <Button x:Name="TaskHistoryRefresh" IsEnabled="False"
+                                        HorizontalAlignment="Right" VerticalAlignment="Center"
+                                        Padding="8,4" Click="OnRefreshTaskHistory">
+                                    <SymbolIcon Symbol="Refresh"/>
+                                </Button>
+                            </Grid>
+                            <TextBlock x:Name="TaskHistoryError" Foreground="Red" Visibility="Collapsed"
+                                       IsTextSelectionEnabled="True" TextWrapping="Wrap"/>
+                            <StackPanel x:Name="TaskHistoryLoadingPanel" Visibility="Collapsed"
+                                        Spacing="10" Padding="0,20">
+                                <ProgressRing Width="24" Height="24" IsActive="True"/>
+                                <TextBlock Text="正在读取任务记录…" Opacity=".7"/>
+                            </StackPanel>
+                            <StackPanel x:Name="TaskHistoryEmpty" Visibility="Collapsed"
+                                        Spacing="4" Padding="0,20">
+                                <TextBlock Text="暂无任务记录" FontWeight="SemiBold"/>
+                                <TextBlock x:Name="TaskHistoryEmptyText" Opacity=".65"/>
+                            </StackPanel>
+                            <StackPanel x:Name="TaskHistoryRows" Spacing="0"/>
+                            <TextBlock x:Name="TaskHistoryIssuesNotice" Foreground="Orange" FontSize="11"
+                                       Visibility="Collapsed" TextWrapping="Wrap"/>
+                            <StackPanel x:Name="TaskEventsPanel" Visibility="Collapsed" Spacing="8"/>
+                        </StackPanel>
                     </StackPanel>
                 </ScrollViewer>
                 <ScrollViewer x:Name="SettingsPage" Visibility="Collapsed">
