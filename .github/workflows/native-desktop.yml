@@ -45,7 +45,7 @@ jobs:
         run: bash scripts/test_docker_contract.sh
       - name: Verify Windows FFI adapter contract
         run: bash scripts/test_windows_ffi_contract.sh
-      - run: node --test apps/desktop-tauri/scripts/*.test.mjs
+      - run: node --test apps/shared-web/scripts/*.test.mjs
 
   linux-native:
     name: Linux GTK4 + Rust FFI
@@ -80,7 +80,7 @@ jobs:
 
   macos-native:
     # Build and smoke-test the actual SwiftUI + Rust FFI app on both required
-    # macOS architectures. This is separate from the frozen Tauri reference.
+    # macOS architectures.
     name: SwiftUI + Rust FFI ${{ matrix.arch }}
     strategy:
       fail-fast: false
@@ -167,7 +167,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed" }
           & "$env:RUNNER_TEMP/vcpkg/vcpkg.exe" install "eccodes[aec,png]:$env:VCPKG_TRIPLET" --classic
           if ($LASTEXITCODE -ne 0) { throw "ecCodes build failed" }
-          node apps/desktop-tauri/scripts/bundle-vcpkg-eccodes.mjs `
+          node apps/shared-web/scripts/bundle-vcpkg-eccodes.mjs `
             "$env:RUNNER_TEMP/vcpkg/installed" `
             "$env:RUNNER_TEMP/vcpkg/ports" `
             "$env:VCPKG_TRIPLET" `
@@ -221,95 +221,6 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Linux C++ FFI smoke
         run: bash scripts/test_linux_ffi.sh
-
-  desktop:
-    # These build jobs are not claims of signing, clean-machine or real-data acceptance.
-    name: Tauri ${{ matrix.target }}
-    needs: contracts
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: macos-26
-            target: aarch64-apple-darwin
-            arch: arm64
-            bundles: app,dmg
-          - runner: macos-26-intel
-            target: x86_64-apple-darwin
-            arch: x64
-            bundles: app,dmg
-          - runner: windows-2022
-            target: x86_64-pc-windows-msvc
-            arch: x64
-            triplet: x64-windows
-            bundles: nsis
-          - runner: windows-11-arm
-            target: aarch64-pc-windows-msvc
-            arch: arm64
-            triplet: arm64-windows
-            bundles: nsis
-    runs-on: ${{ matrix.runner }}
-    env:
-      FIRESKY_NATIVE_TARGET: ${{ matrix.target }}
-      EXPECTED_NODE_ARCH: ${{ matrix.arch }}
-      HOMEBREW_NO_AUTO_UPDATE: "1"
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          architecture: ${{ matrix.arch }}
-          cache: npm
-          cache-dependency-path: apps/desktop-tauri/package-lock.json
-      - name: Verify native runner architecture
-        run: node -e "if (process.arch !== process.env.EXPECTED_NODE_ARCH) throw Error('Wrong native builder architecture')"
-      - name: Install JavaScript dependencies
-        working-directory: apps/desktop-tauri
-        run: npm ci --no-audit --no-fund
-      - name: Install macOS decoder
-        if: runner.os == 'macOS'
-        run: brew install eccodes
-      - name: Build Windows decoder from pinned vcpkg ports
-        if: runner.os == 'Windows'
-        shell: pwsh
-        env:
-          VCPKG_TRIPLET: ${{ matrix.triplet }}
-        run: |
-          git clone --filter=blob:none --no-checkout https://github.com/microsoft/vcpkg.git "$env:RUNNER_TEMP/vcpkg"
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg clone failed" }
-          git -C "$env:RUNNER_TEMP/vcpkg" checkout 2ec0f1747d8186a5c9babe276e2ad57cd2b12d2a
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg checkout failed" }
-          & "$env:RUNNER_TEMP/vcpkg/bootstrap-vcpkg.bat" -disableMetrics
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg bootstrap failed" }
-          & "$env:RUNNER_TEMP/vcpkg/vcpkg.exe" install "eccodes[aec,png]:$env:VCPKG_TRIPLET" --classic
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg decoder build failed" }
-          node apps/desktop-tauri/scripts/bundle-vcpkg-eccodes.mjs "$env:RUNNER_TEMP/vcpkg/installed" "$env:RUNNER_TEMP/vcpkg/ports" "$env:VCPKG_TRIPLET" "$env:RUNNER_TEMP/eccodes-bundle"
-          if ($LASTEXITCODE -ne 0) { throw "vcpkg decoder metadata failed" }
-          "FIRESKY_ECCODES_ROOT=$env:RUNNER_TEMP/eccodes-bundle" >> $env:GITHUB_ENV
-      - name: Resource contract tests on the target host
-        run: node --test apps/desktop-tauri/scripts/*.test.mjs
-      - name: Test native engine
-        run: cargo test --locked --target ${{ matrix.target }} --manifest-path engine/Cargo.toml
-      - name: Build target-native Tauri release
-        # NSIS supports native ARM64 apps; its x86 installer stub runs under emulation.
-        # offlineInstaller selects arm64/x64 WebView2 from the actual Tauri target.
-        working-directory: apps/desktop-tauri
-        run: npm run tauri -- build --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
-      - name: Verify prepared resource checksums and target
-        working-directory: apps/desktop-tauri
-        run: node --input-type=module -e "import {nativeTarget} from './scripts/native-target.mjs'; import {verifyResourceManifest} from './scripts/native-resources.mjs'; verifyResourceManifest('src-tauri/resources/native', nativeTarget());"
-      - name: Upload actual target installers and resource manifests
-        uses: actions/upload-artifact@v4
-        with:
-          name: FireSky-${{ matrix.target }}
-          if-no-files-found: error
-          path: |
-            apps/desktop-tauri/src-tauri/target/${{ matrix.target }}/release/bundle/
-            apps/desktop-tauri/src-tauri/resources/native/RESOURCE-MANIFEST.json
-            apps/desktop-tauri/src-tauri/resources/native/BUNDLE-METADATA.json
 
   docker:
     name: Docker ${{ matrix.platform }} build and runtime smoke
@@ -365,7 +276,7 @@ jobs:
           docker cp firesky-smoke:/data/state/http-token "${RUNNER_TEMP}/firesky-http-token"
           export FIRESKY_HTTP_TOKEN_FILE="${RUNNER_TEMP}/firesky-http-token"
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:18765/api/v1/firesky/desktop/status)" = 401
-          node apps/desktop-tauri/scripts/smoke-http-runtime.mjs http://127.0.0.1:18765 --history-seed "${RUNNER_TEMP}/firesky-history-smoke.json"
+          node apps/shared-web/scripts/smoke-http-runtime.mjs http://127.0.0.1:18765 --history-seed "${RUNNER_TEMP}/firesky-history-smoke.json"
           docker rm -f firesky-smoke
           docker run -d --name firesky-smoke -v firesky-smoke-state:/data/state -p 127.0.0.1:18765:8765 firesky:ci-${EXPECTED_ARCH}
           for attempt in $(seq 1 60); do
@@ -374,7 +285,7 @@ jobs:
           done
           docker cp firesky-smoke:/data/state/http-token "${RUNNER_TEMP}/firesky-http-token-restored"
           cmp "${RUNNER_TEMP}/firesky-http-token" "${RUNNER_TEMP}/firesky-http-token-restored"
-          node apps/desktop-tauri/scripts/smoke-http-runtime.mjs http://127.0.0.1:18765 --history-verify "${RUNNER_TEMP}/firesky-history-smoke.json"
+          node apps/shared-web/scripts/smoke-http-runtime.mjs http://127.0.0.1:18765 --history-verify "${RUNNER_TEMP}/firesky-history-smoke.json"
       - name: Capture container diagnostics
         if: always()
         run: docker logs firesky-smoke

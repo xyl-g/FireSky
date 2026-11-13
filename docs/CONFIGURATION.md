@@ -93,8 +93,13 @@ pip install -e ".[dev]"       # + pytest
 pip install -e ".[cams]"      # + cdsapi（CAMS 下载，需 ADS key）
 ```
 
-## 5. 前端配置（`frontend/`）
+## 5. 前端配置（`apps/shared-web/`）
 
-- API 地址：开发模式走 vite 代理（`/api` → `127.0.0.1:8765`）；生产同源托管，
+> 2026-11-13 更新：共享 Web SPA 已迁至 `apps/shared-web/`，`make frontend`、
+> Docker 与引擎默认静态根统一构建该 package。`frontend/`（旧 SvelteKit 工程）
+> 仍在仓库中待合并，不再是默认前端。
+
+- API 地址：开发模式走 vite 代理（`/api/v1/firesky` → `127.0.0.1:8765`）；生产同源托管，
   无需配置；
-- 构建产物 `frontend/build` 由后端 SPA fallback 直接服务。
+- 构建产物 `apps/shared-web/dist` 由后端 SPA fallback 直接服务
+  （可用 `FIRESKY_WEB_ROOT` 覆盖）。

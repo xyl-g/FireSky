@@ -84,6 +84,16 @@ struct PreflightView: View {
                 .animation(.easeInOut(duration: 0.18), value: store.ready)
         }.padding(26).frame(width: 490)
             .background(Color(nsColor: .windowBackgroundColor))
+            .confirmationDialog(
+                "数据周期确认",
+                isPresented: $store.showCycleAgeConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("继续预测") { store.confirmCycleAgeAndForecast() }
+                Button("返回更新数据", role: .cancel) {}
+            } message: {
+                Text("\(store.cycleAgeSummary) 的发布周期未核验或不是最新发布。可以继续预测（结果可能略有偏差），也可以返回并点击「更新数据」获取最新周期。")
+            }
     }
 }
 
@@ -109,6 +119,17 @@ struct InventoryView: View {
                     Button { Task { await store.loadInventory() } } label: {
                         Image(systemName: "arrow.clockwise")
                     }.help("刷新本地清单")
+                }
+                if store.dataSyncRunning {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(store.status).font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(1).truncationMode(.tail)
+                    }
+                } else if !store.dataSyncMessage.isEmpty {
+                    Text(store.dataSyncMessage).font(.caption)
+                        .foregroundStyle(store.dataSyncSaveFailed ? Color.red : Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 DownloadProbeView()
                 Divider()
@@ -310,6 +331,52 @@ struct SettingsView: View {
                         dataSyncSourceRow("ec", "EC")
                     }
                 }
+                Divider()
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("后台助手（关闭应用后仍同步）").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Text("安装为系统 launchd 代理，按上面的同步间隔在后台自动拉齐最新已发布周期，无需保持应用打开；结果以系统通知提示，并记录在下方。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if store.helperAvailable {
+                        HStack(spacing: 8) {
+                            if store.helperInstalled {
+                                Label(store.helperLoaded ? "已安装并运行" : "已安装（未加载）",
+                                      systemImage: store.helperLoaded ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                                    .font(.caption)
+                                    .foregroundStyle(store.helperLoaded ? Color.green : Color.orange)
+                            } else {
+                                Label("未安装", systemImage: "circle").font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if store.helperBusy { ProgressView().controlSize(.small) }
+                            Button(store.helperInstalled ? "重新安装" : "安装助手", systemImage: "arrow.down.app") {
+                                store.installHelper()
+                            }
+                            .disabled(store.helperBusy || store.workspace.isEmpty)
+                            if store.helperInstalled {
+                                Button("卸载", systemImage: "trash") { store.uninstallHelper() }
+                                    .disabled(store.helperBusy)
+                            }
+                            Button("刷新", systemImage: "arrow.clockwise") { store.refreshHelperStatus() }
+                                .disabled(store.helperBusy)
+                        }
+                        if let summary = store.helperStatus["summary"] as? String, !summary.isEmpty {
+                            let run = store.helperStatus["last_run_utc"] as? String ?? ""
+                            Text("上次后台运行 \(dataSyncTimeText(run))：\(summary)")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        if !store.helperMessage.isEmpty {
+                            Text(store.helperMessage).font(.caption)
+                                .foregroundStyle(store.helperMessageFailed ? Color.red : Color.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    } else {
+                        Text("当前为源码运行环境，后台助手仅在正式 FireSky 安装包中可用。")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
             Section("本地引擎") {
                 TextField("数据目录", text: $store.workspace)
@@ -379,15 +446,32 @@ struct SettingsView: View {
         var details: [String] = []
         if !cycle.isEmpty { details.append("最近周期 \(cycle)") }
         if files > 0 { details.append("\(files) 个文件") }
+        if let attempt = state["last_attempt_utc"] as? String, !attempt.isEmpty {
+            details.append("上次同步 \(dataSyncTimeText(attempt))")
+        }
         if let errors = result["errors"] as? [String], let first = errors.first, !first.isEmpty {
             details.append("最近错误：\(first)")
         }
         if failures > 0 { details.append("连续失败 \(failures) 次") }
         if suspended { details.append("已暂停：立即同步或重新保存设置可解锁") }
+        let live = store.dataSyncRunning ? (store.dataSyncProgress[name] as? JSONObject) : nil
+        let livePercent = (live?["percent"] as? NSNumber)?.doubleValue ?? 0
+        let liveMessage = live?["message"] as? String ?? ""
         return HStack(alignment: .top, spacing: 10) {
             Text(label).font(.callout.weight(.medium)).frame(width: 44, alignment: .leading)
             VStack(alignment: .leading, spacing: 3) {
-                Text(badge).font(.callout).foregroundStyle(color)
+                if live != nil {
+                    HStack(spacing: 6) {
+                        ProgressView(value: livePercent, total: 100).frame(width: 90)
+                        Text("\(Int(livePercent))%").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                    if !liveMessage.isEmpty {
+                        Text(liveMessage).font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else {
+                    Text(badge).font(.callout).foregroundStyle(color)
+                }
                 if !details.isEmpty {
                     Text(details.joined(separator: " · "))
                         .font(.caption).foregroundStyle(.secondary)
@@ -396,6 +480,17 @@ struct SettingsView: View {
             }
             Spacer()
         }
+    }
+
+    /// ISO8601 UTC → 本地短时间（月日 时:分），用于「上次同步」展示。
+    private func dataSyncTimeText(_ iso: String) -> String {
+        let parser = ISO8601DateFormatter()
+        parser.formatOptions = [.withInternetDateTime]
+        guard let date = parser.date(from: iso) else { return iso }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "zh_CN")
+        formatter.dateFormat = "MM-dd HH:mm"
+        return formatter.string(from: date)
     }
 
     private func tutorialStep<Content: View>(_ number: String, _ title: String, detail: String,

@@ -92,8 +92,14 @@ pip install -e ".[dev]"       # + pytest
 pip install -e ".[cams]"      # + cdsapi (CAMS downloads, needs an ADS key)
 ```
 
-## 5. Frontend configuration (`frontend/`)
+## 5. Frontend configuration (`apps/shared-web/`)
 
-- API base: dev mode uses the vite proxy (`/api` → `127.0.0.1:8765`);
+> Updated 2026-11-13: the shared Web SPA now lives in `apps/shared-web/`;
+> `make frontend`, Docker and the engine's default static root all build that
+> package. The old `frontend/` (SvelteKit) remains in the tree pending a merge
+> and is no longer the default frontend.
+
+- API base: dev mode uses the vite proxy (`/api/v1/firesky` → `127.0.0.1:8765`);
   production is same-origin served — nothing to configure;
-- The build output `frontend/build` is served by the backend's SPA fallback.
+- The build output `apps/shared-web/dist` is served by the backend's SPA
+  fallback (override with `FIRESKY_WEB_ROOT`).

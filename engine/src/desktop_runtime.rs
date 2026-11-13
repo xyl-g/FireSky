@@ -408,7 +408,7 @@ impl Runtime {
         // The wire method is `data_sync_run`; history records it under the
         // design's `data_sync` label so users can tell background sync rounds
         // apart from manual prepare/forecast tasks (design 3.2/7.2).
-        let label = if method == "data_sync_run" {
+        let label = if method == "data_sync_run" || method == "data_sync_tick" {
             "data_sync"
         } else {
             method
@@ -416,7 +416,7 @@ impl Runtime {
         if !matches!(
             method,
             "check" | "prepare" | "forecast" | "publications" | "network_probe"
-                | "data_sync" | "data_sync_run"
+                | "data_sync" | "data_sync_run" | "data_sync_tick"
         ) {
             return Ok(None);
         }
@@ -560,6 +560,61 @@ impl Runtime {
                     &cancel,
                     progress,
                 )
+            }
+            "data_sync_tick" => {
+                // One-shot entry for scheduled helpers (launchd / Task
+                // Scheduler): judge due, then run only the due sources. Keeps
+                // the due+run decision in the cross-platform engine so every
+                // platform's helper is a single `desktop-call data_sync_tick`.
+                let operation_busy = self.operation.try_lock().is_err();
+                let sync_busy = self.sync.try_lock().is_err();
+                let due = crate::desktop_sync::due(
+                    &self.workspace,
+                    operation_busy || sync_busy,
+                    params["now_utc"].as_str(),
+                )?;
+                let sources: Vec<String> = due["sources"]
+                    .as_object()
+                    .map(|rows| {
+                        rows.iter()
+                            .filter(|(_, row)| row["due"].as_bool() == Some(true))
+                            .map(|(name, _)| name.clone())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if sources.is_empty() {
+                    return Ok(json!({
+                        "contract": "rust-data-sync-tick-v1",
+                        "skipped": true,
+                        "due": due,
+                    }));
+                }
+                let operation_free = self.operation.try_lock().is_ok();
+                if !operation_free {
+                    return Err("data sync skipped because another prepare/forecast is active".into());
+                }
+                let _sync_guard = self
+                    .sync
+                    .try_lock()
+                    .map_err(|_| "another data sync is active")?;
+                let round = crate::desktop_sync::run(
+                    &crate::desktop_sync::RunContext {
+                        workspace: &self.workspace,
+                        cams_cache_dir: self.inventory.cams_cache_dir.clone(),
+                        gfs_cache_dir: self.inventory.gfs_cache_dir.clone(),
+                        ecmwf_cache_dir: self.inventory.ecmwf_cache_dir.clone(),
+                    },
+                    json!({ "sources": sources }),
+                    task_id,
+                    &cancel,
+                    progress,
+                )?;
+                Ok(json!({
+                    "contract": "rust-data-sync-tick-v1",
+                    "skipped": false,
+                    "due": due,
+                    "round": round,
+                }))
             }
             "network_probe" => {
                 let _guard = self

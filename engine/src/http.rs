@@ -1048,7 +1048,7 @@ async fn unknown_api() -> ApiError {
 }
 
 fn web_root(workspace: &FsPath, configured: Option<PathBuf>) -> PathBuf {
-    let path = configured.unwrap_or_else(|| PathBuf::from("frontend/build"));
+    let path = configured.unwrap_or_else(|| PathBuf::from("apps/shared-web/dist"));
     if path.is_absolute() {
         path
     } else {
@@ -1169,7 +1169,7 @@ mod tests {
     fn static_root_resolves_default_relative_and_absolute_paths() {
         let directory = tempfile::tempdir().unwrap();
         let workspace = directory.path();
-        assert_eq!(web_root(workspace, None), workspace.join("frontend/build"));
+        assert_eq!(web_root(workspace, None), workspace.join("apps/shared-web/dist"));
         assert_eq!(
             web_root(workspace, Some(PathBuf::from("shared-web"))),
             workspace.join("shared-web")

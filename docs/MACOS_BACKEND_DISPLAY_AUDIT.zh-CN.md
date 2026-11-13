@@ -1,14 +1,26 @@
 # macOS 原生界面后端数据展示审计
 
-更新日期：2026-11-12。本文按当前 Rust desktop runtime 返回合同核对实际展示；
-完整逐项映射见 [后端数据与界面展示清单](MACOS_BACKEND_DATA_DISPLAY.zh-CN.md)。
+更新日期：2026-11-13。本文按当前 Rust desktop runtime 返回合同核对实际展示；
+完整逐项映射见 [后端数据与界面展示清单](MACOS_BACKEND_DATA_DISPLAY.zh-CN.md)，
+本轮（Web↔macOS 展示对齐）的逐项缺口与归类见
+[展示字段矩阵](WEB_MACOS_FIELD_MATRIX.zh-CN.md)。
 审计对象是点预测、实况分析和区域预测，不代表真实上游全链路已经验收。
-最终收尾与暂停接续见 [本轮交接](HANDOFF_2026-11-12.zh-CN.md)；
-现有应用包早于最后的后端修复。
+用户最新决定：以 macOS 为产品与 UI 基准，先完善其功能、流程和展示，其他 UI 后续
+对齐；见[基准规范](MACOS_UI_BASELINE.zh-CN.md)。本文的旧 Web 对照是历史字段证据，
+macOS 当前缺陷或未验收状态不自动成为跨端规范。
+2026-11-12 交接见 [HANDOFF_2026-11-12](HANDOFF_2026-11-12.zh-CN.md)；
+现有 `dist/native-macos` 应用包仍早于 2026-11-13 展示批次（本机验证包见「本轮验证」）。
 
 ## 结论
 
-点预测和实况分析的核心结果已经足够支撑附件中的布局：结果摘要、质量指标卡、质量曲线和逐时台账都不需要新增后端字段。此前主要缺口在 SwiftUI 台账只显示了少量字段。本轮已补充逐时台账的可烧状态、可烧云量、云层 AGL、AOD 550、太阳仰角和场景；实况台账也补充了可烧云量和 AOD 550。诊断页同时接入了运行元数据、云体几何支持度、场景分数、数据来源和冻结剖面能力说明；点预测大气剖面页会绘制后端返回的云底、云顶和理论照明基准。
+点预测和实况分析的核心结果已经足够支撑附件中的布局：结果摘要、质量指标卡、质量曲线和逐时台账都不需要新增后端字段。2026-11-12 前主要缺口在 SwiftUI 台账只显示少量字段，已补齐可烧状态、可烧云量、云层 AGL、AOD 550、太阳仰角和场景。2026-11-13 展示对齐批次（对照
+[WEB_MACOS_DISPLAY_PARITY_PLAN](WEB_MACOS_DISPLAY_PARITY_PLAN.zh-CN.md)，71 项缺口盘点）进一步补齐：
+
+- 点预测：趋势图多序列（可烧云占比/可烧比例/回程透过率，0–100% 对齐小图）、独立 AOD550 趋势小图、
+  只读「评分组成」面板（[Workbench.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/Workbench.swift:598)）。
+- 实况：指标按「卫星云况 / 运动采样 / 光学与雷达」分组；回程透过率、多光谱云类等后端缺数项显式「未计算/未接入」。
+- 区域：固定 0–2.5 质量色带与覆盖/缺测/采样标注、缓存快照可辨认标识、城市排行行详情改用行内 point DTO。
+- 诊断页同时接入运行元数据、云体几何支持度、场景分数、数据来源和冻结剖面能力说明。
 
 ## 点预测
 
@@ -31,12 +43,22 @@ Rust 在 `engine/src/point_core.rs` 的 `materialize` 中返回：
 
 当前 macOS 页面可以展示：
 
-- 顶部摘要：峰值质量、质量档位、最佳时刻和推荐窗口。
-- 指标卡：有效可烧云量、云质厚度、亮度色彩、主要云层 AGL、AOD 550、入射受光、返程对比度、持续时长、输入支持度和对流风险。
-- 质量曲线：从 `steps[].valid_time_utc` 或 `steps[].valid_time_local` 与 `steps[].instant_quality_index` 绘制。
-- 逐时台账：时间、质量、档位、可烧状态、可烧云量、云层 AGL、AOD 550、太阳仰角和场景。
-- “诊断与时间窗”：周期、本地锚点、时区、分析半径、场景分数、云体几何支持度、云相/云属代理、AOD 来源、色彩/演化/数据角色、缓存状态和冻结剖面有效性。
-- “大气剖面”：显示结果内嵌的 `cross_section`，并可调用 `profile_query` 读取最佳时刻冻结剖面摘要；实况可选择已发布步骤查询，区域可按网格查询。点预测尚无任意时刻选择器，查询摘要也不替换原有剖面图。
+- 顶部摘要：峰值质量、质量档位、最佳时刻、推荐窗口和起报周期说明。
+- 指标卡：有效可烧云量、云质厚度、亮度色彩、主要云层 AGL、AOD 550、入射受光、返程对比度、持续时长、输入支持度和对流风险；同一字段的百分比口径与台账/统计一致。
+- 「评分组成」分项面板：只读展示基础分、持续时间修正、入射削光、观测对比度等贡献值与方向，
+  并标明几何遮挡已含在可烧云量、不重复扣分；不在 SwiftUI 重算。
+- 质量曲线：`steps[].instant_quality_index`，固定 0–2.5 轴；比例序列（可烧云占比/可烧比例/回程透过率）
+  用 0–100% 对齐小图；AOD550 独立小图（`steps[].quality_aod550`）；缺测断线不补零；
+  悬停读数与最佳时刻标记。
+- 逐时台账：时间、质量、档位、可烧状态、可烧云量、云层 AGL、亮度颜色、可烧比例、入射阻挡、
+  AOD 550、太阳仰角和场景；带最佳时刻与当前选中时刻标记。
+- 「诊断与时间窗」：周期、本地锚点、时区、分析半径、场景分数、云体几何支持度、云相/云属代理、
+  AOD 来源、色彩/演化/数据角色、缓存状态和冻结剖面有效性。
+- 「大气剖面」：显示结果内嵌 `cross_section`（含温度、RH、云量、地形与理论照明图层与图例），
+  并可调用 `profile_query` 读取最佳时刻冻结剖面摘要；实况可选择已发布步骤查询，区域可按网格查询。
+  点预测尚无任意时刻选择器，查询摘要不替换原有剖面图。2026-11-13 源码核对：
+  `profile_query` 已按 `valid_time_utc` 查询冻结模式剖面，forecast 装配也已读取
+  `offset_minutes`；后续先复用现有合同，不预设必须新增 RPC 字段。
 
 峰值数值必须配 `peak_quality_level`，不能配事件整体的 `quality_level`。
 `model_disagreement_score` 当前为占位零，未计算真实跨模式分歧，本轮不再用它作主卡指标。
@@ -62,14 +84,17 @@ Rust 在 `engine/src/nowcast_runtime.rs` 返回：
 当前 macOS 页面可以展示：
 
 - 实况摘要、最佳时刻、卫星观测时间。
-- 卫星云况、运动与约束、采样与光学指标卡。
-- 质量变化曲线。
+- 「卫星云况 / 运动采样 / 光学与雷达」三组指标卡；低云状态按后端合同
+  `detected|clear|unknown`（[desktop_nowcast_adjustment.rs](/Users/xiaoyang/晓洋站点/firesky/engine/src/desktop_nowcast_adjustment.rs:227)）映射中文；回程透过率序列、
+  多光谱云类概率等后端缺数项显式标注「后端未计算」，不冒充观测。
+- 质量变化曲线（固定 0–2.5 轴、缺测断线、最佳时刻标记与悬停读数）。
 - 卫星云层后验冻结剖面，优先按峰值步骤太阳方位选择最近的实际采样方位；不可烧且没有最佳时刻时取首个有效诊断步骤。实际方位会标明，缺少方位依据时显示原因，不混叠方向。
-- 云体运动和雷达诊断。
+- 云体运动和雷达诊断（雷达未接入时显式标注「后端未接入雷达观测」）。
 - 逐时台账：时间、质量、档位、可烧状态、可烧云量、AOD 550、太阳仰角。
 
 实况逐时结果没有与点预测同等的模式云底/云顶字段，因此台账只展示后端实际返回的字段，不填充虚构的云层高度。
-实况报告顶层没有 `cross_section`；后端冻结剖面查询能力不代表 macOS 已有逐时查询入口。
+实况报告顶层没有 `cross_section`；「尚无逐时查询入口」的旧说法已过时：实况大气剖面页已提供按
+steps 选择时次的冻结查询入口（Picker＋「读取」按钮），查询摘要不替换静态概率图。
 
 ## 区域预测
 
@@ -90,11 +115,11 @@ Rust 在 `engine/src/desktop_runtime.rs` 的区域结果中返回：
 
 当前页面可以展示：
 
-- GFS、ECMWF 质量网格。
-- GFS/EC 独立峰值和有效网格统计。
-- 城市排名和最佳时刻。
-- 网格详情、质量指数和剖面查询入口。
-- 区域覆盖范围、网格精度和模式周期。
+- GFS、ECMWF 质量网格（固定 0–2.5 色带，不按单次预测拉伸；缺测网格透明、不进有效排行）。
+- GFS/EC 独立峰值和有效网格统计；覆盖范围、网格精度、采样格点与缺测统计标注；跨 ±180° 区域保持网格连续。
+- 城市排名和最佳时刻；点击城市行时详情使用行内携带的 point DTO（坐标不落 0.25° 格点也不误报「缺测」）。
+- 网格详情、质量指数和剖面查询入口（弹窗字段全部来自区域 DTO：峰值/事件质量、档位、置信度、云族与质量组成）。
+- 缓存快照可辨认标识：`cache.status == "hit"` 时标注「缓存快照 · 生成于 …UTC」。
 - 数据准备秒数、原生阶段耗时毫秒数。
 
 `frame_data` 是地图渲染所需的原始网格数据，适合交给地图图层处理，不适合在普通文本卡片中展开。
@@ -130,8 +155,10 @@ Rust 在 `engine/src/desktop_runtime.rs` 的区域结果中返回：
    已有源码修复及科学回归；真实双侧下载和连续地图实机显示仍未验收。
 
 6. **长期历史结果恢复**  
-   当前历史入口使用 `read_cache`，有 300 秒、同源码版本、源文件和周期有效性限制。
-   `hello` 虽声明 `result_restore`，但目前没有对应 RPC 实现。需要独立不可变快照才能与原始数据保留周期解耦。
+   历史入口已使用 `result_restore(task_id)` 与内容寻址不可变快照；Rust 分发和 Swift
+   `Store.restore` 均已接入。300 秒 TTL、同源码/输入/周期限制属于计算缓存 `read_cache`，
+   不再用于限制历史结果恢复。快照按报告保留策略回收，缺失/篡改时明确失败；新包 GUI、
+   真实长期运行仍待验收。冻结剖面查询源有独立有效期，恢复结果不代表可无限期重算剖面。
 
 7. **全球实况范围**  
    未知地点 EAST_ASIA 回落已移除，按实际球面光路/采样范围规划并修正 GFS 跨线裁剪。
@@ -139,14 +166,34 @@ Rust 在 `engine/src/desktop_runtime.rs` 的区域结果中返回：
 
 ## 对应代码
 
-- 点预测摘要、指标和曲线：[Workbench.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/Workbench.swift:380)
-- 点预测逐时台账：[Workbench.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/Workbench.swift:656)
-- 实况摘要和指标：[Workbench.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/Workbench.swift:996)
-- 实况逐时台账：[Workbench.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/Workbench.swift:1190)
-- AOD 读取：[ForecastComparison.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/ForecastComparison.swift:21)
-- 区域结果解析：[RegionalForecast.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/RegionalForecast.swift:44)
+- 点预测摘要、指标和曲线：[Workbench.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/Workbench.swift:397)
+- 点预测「评分组成」面板：[Workbench.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/Workbench.swift:598)
+- 点预测对比曲线与 AOD 小图：[Workbench.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/Workbench.swift:744)
+- 点预测逐时台账：[Workbench.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/Workbench.swift:1293)
+- 点预测大气剖面：[Workbench.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/Workbench.swift:1580)
+- 区域页（色带/排行/缓存标识/城市详情）：[Workbench.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/Workbench.swift:2056)
+- 实况摘要与指标分组：[Workbench.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/Workbench.swift:2494)
+- 实况卫星剖面与冻结查询：[Workbench.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/Workbench.swift:2706)
+- AOD 读取（缺测显示「暂无来源」，不再空标 CAMS）：[ForecastComparison.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/ForecastComparison.swift:34)
+- 低云状态映射（detected/clear/unknown）：[NowcastPresentation.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/NowcastPresentation.swift:71)
+- 区域结果解析（含 cacheStatus 与城市行 point DTO）：[RegionalForecast.swift](/Users/xiaoyang/晓洋站点/firesky/apps/macos/Sources/FireSkyNative/RegionalForecast.swift:126)
 
 ## 本轮验证
+
+### 2026-11-13 展示对齐批次
+
+- 实现由动态工作流完成（71 项缺口：单点 24/实况 26/区域 21；三块串行实现，13 个文件改动，
+  Rust DTO 零改动——弹窗字段已在 `points[]`/`quality_components`）。
+- 门禁：swift build、cargo test、全量 pytest（2031 项）、前端合同测试（27 项）最终全绿；
+  快级门禁 3 轮收敛。
+- 独立复核 17 条意见（15 修/2 驳）：AOD 来源空声明、低云状态枚举映射、城市排行详情误报缺测、
+  区域缓存状态缺失、`quality ?? 0` 潜伏模式、缺测占位符统一、VoiceOver 选中态等均已修复并复跑门禁。
+- 本机验收：`FIRESKY_NATIVE_DIST=/tmp/firesky-parity-macos bash scripts/build_macos_native.sh`
+  构建全新 app；`scripts/test_macos_native.sh`（C FFI、Swift FFI、fixtures、bundle smoke）通过；
+  另清理 `ForecastComparison.swift` 一处未使用变量警告后重验通过。
+- 原生 UI 可访问性树走查单点/区域/实况页与缺测状态（等待态、后端未计算标注如实呈现）。
+
+### 2026-11-12 交接批次（保留）
 
 - macOS ARM64 release 构建与应用打包通过；C FFI、Swift FFI、Swift fixtures 和 bundle smoke 通过。
 - 新增 JSON 数值 0/1 与布尔值、null/非有限数、卫星方位选择、不可烧但仍有剖面、
@@ -156,5 +203,15 @@ Rust 在 `engine/src/desktop_runtime.rs` 的区域结果中返回：
 - 展示批次 Rust：184 单元测试及 4 进程测试通过，2 项忽略。
   后续最终冻结源码为 engine 191 单测及 4 进程测试通过、3 项忽略，native 154 项通过；
   相关科学回归 238 项通过。后端收尾后未重新打包，不与展示批次混称同版本验收。
-- 截图使用明确标记的 UI fixture，不是实际预测。以上不代表真实 CAMS 全链路、
+
+### 仍未覆盖（2026-11-13 批次）
+
+- 当前跨批次状态与执行顺序见[最新接续计划](NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。
+  退役批次另有 pytest 2032 通过、1 跳过、2 项区域 CLI fixture 超时记录；上方展示
+  批次全绿不能替代当前工作区的统一门禁。本次文档核对未重跑这些测试。
+- 像素级视觉走查（1440×900、1120×720、窄窗口、浅色/深色、长标签/负高度/全无效态）与
+  VoiceOver/键盘真机走查未做；图表 accessibility 已在代码层补齐（选中态标签、逐行可读标签）。
+- 2026-11-13 批次未重新触发真实预测/数据下载；以上验证为 fixture/合同级，不代表真实 CAMS 全链路、
   全球实况、跨日界线区域或其他平台已验收。
+- 缓办项：点预测剖面任意时次选择器（先复用 `profile_query.valid_time_utc` 并核对 UI 接线）、
+  GFS 云相/冰含量与多光谱云类概率（后端缺数，独立立项）、实况地图（单独立项）。

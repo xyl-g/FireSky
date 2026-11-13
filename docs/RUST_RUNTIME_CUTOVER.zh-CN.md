@@ -1,9 +1,14 @@
 # Rust 原生运行时切换与验收
 
-日期：2026-11-12。
+更新日期：2026-11-13（当前状态与路径复核；历史验证批次保留）。
 
-本次收尾、用户要求暂停及后续顺序见 [交接记录](HANDOFF_2026-11-12.zh-CN.md)。
-本文历史验证记录不等于暂停时最新脏工作区的全部源码已通过最终同版本验收。
+当前状态与后续顺序见[最新接续计划](NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)，
+旧批次收尾/暂停记录见[交接记录](HANDOFF_2026-11-12.zh-CN.md)。本文历史验证记录
+不等于当前脏工作区已通过最终同版本验收；退役批次有两项区域 CLI fixture 超时待定位。
+
+用户当前优先级：先完善并验收 macOS；macOS 是产品与 UI 基准，其他端后续向其对齐，
+详见[基准规范](MACOS_UI_BASELINE.zh-CN.md)。Docker 路径与镜像门禁属于后续 Web 部署，
+不作为当前 macOS 流程/发布验收的前置条件；最终全项目验收仍逐端记录实际结果。
 
 ## 当前结论
 
@@ -19,7 +24,7 @@ Python 的分支。Python 源码保留为旧入口、数值差分 oracle 和测�
 `RUST_MIGRATION_PLAN.md` 的阶段清单保留为历史基线，不能据其推断当前启动入口。
 正式桌面方向已改为平台原生 UI + Rust FFI：先完成 macOS SwiftUI/AppKit，
 再按同一 C ABI 扩展 Windows/Linux 原生客户端；Docker/Web 继续由 Rust HTTP
-服务提供。Tauri 页面冻结为合同和回归参考，不再作为桌面产品主线。桌面 FFI
+服务提供。2026-11-13 共享页面迁至 `apps/shared-web/`，Tauri 桌面壳已删除。桌面 FFI
 合同与 macOS 门禁见 `NATIVE_UI_FFI_MIGRATION.zh-CN.md`；旧联合清单
 `TAURI_RUST_JOINT_MIGRATION.zh-CN.md` 仅保留历史 Web/HTTP 迁移记录。
 
@@ -60,7 +65,7 @@ HTTP 请求单模式时投影为对应点/区域报告。点/区域计算前须�
 桌面 check/prepare/forecast 会话或 HTTP 数据下载任务准备。普通实况请求原生
 解析 HSD、GFS、CAMS；`allow_download: false` 仅使用本地输入，缺失即报错。
 显式 `aerosol` 输入可用于冻结对照，但不能把这种运行记作真实 CAMS 输入验收。
-`make serve-python` 和 `make legacy-install` 是显式旧版/对照入口，不是原生服务的依赖。
+`make serve-legacy-python`（原名 `make serve-python`，2026-11-13 更名）和 `make legacy-install` 是显式旧版/对照入口，不是原生服务的依赖。
 
 ## 已实现的生产路径
 
@@ -70,10 +75,12 @@ HTTP 请求单模式时投影为对应点/区域报告。点/区域计算前须�
 | HSD | S3 分页 XML 发现、完整 B07/B13/B15 扫描选择、受限下载、串联 bz2 解压、原始亮温标定、AHI `sweep=y` 椭球投影、紧凑 NPZ 原子发布和生产读取器回读。 |
 | 实况 | 多帧选择、B13 运动和平流、真实 GFS 时次先验、CAMS 光路、逐观测物理评估、雷达约束、事件质量和前端报告组装。高级冻结输入路径仍可供差分测试使用。 |
 | 雷达 | RainViewer 元数据、PNG、Universal Blue 调色板、覆盖/局地/路径降水和对流风险。不可用或覆盖不足保留 unknown，不当作晴空；离线实况不自动访问雷达网络。 |
-| 桌面 | Rust 拥有运行时、任务、进度、取消、数据准备、单次确认令牌和受约束的结果恢复；原生客户端通过版本化 C FFI 调用，点/区域/实况均接入 check/prepare/forecast。macOS SwiftUI 已接入 dylib、任务历史/事件/恢复/重试入口并有双架构 bundle smoke；Windows WinUI/C# 已接入 DLL，Linux 已有 C++20 FFI 客户端 smoke。两端目标机 UI/打包/真实数据仍待验收。JSONL 仅保留开发诊断，Tauri 页面冻结。 |
+| 桌面 | Rust 拥有运行时、任务、进度、取消、数据准备、单次确认令牌和结果快照恢复；原生客户端通过版本化 C FFI 调用，点/区域/实况均接入 check/prepare/forecast。macOS SwiftUI 已接入 dylib、任务历史/事件/恢复/重试；Windows WinUI/C# 已接入 DLL，Linux 已有 C++20 FFI 客户端 smoke，后两平台开发暂停。JSONL 仅保留开发诊断；共享 Web 已独立，Tauri 壳已删除。各批 bundle smoke 不替代最终同源码交付验收。 |
+| 后台数据同步 | `desktop_sync` 与 macOS 设置/心跳/立即同步已实现，默认关闭；CAMS/GFS/EC 最新 verified 周期与独立状态/熔断/任务历史接线。设计 A1–A8 真实同步验收仍待完成，不包含卫星后台调度。 |
 | 报告 | 点/实况报告由 Rust 渲染 HTML，按完整内容 SHA 注册到独立目录，原子发布；HTTP 读取复核文件类型、大小和内容 SHA。 |
 | 实况地图 | 显式请求 `include_map_cells: true` 时，由真实评估格点发布地图帧；严格 16 字段帧/13 字段格点、范围和时序校验，内容 SHA token、gzip 原子存储。未产生格点时明确不可用。 |
 | 缓存 | 独立 `rust-native-runtime-cache-v1` 命名空间，请求和源码身份、300 秒 TTL、报告/注册表原子发布、读取时重新验证冻结源 SHA 和模式周期。旧 Python 缓存不冒充新缓存。 |
+| 历史恢复与保留 | `result_restore(task_id)` 读取不可变内容寻址快照，与上述计算缓存分离；周期/天数保留、快照读租约和存活地图引用保留已实现。冻结剖面源另有有效期，历史结果恢复不承诺重新计算过期剖面。 |
 | 发布 | macOS 构建脚本将 Rust 引擎、ecCodes 动态库依赖闭包、definitions/samples 和许可证打包，重写 loader 路径并签名。Windows 构建加入 Cargo/预编译引擎资源与可选 ecCodes 包。Docker 运行层为 Debian + Rust + ecCodes，无 Python。 |
 
 原生区域契约为 `rust-desktop-regional-forecast-v1` / `native-object-v1`。
@@ -107,7 +114,7 @@ HTTP 请求单模式时投影为对应点/区域报告。点/区域计算前须�
 | `GET /data/status` | 本地数据清单；不把文件数量伪装成某请求 ready，也不声称上游周期已探测。 |
 | `POST /data/requirements`、`/data/fetch`；`GET /data/fetch/status` | 原生事件计划、GFS/EC/CAMS 下载任务和状态。范围为 1–7 天、dawn/dusk、非跨日界线 bbox；显式 CAMS run pin 尚不支持。 |
 | `POST /data/prune` | 仅允许配置的缓存目录，移动可重建缓存到 `.trash`，不 unlink；数据库、锁、符号链接和已有回收区不处理。`freed_mb` 表示移出活动缓存量，`reclaimed_disk_mb` 为 0。 |
-| SPA | 默认托管 `frontend/build`，可用 `FIRESKY_WEB_ROOT` 指定共享页面产物；Docker 将 `apps/desktop-tauri/dist` 放入该默认目录。部分旧点预测/位置别名保留。 |
+| SPA | 默认托管 `apps/shared-web/dist`，可用 `FIRESKY_WEB_ROOT` 覆盖；Makefile 与 Docker 构建 shared-web。Docker COPY 到 `/app/frontend/build` 且无覆盖变量，与默认根不一致，列入后续部署修复及首页/资源验收。Web UI 后续按 macOS 基准对齐，旧 `frontend/` 能力逐页核对。 |
 
 四个传输 worker；每个 Runtime 同时只允许一个重计算/准备操作，忙时拒绝，
 不能把四 worker 写成四个大范围预测的并行吞吐。任务注册上限 32、
@@ -176,16 +183,18 @@ Rust **33.31 ms**，约 **2.19 倍**，耗时降低 **54.4%**；计时前验证�
 - 模式单点完整云场地图未接入；用户在后续 Q04 确认不再需要，已从迁移实现范围
   排除，后续仅清理对应废弃入口/协议。点报告不携带地图格点。
   实况 token/time 地图、区域地图和点报告内联剖面保留，不受该决定影响。
-  地图缓存尚无配额和自动回收。
-- 原有 `/forecasts/national/diagnostic`、热门城市缓存预热、卫星管理预热任务、
-  national refresh、Redis latest-cycle refresh 仍需接线。
-  未注册路由明确 501；部分原生底层 helper 已存在，但不算对应 API 已完成。
+  地图已随报告/存活快照引用及保留策略回收；真实长期磁盘释放仍需验收，不采用容量配额代替用户确认的周期/天数规则。
+- 通用 HTTP 区域独立诊断和仍有消费者的管理刷新 API 尚需核对/接线。
+  城市排名已并入区域任务；卫星按需准备，不新增常驻后台预热；发布探测与模式后台
+  同步已有实现，不机械复刻旧 Redis/预热接口。未注册路由明确 501，保留/退役依消费者矩阵决定。
 - Qt/PySide 旧界面、旧 Python 包 API/脚本继续需要 Python；它们不属于新的原生
   启动入口。尚未删除或承诺兼容所有旧 Python 入口。
 - macOS 原生 UI 已默认加载 `libfiresky_engine.dylib`，正式 bundle 不启动 Python；
   FFI 生命周期、动态库卸载、资源路径、Swift/C ABI 和预检冷启动已通过本机 smoke，
   CI 已加入 ARM64/x86_64 矩阵。真实 CAMS 冷/热链路、clean-machine、Developer ID
-  签名/公证仍未验收。Windows 已按同一合同接入 `firesky_engine.dll`，Linux 已有
+  签名/公证仍未验收。11 月 13 日已有北京/广州真实 GFS 点冷准备与缓存复用，详见
+  `CAMS_DUAL_ROUTE_PROPOSAL.zh-CN.md`；不能替代 EC/区域/实况和当前源码统一验收。
+  Windows 已按同一合同接入 `firesky_engine.dll`，Linux 已有
   `libfiresky_engine.so` C++20 适配和 smoke；两端目标机 UI、安装包和真实数据仍未验收，
   不能用冻结 Tauri 页面替代。
 - Windows/Linux 原生 UI 的任务历史、结果恢复和手动重试入口尚未全部接入；

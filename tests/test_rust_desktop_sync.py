@@ -21,8 +21,6 @@ import time
 
 import pytest
 
-from test_rust_migration import engine_binary
-
 NOW = "2026-11-13T15:00:00Z"
 STATE_CONTRACT = "rust-data-sync-state-v1"
 SETTINGS_CONTRACT = "rust-data-sync-settings-v1"

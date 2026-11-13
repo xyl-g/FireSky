@@ -16,7 +16,10 @@ use std::{
     fs::{self, File, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
-    sync::{Condvar, Mutex, OnceLock},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Condvar, Mutex, OnceLock,
+    },
     time::{Duration as StdDuration, Instant},
 };
 
@@ -640,7 +643,7 @@ pub(crate) fn resolve(
     targets: Vec<DateTime<Utc>>,
     config: Config,
 ) -> Result<Value, String> {
-    run(Params {
+    execute(Params {
         operation: "resolve".into(),
         cache_dir: root.to_owned(),
         area: json!(area),
@@ -655,9 +658,25 @@ pub(crate) fn resolve(
 }
 
 pub fn execute(params: Params) -> Result<Value, String> {
-    run(params)
+    execute_cancellable(params, &AtomicBool::new(false))
 }
-fn run(params: Params) -> Result<Value, String> {
+
+fn check_cancelled(cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Acquire) {
+        Err("desktop operation cancelled".into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Cancellable variant for interactive desktop paths. The flag is checked at
+/// every target/group boundary so a cancelled prepare/sync round stops before
+/// the next ADS queue instead of running the whole continent batch to the end.
+pub fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result<Value, String> {
+    check_cancelled(cancel)?;
+    run(params, cancel)
+}
+fn run(params: Params, cancel: &AtomicBool) -> Result<Value, String> {
     let started = Instant::now();
     params.config.validate()?;
     let exact = params.require_exact_valid_time;
@@ -728,6 +747,7 @@ fn run(params: Params) -> Result<Value, String> {
             decode_ms: 0.0,
         };
         if params.operation == "download" {
+            check_cancelled(cancel)?;
             results.insert(
                 missing[0],
                 single(
@@ -744,6 +764,7 @@ fn run(params: Params) -> Result<Value, String> {
         } else {
             let mut groups = BTreeMap::<(NaiveDate, String), Vec<(DateTime<Utc>, Run)>>::new();
             for &target in &missing {
+                check_cancelled(cancel)?;
                 if let Some(run) = availability.choose(&mut session.ads, target)? {
                     groups
                         .entry((run.day, run.clock.clone()))
@@ -753,6 +774,7 @@ fn run(params: Params) -> Result<Value, String> {
             }
             groups_count = groups.len();
             for group in groups.values() {
+                check_cancelled(cancel)?;
                 let run = &group[0].1;
                 let mut leads: BTreeSet<_> = group
                     .iter()
@@ -801,6 +823,7 @@ fn run(params: Params) -> Result<Value, String> {
                     if results.contains_key(&target) {
                         continue;
                     }
+                    check_cancelled(cancel)?;
                     fallbacks += 1;
                     results.insert(
                         target,

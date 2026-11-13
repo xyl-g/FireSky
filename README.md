@@ -7,6 +7,9 @@ An independent burning-sunset prediction stack: **native Rust prediction engine 
 
 > English documentation: [README.en.md](README.en.md)
 
+> 当前主线：以 [macOS 产品与 UI 基准](docs/MACOS_UI_BASELINE.zh-CN.md)完善原生端，
+> 其他 UI 最终向其对齐；状态与顺序见 [2026-11-13 接续计划](docs/NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。
+
 ---
 
 ## 目录 / Contents
@@ -16,7 +19,7 @@ An independent burning-sunset prediction stack: **native Rust prediction engine 
 3. [系统要求与安装](#系统要求与安装)
 4. [数据源与注册要求（重要）](#数据源与注册要求)
 5. [配置说明](#配置说明)
-6. [使用：后端 / 前端 / CLI / Python API](#使用)
+6. [使用：后端 / 前端 / CLI](#使用)
 7. [API 端点清单](#api-端点清单)
 8. [测试与不变量回归](#测试与不变量回归)
 9. [目录结构](#目录结构)
@@ -31,10 +34,10 @@ An independent burning-sunset prediction stack: **native Rust prediction engine 
 - **点预测**：单观测点朝/晚霞逐五分钟质量台账（指数 + 档位：无明显火烧云 → 世纪大烧）
 - **区域预测**：中国/东亚等区域批量观测点评分 + 地图帧 + 大气剖面
 - **实况 nowcast**：向日葵 9 号卫星（HSD 分段）云柱反演 + 天气雷达对流修正
-- **后端服务**：Rust/Axum 异步 job + SSE + gzip + 严格输入身份缓存；旧 FastAPI 入口仅用于兼容和对照
+- **后端服务**：Rust/Axum 异步 job + SSE + gzip + 严格输入身份缓存
 - **最小前端**：`/forecast`（点/区域预测）、`/now`（实况）、`/outlook`（形势图）、`/admin`（管理控制台）
 - **原生桌面**：正式路线是 macOS SwiftUI/AppKit + Rust FFI，Windows WinUI 3 和 Linux 原生 UI
-  按同一 ABI 后续对齐；[构建与迁移状态](apps/README.md)。PySide6 入口保留兼容。
+  按同一 ABI 后续对齐；[构建与迁移状态](apps/README.md)。
 
 ## 架构与物理原理
 
@@ -71,7 +74,7 @@ $$\Delta\tau_c=b^{1.35}\frac{\Delta s}{140\ \mathrm{km}},\qquad
 $$\mathrm{pre}=q_{\rm cov} f_m \iota c f_D,\qquad
   q=\min\left(2.5, 1.225 \mathrm{pre}^{1.2}\right)$$
 
-   算法版本 `2026.11.04.87`。评分实现位于 `native/` 和 `engine/`，Python 对照版本保留在 `src/firesky/`。完整推导见[原理文档](docs/PRINCIPLES.md)。
+   算法版本 `2026.11.04.87`。评分实现位于 `native/` 和 `engine/`。完整推导见[原理文档](docs/PRINCIPLES.md)。
    The empirical layer: amount anchors $q_{\rm cov}$ → material factor $f_m=m/0.72$ → inflow AOD illumination
    $\iota$ → return-leg AOD contrast $c$ → best-continuous-20-minute window integral with duration factor $f_D$
    → calibrated response curve → level labels, as in the formula above. Algorithm version `2026.11.04.87`.
@@ -79,19 +82,15 @@ $$\mathrm{pre}=q_{\rm cov} f_m \iota c f_D,\qquad
 
 ## 系统要求与安装
 
-2026-11-11：默认服务/CLI/原生桌面启动已改为 Rust，无 Python 运行时依赖。
-已实现范围、旧接口差异和验收缺口见 [原生运行时切换](docs/RUST_RUNTIME_CUTOVER.zh-CN.md)；
-不应把切换默认入口等同于全部旧功能已验收。
+服务/CLI/原生桌面运行时均为 Rust，无 Python 运行时依赖。
+已实现范围与验收缺口见 [原生运行时切换](docs/RUST_RUNTIME_CUTOVER.zh-CN.md)。
 
 | 依赖 | 版本 | 用途 | 必需? |
 |---|---|---|---|
-| Python | ≥ 3.11 | 旧版入口、差分 oracle / 测试 | 原生运行不需要 |
 | Rust (cargo) | 当前稳定版 | 独立原生引擎编译 | 构建需要 |
 | Node.js + npm | ≥ 20 | 前端构建 | 前端需要 |
-| numpy / requests / astral / eccodes | 见 `pyproject.toml` | Python 对照实现 | 仅旧版/测试 |
-| fastapi / uvicorn / pyyaml / httpx | 同上 | 旧后端服务 | 仅旧版 |
-| pillow / h5py / cdsapi | 同上 | Python 雷达 / 卫星 / ADS 对照 | 仅旧版/测试 |
 | eccodes 二进制库 | ecCodes ≥ 2.33 | Rust 通过 C ABI 解码 GRIB；需 definitions/samples | ✅ |
+| Python + pytest/numpy | ≥ 3.11 | 仅现架构契约测试与资源/数据工具（`scripts/`） | 运行不需要 |
 
 ```bash
 # 构建引擎与前端，不安装 Python 包
@@ -136,24 +135,12 @@ curl -X POST http://127.0.0.1:8765/api/v1/firesky/data/fetch -H 'Content-Type: a
 ```
 
 > 评分读取严格校验的 CAMS 缓存，缺少完整时空覆盖时明确报错，不虚构 AOD。
-> 数据准备由 Rust 直接访问 ADS，仍需账号和许可。旧 YAML 的
-> `satellite_warmup_token` 仅适用于显式 Python 服务，不为原生服务提供鉴权。
+> 数据准备由 Rust 直接访问 ADS，仍需账号和许可。
 
 ## 配置说明
 
-原生运行时使用 [环境变量](docs/RUST_RUNTIME_CUTOVER.zh-CN.md#配置) 和命令行参数。
-以下 YAML 字段仅适用于显式旧 Python 入口：
-`src/firesky/config/web_server.yaml`，可用 `FIRESKY_CONFIG` 指向自定义副本。
-
-| 字段 | 默认 | 说明 |
-|---|---|---|
-| `server.host` / `server.port` | 127.0.0.1 / 8765 | 后端监听 |
-| `server.workers` | null | 预测并行进程数（null=自动） |
-| `server.aerosol_source` | cams | `auto` / `cams` / `fallback`（fallback=无 CAMS 时用 Open-Meteo 空气质量 AOD） |
-| `server.*_cache_dir` | `.cache/firesky/*` | GFS / ECMWF / CAMS / 地图帧 / 区域 / 单点 / 卫星缓存目录 |
-| `server.satellite_warmup_token` | null | 卫星预热管理端点的本地令牌（设了才开网络预热） |
-| `server.forecast_cache_seconds` | 300 | 预测响应内存缓存秒数 |
-| `logging.*` | INFO / logs / firesky | 日志级别 / 目录 / 应用名 |
+原生运行时使用 [环境变量](docs/RUST_RUNTIME_CUTOVER.zh-CN.md#配置) 和命令行参数；
+Docker 部署的目录约定见 `docker/Dockerfile` 与 [部署文档](docs/DEPLOY.md)。
 
 ## 使用
 
@@ -162,7 +149,7 @@ curl -X POST http://127.0.0.1:8765/api/v1/firesky/data/fetch -H 'Content-Type: a
 ```bash
 make serve
 # 前端已构建时直接访问 http://127.0.0.1:8765/forecast
-# 开发模式前端：cd frontend && npm run dev -- --host 5173（API 走 /api 代理到 8765）
+# 开发模式前端：cd apps/shared-web && npm run dev -- --host 5173（API 走 /api 代理到 8765）
 ```
 
 ### CLI（引擎直用，不起服务）
@@ -172,27 +159,10 @@ engine/target/release/firesky-engine forecast --input request.json --workspace "
 # JSON 请求示例及字段见原生运行时文档
 ```
 
-### Python API（保留的旧版/对照入口）
-
-```python
-from datetime import datetime, timezone
-from firesky import predict_burn_sky
-
-result = predict_burn_sky(
-    [{"name": "杭州", "lat": 30.27, "lon": 120.15, "elevation_m": 12.0,
-      "timezone_name": "Asia/Shanghai"}],
-    "2026-11-05",
-    "dusk",
-    datetime(2026, 11, 4, 12, tzinfo=timezone.utc),   # GFS 周期
-    cams_cache_dir=".cache/cams",
-)
-print(result["points"][0]["peak"]["quality_level"])
-```
-
 ## API 端点清单
 
 原生已注册接口及未完成清单见 [原生运行时切换](docs/RUST_RUNTIME_CUTOVER.zh-CN.md#http-范围)。
-以下为旧版完整 API 清单；不能据此假定每个接口已移植。旧版参数、返回字段与调用示例见 [预测接口说明](docs/FORECAST_API.md)。
+参数、返回字段与调用示例见 [预测接口说明](docs/FORECAST_API.md)。
 
 | 端点 | 方法 | 说明 |
 |---|---|---|
@@ -207,92 +177,64 @@ print(result["points"][0]["peak"]["quality_level"])
 | `/api/v1/firesky/points/metadata`、`/locations/search` | GET | 观测点元数据 / 地名搜索 |
 | `/api/v1/firesky/data/*` | POST/GET | 数据下载计划器（`data/fetch` 异步 job，`sources` 含 `gfs`/`ecmwf`/`cams`）+ 状态/清理 |
 | `/api/v1/firesky/cache/warmup` | POST | 热门城市预测缓存预热 |
-| `/api/v1/firesky/satellite/cache/warmup` | POST | 卫星缓存预热（需 `satellite_warmup_token`，请求头 `x-firesky-warmup-token`） |
 | `/{full_path}` | GET | SPA fallback（前端客户端路由） |
 
 ## 测试与不变量回归
 
 ```bash
 make test-rust
-make test                                  # 需要 Python 差分依赖
-cd frontend && npm run check && npm run build # 0 errors
+make test                                  # 现架构契约测试，需 pytest/numpy
+cd apps/shared-web && npm run check && npm run build # 0 errors
 ```
 
-- `tests/test_scoring_invariants.py`：评分不变量回归（统一 20 分钟窗口：短 run 等值 /
-  边界连续；LCL 云底；NaN 档位防护；响应曲线单调性）。
-- `tests/test_backend_api.py`：服务契约（health / contract / 异步 job 失败语义）。
-- 改动 `native/src/*.rs` 后先 `./scripts/build_native_variants.sh` 再跑 pytest
-  （否则 pytest 用的是旧 dylib，会误判）。
+- `tests/test_rust_hsd_raw.py`：HSD 标定原生契约（Python 仅作测试 oracle）。
+- `tests/test_rust_desktop_sync.py`：后台数据同步助手 JSONL 桥契约（设置持久化、
+  到期门禁、熔断与解锁、fail-closed）。
+- `tests/test_native_preparation_ui.py`：macOS Swift 准备/展示逻辑编译检查。
+- 改动 `native/src/*.rs` 后先 `./scripts/build_native_variants.sh` 再跑测试
+  （否则加载的是旧 dylib，会误判）。
 
 ## 桌面应用（本地单机）
 
 当前正式桌面先交付 macOS SwiftUI/AppKit + Rust FFI；Windows WinUI 和 Linux
 原生 UI 只按 macOS 的 ABI、预检和任务生命周期合同扩展。[构建与迁移状态](apps/README.md)
-记录各平台的实际验收边界。Tauri 桌面壳已冻结，仅保留为共享 Web/合同参考，不是正式桌面发布路径。
-
-### 旧 PySide6 兼容版（legacy）
-
-以下命令仅构建或运行旧 Python 桌面，不是默认原生发布流程。它仍需要 Python
-及对应依赖，不能用来证明整个桌面产品已 Python-free。
-
-```bash
-# 开发运行
-.venv/bin/python desktop/app.py
-
-# 打包（macOS 出 FireSky.app / Windows 出 exe 目录）
-pip install pyinstaller
-pyinstaller desktop/FireSky.spec --noconfirm
-
-# macOS 出 dmg（把 .app 装进磁盘镜像）
-hdiutil create -volname FireSky -srcfolder dist/FireSky.app -ov -format UDZO FireSky.dmg
-```
-
-上述 PySide6 兼容界面包含观测点表单、日期/现象/模式选择、进度和曲线。
-其 PyInstaller 产物不属于当前 Rust 原生发布验收。
+记录各平台的实际验收边界。Tauri 桌面壳与旧 PySide6 桌面均已退役（2026-11-13）：
+共享 Web 迁至 `apps/shared-web/`，由 Rust HTTP 与 Docker 托管；旧版用户数据
+（`~/.firesky-desktop/` 收藏点与当前点）由 macOS 新版启动时自动导入。退役记录见
+`docs/PYTHON_TAURI_PYSIDE_RETIREMENT_PLAN.zh-CN.md`。
 
 ### 地图底图与天地图 Key
 
-旧 PySide6 兼容版的选点地图是本地 Leaflet（`desktop/assets/`，随包分发）+ QWebEngine，
-双底图源，**地图只用于选点，不叠加任何预报结果**：
+共享 Web 的选点地图双底图源，**地图只用于选点，不叠加任何预报结果**：
 
 | 底图源 | 适用区域 | 底图类型 | Key |
 |---|---|---|---|
 | 天地图（默认） | 中国境内 | 影像 / 矢量 / 地形 | 需自备 |
-| Esri | 仅中国境外 | 影像 / 街道 / 地形 | 免 Key |
+| OpenFreeMap | 全球 | 影像 / 街道 | 免 Key |
 
 天地图 Key 在 [console.tianditu.gov.cn](https://console.tianditu.gov.cn) 申请，
-应用类型选「浏览器端」。注入方式三选一（优先级从高到低）：
-
-1. 环境变量 `FIRESKY_TIANDITU_KEY`
-2. 应用内「数据与缓存 → 地图服务」填入 → 写入 `~/.firesky-desktop/config.json`
-3. 源码运行时回退读取 `frontend/src/lib/utils/constants.ts`（打包版不含此文件）
+应用类型选「浏览器端」，在 Web 设置页「地图服务」中填入（保存在浏览器本地）。
 
 **仓库与发布产物都不内置可用 Key。** 未配置时地图显示申请引导，并可一键切到
-Esri 底图继续选点。境内公开使用须用天地图（《地图管理条例》要求有审图号的
-底图），Esri 仅限中国境外。
-
-> 体积提示：QtWebEngine 会显著撑大产物，macOS `.app` 约 640 MB（含双架构
-> WebEngineCore）；如需分发瘦身，可 `lipo -thin arm64` 并裁剪 locales /
-> devtools pak，代价是放弃 Intel Mac。
+OpenFreeMap 底图继续选点。境内公开使用须用天地图（《地图管理条例》要求有审图号的
+底图），OpenFreeMap 仅限中国境外。
 
 ## 目录结构
 
 ```
 firesky/
-├── src/firesky/           # 引擎 + 后端（Python）
-│   ├── engine.py          # 高层 API predict_burn_sky
-│   ├── api.py             # FastAPI 生产入口
-│   ├── web_server.py      # 服务核心（job/缓存/payload 装配）
-│   ├── national_batch.py  # 区域网格派生 + 原生调用 + 质量装配
-│   ├── satellite*.py / radar.py                  # nowcast 数据与反演
-│   ├── gfs.py / ecmwf*.py / aerosol.py           # 数据摄取
-│   ├── scoring.py / forward_field_scoring.py     # 物理 + 经验评分
-│   ├── native_core.py     # ctypes 桥（libfiresky_native）
-│   └── config/web_server.yaml                    # 服务配置
+├── engine/                # Rust 引擎：HTTP 服务 / CLI / 桌面 FFI / 数据同步
 ├── native/                # Rust 光线追踪评分器（cdylib）
-├── frontend/              # SvelteKit 最小前端（build 由后端托管）
-├── scripts/build_native_variants.sh
-└── tests/
+├── apps/
+│   ├── macos/             # SwiftUI/AppKit + Rust FFI（正式桌面主线）
+│   ├── windows/           # WinUI 3 + Rust FFI
+│   ├── linux/             # GTK4/C++ + Rust FFI
+│   └── shared-web/        # 共享 Web SPA（Rust HTTP 与 Docker 同源托管）
+├── frontend/              # 旧 SvelteKit 前端（待合并，契约测试保留）
+├── resources/app-data/    # 内置城市目录与时区数据集（sha256 清单审计）
+├── docker/                # 三阶段镜像（Rust 构建 + Web 构建 + 无 Python 运行时）
+├── scripts/               # 构建/冒烟脚本与资源、数据准备工具
+└── tests/                 # 现架构契约测试（Rust IPC / Swift UI）
 ```
 
 ## 常见问题排查
@@ -303,7 +245,7 @@ firesky/
 | `No cached CAMS optical profile covers ...` | CAMS 缓存缺该周期文件——预热端点下载（需 ADS key）或从其他部署拷贝 `.cache/cams` |
 | `CAMS full profile does not cover every model cell` | CAMS 水平范围不够——扩大预热 `area` |
 | 预测报"GFS 周期不可用" | NOMADS 发布延迟 ~5h45m；用更早的 cycle 或稍后重试 |
-| 前端空白/404 | `cd frontend && npm run build` 后重启后端 |
+| 前端空白/404 | `cd apps/shared-web && npm run build` 后重启后端 |
 | 405 Method Not Allowed | 未知路径的 POST 落在 GET-only SPA catch-all 上——检查端点拼写 |
 
 ## 来源
@@ -320,6 +262,6 @@ firesky/
   CAMS / ADS（气溶胶）、JMA / NICT / NOAA（向日葵 9 号）、RainViewer（雷达）、
   Open-Meteo、OpenStreetMap Nominatim
   （地名）、AWS Terrain Tiles（高程）、MapLibre / Leaflet（地图）。
-- **开源软件栈**：Rust 生态（rayon 等）、numpy、astral、ecCodes、FastAPI、
-  uvicorn、SvelteKit、Leaflet、shadcn-svelte、lucide 图标。
+- **开源软件栈**：Rust 生态（rayon、Axum 等）、ecCodes、Svelte/SvelteKit、
+  Leaflet、shadcn-svelte、lucide 图标；astral（太阳公式来源，见 `third_party/astral/NOTICE`）。
 - 以及每一个抬头看过晚霞、并愿意把观测反馈给数据的人。

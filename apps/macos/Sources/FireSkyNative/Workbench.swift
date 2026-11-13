@@ -542,7 +542,9 @@ struct WorkResultsView: View {
                         Text("\(store.selectedModel.uppercased()) 暂无结果")
                             .foregroundStyle(.secondary).padding(30)
                     } else if store.resultTab == "逐时台账" {
-                        WorkLedgerView(report: report)
+                        WorkLedgerView(report: report,
+                                       bestTime: report?["best_time_local"] as? String,
+                                       selectedTime: $store.pointSelectedTime)
                     } else {
                         WorkDiagnosticView(report: report, profile: store.resultTab == "大气剖面")
                     }
@@ -695,7 +697,7 @@ private struct WorkQualityBreakdownView: View {
                 .frame(maxWidth: .infinity, alignment: .leading).lineLimit(2)
             Text(delta ?? "—")
                 .font(.system(size: 11, weight: .medium)).monospacedDigit()
-                .foregroundStyle(delta.map { $0.hasPrefix("-") ? Color.red : Color.green } ?? Color.secondary)
+                .foregroundStyle(deltaColor(delta))
                 .frame(width: 56, alignment: .trailing)
                 .accessibilityLabel(delta == nil ? "\(title)，无独立修正量" : "\(title)，修正量 \(delta!)")
         }.padding(.vertical, 6)
@@ -716,6 +718,12 @@ private struct WorkQualityBreakdownView: View {
         return String(format: "%+.3f", number.doubleValue)
     }
 
+    /// 加分为绿、扣分为红、零修正保持中性（对齐 Web 的 delta 着色）。
+    private func deltaColor(_ delta: String?) -> Color {
+        guard let delta, delta != "0.000" else { return Color.secondary }
+        return delta.hasPrefix("-") ? Color.red : Color.green
+    }
+
     private func valueSuffix(_ value: Any?, _ suffix: String, digits: Int, sign: String = "") -> String {
         guard let number = value as? NSNumber, number.doubleValue.isFinite else { return "—" }
         return "\(sign)\(String(format: "%.\(digits)f", number.doubleValue))\(suffix)"
@@ -726,36 +734,223 @@ private struct WorkQualityBreakdownView: View {
         return value
     }
 }
+/// 图表悬停读数的瞬态容器。本机工具链仅含 CommandLineTools（无 Xcode），
+/// 没有 SwiftUIMacros 插件，SwiftUI 宏属性（@State 等）无法参与编译；
+/// @StateObject/@Published 为普通属性包装器，可正常展开。
+private final class ChartHoverState: ObservableObject {
+    @Published var date: Date?
+}
+
+struct WorkComparisonCurveView: View {
+    @EnvironmentObject private var store: Store
     let comparison: ForecastComparison
     let timezone: String
+    /// 悬停时刻（原生图形规范：图表需可读 tooltip）；仅在指针悬停期间生效。
+    @StateObject private var hover = ChartHoverState()
+
     var body: some View {
         let points = comparison.curve(timezone: timezone)
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("霞光质量变化").font(.system(size: 13, weight: .semibold))
+        let ratios = comparison.ratioCurve(timezone: timezone)
+        let aod = comparison.aodCurve(timezone: timezone)
+        let peak = points.max { $0.quality < $1.quality }
+        let selectedDate = Self.time(points, matching: store.pointSelectedTime)
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("霞光质量与大气趋势").font(.system(size: 13, weight: .semibold))
+                Text("质量轴固定 0–2.5 · 比例轴 0–100% · 缺测断线不补零")
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
                 Spacer()
-                ForEach(ForecastComparison.models, id: \.self) { model in
-                    HStack(spacing: 5) {
-                        Rectangle().fill(modelColor(model)).frame(width: 14, height: 2)
-                        Text(model.uppercased())
-                    }.font(.system(size: 10)).foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    lineSwatch("GFS", warm, dashed: false)
+                    lineSwatch("EC", teal, dashed: true)
+                }.font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            summaryChips(points: points, peak: peak)
+            qualityChart(points: points, selectedDate: selectedDate)
+            ratioChart(ratios)
+            aodChart(aod)
+            timelineStrip(peakLocal: peak?.local)
+        }.padding(16).workSurface()
+    }
+
+    private func summaryChips(points: [ForecastCurvePoint], peak: ForecastCurvePoint?) -> some View {
+        let aodValues = comparison.aodCurve(timezone: timezone).map(\.quality)
+        let steps = comparison.report(store.selectedModel)?["steps"] as? [JSONObject] ?? []
+        let validCount = steps.filter { $0["valid"] as? Bool != false }.count
+        return HStack(spacing: 18) {
+            summaryChip("峰值质量", peak.map { String(format: "%.3f / 2.5", $0.quality) } ?? "—")
+            summaryChip("峰值时刻", peak.map { ObservationDate.timeLabel($0.time, timezone: timezone) } ?? "—")
+            summaryChip("有效时次（\(store.selectedModel.uppercased())）",
+                        steps.isEmpty ? "—" : "\(validCount) 有效 · 共 \(steps.count) 时次")
+            summaryChip("AOD 550 范围",
+                        aodValues.isEmpty ? "—" : String(format: "%.3f–%.3f", aodValues.min() ?? 0, aodValues.max() ?? 0))
+        }
+    }
+
+    private func summaryChip(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.system(size: 8)).foregroundStyle(.secondary)
+            Text(value).font(.system(size: 11, weight: .medium)).monospacedDigit().lineLimit(1)
+        }.help(title)
+    }
+
+    private func lineSwatch(_ title: String, _ color: Color, dashed: Bool) -> some View {
+        HStack(spacing: 5) {
+            Rectangle()
+                .fill(dashed ? Color.clear : color)
+                .frame(width: 14, height: 2)
+                .overlay {
+                    Rectangle().stroke(color, style: StrokeStyle(lineWidth: 1.6, dash: dashed ? [4, 3] : []))
+                        .opacity(dashed ? 1 : 0)
+                }
+            Text(title)
+        }
+    }
+
+    /// 距悬停时刻最近的有效曲线点（循环实现避免过重的类型推断表达式）。
+    private static func hoveredPoint(_ points: [ForecastCurvePoint], near date: Date) -> ForecastCurvePoint? {
+        var best: ForecastCurvePoint?
+        var bestDelta = Double.infinity
+        for point in points {
+            let delta = abs(point.time.timeIntervalSince(date))
+            if delta < bestDelta {
+                bestDelta = delta
+                best = point
+            }
+        }
+        return best
+    }
+
+    @ChartContentBuilder
+    private func seriesMarks(_ points: [ForecastCurvePoint]) -> some ChartContent {
+        ForEach(points) { point in
+            LineMark(x: .value("时间", point.time), y: .value("质量指数", point.quality),
+                     series: .value("曲线", point.series))
+                .foregroundStyle(modelColor(point.model))
+                .lineStyle(StrokeStyle(lineWidth: 2, dash: point.model == "ec" ? [4, 3] : []))
+            PointMark(x: .value("时间", point.time), y: .value("质量指数", point.quality))
+                .foregroundStyle(modelColor(point.model)).symbolSize(8)
+        }
+    }
+
+    @ChartContentBuilder
+    private func bestMarks(_ points: [ForecastCurvePoint]) -> some ChartContent {
+        ForEach(ForecastComparison.models, id: \.self) { model in
+            if let best = bestPoint(model, in: points) {
+                PointMark(x: .value("时间", best.time), y: .value("质量指数", best.quality))
+                    .symbol(.diamond).symbolSize(46)
+                    .foregroundStyle(modelColor(model))
+                    .accessibilityLabel("\(model.uppercased()) 最佳时刻 \(ObservationDate.timeLabel(best.time, timezone: timezone))，质量 \(String(format: "%.3f", best.quality))")
+            }
+        }
+    }
+
+    @ChartContentBuilder
+    private func hoverMarks(_ points: [ForecastCurvePoint]) -> some ChartContent {
+        // 悬停读数（原生图形规范 tooltip）：取最近有效点，数值直接来自曲线数据。
+        if let hoverDate = hover.date,
+           let hovered = Self.hoveredPoint(points, near: hoverDate) {
+            RuleMark(x: .value("悬停时刻", hovered.time))
+                .foregroundStyle(Color.secondary.opacity(0.35))
+                .lineStyle(StrokeStyle(lineWidth: 1))
+            PointMark(x: .value("时间", hovered.time), y: .value("质量指数", hovered.quality))
+                .symbol(.circle).symbolSize(30)
+                .foregroundStyle(modelColor(hovered.model))
+                .annotation(position: .top, spacing: 5) {
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("\(hovered.model.uppercased()) \(ObservationDate.timeLabel(hovered.time, timezone: timezone))")
+                            .font(.system(size: 9, weight: .medium))
+                        Text("质量 \(String(format: "%.3f", hovered.quality))")
+                            .font(.system(size: 9)).monospacedDigit()
+                    }.padding(4).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 4))
+                        .accessibilityHidden(true)
+                }
+        }
+    }
+
+    private func qualityChart(points: [ForecastCurvePoint], selectedDate: Date?) -> some View {
+        Chart {
+            seriesMarks(points)
+            bestMarks(points)
+            if let selectedDate {
+                RuleMark(x: .value("选中时刻", selectedDate))
+                    .foregroundStyle(Color.secondary.opacity(0.55))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                    .accessibilityLabel("选中时刻")
+            }
+            hoverMarks(points)
+        }
+        .chartYScale(domain: 0...2.5)
+        .chartYAxis {
+            AxisMarks(position: .leading, values: [0, 1.25, 2.5]) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
+                AxisValueLabel {
+                    if let number = value.as(Double.self) {
+                        Text(number.formatted(.number.precision(.fractionLength(0...2))))
+                    }
                 }
             }
-            Chart(points) { point in
-                LineMark(x: .value("时间", point.time), y: .value("质量指数", point.quality),
-                         series: .value("曲线", point.series))
-                    .foregroundStyle(modelColor(point.model))
-                    .lineStyle(StrokeStyle(lineWidth: 2, dash: point.model == "ec" ? [4, 3] : []))
-                PointMark(x: .value("时间", point.time), y: .value("质量指数", point.quality))
-                    .foregroundStyle(modelColor(point.model)).symbolSize(8)
+        }
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 5)) { value in
+                AxisGridLine()
+                AxisValueLabel {
+                    if let date = value.as(Date.self) { Text(ObservationDate.timeLabel(date, timezone: timezone)) }
+                }
             }
-            .chartYScale(domain: 0...2.5)
+        }
+        .chartYAxisLabel("质量指数 · 0–2.5")
+        .frame(height: 164)
+        .overlay {
+            if points.isEmpty {
+                Text(comparison.result == nil ? "等待预测" : "暂无质量曲线")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityLabel("逐时质量趋势，GFS 实线，EC 虚线，菱形为各模式最佳时刻，竖虚线为选中时刻")
+        .chartOverlay { proxy in
+            Rectangle().fill(Color.clear).contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let location):
+                        hover.date = proxy.value(atX: location.x, as: Date.self)
+                    case .ended:
+                        hover.date = nil
+                    @unknown default:
+                        hover.date = nil
+                    }
+                }
+        }
+    }
+
+    /// 0–100% aligned sub-plot for the three ratio series (plan: 右轴或对齐小图).
+    private func ratioChart(_ ratios: [ForecastRatioPoint]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                ForEach(["coverage", "ratio", "transmission"], id: \.self) { kind in
+                    HStack(spacing: 5) {
+                        Rectangle().fill(ratioSeriesColor(kind)).frame(width: 12, height: 2.5)
+                        Text(ratioSeriesLabel(kind))
+                    }.font(.system(size: 9)).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Text("EC 为虚线").font(.system(size: 9)).foregroundStyle(.tertiary)
+            }
+            Chart {
+                ForEach(ratios) { point in
+                    LineMark(x: .value("时间", point.time), y: .value("条件占比", point.value),
+                             series: .value("曲线", point.series))
+                        .foregroundStyle(ratioSeriesColor(point.kind))
+                        .lineStyle(StrokeStyle(lineWidth: 1.8, dash: point.model == "ec" ? [4, 3] : []))
+                }
+            }
+            .chartYScale(domain: 0...1)
             .chartYAxis {
-                AxisMarks(position: .leading, values: [0, 1.25, 2.5]) { value in
+                AxisMarks(position: .trailing, values: [0, 0.5, 1]) { value in
                     AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
                     AxisValueLabel {
                         if let number = value.as(Double.self) {
-                            Text(number.formatted(.number.precision(.fractionLength(0...2))))
+                            Text("\(Int((number * 100).rounded()))%")
                         }
                     }
                 }
@@ -768,41 +963,250 @@ private struct WorkQualityBreakdownView: View {
                     }
                 }
             }
-            .frame(height: 164)
+            .chartYAxisLabel("条件占比 · 0–100%")
+            .frame(height: 128)
             .overlay {
-                if points.isEmpty {
-                    Text(comparison.result == nil ? "等待预测" : "暂无质量曲线")
+                if ratios.isEmpty {
+                    Text("暂无 0–100% 比例序列")
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                 }
             }
-        }.padding(16).workSurface()
+            .accessibilityLabel("可烧云占比、可烧比例与回程透过率趋势，占比轴固定 0 到 100%")
+        }
+    }
+
+    private func aodChart(_ aod: [ForecastCurvePoint]) -> some View {
+        let values = aod.map(\.quality)
+        let times = aod.map(\.time)
+        let domain = Self.aodDomain(aod)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("AOD 550 趋势").font(.system(size: 11, weight: .semibold))
+                Text(values.isEmpty ? "暂无可用 AOD550 时序"
+                     : String(format: "范围 %.3f–%.3f · 来源 %@", values.min() ?? 0, values.max() ?? 0, comparison.aod.source))
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
+                Spacer()
+                if let first = times.min(), let last = times.max() {
+                    Text("时次 \(ObservationDate.timeLabel(first, timezone: timezone))–\(ObservationDate.timeLabel(last, timezone: timezone))")
+                        .font(.system(size: 9)).foregroundStyle(.secondary).monospacedDigit()
+                }
+            }
+            Chart {
+                ForEach(aod) { point in
+                    LineMark(x: .value("时间", point.time), y: .value("AOD 550", point.quality),
+                             series: .value("曲线", point.series))
+                        .foregroundStyle(modelColor(point.model))
+                        .lineStyle(StrokeStyle(lineWidth: 1.8, dash: point.model == "ec" ? [4, 3] : []))
+                    PointMark(x: .value("时间", point.time), y: .value("AOD 550", point.quality))
+                        .foregroundStyle(modelColor(point.model)).symbolSize(6)
+                }
+            }
+            .chartYScale(domain: domain)
+            .chartXAxis {
+                AxisMarks(values: .automatic(desiredCount: 4)) { value in
+                    AxisGridLine()
+                    AxisValueLabel {
+                        if let date = value.as(Date.self) { Text(ObservationDate.timeLabel(date, timezone: timezone)) }
+                    }
+                }
+            }
+            .chartYAxisLabel("AOD 550")
+            .frame(height: 118)
+            .overlay {
+                if aod.isEmpty {
+                    Text(comparison.result == nil ? "等待预测" : "暂无可用 AOD550 时序")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityLabel("AOD 550 逐时趋势，自适应取值范围，缺测时段断线")
+        }
+    }
+
+    /// Event timeline strip; selecting a bar updates the shared local selection only
+    /// (never the map). Keyboard focusable buttons with VoiceOver labels.
+    private func timelineStrip(peakLocal: String?) -> some View {
+        let steps = comparison.report(store.selectedModel)?["steps"] as? [JSONObject] ?? []
+        let validSteps = steps.filter { $0["valid"] as? Bool != false }
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("事件时间轴（\(store.selectedModel.uppercased())）")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("点击选择时刻；选中态不驱动地图")
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
+                Spacer()
+                Text("深色为峰值 · 高亮为当前")
+                    .font(.system(size: 9)).foregroundStyle(.tertiary)
+            }
+            if steps.isEmpty {
+                Text(comparison.result == nil ? "等待预测" : "暂无时次")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            } else {
+                HStack(alignment: .bottom, spacing: 3) {
+                    ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
+                        let valid = step["valid"] as? Bool != false
+                        let local = step["valid_time_local"] as? String ?? ""
+                        if valid {
+                            let selected = store.pointSelectedTime == local
+                            let isPeak = !local.isEmpty && local == peakLocal
+                            Button {
+                                store.pointSelectedTime = local
+                            } label: {
+                                RoundedRectangle(cornerRadius: 2)
+                                    .fill(selected ? warm : isPeak ? warm.opacity(0.62) : Color.secondary.opacity(0.32))
+                                    .frame(height: selected ? 18 : 10)
+                            }.buttonStyle(.plain)
+                                .accessibilityLabel("查看 \(timeLabel(local))，质量 \(format(step["instant_quality_index"], digits: 3))")
+                                .accessibilityAddTraits(selected ? .isSelected : [])
+                                .help("\(timeLabel(local))\(isPeak ? " · 峰值" : "")")
+                        } else {
+                            RoundedRectangle(cornerRadius: 2)
+                                .stroke(Color.secondary.opacity(0.4), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
+                                .frame(height: 10)
+                                .accessibilityHidden(true)
+                                .help("超出有效太阳窗口")
+                        }
+                    }
+                }
+                if let first = validSteps.first?["valid_time_local"] as? String,
+                   let last = validSteps.last?["valid_time_local"] as? String {
+                    HStack {
+                        Text(timeLabel(first)).monospacedDigit()
+                        Spacer()
+                        Text(timeLabel(last)).monospacedDigit()
+                    }.font(.system(size: 9)).foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func bestPoint(_ model: String, in points: [ForecastCurvePoint]) -> ForecastCurvePoint? {
+        guard let best = comparison.report(model)?["best_time_local"] as? String, !best.isEmpty else { return nil }
+        return points.first { $0.model == model && $0.local == best }
+    }
+
+    private static func time(_ points: [ForecastCurvePoint], matching local: String?) -> Date? {
+        guard let local, !local.isEmpty else { return nil }
+        return points.first { $0.local == local }?.time
+    }
+
+    private static func aodDomain(_ points: [ForecastCurvePoint]) -> ClosedRange<Double> {
+        let values = points.map(\.quality)
+        guard let low = values.min(), let high = values.max() else { return 0...1 }
+        let padding = Swift.max(0.05, (high - low) * 0.25)
+        let minLow = Swift.max(0, low - padding)
+        return minLow...Swift.max(minLow + 0.1, high + padding)
     }
 }
 
+/// Nowcast trend view (plan items nowcast-5/6): the fixed 0–2.5 quality line plus
+/// a 0–100% ratio sub-plot (burnable cloud coverage / forward burnable ratio) and an
+/// independent AOD 550 sub-plot. Missing values break lines; nothing is joined to 0.
 struct WorkCurveView: View {
     let report: JSONObject?
     let timezone: String
     var body: some View {
         let points = ForecastComparison.curve(report: report, model: "nowcast", timezone: timezone)
-        VStack(alignment: .leading, spacing: 10) {
+        let ratios = ForecastComparison.ratioCurve(report: report, model: "nowcast", timezone: timezone)
+        let aod = ForecastComparison.aodCurve(report: report, model: "nowcast", timezone: timezone)
+        return VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("霞光质量变化").font(.system(size: 13, weight: .semibold))
+                Text("质量轴固定 0–2.5 · 比例轴 0–100% · 缺测断线不补零")
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
                 Spacer()
                 Label("质量指数", systemImage: "circle.fill").font(.system(size: 9)).foregroundStyle(warm).workChip()
             }
-            Chart(points) { point in
+            qualityChart(points)
+            ratioChart(ratios)
+            aodChart(aod)
+        }.padding(16).workSurface()
+    }
+
+    private func qualityChart(_ points: [ForecastCurvePoint]) -> some View {
+        Chart {
+            ForEach(points) { point in
                 LineMark(x: .value("时间", point.time), y: .value("质量指数", point.quality),
                          series: .value("曲线", point.series))
                     .foregroundStyle(warm).lineStyle(StrokeStyle(lineWidth: 2))
                 PointMark(x: .value("时间", point.time), y: .value("质量指数", point.quality))
                     .foregroundStyle(warm).symbolSize(8)
             }
-            .chartYScale(domain: 0...2.5)
+            // 原生图形规范（方案 :90）：图表需要最佳时刻标记，与点预测质量图同款菱形。
+            if let bestTime = report?["best_time_local"] as? String,
+               let best = points.first(where: { $0.local == bestTime }) {
+                PointMark(x: .value("时间", best.time), y: .value("质量指数", best.quality))
+                    .symbol(.diamond).symbolSize(46)
+                    .foregroundStyle(warm)
+                    .accessibilityLabel("最佳时刻 \(ObservationDate.timeLabel(best.time, timezone: timezone))，质量 \(String(format: "%.3f", best.quality))")
+            }
+        }
+        .chartYScale(domain: 0...2.5)
+        .chartYAxis {
+            AxisMarks(position: .leading, values: [0, 1.25, 2.5]) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
+                AxisValueLabel {
+                    if let number = value.as(Double.self) { Text(number.formatted(.number.precision(.fractionLength(0...2)))) }
+                }
+            }
+        }
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 5)) { value in
+                AxisGridLine()
+                AxisValueLabel {
+                    if let date = value.as(Date.self) {
+                        Text(ObservationDate.timeLabel(date, timezone: timezone))
+                    }
+                }
+            }
+        }
+        .chartYAxisLabel("质量指数 · 0–2.5")
+        .frame(height: 164)
+        .overlay {
+            if points.isEmpty {
+                Text(report == nil ? "等待实况分析" : "暂无质量曲线")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+        }
+        .accessibilityLabel("实况逐时质量趋势，质量轴固定 0 到 2.5，缺测时段断线")
+    }
+
+    /// 0–100% ratio series on their own axis (never mixed with the quality axis).
+    /// The desktop nowcast leaves observer_return_transmission Null
+    /// (nowcast_runtime.rs:786), so that series stays absent with an explicit note.
+    private func ratioChart(_ ratios: [ForecastRatioPoint]) -> some View {
+        let kinds = ["coverage", "ratio", "transmission"]
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                ForEach(kinds, id: \.self) { kind in
+                    if ratios.contains(where: { $0.kind == kind }) {
+                        HStack(spacing: 5) {
+                            Rectangle().fill(ratioSeriesColor(kind)).frame(width: 12, height: 2.5)
+                            Text(ratioSeriesLabel(kind))
+                        }.font(.system(size: 9)).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                if !ratios.contains(where: { $0.kind == "transmission" }) {
+                    Text("回程透过率：后端未计算（桌面实况不发布该序列）")
+                        .font(.system(size: 9)).foregroundStyle(.tertiary)
+                }
+            }
+            Chart {
+                ForEach(ratios) { point in
+                    LineMark(x: .value("时间", point.time), y: .value("条件占比", point.value),
+                             series: .value("曲线", point.series))
+                        .foregroundStyle(ratioSeriesColor(point.kind))
+                        .lineStyle(StrokeStyle(lineWidth: 1.8))
+                }
+            }
+            .chartYScale(domain: 0...1)
             .chartYAxis {
-                AxisMarks(position: .leading, values: [0, 1.25, 2.5]) { value in
+                AxisMarks(position: .leading, values: [0, 0.5, 1]) { value in
                     AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
                     AxisValueLabel {
-                        if let number = value.as(Double.self) { Text(number.formatted(.number.precision(.fractionLength(0...2)))) }
+                        if let number = value.as(Double.self) {
+                            Text("\(Int((number * 100).rounded()))%")
+                        }
                     }
                 }
             }
@@ -810,25 +1214,87 @@ struct WorkCurveView: View {
                 AxisMarks(values: .automatic(desiredCount: 5)) { value in
                     AxisGridLine()
                     AxisValueLabel {
-                        if let date = value.as(Date.self) {
-                            Text(ObservationDate.timeLabel(date, timezone: timezone))
-                        }
+                        if let date = value.as(Date.self) { Text(ObservationDate.timeLabel(date, timezone: timezone)) }
                     }
                 }
             }
-            .frame(height: 164)
+            .chartYAxisLabel("条件占比 · 0–100%")
+            .frame(height: 128)
             .overlay {
-                if points.isEmpty {
-                    Text(report == nil ? "等待实况分析" : "暂无质量曲线")
+                if ratios.isEmpty {
+                    Text(report == nil ? "等待实况分析" : "暂无 0–100% 比例序列")
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                 }
             }
-        }.padding(16).workSurface()
+            .accessibilityLabel("可烧云占比与可烧比例趋势，占比轴固定 0 到 100%，缺测时段断线")
+        }
+    }
+
+    /// Independent AOD 550 sub-plot with adaptive range, time span and source caption
+    /// (plan: AOD550 独立展示取值范围、时次和来源).
+    private func aodChart(_ aod: [ForecastCurvePoint]) -> some View {
+        let values = aod.map(\.quality)
+        let times = aod.map(\.time)
+        let domain = Self.aodDomain(aod)
+        let source = (report?["aerosol"] as? JSONObject)?["source"] as? String
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("AOD 550 趋势").font(.system(size: 11, weight: .semibold))
+                Text(values.isEmpty ? (report == nil ? "等待实况分析" : "暂无可用 AOD550 时序")
+                     : String(format: "范围 %.3f–%.3f", values.min() ?? 0, values.max() ?? 0))
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
+                Spacer()
+                if let first = times.min(), let last = times.max() {
+                    Text("时次 \(ObservationDate.timeLabel(first, timezone: timezone))–\(ObservationDate.timeLabel(last, timezone: timezone))")
+                        .font(.system(size: 9)).foregroundStyle(.secondary).monospacedDigit()
+                }
+                Text("来源 \(source ?? "未提供")")
+                    .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
+            }
+            Chart {
+                ForEach(aod) { point in
+                    LineMark(x: .value("时间", point.time), y: .value("AOD 550", point.quality),
+                             series: .value("曲线", point.series))
+                        .foregroundStyle(warm).lineStyle(StrokeStyle(lineWidth: 1.8))
+                    PointMark(x: .value("时间", point.time), y: .value("AOD 550", point.quality))
+                        .foregroundStyle(warm).symbolSize(6)
+                }
+            }
+            .chartYScale(domain: domain)
+            .chartXAxis {
+                AxisMarks(values: .automatic(desiredCount: 4)) { value in
+                    AxisGridLine()
+                    AxisValueLabel {
+                        if let date = value.as(Date.self) { Text(ObservationDate.timeLabel(date, timezone: timezone)) }
+                    }
+                }
+            }
+            .chartYAxisLabel("AOD 550")
+            .frame(height: 118)
+            .overlay {
+                if aod.isEmpty {
+                    Text(report == nil ? "等待实况分析" : "暂无可用 AOD550 时序")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                }
+            }
+            .accessibilityLabel("实况 AOD 550 逐时趋势，独立量程，缺测时段断线，不与质量轴混用")
+        }
+    }
+
+    private static func aodDomain(_ points: [ForecastCurvePoint]) -> ClosedRange<Double> {
+        let values = points.map(\.quality)
+        guard let low = values.min(), let high = values.max() else { return 0...1 }
+        let padding = Swift.max(0.05, (high - low) * 0.25)
+        let minLow = Swift.max(0, low - padding)
+        return minLow...Swift.max(minLow + 0.1, high + padding)
     }
 }
 
 struct WorkLedgerView: View {
+    @EnvironmentObject private var store: Store
     let report: JSONObject?
+    let bestTime: String?
+    @Binding var selectedTime: String?
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             VStack(spacing: 0) {
@@ -839,20 +1305,30 @@ struct WorkLedgerView: View {
                     Divider().opacity(0.5)
                 }
                 if report == nil { Text("等待预测").foregroundStyle(.secondary).padding(40) }
+                Text("云底–云顶为海拔 ASL 口径，「云层 AGL」为离地口径；— 表示缺测，无效时次不展示数值；点击行仅切换本地选中时刻，不驱动地图。")
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(minWidth: 760, alignment: .leading)
+            .frame(minWidth: 1284, alignment: .leading)
         }
         .workSurface()
     }
 
     private var header: some View {
         HStack(spacing: 0) {
-            Text("时间").frame(width: 78, alignment: .leading)
+            Text("时间").frame(width: 88, alignment: .leading)
             Text("质量").frame(width: 68, alignment: .leading)
             Text("档位").frame(width: 92, alignment: .leading)
             Text("可烧").frame(width: 52, alignment: .leading)
             Text("可烧云量").frame(width: 84, alignment: .leading)
+            Text("主导压力族").frame(width: 96, alignment: .leading)
+            Text("云底–云顶 ASL").frame(width: 120, alignment: .leading)
             Text("云层 AGL").frame(width: 112, alignment: .leading)
+            Text("亮度颜色").frame(width: 68, alignment: .leading)
+            Text("可烧比例").frame(width: 68, alignment: .leading)
+            Text("回程透过率").frame(width: 76, alignment: .leading)
+            Text("入射阻挡").frame(width: 72, alignment: .leading)
             Text("AOD 550").frame(width: 72, alignment: .leading)
             Text("太阳仰角").frame(width: 78, alignment: .leading)
             Text("场景").frame(width: 138, alignment: .leading)
@@ -868,33 +1344,76 @@ struct WorkLedgerView: View {
         let burnable = item["physically_burnable"] as? Bool
         let base = item["dominant_burnable_cloud_base_agl_mean_m"]
         let top = item["dominant_burnable_cloud_top_agl_mean_m"]
-        return HStack(spacing: 0) {
-            Text(timeLabel(item["valid_time_local"] as? String))
-                .frame(width: 78, alignment: .leading)
-            Text(valid ? format(item["instant_quality_index"], digits: 3) : "—")
-                .frame(width: 68, alignment: .leading)
-            Text(valid ? item["instant_quality_level"] as? String ?? "—" : "缺测")
-                .frame(width: 92, alignment: .leading)
-            Image(systemName: !valid || burnable == nil ? "minus"
-                  : burnable == true ? "checkmark" : "xmark")
-                .foregroundStyle(!valid || burnable == nil ? Color.secondary : burnable == true ? teal : Color.orange)
-                .frame(width: 52, alignment: .leading)
-                .accessibilityLabel(!valid ? "缺测" : burnable == true ? "可烧" : burnable == false ? "不可烧" : "未提供")
-            Text(valid ? percent(item["burnable_cloud_coverage"]) : "—")
-                .frame(width: 84, alignment: .leading)
-            Text(valid ? cloudLayerLabel(base: base, top: top) : "—")
-                .frame(width: 112, alignment: .leading)
-            Text(valid ? format(item["quality_aod550"], digits: 2) : "—")
-                .frame(width: 72, alignment: .leading)
-            Text(valid ? format(item["solar_elevation_deg"], digits: 1) : "—")
-                .frame(width: 78, alignment: .leading)
-            Text(valid ? sceneLabel(item["selected_regime"]) : "—")
-                .frame(width: 138, alignment: .leading)
+        let baseASL = item["dominant_burnable_cloud_base_asl_mean_m"]
+        let topASL = item["dominant_burnable_cloud_top_asl_mean_m"]
+        let local = item["valid_time_local"] as? String ?? ""
+        let selected = !local.isEmpty && selectedTime == local
+        let isBest = !local.isEmpty && local == bestTime
+        return Button {
+            guard valid, !local.isEmpty else { return }
+            selectedTime = local
+        } label: {
+            HStack(spacing: 0) {
+                HStack(spacing: 4) {
+                    Text(timeLabel(local))
+                    if isBest {
+                        Image(systemName: "star.fill")
+                            .font(.system(size: 9))
+                            .foregroundStyle(warm)
+                    }
+                }
+                .frame(width: 88, alignment: .leading)
+                Text(valid ? format(item["instant_quality_index"], digits: 3) : "—")
+                    .frame(width: 68, alignment: .leading)
+                Text(valid ? item["instant_quality_level"] as? String ?? "—" : "缺测")
+                    .frame(width: 92, alignment: .leading)
+                Image(systemName: !valid || burnable == nil ? "minus"
+                      : burnable == true ? "checkmark" : "xmark")
+                    .foregroundStyle(!valid || burnable == nil ? Color.secondary : burnable == true ? teal : Color.orange)
+                    .frame(width: 52, alignment: .leading)
+                    .accessibilityLabel(!valid ? "缺测" : burnable == true ? "可烧" : burnable == false ? "不可烧" : "未提供")
+                Text(valid ? percent(item["burnable_cloud_coverage"]) : "—")
+                    .frame(width: 84, alignment: .leading)
+                Text(valid ? familyLabel(item["dominant_burnable_pressure_family"]) : "—")
+                    .frame(width: 96, alignment: .leading)
+                    .foregroundStyle(item["dominant_burnable_pressure_family"] == nil ? Color.secondary : Color.primary)
+                Text(valid ? aslRangeLabel(base: baseASL, top: topASL) : "—")
+                    .frame(width: 120, alignment: .leading)
+                Text(valid ? cloudLayerLabel(base: base, top: top) : "—")
+                    .frame(width: 112, alignment: .leading)
+                Text(valid ? ratioText(item["brightness_color"]) : "—")
+                    .frame(width: 68, alignment: .leading)
+                Text(valid ? ratioText(item["forward_burnable_cloud_ratio"]) : "—")
+                    .frame(width: 68, alignment: .leading)
+                Text(valid ? ratioText(item["observer_return_transmission"]) : "—")
+                    .frame(width: 76, alignment: .leading)
+                Text(valid ? ratioText(item["solar_incoming_block_risk"]) : "—")
+                    .frame(width: 72, alignment: .leading)
+                Text(valid ? format(item["quality_aod550"], digits: 2) : "—")
+                    .frame(width: 72, alignment: .leading)
+                Text(valid ? format(item["solar_elevation_deg"], digits: 1) : "—")
+                    .frame(width: 78, alignment: .leading)
+                Text(valid ? sceneLabel(item["selected_regime"]) : "—")
+                    .frame(width: 138, alignment: .leading)
+            }
+            .font(.system(size: 11))
+            .monospacedDigit()
+            .padding(.vertical, 12)
+            .padding(.horizontal, 14)
+            .contentShape(Rectangle())
+            .background(selected ? warm.opacity(0.10) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
         }
-        .font(.system(size: 11))
-        .monospacedDigit()
-        .padding(.vertical, 12)
-        .padding(.horizontal, 14)
+        .buttonStyle(.plain)
+        .disabled(!valid || local.isEmpty)
+        .accessibilityLabel(valid ? "时次 \(timeLabel(local))，质量 \(format(item["instant_quality_index"], digits: 3))\(isBest ? "，最佳时刻" : "")" : "缺测时次")
+        .accessibilityAddTraits(selected ? .isSelected : [])
+    }
+
+    /// ASL datum column, matching the Web「加权云底–云顶」column (km ASL).
+    private func aslRangeLabel(base: Any?, top: Any?) -> String {
+        guard let base = base as? NSNumber, base.doubleValue.isFinite,
+              let top = top as? NSNumber, top.doubleValue.isFinite else { return "—" }
+        return String(format: "%.1f–%.1f km", base.doubleValue / 1000, top.doubleValue / 1000)
     }
 
     private func cloudLayerLabel(base: Any?, top: Any?) -> String {
@@ -952,10 +1471,9 @@ struct WorkDiagnosticView: View {
                     diagnosticRow("几何支持度", report["cloud_geometry_confidence"], percentValue: true)
                     diagnosticRow("置信度语义", report["confidence_kind"] ?? report["confidence_score_semantics"])
                     diagnosticRow("质量指数语义", report["quality_index_semantics"])
-                    diagnosticRow("主压力族", report["dominant_burnable_pressure_family"])
-                    diagnosticRow("云相代理", report["cloud_phase_proxy"])
-                    diagnosticRow("云属代理", report["cloud_genus_proxy"])
+                    diagnosticRow("主压力族", familyLabel(report["dominant_burnable_pressure_family"]))
                 }
+                WorkGenusPhaseDiagnosis(report: report)
                 if let scores = report["scene_scores"] as? JSONObject, !scores.isEmpty {
                     WorkDiagnosticGroup(title: "场景分数") {
                         ForEach(scores.keys.sorted(), id: \.self) { key in
@@ -1012,80 +1530,66 @@ struct WorkDiagnosticView: View {
     }
 }
 
-private struct CrossSectionPoint: Identifiable {
-    let id: String
-    let distance: Double
-    let height: Double
-    let kind: String
+/// Cross-section grid parsed from the already-returned cross_section.fields payload
+/// (engine/src/cross_section.rs). Nulls stay nil so missing cells are never drawn as clear sky.
+private struct CrossSectionData {
+    let distances: [Double]
+    let levels: [Int]
+    let heights: [[Double?]]
+    let temps: [[Double?]]
+    let rh: [[Double?]]
+    let amounts: [[Double?]]
+    let presence: [[Double?]]
+    let fractions: [[Double?]]
+    let familyCodes: [[Int]]
+    let statuses: [[Int]]
+    let terrain: [Double]
+    let requiredASL: [Double]
+    let targets: [JSONObject]
+
+    init?(section: JSONObject) {
+        let distances = (section["distances_km"] as? [Any])?.compactMap(number) ?? []
+        guard !distances.isEmpty else { return nil }
+        let fields = section["fields"] as? JSONObject ?? [:]
+        let grid: (String) -> [[Double?]] = { key in
+            ((fields[key] as? [[Any]]) ?? []).map { (row: [Any]) in
+                row.map { ($0 as? NSNumber)?.doubleValue }
+            }
+        }
+        let ints: (String) -> [[Int]] = { key in
+            ((fields[key] as? [[Any]]) ?? []).map { (row: [Any]) in
+                row.map { ($0 as? NSNumber)?.intValue ?? 0 }
+            }
+        }
+        self.distances = distances
+        self.levels = (section["pressure_levels_hpa"] as? [Any])?.compactMap { ($0 as? NSNumber)?.intValue } ?? []
+        self.heights = grid("geopotential_height_asl_m")
+        self.temps = grid("temperature_c")
+        self.rh = grid("rh_percent")
+        self.amounts = grid("cloud_amount")
+        self.presence = grid("cloud_presence")
+        self.fractions = grid("cloud_fraction_percent")
+        self.familyCodes = ints("pressure_family_code")
+        self.statuses = ints("cloud_layer_status")
+        self.terrain = (section["terrain_elevation_asl_m"] as? [Any])?.compactMap(number) ?? []
+        self.requiredASL = (section["required_illumination_base_asl_m"] as? [Any])?.compactMap(number) ?? []
+        self.targets = section["theoretical_targets"] as? [JSONObject] ?? []
+    }
 }
 
 private struct WorkCrossSectionView: View {
     let section: JSONObject?
-
-    private var points: [CrossSectionPoint] {
-        let targets = section?["theoretical_targets"] as? [JSONObject] ?? []
-        var values: [CrossSectionPoint] = []
-        for (index, target) in targets.enumerated() {
-            guard let distance = number(target["distance_km"]) else { continue }
-            if let base = number(target["cloud_base_agl_m"]) {
-                values.append(CrossSectionPoint(id: "\(index)-base", distance: distance, height: base / 1000, kind: "云底"))
-            }
-            if let top = number(target["cloud_top_agl_m"]) {
-                values.append(CrossSectionPoint(id: "\(index)-top", distance: distance, height: top / 1000, kind: "云顶"))
-            }
-        }
-        let distances = (section?["distances_km"] as? [Any])?.compactMap(number) ?? []
-        let required = (section?["required_illumination_base_agl_m"] as? [Any])?.compactMap(number) ?? []
-        for (index, pair) in zip(distances.indices, zip(distances, required)) {
-            values.append(CrossSectionPoint(id: "\(index)-required", distance: pair.0, height: pair.1 / 1000, kind: "理论照明基准"))
-        }
-        return values
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("太阳方向剖面").font(.system(size: 12, weight: .semibold))
                 Spacer()
-                Text(section == nil ? "暂无冻结剖面" : "沿光路高度")
+                Text(section == nil ? "暂无冻结剖面" : "沿光路高度 · 海拔口径")
                     .font(.system(size: 9)).foregroundStyle(.secondary)
             }
             if let section {
-                HStack(spacing: 12) {
-                    diagnosticChip("太阳高度", section["solar_elevation_deg"], suffix: "°")
-                    diagnosticChip("太阳方位", section["solar_azimuth_deg"], suffix: "°")
-                    diagnosticChip("采样", section["spatial_sampling"])
-                }
-                if points.isEmpty {
-                    Text("后端未返回可绘制的云层目标；可在完整报告中查看原始剖面。")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
-                } else {
-                    Chart(points) { point in
-                        LineMark(
-                            x: .value("距离", point.distance),
-                            y: .value("高度", point.height),
-                            series: .value("曲线", point.kind)
-                        )
-                        .foregroundStyle(point.kind == "云底" ? warm : point.kind == "云顶" ? teal : Color.secondary)
-                        .lineStyle(StrokeStyle(lineWidth: point.kind == "理论照明基准" ? 1 : 2,
-                                               dash: point.kind == "理论照明基准" ? [4, 3] : []))
-                        PointMark(
-                            x: .value("距离", point.distance),
-                            y: .value("高度", point.height)
-                        )
-                        .foregroundStyle(point.kind == "云底" ? warm : point.kind == "云顶" ? teal : Color.secondary)
-                        .symbolSize(point.kind == "理论照明基准" ? 4 : 8)
-                    }
-                    .chartXAxisLabel("沿光路距离 · km")
-                    .chartYAxisLabel("高度 · km")
-                    .frame(height: 230)
-                    HStack(spacing: 12) {
-                        legend("云底", warm)
-                        legend("云顶", teal)
-                        legend("理论照明基准", .secondary, dashed: true)
-                    }
-                    .font(.system(size: 9)).foregroundStyle(.secondary)
-                }
+                CrossSectionFigureView(section: section)
             } else {
                 Text("此结果没有可查询的冻结模式剖面。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
@@ -1094,21 +1598,398 @@ private struct WorkCrossSectionView: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .workSurface()
+        .accessibilityLabel("太阳方向大气剖面：温度层线、相对湿度与云量色块、地形填充、云层状态描边和理论照明基准，高度轴为海拔 0 到 18 公里")
+    }
+}
+
+/// 距离×高度剖面图层组件（regional-7，区域/单点共用，方案 :123-124）。
+/// 图层：温度层线、RH/云量色块（压力族配色）、地形填充、云层状态描边、
+/// 理论照明基准与理论目标云底/云顶；缺测层不绘制、不解释成晴空。
+struct CrossSectionFigureView: View {
+    let section: JSONObject
+    @Environment(\.colorScheme) private var scheme
+
+    private var data: CrossSectionData? { CrossSectionData(section: section) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 12) {
+                diagnosticChip("太阳高度", section["solar_elevation_deg"], suffix: "°")
+                diagnosticChip("太阳方位", section["solar_azimuth_deg"], suffix: "°")
+                diagnosticChip("剖面范围", section["analysis_radius_km"], suffix: " km")
+                diagnosticChip("相对时刻", offsetLabel(section["offset_minutes"]))
+                diagnosticChip("有效时次", timeLabel(section["valid_time_local"] as? String))
+                diagnosticChip("采样", section["spatial_sampling"])
+            }
+            if let data {
+                Canvas { context, size in
+                    draw(context: context, size: size, data: data)
+                }
+                .frame(height: 252)
+                legend
+                targetStrip(data.targets)
+            } else {
+                Text("后端未返回可绘制的剖面字段；可在诊断中查看理论目标与照明基准。")
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
+            }
+        }
+    }
+
+    // MARK: drawing
+
+    private func draw(context: GraphicsContext, size: CGSize, data: CrossSectionData) {
+        let left = 40.0, right = size.width - 12, top = 10.0, bottom = size.height - 24
+        guard right > left + 20, bottom > top + 20 else { return }
+        let maxDistance = max(1, data.distances.last ?? 1)
+        let maxHeight = 18_000.0
+        let x = { (distance: Double) in left + distance / maxDistance * (right - left) }
+        let y = { (height: Double) in top + (1 - min(max(height, 0), maxHeight) / maxHeight) * (bottom - top) }
+
+        // height grid + labels (0 / 3 / 6 / ... / 18 km ASL)
+        for altitude in stride(from: 0.0, through: maxHeight, by: 3000.0) {
+            let lineY = y(altitude)
+            var grid = Path()
+            grid.move(to: CGPoint(x: left, y: lineY))
+            grid.addLine(to: CGPoint(x: right, y: lineY))
+            context.stroke(grid, with: .color(Color.secondary.opacity(0.22)), lineWidth: 0.6)
+            context.draw(Text("\(Int(altitude / 1000))km").font(.system(size: 8)).foregroundStyle(.secondary),
+                         at: CGPoint(x: left - 4, y: lineY), anchor: .trailing)
+        }
+        // distance grid every 4th sample
+        for (index, distance) in data.distances.enumerated() where index % 4 == 0 {
+            let lineX = x(distance)
+            var grid = Path()
+            grid.move(to: CGPoint(x: lineX, y: top))
+            grid.addLine(to: CGPoint(x: lineX, y: bottom))
+            context.stroke(grid, with: .color(Color.secondary.opacity(0.15)),
+                           style: StrokeStyle(lineWidth: 0.6, dash: [3, 4]))
+            context.draw(Text("\(Int(distance))km").font(.system(size: 8)).foregroundStyle(.secondary),
+                         at: CGPoint(x: lineX, y: bottom + 10), anchor: .center)
+        }
+
+        // terrain fill + line + observer dot
+        if data.terrain.count == data.distances.count {
+            var fill = Path()
+            fill.move(to: CGPoint(x: x(data.distances[0]), y: y(data.terrain[0])))
+            for index in data.distances.indices.dropFirst() {
+                fill.addLine(to: CGPoint(x: x(data.distances[index]), y: y(data.terrain[index])))
+            }
+            fill.addLine(to: CGPoint(x: right, y: bottom))
+            fill.addLine(to: CGPoint(x: left, y: bottom))
+            fill.closeSubpath()
+            context.fill(fill, with: .color(Color(red: 0.41, green: 0.45, blue: 0.44).opacity(0.18)))
+            var line = Path()
+            line.move(to: CGPoint(x: x(data.distances[0]), y: y(data.terrain[0])))
+            for index in data.distances.indices.dropFirst() {
+                line.addLine(to: CGPoint(x: x(data.distances[index]), y: y(data.terrain[index])))
+            }
+            context.stroke(line, with: .color(Color(red: 0.41, green: 0.45, blue: 0.44)), lineWidth: 1.6)
+            let observer = CGPoint(x: x(data.distances[0]), y: y(data.terrain[0]))
+            let dot = CGRect(x: observer.x - 5, y: observer.y - 5, width: 10, height: 10)
+            context.fill(Path(ellipseIn: dot), with: .color(Color(red: 0.95, green: 0.49, blue: 0.26)))
+            context.draw(Text("观测点").font(.system(size: 8)).foregroundStyle(.secondary),
+                         at: CGPoint(x: observer.x + 10, y: observer.y - 8), anchor: .leading)
+        }
+
+        // RH / cloud amount cells with cloud-layer status strokes
+        let sampleCount = Swift.max(1, data.distances.count - 1)
+        let columnSpan = (right - left) / Double(sampleCount)
+        let cellWidth = Swift.max(6.0, columnSpan * 0.72)
+        for i in data.distances.indices {
+            for l in data.levels.indices {
+                guard let height = data.heights[i][l] else { continue } // 缺测层不绘制，不解释成晴空
+                let center = CGPoint(x: x(data.distances[i]), y: y(height))
+                let topY = y(height + 700)
+                let cellHeight = max(5, y(height - 700) - topY)
+                let rect = CGRect(x: center.x - cellWidth / 2, y: topY,
+                                  width: cellWidth, height: cellHeight)
+                if let fill = cloudCellFill(amount: data.amounts[i][l], presence: data.presence[i][l],
+                                            rh: data.rh[i][l], fraction: data.fractions[i][l],
+                                            family: data.familyCodes[i][l]) {
+                    context.fill(Path(rect), with: .color(fill))
+                }
+                switch data.statuses[i][l] {
+                case 3:
+                    context.stroke(Path(rect), with: .color(Color(red: 0.94, green: 0.42, blue: 0.21)), lineWidth: 1.8)
+                case 2:
+                    context.stroke(Path(rect), with: .color(Color(red: 0.83, green: 0.55, blue: 0.22)),
+                                   style: StrokeStyle(lineWidth: 1.4, dash: [4, 3]))
+                default:
+                    break
+                }
+            }
+        }
+
+        // temperature layer lines colored by level average temperature
+        for l in data.levels.indices {
+            var points: [CGPoint] = []
+            var temps: [Double] = []
+            for i in data.distances.indices {
+                guard let height = data.heights[i][l] else { continue }
+                points.append(CGPoint(x: x(data.distances[i]), y: y(height)))
+                if let temp = data.temps[i][l] { temps.append(temp) }
+            }
+            guard points.count > 1 else { continue }
+            var line = Path()
+            line.move(to: points[0])
+            points.dropFirst().forEach { line.addLine(to: $0) }
+            let average = temps.isEmpty ? 0 : temps.reduce(0, +) / Double(temps.count)
+            let color = average < -30 ? Color(red: 0.55, green: 0.40, blue: 0.45)
+                : average < 0 ? Color(red: 0.69, green: 0.42, blue: 0.36)
+                : Color(red: 0.78, green: 0.31, blue: 0.22)
+            context.stroke(line, with: .color(color.opacity(0.62)), lineWidth: 1.1)
+            if l % 2 == 0, l < data.levels.count, let last = points.last {
+                context.draw(Text("\(data.levels[l])hPa").font(.system(size: 8)).foregroundStyle(.secondary),
+                             at: CGPoint(x: last.x - 5, y: last.y - 6), anchor: .trailing)
+            }
+        }
+
+        // required illumination threshold (ASL), dashed amber
+        if data.requiredASL.count == data.distances.count {
+            var line = Path()
+            line.move(to: CGPoint(x: x(data.distances[0]), y: y(data.requiredASL[0])))
+            for index in data.distances.indices.dropFirst() {
+                line.addLine(to: CGPoint(x: x(data.distances[index]), y: y(data.requiredASL[index])))
+            }
+            context.stroke(line, with: .color(Color(red: 0.83, green: 0.55, blue: 0.22)),
+                           style: StrokeStyle(lineWidth: 2.2, dash: [7, 5]))
+        }
+
+        // theoretical target cloud base / top markers
+        for target in data.targets {
+            guard let distance = number(target["distance_km"]),
+                  let base = number(target["cloud_base_asl_m"]) else { continue }
+            let basePoint = CGPoint(x: x(distance), y: y(base))
+            context.fill(Path(ellipseIn: CGRect(x: basePoint.x - 4, y: basePoint.y - 4, width: 8, height: 8)),
+                         with: .color(warm))
+            if let top = number(target["cloud_top_asl_m"]) {
+                let topPoint = CGPoint(x: x(distance), y: y(top))
+                context.fill(Path(ellipseIn: CGRect(x: topPoint.x - 4, y: topPoint.y - 4, width: 8, height: 8)),
+                             with: .color(teal))
+            }
+        }
+    }
+
+    /// Port of the Web cloudFill (NationalCrossSection.svelte): cloud amount over
+    /// presence/fraction fallback, humidity tint below the cloud threshold, family colors.
+    private func cloudCellFill(amount: Double?, presence: Double?, rh: Double?,
+                               fraction: Double?, family: Int) -> Color? {
+        let cloudAmount = amount ?? Swift.max(presence ?? 0, (fraction ?? 0) / 100)
+        let humidity = Swift.max(0, (rh ?? 0) - 55) / 45
+        if cloudAmount < 0.18 {
+            if let fraction, fraction <= 0 { return nil }
+            if humidity < 0.06 { return nil }
+            return Color(red: 112 / 255, green: 151 / 255, blue: 126 / 255)
+                .opacity(min(0.34, 0.04 + humidity * 0.26))
+        }
+        let alpha = min(0.82, 0.10 + cloudAmount * 0.68)
+        switch family {
+        case 1: return Color(red: 116 / 255, green: 157 / 255, blue: 194 / 255).opacity(alpha)
+        case 2: return Color(red: 105 / 255, green: 154 / 255, blue: 142 / 255).opacity(alpha)
+        default: return Color(red: 126 / 255, green: 136 / 255, blue: 145 / 255).opacity(alpha)
+        }
+    }
+
+    private func offsetLabel(_ value: Any?) -> String {
+        guard let value = value as? NSNumber, value.doubleValue.isFinite else { return "—" }
+        let minutes = Int(value.doubleValue)
+        return "\(minutes > 0 ? "+" : "")\(minutes) 分"
+    }
+
+    // MARK: legend & target diagnosis
+
+    private var legend: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 12) {
+                legendChip("高云压力族", Color(red: 116 / 255, green: 157 / 255, blue: 194 / 255))
+                legendChip("中云压力族", Color(red: 105 / 255, green: 154 / 255, blue: 142 / 255))
+                legendChip("低云压力族", Color(red: 126 / 255, green: 136 / 255, blue: 145 / 255))
+                legendChip("湿润未饱和", Color(red: 112 / 255, green: 151 / 255, blue: 126 / 255))
+                legendLine("温度层线", Color(red: 0.69, green: 0.42, blue: 0.36), dashed: false)
+                legendLine("地形", Color(red: 0.41, green: 0.45, blue: 0.44), dashed: false)
+            }
+            HStack(spacing: 12) {
+                legendDot("云底", warm)
+                legendDot("云顶", teal)
+                legendLine("理论照明基准（ASL）", Color(red: 0.83, green: 0.55, blue: 0.22), dashed: true)
+                legendFrame("受光且可见候选（未评估云遮挡）", Color(red: 0.94, green: 0.42, blue: 0.21), dashed: false)
+                legendFrame("达到受光阈值但不可见", Color(red: 0.83, green: 0.55, blue: 0.22), dashed: true)
+            }
+            Text("图层数值为对应模式（GFS/EC）各自的场；未着色不代表晴空（缺测或低于阈值），低云压力族仅在近场距离门限内排除；橙色状态未评估云体遮挡。")
+                .font(.system(size: 9)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .font(.system(size: 9)).foregroundStyle(.secondary)
+    }
+
+    private func legendChip(_ title: String, _ color: Color) -> some View {
+        HStack(spacing: 4) {
+            Rectangle().fill(color).frame(width: 12, height: 7).cornerRadius(1.5)
+            Text(title)
+        }
+    }
+
+    private func legendLine(_ title: String, _ color: Color, dashed: Bool) -> some View {
+        HStack(spacing: 4) {
+            Rectangle().fill(Color.clear).frame(width: 12, height: 0)
+                .overlay { Rectangle().stroke(color, style: StrokeStyle(lineWidth: 1.6, dash: dashed ? [4, 3] : [])) }
+                .frame(height: 7)
+            Text(title)
+        }
+    }
+
+    private func legendDot(_ title: String, _ color: Color) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 7, height: 7)
+            Text(title)
+        }
+    }
+
+    private func legendFrame(_ title: String, _ color: Color, dashed: Bool) -> some View {
+        HStack(spacing: 4) {
+            Rectangle().fill(Color.clear)
+                .overlay { Rectangle().stroke(color, style: StrokeStyle(lineWidth: 1.4, dash: dashed ? [4, 3] : [])) }
+                .frame(width: 11, height: 7)
+            Text(title)
+        }
+    }
+
+    /// Theoretical target status summary (Web target-strip parity).
+    private func targetStrip(_ targets: [JSONObject]) -> some View {
+        let burnable = targets.filter { $0["status"] as? String == "burnable" }
+        return Group {
+            if !targets.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("受光与几何/地形可见候选（未评估云遮挡）")
+                        .font(.system(size: 10, weight: .medium)).foregroundStyle(.primary)
+                    if !burnable.isEmpty {
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 232), spacing: 6)], spacing: 6) {
+                            ForEach(Array(burnable.prefix(8).enumerated()), id: \.offset) { _, target in
+                                targetChip(target)
+                            }
+                        }
+                    } else if let diagnostic = targets.first(where: { $0["status"] as? String != "burnable" }) {
+                        Text("当前太阳方向没有可烧目标云：\(targetFamily(diagnostic))，\(diagnostic["status_reason"] as? String ?? "状态原因未提供")")
+                            .font(.system(size: 9)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+        }
+    }
+
+    private func targetChip(_ target: JSONObject) -> some View {
+        let family = targetFamily(target)
+        let phase = (target["cloud_phase"] as? JSONObject)?["label"] as? String ?? "unknown"
+        let phaseText = phase == "ice" ? "冰相" : phase == "water" ? "水相" : phase == "mixed" ? "混合相" : "未知"
+        let distance = number(target["distance_km"]).map { String(format: "%.0f", $0) } ?? "—"
+        let base = number(target["cloud_base_asl_m"]).map { String(format: "%.1f", $0 / 1000) } ?? "—"
+        let top = number(target["cloud_top_asl_m"]).map { String(format: "%.1f", $0 / 1000) } ?? "—"
+        let text = "\(family) · \(phaseText) · \(distance) km · ASL \(base)–\(top) km"
+        return Text(text)
+            .font(.system(size: 9)).monospacedDigit()
+            .padding(.horizontal, 6).padding(.vertical, 3)
+            .background(Color(red: 0.94, green: 0.42, blue: 0.21).opacity(0.08),
+                        in: RoundedRectangle(cornerRadius: 4))
+            .overlay { RoundedRectangle(cornerRadius: 4).stroke(Color(red: 0.94, green: 0.42, blue: 0.21).opacity(0.42), lineWidth: 1) }
+            .help(target["status_reason"] as? String ?? text)
+    }
+
+    private func targetFamily(_ target: JSONObject) -> String {
+        switch target["pressure_family"] as? String {
+        case "high": return "高云压力族"
+        case "middle": return "中云压力族"
+        case "low": return "低云压力族"
+        default: return target["pressure_family_label"] as? String ?? "云层"
+        }
     }
 
     private func diagnosticChip(_ title: String, _ value: Any?, suffix: String = "") -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(title).font(.system(size: 8)).foregroundStyle(.secondary)
-            Text(diagnosticValue(value, digits: 1, suffix: suffix))
+            Text(title == "有效时次" ? (value as? String ?? "—")
+                 : diagnosticValue(value, digits: 1, suffix: suffix))
                 .font(.system(size: 10, weight: .medium)).monospacedDigit()
         }
     }
+}
 
-    private func legend(_ title: String, _ color: Color, dashed: Bool = false) -> some View {
-        HStack(spacing: 4) {
-            Rectangle().fill(color).frame(width: 14, height: dashed ? 1 : 2)
-            Text(title)
+/// Structured cloud-genus / cloud-phase diagnosis (plan item point-9). Reads the backend
+/// proxy objects as-is; GFS point reports carry the fixed "not resolved" phase placeholder,
+/// which is shown as 未解析 instead of a guessed phase (plan item point-15).
+private struct WorkGenusPhaseDiagnosis: View {
+    let report: JSONObject
+
+    var body: some View {
+        WorkDiagnosticGroup(title: "云属与相态（模型代理 · 不参与评分）") {
+            if let genus = report["cloud_genus_proxy"] as? JSONObject {
+                let label = genus["label"] as? String ?? "unknown"
+                if label != "unknown" {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text("云属代理").foregroundStyle(.secondary)
+                        Spacer(minLength: 10)
+                        Text(genusLabel(label))
+                            .multilineTextAlignment(.trailing)
+                        Text(percent(genus["confidence"])).monospacedDigit().foregroundStyle(.secondary)
+                    }.font(.system(size: 10))
+                    if let candidates = topCandidates(genus["candidate_scores"], limit: 3) {
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text("候选 Top3").foregroundStyle(.secondary)
+                            Spacer(minLength: 10)
+                            Text(candidates).multilineTextAlignment(.trailing).lineLimit(2)
+                        }.font(.system(size: 10))
+                    }
+                } else if let compatible = compatibleGenera(report) {
+                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                        Text("云属未定").foregroundStyle(.secondary)
+                        Spacer(minLength: 10)
+                        Text("压力族仅兼容 \(compatible)").multilineTextAlignment(.trailing).lineLimit(2)
+                    }.font(.system(size: 10))
+                }
+                diagnosticRow("推断依据", genus["source"])
+                diagnosticRow("评分影响", (genus["scoring_effect"] as? Bool) == false ? "不参与评分" : "—")
+            } else {
+                diagnosticRow("云属代理", "—")
+            }
+            phaseRows(report["cloud_phase_proxy"])
         }
+    }
+
+    @ViewBuilder
+    private func phaseRows(_ phase: Any?) -> some View {
+        if let phase = phase as? JSONObject {
+            let label = phase["label"] as? String ?? "unknown"
+            if label == "unknown", phase["source"] as? String == "not-resolved-for-native-burnable-target" {
+                diagnosticRow("相态", "未解析（GFS 桌面点预测不解析目标云相态）")
+            } else {
+                let ice = phase["ice_fraction"] as? NSNumber
+                let iceText = (ice != nil && ice!.doubleValue.isFinite)
+                    ? " · 冰含量占比 \(Int((ice!.doubleValue * 100).rounded()))%" : ""
+                diagnosticRow("相态", "\(phaseLabel(label))\(iceText)")
+                diagnosticRow("相态置信度", phase["confidence"], percentValue: true)
+            }
+        } else if phase == nil {
+            diagnosticRow("相态", "—")
+        } else {
+            diagnosticRow("相态", phase)
+        }
+    }
+
+    private func topCandidates(_ scores: Any?, limit: Int) -> String? {
+        guard let scores = scores as? JSONObject, !scores.isEmpty else { return nil }
+        let ranked = scores.sorted { ($0.value as? NSNumber)?.doubleValue ?? -1 > ($1.value as? NSNumber)?.doubleValue ?? -1 }
+        let top = ranked.prefix(limit).compactMap { key, value -> String? in
+            guard let number = value as? NSNumber, number.doubleValue.isFinite else { return nil }
+            return "\(genusLabel(key)) \(Int((number.doubleValue * 100).rounded()))%"
+        }
+        return top.isEmpty ? nil : top.joined(separator: " · ")
+    }
+
+    private func compatibleGenera(_ report: JSONObject) -> String? {
+        guard let diagnosis = report["dominant_burnable_cloud_genus_diagnosis"] as? JSONObject,
+              let genera = diagnosis["compatible_genera"] as? [String], !genera.isEmpty else { return nil }
+        return genera.map(genusLabel).joined(separator: " / ")
     }
 }
 
@@ -1196,6 +2077,9 @@ struct WorkRegionPage: View {
                 Toggle(isOn: $store.showRegionalGrid) {
                     Image(systemName: "square.grid.3x3").accessibilityLabel("显示网格")
                 }.toggleStyle(.button).help("显示网格")
+                Toggle(isOn: $store.showRegionalSamples) {
+                    Image(systemName: "square.stack.3d.up").accessibilityLabel("采样格点")
+                }.toggleStyle(.button).help("采样格点（复用预测点，最多显示 2000 个）")
                 Button { store.regionalFitVersion += 1 } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }
                     .help("适应预测范围").accessibilityLabel("适应预测范围")
                 Button { store.showRegionalInspector.toggle() } label: { Image(systemName: "sidebar.right") }
@@ -1309,6 +2193,13 @@ struct WorkRegionPage: View {
             Text("\(grid) · \(count) · \(regions) · \(prefetch)")
                 .font(.system(size: 9)).foregroundStyle(.secondary)
                 .lineLimit(1).minimumScaleFactor(0.75)
+            // 缓存快照可辨认（硬规则 2）：与点页「缓存状态」诊断组对齐，只标注命中。
+            if model.cacheStatus == "hit", let generated = model.cacheGeneratedAt {
+                Text("缓存快照 · 生成于 \(String(generated.prefix(16)).replacingOccurrences(of: "T", with: " ")) UTC")
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
+                    .lineLimit(1).minimumScaleFactor(0.75)
+                    .help("本次结果读取自引擎缓存快照，未重新计算")
+            }
             if !model.nativeTimingsMS.isEmpty {
                 let native = model.nativeTimingsMS
                 Text("原生耗时 · " + native.keys.sorted().map {
@@ -1352,13 +2243,28 @@ struct WorkRegionPage: View {
     private var legend: some View {
         HStack(spacing: 7) {
             Text("质量指数")
-            Text("0")
-            HStack(spacing: 0) {
-                ForEach(0..<RegionalPalette.steps, id: \.self) { index in
-                    Color(nsColor: RegionalPalette.color(index))
-                }
-            }.frame(width: 110, height: 6).clipShape(Capsule())
-            Text("2.5")
+            VStack(spacing: 2) {
+                HStack(spacing: 0) {
+                    ForEach(0..<RegionalPalette.steps, id: \.self) { index in
+                        Color(nsColor: RegionalPalette.color(index))
+                    }
+                }.frame(width: 110, height: 6).clipShape(Capsule())
+                // 六档刻度对齐 Web 图例（outlook/+page.svelte:516-523）；色带仍按
+                // RegionalPalette 固定 0–2.5 映射，无渲染改动。
+                HStack(spacing: 0) {
+                    Text("0").fixedSize()
+                    Spacer(minLength: 0)
+                    Text("0.5").fixedSize()
+                    Spacer(minLength: 0)
+                    Text("1.0").fixedSize()
+                    Spacer(minLength: 0)
+                    Text("1.5").fixedSize()
+                    Spacer(minLength: 0)
+                    Text("2.0").fixedSize()
+                    Spacer(minLength: 0)
+                    Text("2.5").fixedSize()
+                }.frame(width: 110)
+            }
             Spacer(minLength: 4)
             Rectangle().stroke(.secondary.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
                 .frame(width: 9, height: 9)
@@ -1378,11 +2284,15 @@ struct WorkRegionPage: View {
                 Text(coordinate.label).font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
                 ForEach(["gfs", "ec"], id: \.self) { model in
                     let cell = store.regionalForecast.model(model).cell(at: coordinate)
+                    // 城市坐标不落在 0.25° 格点上（城市点由引擎单独计算），此时回退到
+                    // 城市排名行携带的完整 point DTO，不得把真实值显示成「缺测」。
+                    let cityCell = store.regionalForecast.model(model).cityRanking.first { $0.coordinate == coordinate }
+                    let display = cell ?? cityCell
                     HStack(spacing: 6) {
                         Text(model.uppercased()).foregroundStyle(model == "gfs" ? warm : teal).frame(width: 34, alignment: .leading)
-                        Text(cell?.quality.map { String(format: "%.2f", $0) } ?? "—").monospacedDigit().bold()
+                        Text(display?.quality.map { String(format: "%.2f", $0) } ?? "—").monospacedDigit().bold()
                         Spacer()
-                        Text(cell?.quality == nil ? "缺测" : timeLabel(cell?.bestTime)).foregroundStyle(.secondary)
+                        Text(display?.quality == nil ? "缺测" : timeLabel(display?.bestTime)).foregroundStyle(.secondary)
                         if cell?.bestTime != nil {
                             Button {
                                 store.queryRegionalProfile(model: model, coordinate: coordinate)
@@ -1393,7 +2303,11 @@ struct WorkRegionPage: View {
                             .help("读取 \(model.uppercased()) 剖面")
                             .disabled(store.busy)
                         }
-                    }.font(.system(size: 11)).help(cell?.error ?? cell?.level ?? "无该模式结果")
+                    }.font(.system(size: 11)).help(display?.error ?? display?.level ?? "无该模式结果")
+                }
+                if let cell = store.regionalForecast.model(store.selectedModel).cell(at: coordinate)
+                    ?? store.regionalForecast.model(store.selectedModel).cityRanking.first(where: { $0.coordinate == coordinate }) {
+                    RegionalCellDetail(model: store.selectedModel, cell: cell)
                 }
                 if store.regionalProfileCoordinate == coordinate,
                    !store.regionalProfileModel.isEmpty {
@@ -1428,7 +2342,7 @@ struct WorkRegionPage: View {
                                         Text(timeLabel(cell.bestTime)).font(.system(size: 9)).foregroundStyle(.secondary)
                                     }
                                     Spacer(minLength: 2)
-                                    Text(String(format: "%.2f", cell.quality ?? 0))
+                                    Text(cell.quality.map { String(format: "%.2f", $0) } ?? "—")
                                         .font(.system(size: 12, weight: .semibold)).monospacedDigit()
                                 }
                                 .padding(.horizontal, 7).padding(.vertical, 9).contentShape(Rectangle())
@@ -1460,7 +2374,7 @@ struct WorkRegionPage: View {
                                         Text(timeLabel(cell.bestTime)).font(.system(size: 9)).foregroundStyle(.secondary)
                                     }
                                     Spacer(minLength: 2)
-                                    Text(String(format: "%.2f", cell.quality ?? 0)).font(.system(size: 12, weight: .semibold))
+                                    Text(cell.quality.map { String(format: "%.2f", $0) } ?? "—").font(.system(size: 12, weight: .semibold))
                                         .monospacedDigit()
                                 }
                                 .padding(.horizontal, 7).padding(.vertical, 9).contentShape(Rectangle())
@@ -1500,6 +2414,83 @@ struct WorkRegionPage: View {
     }
 }
 
+/// 区域网格弹窗明细（regional-1～4，Web BurnOutlookMap.svelte 弹窗的原生对应）。
+/// 字段全部来自区域 points[] DTO 顶层与 quality_components；键缺失显示「未计算/未提供」，
+/// 不在 SwiftUI 重算或猜值（方案 :33、:83-84）。置信度缺值显示「未提供」而非 0%。
+private struct RegionalCellDetail: View {
+    @EnvironmentObject private var store: Store
+    let model: String
+    let cell: RegionalCell
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 6) {
+                Text(model.uppercased()).font(.system(size: 10, weight: .bold)).foregroundStyle(modelColor(model))
+                if let peakLevel = cell.peakLevel, !peakLevel.isEmpty {
+                    Text(peakLevel).font(.system(size: 9, weight: .medium))
+                        .padding(.horizontal, 5).padding(.vertical, 1.5)
+                        .background(warm.opacity(0.12), in: Capsule())
+                }
+                Spacer()
+            }
+            HStack(alignment: .top, spacing: 8) {
+                scoreCard("峰值质量 / 2.5", cell.peakQuality)
+                scoreCard("事件窗口质量 / 2.5", cell.eventQuality)
+            }
+            VStack(alignment: .leading, spacing: 3) {
+                row("主导可烧压力族", cell.pressureFamily.map { familyLabel($0) } ?? "无可烧目标云")
+                row("有效可烧云", cell.cloudCoverageEffective.map { String(format: "%.1f%%", $0 * 100) } ?? "未计算")
+                row("可烧时长", cell.durationMinutes.map { String(format: "%.0f 分钟", $0) } ?? "未计算")
+                row("质量 AOD", cell.qualityAod.map { String(format: "%.3f", $0) } ?? "未计算")
+                row("入射修正", signedText(cell.incomingAdjustment))
+                row("观测修正", signedText(cell.observerAdjustment))
+                row("最佳时刻", cell.bestTime.map { timeLabel($0) } ?? "无明显峰值")
+                row("置信度", cell.confidenceScore.map { "\(Int(($0 * 100).rounded()))%" } ?? "未提供")
+            }
+            Button {
+                store.openRegionalCellInPointForecast(cell, model: model)
+            } label: {
+                Label("在单点模式打开", systemImage: "arrow.up.forward.app")
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .buttonStyle(.borderless)
+            .help("用该网格的坐标、模式、日期与现象预填单点预测")
+            .disabled(store.busy)
+            .accessibilityLabel("在单点模式打开 \(cell.label)")
+        }
+        .padding(8)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
+    }
+
+    private func scoreCard(_ title: String, _ value: Double?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.system(size: 8)).foregroundStyle(.secondary)
+            Text(value.map { String(format: "%.3f", $0) } ?? "未计算")
+                .font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                .foregroundStyle(value == nil ? Color.secondary : Color.primary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(6)
+        .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 5))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func row(_ title: String, _ value: String) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title).font(.system(size: 9)).foregroundStyle(.secondary)
+            Spacer(minLength: 6)
+            Text(value).font(.system(size: 10)).monospacedDigit()
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    /// 入射/观测 AOD 修正：Web 弹窗的 ±0.3f 语义。
+    private func signedText(_ value: Double?) -> String {
+        guard let value else { return "未计算" }
+        return String(format: "%+.3f", value)
+    }
+}
+
 private struct WorkNowcastHeroView: View {
     @EnvironmentObject private var store: Store
     private var report: JSONObject? { store.resultKind == .nowcast ? store.result : nil }
@@ -1533,7 +2524,8 @@ private struct WorkNowcastHeroView: View {
                     Text(timeLabel(report?["best_time_local"] as? String))
                         .font(.system(size: 22, weight: .semibold)).monospacedDigit()
                     Text("卫星观测 \(observationTime)").font(.system(size: 10)).foregroundStyle(.secondary)
-                    Text("GFS 先验 · CAMS 光学").font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text("实况源：\(sourceText) · 通道 \(channelText)")
+                        .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(2)
                 }.frame(maxWidth: .infinity, alignment: .topLeading)
             }
         }.padding(18).frame(maxWidth: .infinity).workSurface(emphasized: true)
@@ -1543,6 +2535,18 @@ private struct WorkNowcastHeroView: View {
               let date = ISO8601DateFormatter().date(from: value) else { return "—" }
         return ObservationDate.timeLabel(date, timezone: store.timezone)
     }
+
+    // nowcast-8: real source & channel from the backend (desktop_nowcast_adjustment.rs:991,994),
+    // replacing the former hardcoded「GFS 先验 · CAMS 光学」caption.
+    private var sourceText: String {
+        guard let value = nowcast["source"] as? String, !value.isEmpty else { return "未提供" }
+        return value
+    }
+
+    private var channelText: String {
+        guard let value = nowcast["image_channel"] as? String, !value.isEmpty else { return "—" }
+        return value
+    }
 }
 
 private struct WorkNowcastResultsView: View {
@@ -1550,7 +2554,8 @@ private struct WorkNowcastResultsView: View {
     private var report: JSONObject? { store.resultKind == .nowcast ? store.result : nil }
     private var presentation: NowcastPresentation { NowcastPresentation(report: report) }
     private var nowcast: JSONObject { presentation.observation }
-    private let groups = [("卫星云况", 0..<3), ("运动与约束", 3..<6), ("采样与光学", 6..<9)]
+    // Plan row 29 grouping: 卫星云况 / 运动采样 / 光学与雷达 (nowcast-4/7/11).
+    private let groups = [("卫星云况", 0..<7), ("运动采样", 7..<11), ("光学与雷达", 11..<15)]
     var body: some View {
         VStack(spacing: 12) {
             WorkAnalysisTabs()
@@ -1559,8 +2564,18 @@ private struct WorkNowcastResultsView: View {
                     if store.resultTab == "概览" {
                         ForEach(groups, id: \.0) { title, range in
                             VStack(alignment: .leading, spacing: 7) {
-                                Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
-                                HStack(alignment: .top, spacing: 10) {
+                                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                    Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                                    if title == "光学与雷达" {
+                                        Text(radarTimeliness)
+                                            .font(.system(size: 9)).foregroundStyle(.secondary)
+                                            .lineLimit(1).help(radarTimeliness)
+                                    }
+                                    Spacer(minLength: 0)
+                                }
+                                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
+                                                    GridItem(.flexible(), spacing: 10),
+                                                    GridItem(.flexible())], spacing: 10) {
                                     ForEach(Array(NowcastPresentation.metrics[range]), id: \.0) { spec in
                                         metric(spec)
                                     }
@@ -1581,6 +2596,17 @@ private struct WorkNowcastResultsView: View {
         }
     }
 
+    /// Radar observation timeliness next to the 光学与雷达 group (nowcast-11),
+    /// so radar status is visible without switching to the diagnostics tab.
+    private var radarTimeliness: String {
+        guard let source = nowcast["radar_source"] as? String, !source.isEmpty else {
+            return "雷达：后端未接入雷达观测"
+        }
+        let time = timeLabel(nowcast["radar_valid_time_utc"] as? String)
+        let age = number(nowcast["radar_age_minutes"]).map { String(format: "%.0f", $0) } ?? "—"
+        return "雷达 \(source) · 观测 \(time) UTC · 帧龄 \(age) 分钟"
+    }
+
     private func metric(_ spec: (String, String, String)) -> some View {
         let aod = presentation.aod
         return VStack(alignment: .leading, spacing: 7) {
@@ -1589,16 +2615,25 @@ private struct WorkNowcastResultsView: View {
                 WorkAODValue(summary: aod)
             } else {
                 Text(presentation.value(spec.0))
-                    .font(.system(size: spec.0 == "satellite_low_cloud_state" || spec.0 == "satellite_motion_quality" ? 18 : 23,
+                    .font(.system(size: spec.0 == "satellite_low_cloud_state" || spec.0 == "satellite_motion_quality"
+                                  || spec.0 == "cloud_type_label" ? 18 : 23,
                                   weight: .semibold)).monospacedDigit()
                     .foregroundStyle(report == nil ? Color.secondary : Color.primary)
                     .lineLimit(2).minimumScaleFactor(0.8)
                     .frame(maxHeight: .infinity, alignment: .leading)
             }
-            Text(spec.0 == "aod" ? aod.caption : spec.2)
+            Text(spec.0 == "aod" ? aod.caption : captionText(spec))
                 .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(2)
         }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: 112).workSurface()
+    }
+
+    /// nowcast-9: the geometric path risk card carries its light-path sample count
+    /// badge; missing counts stay explicit instead of implying 0 samples.
+    private func captionText(_ spec: (String, String, String)) -> String {
+        guard spec.0 == "geometric_path_blocking_risk" else { return spec.2 }
+        guard let samples = number(nowcast["geometric_path_samples"]) else { return "光路样本数未提供" }
+        return "太阳入射路径 · 基于 \(Int(samples)) 个光路样本"
     }
 
     private var diagnostics: some View {
@@ -1614,6 +2649,7 @@ private struct WorkNowcastResultsView: View {
                 }
             }
             if let report { WorkSharedDiagnosis(report: report) }
+            nowcastScoreComponents
             Text("云体运动与雷达").font(.system(size: 13, weight: .semibold))
             ForEach([
                 ("motion_correlation", "云体运动相关性"),
@@ -1638,45 +2674,175 @@ private struct WorkNowcastResultsView: View {
             }
         }.padding(18).frame(maxWidth: .infinity, alignment: .leading).workSurface()
     }
+
+    /// nowcast-13: read-only score-composition rows from report.quality_components
+    /// (nowcast_runtime.rs:956, event components). Nothing is recomputed here; keys
+    /// the desktop nowcast does not produce simply show —.
+    @ViewBuilder
+    private var nowcastScoreComponents: some View {
+        if let components = report?["quality_components"] as? JSONObject, !components.isEmpty {
+            WorkDiagnosticGroup(title: "评分组成（后端只读 · 不在客户端重算）") {
+                diagnosticRow("云量基础分", components["coverage_base_score"] ?? components["coverage_score"], digits: 3)
+                diagnosticRow("修正后原始分", components["raw_quality_index"], digits: 3)
+                diagnosticRow("可烧云占比（峰值）", components["forward_burnable_cloud_ratio_peak"], percentValue: true)
+                diagnosticRow("可烧载荷（有效）", components["forward_burnable_cloud_load_effective"], digits: 3)
+                diagnosticRow("前方总云场（峰值）", components["forward_view_cloud_field_amount_peak"], digits: 3)
+                diagnosticRow("入射遮挡（均值）", components["solar_incoming_block_risk_mean"], percentValue: true)
+                diagnosticRow("持续时间修正", components["duration_adjustment"], digits: 3)
+                diagnosticRow("持续时间系数", components["duration_factor"], digits: 3)
+                diagnosticRow("入射 AOD 修正", components["incoming_aod_adjustment"], digits: 3)
+                diagnosticRow("观测 AOD 修正", components["observer_aod_adjustment"], digits: 3)
+                diagnosticRow("材质修正", components["material_adjustment"], digits: 3)
+                diagnosticRow("质量用 AOD 550", components["quality_aod550"], digits: 3)
+            }
+        }
+    }
 }
 
+/// Satellite posterior probability profile (plan rows nowcast-1/2/3, Web parity with
+/// SatelliteVerticalProfile.svelte): header coverage stats, teal retrieved-alpha scale,
+/// amber dashed unknown cells, pressure-level row lines with hPa labels on a trailing
+/// axis anchored to the same height scale, and the HSD posterior / GFS prior source legend.
 private struct WorkSatelliteProfileView: View {
     @EnvironmentObject private var store: Store
     let presentation: NowcastPresentation
+
+    // Web color tokens (SatelliteVerticalProfile.svelte:39,43): retrieved maps the
+    // posterior onto rgba(86,143,155,·), unknown stays faint amber behind a dashed border.
+    private static let retrieved = Color(red: 86 / 255, green: 143 / 255, blue: 155 / 255)
+    private static let unknownAmber = Color(red: 183 / 255, green: 121 / 255, blue: 31 / 255)
+    private static let unknownFill = Color(red: 183 / 255, green: 121 / 255, blue: 31 / 255).opacity(0.05)
+
+    private static func retrievedFill(_ probability: Double) -> Color {
+        retrieved.opacity(0.12 + min(100, max(0, probability)) / 150)
+    }
+
+    /// Dashed outline of one unknown cell, drawn as a closed 5-point LineMark series.
+    private struct UnknownCellBorder: Identifiable {
+        let id: String
+        let corners: [(Double, Double)]
+    }
+
     var body: some View {
         let cells = presentation.profileCells
-        VStack(alignment: .leading, spacing: 14) {
+        let stats = presentation.profileStats
+        let hcai = stats.bands.contains("CLOUD_MASK")
+        return VStack(alignment: .leading, spacing: 14) {
             HStack {
                 Text("卫星冻结剖面").font(.system(size: 13, weight: .semibold))
                 Spacer()
                 Text("云层后验概率").font(.system(size: 10)).foregroundStyle(.secondary)
             }
             Text(presentation.profileBearingCaption).font(.system(size: 10)).foregroundStyle(.secondary)
+            if stats.present {
+                // nowcast-2: coverage status & sampling statistics header.
+                HStack(spacing: 16) {
+                    statChip("时次", stats.validTimeText ?? "—")
+                    statChip("状态", stats.statusLabel)
+                    statChip("采样点", stats.sampleText)
+                    statChip("覆盖率", stats.coverageText)
+                    statChip("压力层", "\(stats.pressureCount)")
+                    statChip("未知样本", stats.unknownCount.map(String.init) ?? "—")
+                }
+            }
             if cells.isEmpty {
                 Text(presentation.profileUnavailableReason).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 260)
             } else {
-                Chart(cells) { cell in
-                    RectangleMark(
-                        xStart: .value("距离", cell.startKM), xEnd: .value("距离", cell.endKM),
-                        yStart: .value("高度", cell.bottomKM), yEnd: .value("高度", cell.topKM)
-                    ).foregroundStyle(cell.probability.map { warm.opacity(0.08 + 0.85 * $0 / 100) } ?? Color.secondary.opacity(0.16))
-                }
-                .chartXAxisLabel("沿光路距离 · km")
-                .chartYAxisLabel("高度 · km")
-                .frame(height: 260)
-                HStack(spacing: 6) {
-                    Rectangle().fill(.secondary.opacity(0.16)).frame(width: 10, height: 10)
-                    Text("缺测")
-                    Spacer()
-                    Text("0%")
-                    LinearGradient(colors: [warm.opacity(0.08), warm.opacity(0.93)],
-                                   startPoint: .leading, endPoint: .trailing).frame(width: 72, height: 5)
-                    Text("100%")
-                }.font(.system(size: 9)).foregroundStyle(.secondary)
+                heatmap(cells: cells, rows: stats.pressureRows)
+                legend(hcai: hcai)
             }
+            // nowcast-12: honest annotation — the desktop nowcast steps carry a frozen
+            // model light-path cross-section, but profile samples have no terrain layer
+            // and this page intentionally draws only the satellite posterior heatmap.
+            Text("实况逐时结果另携带冻结太阳光路模式剖面（GFS 温湿/云分数/照明代理）；该剖面样本不含地形字段，本页仅绘卫星后验概率热图。")
+                .font(.system(size: 9)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             frozenQuery
         }.padding(18).frame(maxWidth: .infinity, alignment: .leading).workSurface()
+    }
+
+    private func statChip(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title).font(.system(size: 8)).foregroundStyle(.secondary)
+            Text(value).font(.system(size: 10, weight: .medium)).monospacedDigit().lineLimit(1)
+        }
+    }
+
+    private func heatmap(cells: [NowcastProfileCell], rows: [NowcastPressureRow]) -> some View {
+        let borders = cells.filter { $0.probability == nil }.map { cell in
+            UnknownCellBorder(id: cell.id, corners: [
+                (cell.startKM, cell.bottomKM), (cell.endKM, cell.bottomKM),
+                (cell.endKM, cell.topKM), (cell.startKM, cell.topKM),
+                (cell.startKM, cell.bottomKM),
+            ])
+        }
+        return Chart {
+            ForEach(cells) { cell in
+                RectangleMark(
+                    xStart: .value("距离", cell.startKM), xEnd: .value("距离", cell.endKM),
+                    yStart: .value("高度", cell.bottomKM), yEnd: .value("高度", cell.topKM)
+                ).foregroundStyle(cell.probability.map { Self.retrievedFill($0) } ?? Self.unknownFill)
+            }
+            ForEach(borders) { border in
+                ForEach(Array(border.corners.enumerated()), id: \.offset) { _, corner in
+                    LineMark(x: .value("距离", corner.0), y: .value("高度", corner.1),
+                             series: .value("单元", border.id))
+                        .foregroundStyle(Self.unknownAmber)
+                        .lineStyle(StrokeStyle(lineWidth: 0.7, dash: [3, 2]))
+                }
+            }
+        }
+        .chartXAxisLabel("沿光路距离 · km")
+        .chartYAxisLabel("高度 · km")
+        .chartYAxis {
+            // Height axis (leading) and pressure-level rows (nowcast-1): each
+            // pressure level's representative GFS-prior height shares the same
+            // y scale, so its dashed row line and hPa label stay aligned with km.
+            AxisMarks(position: .leading) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
+                AxisValueLabel {
+                    if let number = value.as(Double.self) {
+                        Text("\(Int(number))km").font(.system(size: 8)).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            AxisMarks(position: .trailing, values: rows.map(\.heightKM)) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.6, dash: [4, 3]))
+                AxisValueLabel {
+                    if let height = value.as(Double.self),
+                       let row = rows.first(where: { abs($0.heightKM - height) < 0.001 }) {
+                        Text("\(row.pressure)hPa").font(.system(size: 8))
+                            .foregroundStyle(Self.retrieved)
+                    }
+                }
+            }
+        }
+        .frame(height: 260)
+        .accessibilityLabel("沿太阳方向卫星后验概率热图，右轴标注 GFS 先验压力层 hPa，未知样本以琥珀虚线框标出，缺测不解释为晴空")
+    }
+
+    /// nowcast-3: retrieved/unknown source legend and missing-measurement semantics,
+    /// branching on bands like the Web footer (CLOUD_MASK → HCAI products, else HSD proxy).
+    private func legend(hcai: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 10) {
+                LinearGradient(colors: [Self.retrieved.opacity(0.12), Self.retrieved.opacity(0.79)],
+                               startPoint: .leading, endPoint: .trailing)
+                    .frame(width: 64, height: 6).clipShape(Capsule())
+                    .overlay { Capsule().stroke(.secondary.opacity(0.35), lineWidth: 0.5) }
+                Text("retrieved 后验概率 0–100%")
+                Rectangle().fill(Self.unknownFill)
+                    .overlay { Rectangle().stroke(Self.unknownAmber, style: StrokeStyle(lineWidth: 1, dash: [3, 2])) }
+                    .frame(width: 12, height: 8)
+                Text("unknown 缺失/未知")
+            }
+            Text(hcai
+                 ? "HCAI 官方云掩膜、云相、云顶高度和 COT 产品。"
+                 : "HSD B07/B13/B15 云概率代理（posterior）；HSD 分支不发布 COT、云相或官方云高真值。")
+            Text("缺失/未知不解释为晴空；连续网格坐标与 model cloud fraction 来自同周期 GFS vertical prior（模式温湿度/风场先验，非观测温湿风廓线或云底真值）。")
+        }.font(.system(size: 9)).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     private var frozenQuery: some View {
@@ -1729,6 +2895,9 @@ private struct WorkNowcastLedgerView: View {
                     Text("档位").frame(width: 92, alignment: .leading)
                     Text("可烧").frame(width: 52, alignment: .leading)
                     Text("可烧云量").frame(width: 84, alignment: .leading)
+                    Text("亮度颜色").frame(width: 68, alignment: .leading)
+                    Text("可烧比例").frame(width: 68, alignment: .leading)
+                    Text("太阳入射阻挡").frame(width: 88, alignment: .leading)
                     Text("AOD 550").frame(width: 72, alignment: .leading)
                     Text("太阳仰角").frame(width: 78, alignment: .leading)
                 }
@@ -1753,6 +2922,12 @@ private struct WorkNowcastLedgerView: View {
                             .accessibilityLabel(!valid ? "缺测" : burnable == true ? "可烧" : burnable == false ? "不可烧" : "未提供")
                         Text(valid ? percent(step["burnable_cloud_coverage"]) : "—")
                             .frame(width: 84, alignment: .leading)
+                        Text(valid ? ratioText(step["brightness_color"]) : "—")
+                            .frame(width: 68, alignment: .leading)
+                        Text(valid ? ratioText(step["forward_burnable_cloud_ratio"]) : "—")
+                            .frame(width: 68, alignment: .leading)
+                        Text(valid ? ratioText(step["solar_incoming_block_risk"]) : "—")
+                            .frame(width: 88, alignment: .leading)
                         Text(valid ? format(step["quality_aod550"], digits: 2) : "—")
                             .frame(width: 72, alignment: .leading)
                         Text(valid ? format(step["solar_elevation_deg"], digits: 1) : "—")
@@ -1767,8 +2942,12 @@ private struct WorkNowcastLedgerView: View {
                 if report == nil {
                     Text("等待实况分析").foregroundStyle(.secondary).padding(40)
                 }
+                Text("亮度颜色 / 可烧比例 / 太阳入射阻挡为后端 0–1 比例字段，— 表示缺测；回程透过率与逐时云底–云顶桌面实况未计算，故不设该两列（不伪造）。点击行不驱动地图。")
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(minWidth: 538, alignment: .leading)
+            .frame(minWidth: 756, alignment: .leading)
         }
         .workSurface()
     }
@@ -1829,6 +3008,7 @@ private struct WorkSegments: View {
                         }
                         .contentShape(Rectangle())
                 }.buttonStyle(.plain)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }.padding(3)
             .background(.black.opacity(scheme == .dark ? 0.12 : 0.035), in: RoundedRectangle(cornerRadius: 8))
@@ -1912,12 +3092,12 @@ private func timeLabel(_ value: String?) -> String {
 }
 
 private func windowLabel(_ report: JSONObject?) -> String {
-    guard let value = report?["timing_window"] as? JSONObject else { return "--" }
+    guard let value = report?["timing_window"] as? JSONObject else { return "—" }
     return "\(timeLabel(value["start_time_local"] as? String)) – \(timeLabel(value["end_time_local"] as? String))"
 }
 
 private func metricValue(_ key: String, _ report: JSONObject?) -> String {
-    guard let report else { return "--" }
+    guard let report else { return "—" }
     let components = report["quality_components"] as? JSONObject ?? [:]
     switch key {
     case "aod": return format(components["quality_aod550"] ?? report["quality_aod550"])
@@ -1926,11 +3106,12 @@ private func metricValue(_ key: String, _ report: JSONObject?) -> String {
     case "confidence": return percent(report["confidence_score"])
     case "convective": return format(report["convective_risk"])
     case "burnable": return percent(components["burnable_cloud_coverage_effective"] ?? report["burnable_cloud_coverage_effective"])
-    case "material": return format(components["cloud_material"])
-    case "brightness": return format(components["brightness_color"])
+    // 0–1 比例字段统一百分比口径，与逐时台账 ratioText、Web MetricsGrid score() 一致。
+    case "material": return ratioText(components["cloud_material"])
+    case "brightness": return ratioText(components["brightness_color"])
     case "incoming": return format(components["incoming_aod_illumination_factor"])
     case "contrast": return format(components["observer_aod_contrast_factor"])
-    default: return "--"
+    default: return "—"
     }
 }
 
@@ -1945,7 +3126,7 @@ private func cloudLayerMetricValue(_ report: JSONObject?) -> String {
 }
 
 private func percent(_ value: Any?) -> String {
-    guard let number = value as? NSNumber else { return "--" }
+    guard let number = value as? NSNumber else { return "—" }
     return String(format: "%.0f%%", number.doubleValue * 100)
 }
 

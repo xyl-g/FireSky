@@ -75,7 +75,7 @@ $env:FIRESKY_IMAGE_TAG = "local"; docker compose up -d --build
   `FIRESKY_IMAGE_TAG=registry.example/firesky:tag FIRESKY_PUSH=1 make docker-buildx`，
   因为 Docker 的 `--load` 不能导入多架构 manifest list；
 - `docker/Dockerfile` 三阶段：Rust 编译独立引擎 → Node 构建
-  `apps/desktop-tauri` 的共享 Web →
+  `apps/shared-web` 的共享 Web →
   Debian slim 运行时（apt 装 `libeccodes0`，非 root 用户 10001 运行，无 Python）；
 - 镜像显式使用 `libeccodes.so.0`、`/usr/share/eccodes/definitions` 和
   `/usr/share/eccodes/samples`；这些路径由 Debian `libeccodes-data` 依赖提供；
@@ -115,7 +115,7 @@ $env:FIRESKY_IMAGE_TAG = "local"; docker compose up -d --build
 cargo build --manifest-path engine/Cargo.toml --release --locked
 
 # 2) 前端
-cd frontend && npm ci && npm run build && cd ..
+cd apps/shared-web && npm ci && npm run build && cd ..
 
 # 3) 试跑
 engine/target/release/firesky-engine http --workspace "$PWD" --host 127.0.0.1 --port 8765
@@ -142,7 +142,7 @@ ASCII 字母、数字或 `-_.~`，应使用随机生成值。错误消息不包�
 ```bash
 cd /opt/firesky
 cargo build --manifest-path engine/Cargo.toml --release --locked
-cd frontend && npm ci && npm run build && cd ..
+cd apps/shared-web && npm ci && npm run build && cd ..
 ```
 
 `/etc/systemd/system/firesky.service`：
@@ -229,7 +229,7 @@ launchctl list | grep firesky                                     # 确认在跑
 git clone https://github.com/xyl-g/FireSky.git; cd FireSky
 cargo build --manifest-path engine/Cargo.toml --release --locked
 
-cd frontend; npm ci; npm run build; cd ..
+cd apps/shared-web; npm ci; npm run build; cd ..
 
 $env:FIRESKY_ECCODES_LIBRARY = "C:\ecCodes\bin\eccodes.dll"
 $env:ECCODES_DEFINITION_PATH = "C:\ecCodes\share\eccodes\definitions"
@@ -342,7 +342,7 @@ curl.exe），或在 WSL2 里用 cron。
 2. 若 `engine/` 或 `native/` 有改动：执行
    `cargo build --manifest-path engine/Cargo.toml --release --locked`
    重编独立引擎（容器构建自动做）；
-3. 若前端改动：`cd frontend && npm ci && npm run build`（容器构建自动做）；
+3. 若前端改动：`cd apps/shared-web && npm ci && npm run build`（容器构建自动做）；
 4. 重启进程；原生缓存校验源码/请求/输入身份，旧 Python 缓存不作为兼容命中。
    重启会丢失内存 job/桌面会话，先等任务结束或明确取消。
 

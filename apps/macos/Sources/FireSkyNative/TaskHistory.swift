@@ -1,6 +1,8 @@
 import SwiftUI
 
-private func taskTimestamp(_ value: String) -> Date? {
+/// Tolerates both plain and fractional-second ISO8601 stamps: engine task
+/// events carry `.300Z` while some receipts use whole seconds.
+func taskTimestamp(_ value: String) -> Date? {
     let formatter = ISO8601DateFormatter()
     formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
     if let date = formatter.date(from: value) { return date }

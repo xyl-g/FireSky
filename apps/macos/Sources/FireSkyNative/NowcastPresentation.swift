@@ -9,45 +9,134 @@ struct NowcastProfileCell: Identifiable {
     let probability: Double?
 }
 
+/// One pressure-level annotation row for the satellite profile heatmap: the level's
+/// representative height comes from the returned GFS prior levels (first non-null
+/// height for that pressure), falling back to the Web layout formula when a level
+/// has no published height. Heights are annotation anchors only, never cloud data.
+struct NowcastPressureRow: Identifiable {
+    let pressure: Int
+    let heightKM: Double
+    var id: Int { pressure }
+}
+
+/// Header statistics for the satellite profile page, read straight from the
+/// already-returned `satellite_vertical_profile` payload (desktop_nowcast_adjustment.rs:530-544).
+struct NowcastProfileStats {
+    let present: Bool
+    let validTimeText: String?
+    let statusLabel: String
+    let sampleText: String
+    let unknownCount: Int?
+    let coverageText: String
+    let pressureCount: Int
+    let bands: [String]
+    let pressureRows: [NowcastPressureRow]
+}
+
 struct NowcastPresentation {
     let report: [String: Any]?
     var observation: [String: Any] { report?["nowcast"] as? [String: Any] ?? [:] }
     var aod: AODSummary { AODSummary.reading(reports: report.map { [$0] } ?? []) }
 
+    // Plan row 29 groups: 卫星云况 / 运动采样 / 光学与雷达. cloud_type_* is a
+    // backend-missing group (plan 116-117): the card shows 未计算 until the Rust
+    // desktop contract computes it — the desktop bands are always HSD B07/B13/B15,
+    // never relabeled as HCAI cloud-type truth.
     static let metrics = [
         ("near_cloud_ratio", "近场云量", "观测点附近卫星云覆盖"),
         ("far_cloud_ratio", "远场云量", "太阳方向远场云覆盖"),
+        ("cloud_blanket_score", "云幕", "光学观测 · 卫星云幕评分"),
+        ("cloud_texture_score", "纹理", "光学观测 · 卫星云顶纹理"),
+        ("horizon_clearance_score", "地平线通透", "光学观测 · 地平线通透度"),
         ("satellite_low_cloud_state", "低云状态", "卫星校准与垂直先验"),
+        ("cloud_type_label", "多光谱云类", "桌面实况未计算 · HSD 通道不产生云类概率"),
         ("satellite_motion_quality", "运动质量", "卫星云体运动状态"),
-        ("convective_score_ceiling", "对流顶棚", "对流约束评分上限"),
         ("geometric_path_blocking_risk", "光路阻塞风险", "太阳入射路径"),
         ("calibrated_sample_coverage_ratio", "采样覆盖率", "卫星有效采样比例"),
         ("confidence", "实况支持度", "卫星反演支持 · 非命中概率"),
+        ("effective_convective_risk", "区域对流风险", "雷达有效值 · 非事件概率"),
+        ("effective_path_blocking_risk", "光路阻塞风险", "雷达有效值 · 光路约束风险"),
+        ("convective_score_ceiling", "对流顶棚", "评分顶棚 · 约束封顶上限"),
         ("aod", "AOD 550", "气溶胶光学厚度"),
     ]
 
     func value(_ key: String) -> String {
         if key == "aod" { return aod.value }
         if key == "satellite_motion_quality" {
-            guard let value = observation[key] as? String else { return "--" }
+            guard let value = observation[key] as? String else { return "—" }
             return ["observation": "原始观测", "strong": "可靠", "decayed": "已衰减",
                     "unknown": "未知", "diagnostic-only": "仅供诊断"][value] ?? value
         }
         if key == "satellite_low_cloud_state" {
-            guard let value = observation[key] as? String else { return "--" }
-            return ["supported": "支持低云", "not_supported": "不支持低云", "unknown": "未知"][value] ?? value
+            // 后端合同只有 detected|clear|unknown（desktop_nowcast_adjustment.rs:227-245、
+            // api/types.ts:41）；键不在合同内时回退显示原始值，不猜测语义。
+            guard let value = observation[key] as? String else { return "—" }
+            return ["detected": "检测到低云", "clear": "无低云", "unknown": "未知"][value] ?? value
         }
         if key == "cloud_type_label" {
+            // Backend-missing group: the Rust desktop nowcast never computes the
+            // multispectral cloud type, so the card shows 未计算 instead of a guess.
+            guard !observation.isEmpty else { return "—" }
             let label = observation[key] as? String ?? ""
-            return label.isEmpty ? "--" : label
+            return label.isEmpty ? "未计算" : label
         }
-        guard let value = Self.number(observation[key]) else { return "--" }
+        guard let value = Self.number(observation[key]) else { return "—" }
         switch key {
         case "near_cloud_ratio", "far_cloud_ratio", "geometric_path_blocking_risk",
              "calibrated_sample_coverage_ratio", "confidence", "convective_score_ceiling",
-             "radar_reliability_score", "radar_local_precip_ratio", "radar_path_precip_ratio":
+             "radar_reliability_score", "radar_local_precip_ratio", "radar_path_precip_ratio",
+             "cloud_blanket_score", "cloud_texture_score", "horizon_clearance_score",
+             "effective_convective_risk", "effective_path_blocking_risk":
             return String(format: "%.0f%%", value * 100)
         default: return String(format: "%.2f", value)
+        }
+    }
+
+    /// Profile header statistics + pressure-row anchors (plan items nowcast-1/2),
+    /// all read from the already-returned profile payload.
+    var profileStats: NowcastProfileStats {
+        guard let profile = observation["satellite_vertical_profile"] as? [String: Any] else {
+            return NowcastProfileStats(present: false, validTimeText: nil, statusLabel: "不可用",
+                                       sampleText: "—", unknownCount: nil, coverageText: "—",
+                                       pressureCount: 0, bands: [], pressureRows: [])
+        }
+        let samples = profile["samples"] as? [[String: Any]] ?? []
+        let levels = samples.flatMap { $0["levels"] as? [[String: Any]] ?? [] }
+        let maxHeight = max(10_000.0, levels.compactMap { Self.number($0["height_m"]) }.max() ?? 10_000)
+        let pressures = (profile["pressure_levels_hpa"] as? [Any])?.compactMap { ($0 as? NSNumber)?.intValue } ?? []
+        let rows: [NowcastPressureRow] = pressures.enumerated().map { index, pressure in
+            let matched = levels.first {
+                (Self.number($0["pressure_hpa"]) ?? -1) == Double(pressure) && Self.number($0["height_m"]) != nil
+            }
+            // Same placement fallback as the Web profile (SatelliteVerticalProfile.svelte:27).
+            let height = matched.flatMap { Self.number($0["height_m"]) }
+                ?? maxHeight * (0.08 + Double(index) / Double(max(1, pressures.count - 1)) * 0.84)
+            return NowcastPressureRow(pressure: pressure, heightKM: height / 1000)
+        }
+        let status = profile["status"] as? String ?? "unavailable"
+        let sampleCount = (profile["sample_count"] as? NSNumber)?.intValue ?? samples.count
+        let usable = (profile["usable_sample_count"] as? NSNumber)?.intValue ?? sampleCount
+        let unknown = (profile["unknown_sample_count"] as? NSNumber)?.intValue
+        let coverage = Self.number(profile["coverage"])
+        let validTime = (profile["valid_time_utc"] as? String)
+            .map { String($0.prefix(16)).replacingOccurrences(of: "T", with: " ") }
+        return NowcastProfileStats(
+            present: true,
+            validTimeText: validTime,
+            statusLabel: Self.profileStatusLabel(status),
+            sampleText: "\(usable)/\(sampleCount)",
+            unknownCount: unknown,
+            coverageText: coverage.map { "\(Int(($0 * 100).rounded()))%" } ?? "—",
+            pressureCount: pressures.count,
+            bands: profile["bands"] as? [String] ?? [],
+            pressureRows: rows)
+    }
+
+    static func profileStatusLabel(_ status: String) -> String {
+        switch status {
+        case "available": return "完整覆盖"
+        case "partial_unknown": return "部分未知"
+        default: return "不可用"
         }
     }
 

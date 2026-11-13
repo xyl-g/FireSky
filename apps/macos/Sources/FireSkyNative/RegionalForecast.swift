@@ -20,8 +20,85 @@ struct RegionalCell: Identifiable, Sendable {
     let level: String
     let bestTime: String?
     let error: String?
+    // 网格弹窗字段（regional-1～4）：独立解析 points[] 顶层与 quality_components，
+    // 键缺失保持 nil，由弹窗显式显示「未计算/未提供」，不在 SwiftUI 重算或猜值。
+    let peakQuality: Double?
+    let peakLevel: String?
+    let eventQuality: Double?
+    let confidenceScore: Double?
+    let pressureFamily: String?
+    let cloudCoverageEffective: Double?
+    let durationMinutes: Double?
+    let qualityAod: Double?
+    let incomingAdjustment: Double?
+    let observerAdjustment: Double?
+    let highCloud: Double?
+    let midCloud: Double?
+    let lowCloud: Double?
+    let timezone: String?
     var id: GridCoordinate { coordinate }
     var label: String { name.isEmpty ? coordinate.label : name }
+
+    init(coordinate: GridCoordinate, name: String, quality: Double?, level: String,
+         bestTime: String?, error: String?,
+         peakQuality: Double? = nil, peakLevel: String? = nil, eventQuality: Double? = nil,
+         confidenceScore: Double? = nil, pressureFamily: String? = nil,
+         cloudCoverageEffective: Double? = nil, durationMinutes: Double? = nil,
+         qualityAod: Double? = nil, incomingAdjustment: Double? = nil,
+         observerAdjustment: Double? = nil,
+         highCloud: Double? = nil, midCloud: Double? = nil, lowCloud: Double? = nil,
+         timezone: String? = nil) {
+        self.coordinate = coordinate
+        self.name = name
+        self.quality = quality
+        self.level = level
+        self.bestTime = bestTime
+        self.error = error
+        self.peakQuality = peakQuality
+        self.peakLevel = peakLevel
+        self.eventQuality = eventQuality
+        self.confidenceScore = confidenceScore
+        self.pressureFamily = pressureFamily
+        self.cloudCoverageEffective = cloudCoverageEffective
+        self.durationMinutes = durationMinutes
+        self.qualityAod = qualityAod
+        self.incomingAdjustment = incomingAdjustment
+        self.observerAdjustment = observerAdjustment
+        self.highCloud = highCloud
+        self.midCloud = midCloud
+        self.lowCloud = lowCloud
+        self.timezone = timezone
+    }
+
+    /// 弹窗所需的 DTO 解析（frames.rs points[] 顶层 + quality_components）。
+    /// 用于区域网格详情与采样点标注；errors/city 行沿用默认空值。
+    init(coordinate: GridCoordinate, row: [String: Any], quality: Double?, level: String,
+         bestTime: String?, error: String?) {
+        let components = row["quality_components"] as? [String: Any] ?? [:]
+        self.init(
+            coordinate: coordinate, name: row["name"] as? String ?? "",
+            quality: quality, level: level, bestTime: bestTime, error: error,
+            peakQuality: Self.number(row["peak_quality_index"]),
+            peakLevel: row["peak_quality_level"] as? String,
+            eventQuality: Self.number(row["quality_index"]),
+            confidenceScore: Self.number(row["confidence_score"]),
+            pressureFamily: row["dominant_burnable_pressure_family"] as? String,
+            cloudCoverageEffective: Self.number(components["burnable_cloud_coverage_effective"]),
+            durationMinutes: Self.number(components["duration_minutes"]),
+            qualityAod: Self.number(components["quality_aod550"]),
+            incomingAdjustment: Self.number(components["incoming_aod_adjustment"]),
+            observerAdjustment: Self.number(components["observer_aod_adjustment"]),
+            highCloud: Self.number(row["high_cloud"]),
+            midCloud: Self.number(row["mid_cloud"]),
+            lowCloud: Self.number(row["low_cloud"]),
+            timezone: row["timezone_name"] as? String
+        )
+    }
+
+    private static func number(_ value: Any?) -> Double? {
+        guard let number = value as? NSNumber, number.doubleValue.isFinite else { return nil }
+        return number.doubleValue
+    }
 }
 
 struct RegionalModel: Sendable {
@@ -44,6 +121,10 @@ struct RegionalModel: Sendable {
     let errorCount: Int
     let prefetchSeconds: Double?
     let nativeTimingsMS: [String: Double]
+    // 缓存快照标识（硬规则 2）：engine 在 model_results[model].cache 始终携带
+    // status/generated_at_utc（desktop_runtime.rs:911-916 hit、:966-975 refresh）。
+    let cacheStatus: String?
+    let cacheGeneratedAt: String?
     var validCount: Int { ranked.count }
     var peak: RegionalCell? { ranked.first }
     var status: String { error != nil ? "未完成" : available ? "预测完成" : "等待预测" }
@@ -72,6 +153,9 @@ struct RegionalModel: Sendable {
         prefetchSeconds = available ? ((report?["timing"] as? [String: Any])?["prefetch_seconds"] as? NSNumber)?.doubleValue : nil
         let timings = available ? (report?["timing"] as? [String: Any])?["native_timings_ms"] as? [String: Any] : nil
         nativeTimingsMS = (timings ?? [:]).compactMapValues(Self.number)
+        let cache = available ? (report?["cache"] as? [String: Any]) : nil
+        cacheStatus = cache?["status"] as? String
+        cacheGeneratedAt = cache?["generated_at_utc"] as? String
         let cityReport = report?["city_ranking"] as? [String: Any]
         cityRankingStatus = cityReport?["status"] as? String ?? "unavailable"
         cityRankingReason = cityReport?["reason"] as? String
@@ -83,8 +167,8 @@ struct RegionalModel: Sendable {
                 let value = Self.number(row["peak_quality_index"] ?? row["quality_index"])
                 let quality = value.flatMap { (0...2.5).contains($0) ? $0 : nil }
                 index[coordinate] = RegionalCell(
-                    coordinate: coordinate, name: row["name"] as? String ?? "",
-                    quality: quality, level: row["peak_quality_level"] as? String ?? row["quality_level"] as? String ?? "—",
+                    coordinate: coordinate, row: row, quality: quality,
+                    level: row["peak_quality_level"] as? String ?? row["quality_level"] as? String ?? "—",
                     bestTime: row["best_time_local"] as? String, error: quality == nil ? "缺测" : nil
                 )
             }
@@ -99,9 +183,10 @@ struct RegionalModel: Sendable {
                 guard let coordinate = Self.coordinate(row) else { continue }
                 let value = Self.number(row["peak_quality_index"] ?? row["quality_index"])
                 let quality = value.flatMap { (0...2.5).contains($0) ? $0 : nil }
+                // 城市行携带完整 point DTO（desktop_runtime.rs:1500-1548），与网格 points[]
+                // 同走 DTO 解析，供网格详情弹窗使用——城市点有真实计算值，不得按缺测处理。
                 cities.append(RegionalCell(
-                    coordinate: coordinate, name: row["name"] as? String ?? "",
-                    quality: quality,
+                    coordinate: coordinate, row: row, quality: quality,
                     level: row["peak_quality_level"] as? String ?? row["quality_level"] as? String ?? "—",
                     bestTime: row["best_time_local"] as? String,
                     error: quality == nil ? (row["error"] as? String ?? "缺测") : nil

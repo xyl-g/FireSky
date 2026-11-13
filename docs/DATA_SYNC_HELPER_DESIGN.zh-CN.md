@@ -6,6 +6,31 @@
 沿用 [CAMS 双路线提案](CAMS_DUAL_ROUTE_PROPOSAL.zh-CN.md) 第 0 节决定 5
 （整周期/洲包络下载已实现并经 2026-11-13 真实验收）。
 
+## 实现与验收状态（2026-11-13 复核）
+
+- 实现已提交于 `75371d1`：`engine/src/desktop_sync.rs`、桌面 Runtime/FFI、任务历史、
+  macOS `Store.swift` / `DialogViews.swift` 已接入；不再是等待开始编码的提案。
+- 已有设置、状态、到期判断、发布验证、单轮运行、失败熔断/手动解锁、60 秒 UI tick
+  和立即同步入口，以及 Rust 单测与 `tests/test_rust_desktop_sync.py` IPC 合同测试。
+  后者通过关闭端口代理模拟发布探测失败，不进行真实下载。
+- 第 14 节 A1–A8 没有在本文记录完整真实执行证据，继续按待验收处理。
+  CAMS 手动 prepare 的亚洲整周期/跨点复用证据不能代替后台同步轮次验收。
+- 本次只核对源码和文档，未重跑测试、启用同步或下载数据；后续顺序见
+  [最新接续计划](NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。以下章节保留为实现合同，
+  其中拟实施措辞/旧行号不代表当前缺实现；第 15 节第 8 项组锁风险仍须实测。
+
+### 守护进程化 / 应用无关同步落地（2026-11-13）
+
+第 1.2.5 / 2 / 15.6 节显式推迟的「守护进程化 / 应用无关同步」已展开为跨平台选型并落地 macOS：
+见 [跨平台技术选型](BACKGROUND_SYNC_PLATFORM_SELECTION.zh-CN.md) 第 7.3（决策记录）/ 7.4（落地与验收）。
+- 定案：macOS 用 **launchd LaunchAgent + 独立无头 helper**（传统 plist）；移动端**每设备本地后台**
+  （CAMS 仅前台）；进度可见**随 helper 一起**。
+- 引擎新增一次性 `desktop-call` CLI 与 `data_sync_tick`（due→run），同步轮**跨进程文件锁**（`state/sync.lock`）。
+- macOS 新增 `FireSkySyncHelper` target + `SyncHelperInstaller`（安装/卸载/刷新）+ 设置页后台助手段 +
+  逐源实时进度/上次同步时间/上次后台运行摘要；构建脚本编译并签名 helper。
+- GFS 同步修复「已同步但单点准备缺数据」：时效改**整小时**、bbox **外扩覆盖点预测域**
+  （`gfs_point_domain_envelope`），经真实 NOAA 单小时复用验收（点域命中同步缓存 `covering_cache`）。
+
 ## 0. 需求、决定记录与历史决定边界
 
 ### 0.1 新需求（用户 2026-11-13）
@@ -459,7 +484,7 @@ GFS/EC 子对象同样内嵌各自 provider 的状态/路径/计时输出。
    `desktop_runtime.rs:1897-1915`）。
 8. 状态文件：损坏/超限/缺合同 fail-closed，等效从未同步。
 
-### 13.2 回归门禁（实现后必须实跑，本文档阶段未运行）
+### 13.2 回归门禁（设计阶段清单；最终同版本结果需另行记录）
 
 - `cargo test`（engine 全量，含既有 `engine/tests/retention_lifecycle.rs`、
   `retention_multiprocess.rs`、`runtime_process.rs`）；

@@ -238,7 +238,7 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
             "geometric_path_blocking_risk": 0.17,
             "calibrated_sample_coverage_ratio": 0.91,
             "near_cloud_ratio": 0.42, "far_cloud_ratio": 0.68,
-            "satellite_low_cloud_state": "supported", "confidence": 0.76,
+            "satellite_low_cloud_state": "detected", "confidence": 0.76,
             "satellite_motion_quality": "strong", "satellite_motion_age_minutes": 7,
             "satellite_advection_horizon_hours": 0.5, "motion_correlation": 0.83,
             "radar_source": "测试雷达（非真实观测）",

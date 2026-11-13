@@ -3,9 +3,27 @@
 更新日期：2026-11-13。本文区分生产 Python 运行时、PySide6 旧桌面、Tauri 桌面壳和
 Docker 正在使用的 Svelte Web 页面。它们是不同的退役对象，不能因为名称或目录相同而一起删除。
 
+> **执行状态（2026-11-13，按实现与验收分开记录）**：Phase 0 消费者盘点与
+> Phase 1/2 共享 Web 拆分、Tauri 壳删除已落地；真实 Docker/同版本全流程门禁仍待完成。
+> **2026-11-13 用户拍板完成最终物理清理**：`desktop/`（PySide6）、`src/firesky/`
+> （legacy Python 参考栈）、`pyproject.toml`、`docker/web_server.yaml`、全部
+> Python/Rust 差分测试与 `scripts/bench_*.py` 已删除；保留现架构契约测试
+> （`test_rust_hsd_raw` / `test_rust_desktop_sync` / `test_native_preparation_ui`）
+> 与构建期资源/数据工具（`build_app_resources.py`、`export_timezone_data.py`、
+> `download_gee_cams_aod.py`、`verify_cached_workflow.py`）。Makefile/CI 的
+> legacy 入口一并移除。运行时替代验收（真实数据/clean-machine）仍按下述门禁待办。
+> 执行记录见[退役基线](RETIREMENT_PHASE0_BASELINE.zh-CN.md) §8–9；当前优先级见
+> [最新接续计划](NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。以下未更新段落为原计划依据。
+> 用户最新决定以 [macOS 为产品与 UI 基准](MACOS_UI_BASELINE.zh-CN.md)，先完成原生端
+> 功能与验收，其他 UI 后续对齐。Docker COPY 与默认静态根不一致的问题保留为后续部署
+> 待办，不作为当前 macOS 工作的前置门槛；静态契约通过仍不能证明实际镜像页面可用。
+
 ## 结论
 
 建议分三条线推进：
+
+当前先完成 macOS 产品与原生交付，再安排其他 UI 对齐与部署、按消费者推进退役。
+下列阶段描述退役依赖，不改变 macOS 优先的执行顺序。
 
 1. **PySide6 桌面产品退役**：新桌面由 macOS SwiftUI/Rust FFI 承接，Web 由 Rust HTTP 托管；
    PySide 保留到功能、用户数据迁移和安装包替代均验收后，再停止分发和删除旧应用入口。
@@ -27,21 +45,24 @@ Tauri 不再是桌面产品；共享 Web 仍可作为静态 Svelte SPA 交由 Ru
 | `engine/` + `native/` | Rust HTTP、CLI、桌面 FFI、数值核心 | 正式生产主线，保留 |
 | `apps/macos/` | SwiftUI/AppKit + `libfiresky_engine.dylib` | macOS 正式桌面主线，继续补真实数据与发布验收 |
 | `apps/windows/`、`apps/linux/` | Rust FFI 原生客户端 | Windows/Linux 桌面开发依用户当前暂停决定，计划保留，不在本轮启动 |
-| `apps/desktop-tauri/src-tauri/` | Tauri 窗口、菜单、单实例、Rust engine sidecar IPC | 不再作为正式桌面；替代并抽离共享 Web 后退役 |
-| `apps/desktop-tauri/src/` | Svelte 工作台；同时支持 Tauri 和 browser transport | Docker 当前从该 package 构建 SPA；迁至明确的 shared-web package 后继续保留 |
-| `frontend/` | 另一套 SvelteKit 前端；`make frontend` 构建到 `frontend/build` | 与 Docker 实际使用的 Svelte 前端并存；先盘点路由和消费者，再决定合并或退役 |
-| `desktop/` | PySide6 主窗口、点/区域/实况/数据页、worker、地图和 PyInstaller spec | 旧兼容桌面；替代验收后停止发布并退役 |
+| ~~`apps/desktop-tauri/src-tauri/`~~ | ~~Tauri 窗口壳~~ | **已删除（2026-11-13，Phase 2）**：目录与 CI Tauri job 一并移除 |
+| ~~`apps/desktop-tauri/src/`~~ → `apps/shared-web/` | 共享 Web SPA（browser-only IPC） | **已完成拆分（Phase 1）**：Docker 与 Rust HTTP 统一构建此 package |
+| `frontend/` | 另一套 SvelteKit 前端；`make frontend` 已改指 shared-web | 与 shared-web 并存；合并需逐页对照，未在本轮执行 |
+| `desktop/` | PySide6 主窗口、点/区域/实况/数据页、worker、地图和 PyInstaller spec | **维护终止（Phase 3）**：不再修复、不随正式发布打包；源码与 spec 待替代验收后归档 |
 | `src/firesky/api.py`、`web_server.py`、`service.py`、`desktop_rpc.py` | 旧 Python API/服务、评分装配及 PySide worker 使用 | 不进入默认 Rust HTTP 路径的能力分批退役；当前被 legacy/test 使用的代码先保留 |
-| `pyproject.toml`、`make legacy-install`、`make serve-python` | Python 对照环境和显式旧服务入口 | 最终改为明确的 test/reference/legacy extras；旧产品路径关闭后移除或单独归档 |
+| `pyproject.toml`、`make legacy-install`、`make serve-legacy-python` | Python 对照环境和显式旧服务入口 | **已完成（Phase 4/5）**：`[legacy]` extra 已拆出（uvicorn/httpx/redis），serve-python 已更名 |
 | `tests/`、`scripts/bench_*.py`、对照/数据工具 | 回归、基准、迁移核对及上游诊断 | 保留必要工具；任何工具都不得成为受支持产品的运行时回退 |
 
-两个状态需要以代码为准：`apps/desktop-tauri/src-tauri/src/sidecar.rs` 当前选择并启动
-`firesky-engine desktop`，不是 Python sidecar；`main.rs` 中提到 `desktop_rpc.py` 的注释是历史措辞。
-反过来，PySide `desktop/workers.py` 仍直接调用 `firesky.web_server` 和 Python 数据/预测模块。
+两个状态需要以代码为准：已删除的 Tauri sidecar 在退役前启动的是
+`firesky-engine desktop`，不是 Python；其 `desktop_rpc.py` 注释是历史措辞。
+PySide `desktop/workers.py` 仍直接调用 `firesky.web_server` 和 Python 数据/预测模块。
 另有历史迁移审计文档称 SwiftUI/WinUI 会启动 Python，与当前 FFI 源码及运行时切换文档不一致；
 退役基线必须重新按启动代码核实并把陈旧说明标记为历史，避免据此误删或重复迁移。
 
 ## 先解决共享 Web 与 Tauri 的边界
+
+> 本节为拆分前审计与方案。拆分已实施：Makefile、Rust HTTP 默认根和 Docker 构建
+> 都改接 `apps/shared-web/`；旧 `frontend/` 独占能力尚未合并，仍需消费者矩阵。
 
 当前部署有两份 Svelte 工程：
 
@@ -122,10 +143,10 @@ helper 测试通过不等于全部 Python 服务编排已被替代。
 
 ### Python 依赖切分
 
-目前 `pyproject.toml` 主 dependencies 仍声明 numpy/requests/astral/eccodes/FastAPI/uvicorn/PyYAML/
-Pillow/httpx/h5py/Redis；同时有 `dev`、`cams`、`nowcast`、`ec` extras。`make legacy-install`
-安装 Python 参考栈，`make serve-python` 显式启动 `firesky.api`，`make test` 用 Python pytest 做
-差分/回归。建议：
+拆分前主 dependencies 含 uvicorn/httpx/Redis；2026-11-13 已将这三项移到 `[legacy]`，
+主依赖仍保留科学对照与现有消费者需要的项目。`make legacy-install` 安装 Python
+参考栈，`make serve-legacy-python` 显式启动旧 API，`make test` 用 pytest 做差分/回归。
+以下为原计划，已实施项见退役基线 §8，完整生产依赖与产物扫描仍需最终验收：
 
 - 把仍需的旧服务依赖迁到一个明确的 `[legacy]` extra；pytest 和差分依赖留在 `[test]`/`[dev]`。
 - 分开提供 `make test-rust` 与 `make test-differential`；后者明确要求 Python，不是安装/启动生产服务的前置条件。
@@ -136,7 +157,7 @@ Pillow/httpx/h5py/Redis；同时有 `dev`、`cams`、`nowcast`、`ec` extras。`
 
 ## 分阶段执行与门禁
 
-### Phase 0：冻结基线与准确盘点
+### Phase 0：消费者盘点已完成；同源码运行基线待统一复验
 
 - 以同一 commit/source_id 记录 `make serve`、Rust HTTP、macOS FFI、Docker HTTP 的实际启动进程；在无 Python
   PATH 下复验。确认不存在隐式子进程或 Python fallback。
@@ -147,7 +168,7 @@ Pillow/httpx/h5py/Redis；同时有 `dev`、`cams`、`nowcast`、`ec` extras。`
 
 **门禁**：未确认目录/接口消费者前，不删文件、不删依赖、不停止构建。
 
-### Phase 1：先从 Tauri package 拆共享 Web
+### Phase 1：共享 Web 拆分已实现；真实 Docker 与完整流程门禁待验收
 
 - 将 Docker 当前构建的 Svelte 页面及 browser transport 移到共享 Web 工程；保留 HTTP browser 路径。
 - 分离 Tauri 专用文件系统/窗口/菜单操作；网页不提供打开宿主/服务器本地目录和退出服务等能力。
@@ -156,7 +177,7 @@ Pillow/httpx/h5py/Redis；同时有 `dev`、`cams`、`nowcast`、`ec` extras。`
 
 **门禁**：桌面 Tauri 仍可构建作为过渡；Docker 与本地 Rust HTTP 使用同一共享 Web SHA 完成点/区域/实况、任务、登录和报告 smoke。
 
-### Phase 2：退役 Tauri 壳，不退役 Svelte Web
+### Phase 2：Tauri 壳已删除；共享 Web 本地合同通过
 
 - 新功能冻结，保留一个明确弃用周期，确认 macOS SwiftUI 为桌面主线，Web 由 Rust HTTP 提供。
 - 在共享 Web 可独立 build/run 后，移除 Tauri Rust crate、`src-tauri` sidecar/window/menu/capabilities、
@@ -167,7 +188,7 @@ Pillow/httpx/h5py/Redis；同时有 `dev`、`cams`、`nowcast`、`ec` extras。`
 
 **门禁**：从发布矩阵移除 Tauri 安装包；确认 Docker 页面未因删壳而丢失，Rust 服务仍可托管 SPA。
 
-### Phase 3：停止 PySide 分发
+### Phase 3：维护终止标记已完成；替代验收与 spec/源码归档待办
 
 - 完成前述 macOS 原生与 Web feature parity 以及真实 CAMS/HSD 上游验收。
 - 给 PySide 旧入口和发布包标记清楚的维护终止版本；在兼容周期提供迁移说明及用户数据导入。
@@ -176,7 +197,7 @@ Pillow/httpx/h5py/Redis；同时有 `dev`、`cams`、`nowcast`、`ec` extras。`
 
 **门禁**：无 PySide 的 macOS bundle 做 clean-machine 点/区域/nowcast/数据准备与结果恢复走查。
 
-### Phase 4：切断旧 Python 产品服务
+### Phase 4：旧服务入口收尾已完成；完整替代验收待办
 
 - 每迁移一个产品路径就做旧 Python 与 Rust 的同输入差分、错误/缺测差分、缓存和 provenance 检查。
 - Rust 替代真实服务路径并至少跨一个正式版本稳定后，依消费者逐项退役 Python route/API/CLI/module。
@@ -186,7 +207,7 @@ Pillow/httpx/h5py/Redis；同时有 `dev`、`cams`、`nowcast`、`ec` extras。`
 
 **门禁**：无 Python 环境下通过从全新工作区启动的 Rust HTTP/CLI/Docker/macOS native 测试；失败路径只报原生错误。
 
-### Phase 5：依赖和源文件收尾
+### Phase 5：部分依赖和旧 CLI 已清理；legacy 模块与交付物审计待办
 
 - 从主 `[project.dependencies]` 移除仅旧产品路径需要的 FastAPI/uvicorn/PyYAML 等，改放 `[legacy]` 或测试 extras；
   不在没有消费者调查前修改数组科学测试的安装方式。
@@ -201,19 +222,31 @@ Pillow/httpx/h5py/Redis；同时有 `dev`、`cams`、`nowcast`、`ec` extras。`
 
 ## 顺序与禁止项
 
+> 2026-11-13 执行口径：以下 1–4 中的盘点、拆分和入口清理已有实施，
+> 替代/真实数据/最终发布门禁尚未全部完成；5–7 仍是长期约束。
+> 第 5 条中 `apps/desktop-tauri/` 已按 Phase 1/2 的消费者盘点结果完成迁移并删除——
+> 这是唯一被整体删除的目录，其余目录的禁令不变。
+
 1. 先完成 Phase 0 基线。当前仓库有大范围既有未提交/未跟踪改动；新接手者先核对 `git status`，不得 `reset/clean`。
 2. Phase 1 和 Phase 2 可先行，因为它们的核心是拆分 Tauri 壳与共享 Web，并不依赖删除 Python 服务。
 3. Phase 3 要等正式 macOS FFI 与 Web 能力完整替代 PySide；Windows/Linux 开发按用户当前暂停范围不自动启动。
 4. Phase 4/5 依赖真实源服务、算法字段合同和全量数据链路验收；不能用旧缓存单次成功宣称 Python 业务模块可删。
-5. 不要同时删除 `frontend/`、`apps/desktop-tauri/`、`desktop/` 或 `src/firesky/` 整目录；每个目录有不同产品/测试/共享 Web 消费者。
+5. 不要同时删除 `frontend/`、`desktop/` 或 `src/firesky/` 整目录；每个目录有不同产品/测试/共享 Web 消费者（`apps/desktop-tauri/` 已于 2026-11-13 完成迁移后删除，为例外记录）。
 6. 不删除用户 `dist/` 安装包、缓存、报告、`.firesky-desktop` 配置或 ADS 凭据作为“代码退役”步骤。
 7. 不把测试/数值 oracle 中的 Python 等同为生产 Python 依赖；也不因“仓库有 Python”就否认 Rust 默认生产路径已可运行。
 
 ## 最终完成定义
 
-- **Tauri 桌面壳已退役**：无 Tauri desktop bundle、sidecar host 或其 CI release；共享 Web 独立构建并继续由 Rust HTTP/Docker 提供。
-- **PySide 桌面已退役**：无正式 PyInstaller/PySide 版；macOS 原生桌面覆盖受支持工作流，升级和旧用户数据迁移已验收。
-- **Python 运行时已退役**：受支持生产入口/镜像/安装包不含 Python runtime，不 spawn Python，无 Python 环境可工作。
-- **Python 源码清理已完成（可选更晚目标）**：只移除已没有受支持产品/测试消费者的模块；必要差分、基准、数据调查工具可留在独立工具环境。
+- **Tauri 桌面壳已退役** ✅：`apps/desktop-tauri/` 已删除、CI Tauri job 已移除；共享 Web
+  （`apps/shared-web`）独立构建并由本地 Rust HTTP 托管。Docker 已改构建来源，但镜像内
+  页面目的路径与默认静态根不一致，修复和实际运行验收待办。
+- **PySide 桌面已退役** ✅（2026-11-13 用户拍板）：`desktop/` 源码与 FireSky.spec
+  已物理删除；正式 CI/release 无 PyInstaller 构建。macOS 原生替代的真实数据验收仍待办。
+- **生产入口已切换 Rust，完整运行时退役验收待补** ◐：默认 `make serve`/macOS FFI
+  与 Docker 定义不启动 Python；本地启动/合同已有证据。Docker 无 Python 检查已进入 CI，
+  本机实际镜像 build/run、全部真实工作流和 clean-machine 尚未由统一版本证明。
+- **Python 源码清理** ✅（2026-11-13 用户拍板）：`src/firesky/`、`pyproject.toml`、
+  差分测试与迁移基准脚本已删除；仅保留现架构契约测试（pytest 作测试 harness）与
+  构建期资源/数据工具。产品运行时与发布产物不含 Python。
 
 上述四条应分别报告状态；不能用“默认服务是 Rust”代替 PySide/Tauri 退役，也不能用“仓库仍有 `.py`”否认生产运行时已无 Python。

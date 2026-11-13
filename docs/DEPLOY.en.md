@@ -80,7 +80,7 @@ $env:FIRESKY_IMAGE_TAG = "local"; docker compose up -d --build
   `FIRESKY_IMAGE_TAG=registry.example/firesky:tag FIRESKY_PUSH=1 make docker-buildx`.
   Docker `--load` cannot import a multi-platform manifest list;
 - `docker/Dockerfile` is three-stage: Rust builds the standalone engine → Node
-  builds the shared Web UI in `apps/desktop-tauri` → Debian slim runtime (apt `libeccodes0`, non-root
+  builds the shared Web UI in `apps/shared-web` → Debian slim runtime (apt `libeccodes0`, non-root
   uid 10001, no Python);
 - The image explicitly uses `libeccodes.so.0`, `/usr/share/eccodes/definitions`
   and `/usr/share/eccodes/samples`; Debian's `libeccodes-data` dependency provides
@@ -125,7 +125,7 @@ Rebind the port: `FIRESKY_HTTP_PORT=80 docker compose up -d`.
 cargo build --manifest-path engine/Cargo.toml --release --locked
 
 # 2) Frontend
-cd frontend && npm ci && npm run build && cd ..
+cd apps/shared-web && npm ci && npm run build && cd ..
 
 # 3) Smoke run
 engine/target/release/firesky-engine http --workspace "$PWD" --host 127.0.0.1 --port 8765
@@ -155,7 +155,7 @@ have full instance permissions. Browser-side CAMS credential writes remain disab
 ```bash
 cd /opt/firesky
 cargo build --manifest-path engine/Cargo.toml --release --locked
-cd frontend && npm ci && npm run build && cd ..
+cd apps/shared-web && npm ci && npm run build && cd ..
 ```
 
 `/etc/systemd/system/firesky.service`:
@@ -243,7 +243,7 @@ launchctl list | grep firesky                                     # verify
 git clone https://github.com/xyl-g/FireSky.git; cd FireSky
 cargo build --manifest-path engine/Cargo.toml --release --locked
 
-cd frontend; npm ci; npm run build; cd ..
+cd apps/shared-web; npm ci; npm run build; cd ..
 
 $env:FIRESKY_ECCODES_LIBRARY = "C:\ecCodes\bin\eccodes.dll"
 $env:ECCODES_DEFINITION_PATH = "C:\ecCodes\share\eccodes\definitions"
@@ -339,7 +339,7 @@ Windows 10+ ships curl.exe), or use cron inside WSL2.
 2. If `engine/` or `native/` changed, rebuild the standalone engine with
    `cargo build --manifest-path engine/Cargo.toml --release --locked`
    (automatic in container builds);
-3. If the frontend changed: `cd frontend && npm ci && npm run build`
+3. If the frontend changed: `cd apps/shared-web && npm ci && npm run build`
    (automatic in container builds);
 4. Restart the process. Native caches validate source/request/input identities;
    legacy Python caches cannot substitute for them. Restart loses jobs and desktop

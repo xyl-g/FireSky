@@ -1,0 +1,35 @@
+{
+  "name": "firesky-shared-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "FireSky 共享 Web SPA（Docker 与本地 Rust HTTP 共用的浏览器页面，docs/PYTHON_TAURI_PYSIDE_RETIREMENT_PLAN.zh-CN.md Phase 1）",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "test": "node --test scripts/*.test.mjs src/lib/*.test.mjs",
+    "test:ui": "playwright test",
+    "smoke:rpc": "node scripts/smoke-desktop-rpc.mjs",
+    "smoke:data": "node scripts/smoke-data-rpc.mjs",
+    "smoke:http": "node scripts/smoke-http-runtime.mjs"
+  },
+  "dependencies": {
+    "@lucide/svelte": "^1.71.0",
+    "@maplibre/maplibre-gl-leaflet": "^0.1.4",
+    "leaflet": "^1.9.4",
+    "leaflet-draw": "^1.0.4",
+    "maplibre-gl": "^6.17.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.65.0",
+    "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@types/leaflet": "^1.9.21",
+    "@types/leaflet-draw": "^1.0.13",
+    "svelte": "^5.28.0",
+    "svelte-check": "^4.2.1",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}

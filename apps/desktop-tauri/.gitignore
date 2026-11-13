@@ -1,8 +1,0 @@
-node_modules/
-.vite/
-dist/
-test-results*/
-playwright-report/
-src-tauri/resources/native/*
-!src-tauri/resources/native/.gitkeep
-src-tauri/resources/app-data/*

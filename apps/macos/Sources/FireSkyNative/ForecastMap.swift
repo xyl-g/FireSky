@@ -150,7 +150,8 @@ struct ForecastMap: NSViewRepresentable {
             }
             cameraReady = true
             let showGrid = store.showRegionalGrid
-            let next = "\(bounds)-\(model)-\(store.resultVersion)-\(showGrid)"
+            let showSamples = store.showRegionalSamples
+            let next = "\(bounds)-\(model)-\(store.resultVersion)-\(showGrid)-\(showSamples)"
             guard signature != next else { return }
             signature = next
             renderTask?.cancel()
@@ -171,7 +172,25 @@ struct ForecastMap: NSViewRepresentable {
                 map.addOverlays(layers.overlays, level: .aboveRoads)
                 self.selectionOverlay = nil
                 self.updateSelection(map)
+                self.updateSampleAnnotations(map, cells: cells, show: showSamples)
             }
+        }
+
+        /// 采样格点标注（regional-6）：与网格线开关并存，复用 points[]，上限 2000 截断。
+        private func updateSampleAnnotations(_ map: MKMapView, cells: [RegionalCell], show: Bool) {
+            map.removeAnnotations(map.annotations)
+            guard show, !cells.isEmpty else { return }
+            let step = max(1, (cells.count + 1999) / 2000)
+            let markers = cells.enumerated().compactMap { offset, cell in
+                offset % step == 0 ? RegionalSampleAnnotation(cell: cell) : nil
+            }
+            map.addAnnotations(markers)
+        }
+
+        @objc private func sampleClicked(_ gesture: NSClickGestureRecognizer) {
+            guard let view = gesture.view as? MKAnnotationView,
+                  let sample = view.annotation as? RegionalSampleAnnotation else { return }
+            store.focusRegionalCell(sample.cell.coordinate)
         }
 
         private func updateSelection(_ map: MKMapView) {
@@ -240,6 +259,20 @@ struct ForecastMap: NSViewRepresentable {
                 renderer.lineWidth = 0.8
             }
             return renderer
+        }
+
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            guard let sample = annotation as? RegionalSampleAnnotation else { return nil }
+            let identifier = "regional-sample"
+            let view = (mapView.dequeueReusableAnnotationView(withIdentifier: identifier) as? RegionalSampleMarkerView)
+                ?? RegionalSampleMarkerView(annotation: sample, reuseIdentifier: identifier)
+            view.annotation = sample
+            view.bounds = NSRect(x: 0, y: 0, width: 7, height: 7)
+            view.toolTip = sample.tooltip
+            if view.gestureRecognizers.isEmpty {
+                view.addGestureRecognizer(NSClickGestureRecognizer(target: self, action: #selector(sampleClicked(_:))))
+            }
+            return view
         }
     }
 }

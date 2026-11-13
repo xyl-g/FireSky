@@ -32,16 +32,19 @@ struct AODSummary {
     let detail: String
     var available: Bool { !values.isEmpty }
     var source: String {
-        if sources.isEmpty || sources.allSatisfy({ $0 == "CAMS" }) { return "CAMS" }
+        // 硬规则 2：无任何环境读数时不得冒充来源；仅在确有读数时声明 CAMS/其他/混合。
+        if sources.isEmpty { return "暂无来源" }
+        if sources.allSatisfy({ $0 == "CAMS" }) { return "CAMS" }
         return sources.allSatisfy({ $0 != "CAMS" }) ? "其他来源" : "混合来源"
     }
     var value: String {
-        guard let low = values.min(), let high = values.max() else { return "--" }
+        guard let low = values.min(), let high = values.max() else { return "—" }
         let first = String(format: "%.2f", low), last = String(format: "%.2f", high)
         return first == last ? first : "\(first) – \(last)"
     }
     var caption: String {
-        Set(values).count > 1 ? "事件时刻取值范围 · 未取平均" : "事件时刻 · 气溶胶光学厚度"
+        if values.isEmpty { return "暂无可用 AOD 观测" }
+        return Set(values).count > 1 ? "事件时刻取值范围 · 未取平均" : "事件时刻 · 气溶胶光学厚度"
     }
 
     static func reading(reports: [[String: Any]]) -> AODSummary {
@@ -148,8 +151,6 @@ struct ForecastComparison {
         var segment = 0
         var seen: Set<Date> = []
         for step in report?["steps"] as? [[String: Any]] ?? [] {
-            let utc = step["valid_time_utc"] as? String
-            let label = utc ?? step["valid_time_local"] as? String ?? ""
             let time = Self.stepDate(step, iso: iso, fractional: fractional, local: local)
             guard let time, step["valid"] as? Bool != false,
                   let quality = step["instant_quality_index"] as? NSNumber,

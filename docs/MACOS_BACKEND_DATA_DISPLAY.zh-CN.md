@@ -1,9 +1,11 @@
 # macOS 后端数据与界面展示清单
 
-更新日期：2026-11-12
+更新日期：2026-11-13（历史恢复合同复核）
 
-最终源码验证、未完成项和暂停接续见 [本轮交接](HANDOFF_2026-11-12.zh-CN.md)。
-现有 macOS 应用包早于最后的后端修复，不能视为同源码验收产物。
+当前状态与后续顺序见[最新接续计划](NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)，历史批次见
+[本轮交接](HANDOFF_2026-11-12.zh-CN.md)。默认 dist 包不能替代本批重新打包的同源码验收。
+产品与 UI 以 [macOS 基准](MACOS_UI_BASELINE.zh-CN.md)为准，先验证本表对应的原生流程，
+其他 UI 再按已验收行为和 Rust 字段语义对齐。
 
 本文把 Rust desktop runtime 的 JSON 返回和 macOS 原生端的展示位置对齐。
 判断依据是当前 `engine/src/desktop_runtime.rs`、`engine/src/frames.rs`、
@@ -35,12 +37,15 @@
 | 后端字段 | 当前展示位置 | 展示方式 |
 | --- | --- | --- |
 | `peak_quality_index`、`peak_quality_level`、`best_time_local`、`timing_window` | 顶部预测摘要 | GFS/EC 并列峰值、档位、最佳时刻和推荐窗口 |
-| `quality_components.*` | 概览指标卡 | 可烧云量、云质厚度、亮度色彩、入射受光、返程对比度 |
-| `aerosol.aod550`、`aerosol.source`、`aerosol.quality` | AOD 卡片和详情提示 | 数值、来源和事件时刻取值范围 |
+| `quality_components.*` | 概览指标卡与评分组成面板 | 可烧云量、云质厚度、亮度色彩、入射受光、返程对比度；评分组成面板只读展示基础分、持续时间修正、入射/观测 AOD 修正与不重复扣分语义 |
+| `aerosol.aod550`、`aerosol.source`、`aerosol.quality` | AOD 卡片和详情提示 | 数值、来源和事件时刻取值范围；`steps[].quality_aod550` 另有独立 AOD550 趋势小图 |
 | `duration_minutes`、`confidence_score`、`convective_risk` | 时效与可靠性卡片 | 持续分钟数、输入支持度、对流风险指标；都不是事件命中概率 |
 | `steps[].valid_time_local`、`instant_quality_index`、`solar_elevation_deg` | 逐时台账 | 逐时质量和太阳高度 |
+| `steps[].dominant_burnable_pressure_family`、`dominant_burnable_cloud_base/top_asl_mean_m`、`brightness_color`、`forward_burnable_cloud_ratio`、`observer_return_transmission`、`solar_incoming_block_risk` | 逐时台账 | 压力族、云底–云顶（ASL 口径）、亮度颜色、可烧比例、回程透过率与入射阻挡列；缺测显示 — |
 | `steps[].physically_burnable`、`selected_regime`、`scene_scores` | 逐时台账和诊断 | 可烧状态、场景档位和场景分数 |
-| `summary`、`cycle_time_utc`、`html_report_path` | 诊断与时间窗 | 摘要、周期和完整报告入口 |
+| `steps[].burnable_cloud_coverage`、`forward_burnable_cloud_ratio`、`observer_return_transmission`、`instant_quality_index` | 趋势图 | 质量轴固定 0–2.5；三条比例序列用 0–100% 对齐小图；缺测断线不补零 |
+| `cloud_genus_proxy.candidate_scores`、`cloud_phase_proxy`、`cloud_evolution.trend` | 诊断 | 云属代理（Top3 候选百分比、不参与评分）、相态（GFS 未解析显示「未解析」）、云体演化趋势结构化展示 |
+| `summary`、`cycle_time_utc` | 诊断与时间窗 | 摘要、预测周期；`html_report_path`/`html_report_url` 桌面合同显式置空（GFS `engine/src/point_core.rs`、EC `engine/src/ecmwf_point.rs`），完整报告入口桌面不适用 |
 | `forecast_mode`、`compute_backend`、`analysis_radius_km`、`timezone_name` | 诊断元数据 | 运行方式、CPU 后端、分析半径和时区 |
 | `confidence_kind` / `confidence_score_semantics`、`quality_index_semantics` | 诊断元数据 | 有值时显示；部分报告未透传全部语义字段，主卡仍明确支持度不是命中概率 |
 | `cloud_geometry_proxy_source`、`cloud_geometry_support_count`、`cloud_geometry_uncertainty_m`、`cloud_geometry_confidence` | 大气剖面/诊断 | 几何代理来源、支持样本、误差和支持度 |
@@ -83,7 +88,7 @@
 | `color_diagnosis`、`source_roles` | 实况诊断 | 色彩类型/诊断置信度，以及卫星、气溶胶和雷达的数据角色 |
 | `nowcast.satellite_vertical_profile` | 大气剖面 | 绘制冻结高度/距离概率图；优先取峰值步骤太阳方位附近的已有采样方位，无最佳时刻时取首个有效诊断步骤方位，并标出实际采样方位，不混叠多个方向 |
 | `steps[]` | 逐时台账和质量曲线 | 质量、档位、可烧状态、太阳高度 |
-| `profile_source` | 剖面能力诊断 | 后端支持冻结源查询，但 macOS 实况页尚无逐时查询入口；报告顶层也没有直接返回 `cross_section` |
+| `profile_source` | 剖面能力诊断 | 后端支持冻结源查询；实况大气剖面页提供按 steps 选择时次的冻结查询入口（Picker＋「读取」按钮）；报告顶层没有直接返回 `cross_section` |
 
 ## 预检、运行和恢复
 
@@ -93,9 +98,10 @@
 | `check` / `prepare` | `datasets[]`、`ready`、`missing_count`、`verified`、`is_latest`、周期和卫星帧信息 | 预测前完整性预检弹窗 |
 | `publications` | GFS/EC/CAMS 周期及 `verified` 状态 | 核验失败时可能返回未核验推算值，不能一概标成“最新周期已确认” |
 | 任务历史/事件 | 任务状态、进度、错误、取消和终态 | 数据页任务历史 |
-| `read_cache` | 缓存身份、报告和源文件校验结果 | 当前历史恢复入口仅复用短期计算缓存：生成时间不超过 300 秒、同源码版本、原始文件身份及周期仍有效；不是独立的长期历史快照 |
-| `result_restore` | 目前无可调用实现 | 仅在 `hello` 能力列表声明，未分发实现；不能宣称长期历史恢复已完成 |
+| `read_cache` | 计算缓存身份、报告和源文件校验结果 | 用于短期计算复用：300 秒、同源码版本、原始文件身份及周期校验；不是当前历史恢复入口 |
+| `result_restore` | 已实现内容寻址不可变结果快照及完整性校验 | macOS 历史入口按 task_id 恢复，不受原始计算缓存 TTL 限制；按报告保留策略淘汰，缺失/篡改明确失败；新包 GUI/长期运行仍待验收 |
 | `retention_settings` | GFS/EC/CAMS 周期数、卫星/报告/地图天数 | 设置页 |
+| `data_sync_settings` / `save_data_sync_settings` / `data_sync_due` / `data_sync_run` | 设置、源状态、到期原因、同步结果与进度 | macOS 设置页、数据页立即同步及任务历史；默认关闭，A1–A8 真实验收待办 |
 
 ## 不直接展示的内容及原因
 
@@ -114,7 +120,7 @@
 | `confidence_score` 作为概率 | 点预测的 `confidence_score_semantics` 表达输入/几何支持，实况尚未透传同等语义字段；二者均不能当成经过校准的事件命中概率。 |
 | 真实跨模式分歧 | 当前 GFS、EC 和实况结果的 `model_disagreement_score` 为占位零，尚无跨模型对齐计算。主卡改为真实的 `convective_risk`；诊断页说明分歧未计算，不用零冒充“一致”。 |
 | 多方位样本缺少方位依据的卫星剖面 | 若没有太阳方位且采样存在多个方向，UI 不任意拼接，显示“已有多方位卫星样本，但缺少太阳方位”。这属于适配信息不足，不代表卫星样本不存在。 |
-| 独立于原始缓存寿命的历史恢复 | 需要不可变结果快照、身份校验及独立恢复 RPC；不能通过放宽计算缓存校验替代。当前保留设置不意味着任意历史结果都能恢复。 |
+| 历史结果与冻结剖面的不同寿命 | 不可变结果快照和 `result_restore` 已实现；过期/缺失快照明确失败。冻结剖面源有独立有效期，恢复历史结果不保证可重新计算已过期剖面。 |
 | 跨日界线区域的完整预测地图 | CAMS 拆分/合并/逐侧预检、连续经度轴、风平流、光路及冻结剖面已有源码修复和科学回归；真实 ADS 双侧下载与连续地图实机显示仍未验收，不能标成生产全链路已支持。 |
 | 任意全球地点的实况覆盖 | 已移除未知地点 EAST_ASIA 回落，按实际球面光路/采样范围规划，并修正 GFS 跨线裁剪；真实上游和完整两帧实况仍待验收，卫星视场外不能承诺观测可用。 |
 

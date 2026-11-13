@@ -8,12 +8,12 @@ COPY engine/Cargo.toml engine/Cargo.lock engine/build.rs ./engine/
 COPY engine/src ./engine/src
 RUN cargo build --manifest-path engine/Cargo.toml --release --locked
 
-# ── Stage 2: shared Tauri/browser frontend ──────────────────────────────────
+# ── Stage 2: shared browser web frontend ────────────────────────────────────
 FROM node:22-bookworm AS frontend-builder
-WORKDIR /build/apps/desktop-tauri
-COPY apps/desktop-tauri/package.json apps/desktop-tauri/package-lock.json ./
+WORKDIR /build/apps/shared-web
+COPY apps/shared-web/package.json apps/shared-web/package-lock.json ./
 RUN npm ci --no-audit --no-fund
-COPY apps/desktop-tauri .
+COPY apps/shared-web .
 RUN npm run build
 
 # ── Stage 3: runtime ────────────────────────────────────────────────────────
@@ -43,7 +43,7 @@ RUN apt-get update \
 
 WORKDIR /app
 COPY --from=engine-builder /build/engine/target/release/firesky-engine /usr/local/bin/firesky-engine
-COPY --from=frontend-builder /build/apps/desktop-tauri/dist /app/frontend/build
+COPY --from=frontend-builder /build/apps/shared-web/dist /app/frontend/build
 COPY resources/app-data /app/resources/app-data
 COPY docker/entrypoint.sh /usr/local/bin/firesky-entrypoint
 

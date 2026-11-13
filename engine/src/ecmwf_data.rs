@@ -11,7 +11,10 @@ use std::{
     fs::{self, File},
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::Instant,
 };
 
@@ -704,6 +707,22 @@ fn hours(cycle: DateTime<Utc>, targets: &[DateTime<Utc>]) -> Result<Vec<i64>, St
     Ok(hours)
 }
 pub fn execute(params: Params) -> Result<Value, String> {
+    execute_cancellable(params, &AtomicBool::new(false))
+}
+
+fn check_cancelled(cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Acquire) {
+        Err("desktop operation cancelled".into())
+    } else {
+        Ok(())
+    }
+}
+
+/// Cancellable variant for interactive desktop paths: the flag is checked
+/// before every per-hour transfer so a cancelled prepare/sync round releases
+/// the operation lock within one file download instead of the whole loop.
+pub fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result<Value, String> {
+    check_cancelled(cancel)?;
     let started = Instant::now();
     params.config.validate()?;
     if !["plan", "probe", "resolve", "download"].contains(&params.operation.as_str())
@@ -802,6 +821,7 @@ pub fn execute(params: Params) -> Result<Value, String> {
     } else if ["resolve", "download"].contains(&params.operation.as_str()) {
         let codes = EcCodes::load()?;
         for hour in &requested {
+            check_cancelled(cancel)?;
             files.push(download(
                 &mut transfer,
                 &codes,
@@ -877,6 +897,29 @@ pub(crate) fn snapshot_cycle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cancelled_execution_stops_before_any_transfer() {
+        let cancel = AtomicBool::new(true);
+        let error = execute_cancellable(
+            Params {
+                operation: "download".into(),
+                config: Config::default(),
+                cycle_utc: Some("2026-11-13T00:00:00Z".into()),
+                forecast_hour: None,
+                forecast_hours: Some(vec![24]),
+                reference_utc: None,
+                now_utc: None,
+                evaluation_utcs: Vec::new(),
+                max_cycles: 8,
+                allow_download: true,
+                use_cache_for_cycle: true,
+            },
+            &cancel,
+        )
+        .unwrap_err();
+        assert!(error.contains("cancelled"), "{error}");
+    }
+
     #[test]
     fn retained_index_is_bounded_and_oversized_entries_do_not_evict() {
         let mut entries = VecDeque::new();

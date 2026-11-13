@@ -74,6 +74,39 @@ struct RegionalProfileView: View {
                 metric("云量样本", cloud?.reduce(0) { $0 + $1.count } ?? 0, suffix: "")
                 metric("温度样本", temperatures?.reduce(0) { $0 + $1.count } ?? 0, suffix: "")
             }
+            figureButton
+        }
+    }
+
+    /// regional-7：区域网格距离×高度剖面图层（与单点共用 CrossSectionFigureView）。
+    /// 图层与图例来自 profile_query 的 cross_section.fields（温度/RH/云量/地形/照明），
+    /// 侧栏宽度不足以可读绘制，展开到弹出窗口查看。
+    private var figureButton: some View {
+        Button {
+            store.showRegionalProfileFigure = true
+        } label: {
+            Label("展开剖面图层", systemImage: "square.split.bottomrightquarter")
+                .font(.system(size: 10, weight: .medium))
+        }
+        .buttonStyle(.borderless)
+        .help("查看温度、湿度、云层、地形与照明剖面图层")
+        .accessibilityLabel("展开 \(model.uppercased()) 网格剖面图层")
+        .popover(isPresented: $store.showRegionalProfileFigure, arrowEdge: .trailing) {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text("\(model.uppercased()) 网格剖面").font(.system(size: 12, weight: .semibold))
+                    Spacer()
+                    Text(coordinate.label).font(.system(size: 10)).monospacedDigit().foregroundStyle(.secondary)
+                }
+                if let section {
+                    CrossSectionFigureView(section: section)
+                }
+                Text("图层由 \(model.uppercased()) 冻结 profile_query 的剖面字段绘制；温度/RH/云量/地形/照明为该模式自身的场，缺测层不绘制、不解释为晴空。")
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(16)
+            .frame(width: 660, alignment: .topLeading)
         }
     }
 

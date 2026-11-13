@@ -48,16 +48,18 @@ enum PreparationActionsChecks {
                 }
             }
         case "copy":
-            let missing = DataRow(source: "gfs", ready: false, old: false, verified: false, missing: 4)
+            let missing = DataRow(source: "gfs", ready: false, old: false, verified: false, latest: false, missing: 4)
             precondition(missing.title == "GFS" && missing.detail == "本次预测数据不完整")
-            let unchecked = DataRow(source: "ecmwf", ready: true, old: false, verified: false, missing: 0)
+            let unchecked = DataRow(source: "ecmwf", ready: true, old: false, verified: false, latest: true, missing: 0)
             precondition(unchecked.title == "EC" && unchecked.detail == "更新待核验")
-            let old = DataRow(source: "cams", ready: true, old: true, verified: true, missing: 0)
+            let old = DataRow(source: "cams", ready: true, old: true, verified: true, latest: false, missing: 0)
             precondition(old.status == "可更新")
-            let verified = DataRow(source: "cams", ready: true, old: false, verified: true, missing: 0)
+            let verified = DataRow(source: "cams", ready: true, old: false, verified: true, latest: true, missing: 0)
             precondition(verified.detail == "发布周期已核验")
-            let satellite = DataRow(source: "hsd", ready: false, old: false, verified: false, missing: 0)
+            let satellite = DataRow(source: "hsd", ready: false, old: false, verified: false, latest: false, missing: 0)
             precondition(satellite.title == "卫星帧" && satellite.detail == "尚未下载本次预测数据")
+            let unverifiedOld = DataRow(source: "gfs", ready: true, old: true, verified: false, latest: false, missing: 0)
+            precondition(unverifiedOld.detail == "非最新发布周期")
         case "profile-query":
             let source: [String: Any] = [
                 "contract": "rust-desktop-profile-source-v1",
@@ -265,13 +267,16 @@ enum PreparationActionsChecks {
                 "gfs": ["aerosol": ["aod550": Double.nan]],
                 "ec": ["aerosol": ["aod550": -1]],
             ]])
-            precondition(!missing.aod.available && missing.aod.value == "--")
+            precondition(!missing.aod.available && missing.aod.value == "—")
+            // 硬规则 2：无读数时不得冒充来源或暗示存在观测。
+            precondition(missing.aod.source == "暂无来源")
+            precondition(missing.aod.caption == "暂无可用 AOD 观测")
         case "aod-source":
             let other = ForecastComparison(result: ["model_results": [
                 "gfs": ["aerosol": ["aod550": 0.21, "source": "default-heuristic"]],
             ]])
             precondition(other.aod.source == "其他来源")
-            precondition(ForecastComparison(result: nil).aod.source == "CAMS")
+            precondition(ForecastComparison(result: nil).aod.source == "暂无来源")
         case "nowcast-curve":
             let report: [String: Any] = ["steps": [
                 ["valid_time_utc": "2026-11-09T09:00:00Z", "instant_quality_index": 0.4],
@@ -324,21 +329,24 @@ enum PreparationActionsChecks {
             let presentation = NowcastPresentation(report: [
                 "confidence_score": 0.99,
                 "quality_components": ["burnable_cloud_coverage_effective": 0.88],
-                "nowcast": ["near_cloud_ratio": 0.32, "confidence": 0.72, "satellite_low_cloud_state": "supported",
+                "nowcast": ["near_cloud_ratio": 0.32, "confidence": 0.72, "satellite_low_cloud_state": "detected",
                             "convective_score_ceiling": 0.64,
                             "satellite_motion_quality": "strong", "geometric_path_blocking_risk": 0,
                             "calibrated_sample_coverage_ratio": Double.nan],
             ])
             precondition(presentation.value("near_cloud_ratio") == "32%")
             precondition(presentation.value("confidence") == "72%")
-            precondition(presentation.value("satellite_low_cloud_state") == "支持低云")
+            // 后端合同枚举 detected|clear|unknown 的中文标签（见 engine low_state）。
+            precondition(presentation.value("satellite_low_cloud_state") == "检测到低云")
+            precondition(NowcastPresentation(report: ["nowcast": ["satellite_low_cloud_state": "clear"]])
+                .value("satellite_low_cloud_state") == "无低云")
             precondition(presentation.value("convective_score_ceiling") == "64%")
             precondition(presentation.value("satellite_motion_quality") == "可靠")
             precondition(presentation.value("geometric_path_blocking_risk") == "0%")
-            precondition(presentation.value("far_cloud_ratio") == "--")
-            precondition(presentation.value("calibrated_sample_coverage_ratio") == "--")
+            precondition(presentation.value("far_cloud_ratio") == "—")
+            precondition(presentation.value("calibrated_sample_coverage_ratio") == "—")
             precondition(!NowcastPresentation.metrics.contains { $0.0 == "disagreement" })
-            precondition(NowcastPresentation(report: ["confidence_score": 0.99]).value("confidence") == "--")
+            precondition(NowcastPresentation(report: ["confidence_score": 0.99]).value("confidence") == "—")
         case "nowcast-profile":
             let presentation = NowcastPresentation(report: ["nowcast": ["satellite_vertical_profile": [
                 "status": "available", "samples": [
@@ -486,7 +494,10 @@ enum PreparationActionsChecks {
             let layers = try! RegionalMapLayers.build(areas: [[100, 10, 124.75, 34.75]], cells: cells)
             precondition(layers.overlays.count <= 28)
             let polygons = layers.overlays.compactMap { $0 as? MKMultiPolygon }
-            precondition(polygons.reduce(0) { $0 + $1.polygons.count } == 10_000)
+            // 覆盖边界常显（regional-10，方案 :78）：末位 MKMultiPolygon 恒为外框
+            // 描边（1 个多边形），其余与 10_000 格点一一对应（9_999 bins + 1 缺测）。
+            precondition(polygons.last?.polygons.count == 1)
+            precondition(polygons.dropLast().reduce(0) { $0 + $1.polygons.count } == 10_000)
             let preview = try! RegionalMapLayers.build(areas: [[119.75, 29.75, 120.25, 30.25]],
                                                        cells: [], showGrid: true)
             precondition(preview.overlays.compactMap { $0 as? MKMultiPolyline }.first?.polylines.count == 8)

@@ -16,7 +16,7 @@ native desktop clients**. The physics follows the methodology of the
 3. [Requirements & installation](#requirements--installation)
 4. [Data sources & registration (important)](#data-sources--registration)
 5. [Configuration](#configuration)
-6. [Usage: backend / frontend / CLI / Python API](#usage)
+6. [Usage: backend / frontend / CLI](#usage)
 7. [API endpoints](#api-endpoints)
 8. [Testing & invariant regression](#testing--invariant-regression)
 9. [Repository layout](#repository-layout)
@@ -36,7 +36,7 @@ native desktop clients**. The physics follows the methodology of the
   radar convective correction.
 - **Backend service**: Rust/Axum jobs + SSE + gzip + checked input caches.
 - **Minimal frontend**: `/forecast`, `/now`, `/outlook`, `/admin`.
-- **Native desktop**: macOS SwiftUI/AppKit and Windows WinUI 3, directly launching Rust. See [build instructions and migration status](apps/README.md). The old PySide6 entry point remains available.
+- **Native desktop**: macOS SwiftUI/AppKit and Windows WinUI 3, directly launching Rust. See [build instructions and migration status](apps/README.md). The old PySide6 app was retired (2026-11-13); user data (~/.firesky-desktop favorites and current spot) imports automatically into the native app.
 
 ## Architecture & physics
 
@@ -74,26 +74,21 @@ $$\Delta\tau_c=b^{1.35}\frac{\Delta s}{140\ \mathrm{km}},\qquad
 $$\mathrm{pre}=q_{\rm cov} f_m \iota c f_D,\qquad
   q=\min\left(2.5, 1.225 \mathrm{pre}^{1.2}\right)$$
 
-   Algorithm version `2026.11.04.87` (`src/firesky/version.py`). Full derivation:
+   Algorithm version `2026.11.04.87`. Full derivation:
    [PRINCIPLES](docs/PRINCIPLES.en.md).
 
 ## Requirements & installation
 
-As of November 11, 2026, default builds, HTTP/CLI and native desktop launchers
-do not require Python. The [cutover audit](docs/RUST_RUNTIME_CUTOVER.zh-CN.md)
-records implemented paths, unsupported legacy endpoints and validation limits.
-Later Python API/configuration examples in this document describe the explicit
-legacy implementation, not the native runtime.
+The HTTP/CLI and native desktop runtimes are Rust and do not require Python.
+The [cutover audit](docs/RUST_RUNTIME_CUTOVER.zh-CN.md) records implemented
+paths and validation limits.
 
 | Dependency | Version | Purpose | Required? |
 |---|---|---|---|
-| Python | ≥ 3.11 | legacy backend and differential tests | not for native runtime |
 | Rust (cargo) | current stable | engine build | build only |
 | Node.js + npm | ≥ 20 | frontend build | frontend only |
-| numpy / requests / astral / eccodes | see `pyproject.toml` | Python reference implementation | legacy/tests only |
-| fastapi / uvicorn / pyyaml / httpx | same | old backend service | legacy only |
-| pillow / h5py / cdsapi | same | Python satellite/radar/ADS reference | legacy/tests only |
 | ecCodes binary library | ≥ 2.33 | direct GRIB C ABI with definitions/samples | yes |
+| Python + pytest/numpy | ≥ 3.11 | architecture contract tests and resource/data tools (`scripts/`) only | not for runtime |
 
 ```bash
 # Build Rust engine and frontend
@@ -142,24 +137,11 @@ curl -X POST http://127.0.0.1:8765/api/v1/firesky/data/fetch \
 > Scoring reads strictly validated CAMS caches and fails when required
 > space/time coverage is missing instead of inventing AOD. Rust preparation
 > accesses ADS directly and still requires an account and accepted licence.
-> Legacy YAML `satellite_warmup_token` applies only to the explicit Python
-> service; it does not authenticate native endpoints.
 
 ## Configuration
 
 The native runtime uses [environment variables and CLI arguments](docs/RUST_RUNTIME_CUTOVER.zh-CN.md#配置).
-The following YAML fields apply only to the explicit legacy Python service:
-`src/firesky/config/web_server.yaml`, optionally selected by `FIRESKY_CONFIG`.
-
-| Field | Default | Meaning |
-|---|---|---|
-| `server.host` / `server.port` | 127.0.0.1 / 8765 | backend bind |
-| `server.workers` | null | parallel prediction processes (null = auto) |
-| `server.aerosol_source` | cams | `auto` / `cams` / `fallback` (fallback = Open-Meteo air-quality AOD when CAMS cache is missing) |
-| `server.*_cache_dir` | `.cache/firesky/*` | GFS / ECMWF / CAMS / map-frame / regional / point / satellite cache dirs |
-| `server.satellite_warmup_token` | null | local token guarding satellite warmup admin endpoints |
-| `server.forecast_cache_seconds` | 300 | in-memory forecast response cache TTL |
-| `logging.*` | INFO / logs / firesky | log level / dir / app name |
+Docker directory conventions are in `docker/Dockerfile` and the [deployment guide](docs/DEPLOY.en.md).
 
 ## Usage
 
@@ -168,7 +150,7 @@ The following YAML fields apply only to the explicit legacy Python service:
 ```bash
 make serve
 # with the frontend built: open http://127.0.0.1:8765/forecast
-# frontend dev mode: cd frontend && npm run dev -- --host 5173 (API proxied to 8765)
+# frontend dev mode: cd apps/shared-web && npm run dev -- --host 5173 (API proxied to 8765)
 ```
 
 ### CLI (engine only, no server)
@@ -178,28 +160,9 @@ engine/target/release/firesky-engine forecast --input request.json --workspace "
 # JSON request examples and fields are in the native runtime audit
 ```
 
-### Python API (legacy/reference only)
-
-```python
-from datetime import datetime, timezone
-from firesky import predict_burn_sky
-
-result = predict_burn_sky(
-    [{"name": "Hangzhou", "lat": 30.27, "lon": 120.15, "elevation_m": 12.0,
-      "timezone_name": "Asia/Shanghai"}],
-    "2026-11-05",
-    "dusk",
-    datetime(2026, 11, 4, 12, tzinfo=timezone.utc),   # GFS cycle
-    cams_cache_dir=".cache/cams",
-)
-print(result["points"][0]["peak"]["quality_level"])
-```
-
 ## API endpoints
 
 See the [native HTTP contract and outstanding routes](docs/RUST_RUNTIME_CUTOVER.zh-CN.md#http-范围).
-The table below is the legacy full API inventory, not a claim that every endpoint
-has been ported.
 
 | Endpoint | Method | Purpose |
 |---|---|---|
@@ -214,102 +177,71 @@ has been ported.
 | `/api/v1/firesky/points/metadata`, `/locations/search` | GET | observer metadata / place-name search |
 | `/api/v1/firesky/data/*` | POST/GET | data-download planner (`data/fetch` async job, `sources`: `gfs`/`ecmwf`/`cams`) + status / prune |
 | `/api/v1/firesky/cache/warmup` | POST | hot-city forecast cache warmup |
-| `/api/v1/firesky/satellite/cache/warmup` | POST | satellite cache warmup (requires `satellite_warmup_token`, header `x-firesky-warmup-token`) |
 | `/{full_path}` | GET | SPA fallback (frontend client routing) |
 
 ## Testing & invariant regression
 
 ```bash
 make test-rust
-make test                                  # Python differential dependencies required
-cd frontend && npm run check && npm run build # 0 errors
+make test                                  # architecture contract tests; needs pytest/numpy
+cd apps/shared-web && npm run check && npm run build # 0 errors
 ```
 
-- `tests/test_engine_api.py`: `predict_burn_sky` input validation and the exposed
-  algorithm version.
-- `tests/test_scoring_invariants.py`: unified 20-minute window (short-run
-  equality / boundary continuity), LCL cloud base, NaN level guard, monotonic
-  response curve.
-- `tests/test_backend_api.py`: service contract (health / contract / async-job
-  failure semantics).
+- `tests/test_rust_hsd_raw.py`: native HSD calibration contracts (Python is
+  only the test oracle).
+- `tests/test_rust_desktop_sync.py`: background data-sync helper JSONL bridge
+  contracts (settings persistence, due gates, circuit breaker, fail-closed).
+- `tests/test_native_preparation_ui.py`: macOS Swift preparation/display logic
+  compile checks.
 - After changing `native/src/*.rs`, rebuild with
-  `./scripts/build_native_variants.sh` before running pytest — otherwise pytest
-  loads the stale dylib and reports misleading results.
+  `./scripts/build_native_variants.sh` before running tests — otherwise they
+  load the stale dylib and report misleading results.
 
 ## Desktop app (local, single-machine)
 
 Current native clients launch the Rust engine directly:
-[macOS SwiftUI / Windows WinUI](apps/README.md) and the
-[Tauri shell](apps/desktop-tauri/README.md). Their documents define build and
-platform acceptance limits.
-
-### Legacy PySide6 compatibility app
-
-These commands run or package the old Python desktop, not the default native
-release. It still requires Python and its dependencies and cannot establish a
-Python-free desktop product.
-
-```bash
-# run from source
-.venv/bin/python desktop/app.py
-
-# bundle (macOS → FireSky.app, Windows → exe folder)
-pip install pyinstaller
-pyinstaller desktop/FireSky.spec --noconfirm
-
-# macOS dmg
-hdiutil create -volname FireSky -srcfolder dist/FireSky.app -ov -format UDZO FireSky.dmg
-```
-
-The compatibility UI includes observer/date/model forms, progress and curves.
-Its PyInstaller output is not part of current Rust native release acceptance.
+[macOS SwiftUI / Windows WinUI](apps/README.md). The Tauri desktop shell and
+the legacy PySide6 app are retired (2026-11-13); the shared browser web now
+lives in `apps/shared-web/` and is served by the Rust HTTP service and Docker.
+Old user data (~/.firesky-desktop favorites and current spot) imports
+automatically into the macOS native app. Retirement record:
+`docs/PYTHON_TAURI_PYSIDE_RETIREMENT_PLAN.zh-CN.md`.
 
 ### Map basemaps and the Tianditu key
 
-The legacy PySide6 picker uses local Leaflet (`desktop/assets/`, shipped with the bundle)
-inside QWebEngine. Two basemap sources, **used for point picking only — no
-forecast layers are drawn on the map**:
+The shared-web picker offers two basemap sources, **used for point picking
+only — no forecast layers are drawn on the map**:
 
 | Source | Valid area | Basemaps | Key |
 |---|---|---|---|
 | Tianditu (default) | Mainland China | imagery / vector / terrain | required |
-| Esri | Outside China only | imagery / streets / topo | keyless |
+| OpenFreeMap | Worldwide | imagery / streets | keyless |
 
 Get a Tianditu key at [console.tianditu.gov.cn](https://console.tianditu.gov.cn)
-(application type: browser). Three ways to inject it, highest priority first:
-
-1. Environment variable `FIRESKY_TIANDITU_KEY`
-2. In-app: **Data & cache → Map service** → writes `~/.firesky-desktop/config.json`
-3. Source checkouts fall back to `frontend/src/lib/utils/constants.ts` (not bundled)
+(application type: browser) and enter it in the web settings page under
+**Map service** (stored in browser-local preferences).
 
 **Neither the repository nor release artifacts ship a working key.** Without
-one the map shows a setup card and offers a one-click switch to Esri. Public use
-inside China must stay on Tianditu (Chinese map regulations require a licensed
-basemap); Esri is for locations outside China.
-
-> Size note: QtWebEngine dominates the bundle — the macOS `.app` is roughly
-> 640 MB (both architectures in WebEngineCore). For lighter distribution thin
-> the binaries to arm64 and prune locales / devtools paks, at the cost of Intel
-> Mac support.
+one the map shows a setup card and offers a one-click switch to OpenFreeMap.
+Public use inside China must stay on Tianditu (Chinese map regulations require
+a licensed basemap); OpenFreeMap is for locations outside China.
 
 ## Repository layout
 
 ```
 firesky/
-├── src/firesky/           # engine + backend (Python)
-│   ├── engine.py          # high-level API predict_burn_sky
-│   ├── api.py             # FastAPI production entry
-│   ├── web_server.py      # service core (jobs / caches / payload assembly)
-│   ├── national_batch.py  # regional grid derivation + native calls + quality
-│   ├── satellite*.py / radar.py                  # nowcast data & retrieval
-│   ├── gfs.py / ecmwf*.py / aerosol.py           # data ingestion
-│   ├── scoring.py / forward_field_scoring.py     # physics + empirical scoring
-│   ├── native_core.py     # ctypes bridge (libfiresky_native)
-│   └── config/web_server.yaml                    # service config
+├── engine/                # Rust engine: HTTP service / CLI / desktop FFI / data sync
 ├── native/                # Rust ray-traced scorer (cdylib)
-├── frontend/              # minimal SvelteKit frontend (served by the backend)
-├── scripts/build_native_variants.sh
-└── tests/
+├── apps/
+│   ├── macos/             # SwiftUI/AppKit + Rust FFI (primary desktop)
+│   ├── windows/           # WinUI 3 + Rust FFI
+│   ├── linux/             # GTK4/C++ + Rust FFI
+│   └── shared-web/        # shared web SPA (served by Rust HTTP and Docker)
+├── frontend/              # legacy SvelteKit frontend (pending merge, contract tests kept)
+├── resources/app-data/    # bundled city catalog & timezone dataset (sha256 manifest)
+├── docker/                # three-stage image (Rust build + web build + Python-free runtime)
+├── scripts/               # build/smoke scripts and resource/data preparation tools
+└── tests/                 # architecture contract tests (Rust IPC / Swift UI)
 ```
 
 ## Troubleshooting
@@ -320,7 +252,7 @@ firesky/
 | `No cached CAMS optical profile covers ...` | the CAMS cache lacks this cycle's file — warm via the endpoint (needs an ADS key) or copy an existing `.cache/cams` |
 | `CAMS full profile does not cover every model cell` | CAMS horizontal area too small — widen the warmup `area` |
 | forecast says "GFS cycle unavailable" | NOMADS publish lag is ~5h45m; use an earlier cycle or retry later |
-| blank frontend / 404 at `/` | `cd frontend && npm run build`, then restart the backend |
+| blank frontend / 404 at `/` | `cd apps/shared-web && npm run build`, then restart the backend |
 | 405 Method Not Allowed | a POST to an unknown path hits the GET-only SPA catch-all — check the endpoint spelling |
 
 ## Origin
@@ -339,8 +271,8 @@ structure draw on public discussion of how burning-sunset colours form.
   CAMS / ADS (aerosol), JMA / NICT / NOAA (Himawari-9), RainViewer (radar),
   Open-Meteo, OpenStreetMap Nominatim
   (geocoding), AWS Terrain Tiles (elevation), MapLibre / Leaflet (maps).
-- **Open-source stack**: the Rust ecosystem (rayon and friends), numpy,
-  astral, ecCodes, FastAPI, uvicorn, SvelteKit, Leaflet, shadcn-svelte and the
-  lucide icon set.
+- **Open-source stack**: the Rust ecosystem (rayon, Axum and friends),
+  ecCodes, Svelte/SvelteKit, Leaflet, shadcn-svelte and the lucide icon set;
+  astral (solar-formula source, see `third_party/astral/NOTICE`).
 - And everyone who has ever looked up at a burning sunset and been willing to
   feed observations back into the data.

@@ -87,7 +87,8 @@ struct RegionalMapLayers: @unchecked Sendable {
             }
         }
         if !lines.isEmpty { append(MKMultiPolyline(lines), .grid) }
-        if !outlines.isEmpty, cells.isEmpty || showGrid { append(MKMultiPolygon(outlines), .outline) }
+        // 覆盖边界常显（regional-10，方案 :78）：网格关闭且有数据时也保留外框描边。
+        if !outlines.isEmpty { append(MKMultiPolygon(outlines), .outline) }
         return RegionalMapLayers(overlays: overlays, styles: styles)
     }
 
@@ -187,5 +188,55 @@ final class RegionalFieldRenderer: MKMultiPolygonRenderer {
             super.draw(mapRect, zoomScale: zoomScale, in: context)
         }
         context.restoreGState()
+    }
+}
+
+/// 采样格点标注（regional-6）：Web 采样圆点的原生对应，tooltip 为
+/// 「档位 · 质量 · 云族 · 高/中/低云%」（BurnOutlookMap.svelte:391-396）。
+/// 字段全部来自区域 points[] DTO；缺测格采样点用灰点，与地图缺测态一致。
+final class RegionalSampleAnnotation: NSObject, MKAnnotation {
+    let cell: RegionalCell
+    let tooltip: String
+    private let coordinateValue: CLLocationCoordinate2D
+
+    var coordinate: CLLocationCoordinate2D { coordinateValue }
+
+    init(cell: RegionalCell) {
+        self.cell = cell
+        self.coordinateValue = CLLocationCoordinate2D(latitude: cell.coordinate.lat, longitude: cell.coordinate.lon)
+        let family: String
+        switch cell.pressureFamily {
+        case "high": family = "高云压力族"
+        case "middle": family = "中云压力族"
+        case "low": family = "低云压力族"
+        default: family = "无"
+        }
+        let percent: (Double?) -> String = { value in
+            guard let value else { return "—" }
+            return "\(Int((value * 100).rounded()))"
+        }
+        let quality = cell.peakQuality.map { String(format: "%.3f", $0) } ?? "未计算"
+        self.tooltip = "\(cell.peakLevel ?? "—") · \(quality)/2.5\n主导可烧压力族 \(family)"
+            + "\n高/中/低云 \(percent(cell.highCloud))/\(percent(cell.midCloud))/\(percent(cell.lowCloud))%"
+        super.init()
+    }
+
+    /// Web 采样圆点 fillOpacity 0.9；缺测（quality 缺失）用灰点。
+    var markerColor: NSColor {
+        guard let fill = cell.quality.map(RegionalPalette.fill) else { return NSColor(white: 0.5, alpha: 0.45) }
+        return NSColor(srgbRed: Double(fill.red) / 255, green: Double(fill.green) / 255,
+                       blue: Double(fill.blue) / 255, alpha: 0.9)
+    }
+}
+
+final class RegionalSampleMarkerView: MKAnnotationView {
+    override func draw(_ dirtyRect: NSRect) {
+        guard let sample = annotation as? RegionalSampleAnnotation else { return }
+        let path = NSBezierPath(ovalIn: bounds.insetBy(dx: 0.5, dy: 0.5))
+        sample.markerColor.setFill()
+        path.fill()
+        path.lineWidth = 1
+        sample.markerColor.setStroke()
+        path.stroke()
     }
 }

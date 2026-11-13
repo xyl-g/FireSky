@@ -1,4 +1,4 @@
-# FireSky 轻量自托管：共享 Tauri Web + Rust，默认仅发布到本机。
+# FireSky 轻量自托管：共享 Web SPA + Rust HTTP，默认仅发布到本机。
 # 启动：FIRESKY_IMAGE_TAG=local docker compose up -d --build
 
 name: firesky

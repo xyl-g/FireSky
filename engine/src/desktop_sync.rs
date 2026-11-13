@@ -42,6 +42,10 @@ const SUSPENSION_THRESHOLD: u32 = 3;
 /// Publication probes reuse the bounded `desktop_publications` timeout
 /// contract (upper limit 60 s; results carry its 300 s cache).
 const PROBE_TIMEOUT_SECONDS: f64 = 60.0;
+/// Coverage-aware sync revision (F1). Bump when the synced footprint changes
+/// (bbox/hours/schema); states recorded under an older revision no longer
+/// count as `current` and the same cycle is re-evaluated against the cache.
+const COVERAGE_VERSION: u32 = 2;
 
 fn check(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::Acquire) {
@@ -290,6 +294,11 @@ pub struct SourceState {
     pub last_result: Option<Value>,
     pub consecutive_failures: u32,
     pub suspended: bool,
+    /// Fingerprint of the synced footprint: `v{COVERAGE_VERSION}:{bbox}:{hours}`
+    /// for GFS (anchor point-domain envelope + hourly horizon), the continent
+    /// envelope for CAMS, and the published-step horizon for EC. `None` means
+    /// the state predates coverage tracking and must be re-verified.
+    pub coverage_fingerprint: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -439,6 +448,7 @@ struct RoundOutcome {
     name: String,
     status: &'static str,
     last_cycle: Option<String>,
+    coverage_fingerprint: Option<String>,
     source: Value,
 }
 
@@ -459,6 +469,7 @@ fn commit_round_outcomes(
                 latest.source_mut(&outcome.name),
                 outcome.status,
                 outcome.last_cycle.clone(),
+                outcome.coverage_fingerprint.clone(),
                 &outcome.source,
                 task_id,
             );
@@ -475,6 +486,7 @@ fn record_source_outcome(
     target: Option<&mut SourceState>,
     status: &str,
     last_cycle: Option<String>,
+    coverage_fingerprint: Option<String>,
     source: &Value,
     task_id: Option<&str>,
 ) {
@@ -485,10 +497,16 @@ fn record_source_outcome(
     match status {
         "synced" => {
             target.last_cycle = last_cycle;
+            target.coverage_fingerprint = coverage_fingerprint;
             target.consecutive_failures = 0;
             target.suspended = false;
         }
         "current" => {
+            // A coverage-verified `current` re-stamps the footprint so an old
+            // untracked state becomes trusted without re-downloading.
+            if coverage_fingerprint.is_some() {
+                target.coverage_fingerprint = coverage_fingerprint;
+            }
             target.consecutive_failures = 0;
             target.suspended = false;
         }
@@ -566,6 +584,7 @@ fn due_for_source(
     interval_minutes: u32,
     publication: Option<&Publication>,
     now: DateTime<Utc>,
+    coverage_matches: bool,
 ) -> (bool, String) {
     if state.suspended {
         return (false, "suspended_failures".into());
@@ -588,7 +607,14 @@ fn due_for_source(
         .and_then(|value| time_contract::parse_utc(value).ok())
     {
         if publication.cycle.is_some_and(|cycle| cycle <= last) {
-            return (false, "cycle_current".into());
+            // Coverage awareness (F1): a `current` cycle only counts when its
+            // recorded footprint matches the active settings. An untracked or
+            // stale footprint (old 3-hour anchor sync, changed horizon/anchor)
+            // re-opens the same cycle so run() can verify or backfill coverage.
+            if coverage_matches {
+                return (false, "cycle_current".into());
+            }
+            return (true, format!("coverage_stale:{}", publication.label));
         }
     }
     (true, format!("new_cycle:{}", publication.label))
@@ -694,7 +720,13 @@ pub fn due(workspace: &Path, busy: bool, now_utc: Option<&str>) -> Result<Value,
                 "label": p.label,
             })
         });
-        let (is_due, reason) = due_for_source(source_state, interval, publication.as_ref(), now);
+        let coverage_matches = expected_fingerprint(name, &settings)
+            .ok()
+            .is_some_and(|expected| {
+                source_state.coverage_fingerprint.as_deref() == Some(expected.as_str())
+            });
+        let (is_due, reason) =
+            due_for_source(source_state, interval, publication.as_ref(), now, coverage_matches);
         if is_due {
             due_sources.push(name);
         }
@@ -801,6 +833,80 @@ fn ec_forecast_hours(horizon: u32) -> Vec<i64> {
     hours
 }
 
+/// Canonical GFS sync footprint for an anchor: the point-domain envelope at
+/// the default compute radius, so any point forecast inside the anchor can
+/// reuse the synced cache (design 7.4 coverage reuse).
+fn gfs_sync_bbox(anchor: &str) -> Result<[f64; 4], String> {
+    gfs_data::canonical_bbox(
+        desktop_context::gfs_point_domain_envelope(
+            region_bounds(anchor)?,
+            desktop_context::DEFAULT_RADIUS_KM,
+        ),
+        "0p25",
+    )
+}
+
+/// The footprint a successful round with these settings would produce. Used
+/// both to stamp state after a sync and to detect stale `current` states.
+fn expected_fingerprint(name: &str, settings: &Settings) -> Result<String, String> {
+    let anchor = settings
+        .anchor_region
+        .as_deref()
+        .ok_or("data sync anchor region is not configured")?;
+    match name {
+        "gfs" => {
+            let horizon = settings
+                .lead_horizon_hours
+                .ok_or("lead_horizon_hours is not configured")?;
+            Ok(format!(
+                "v{COVERAGE_VERSION}:gfs:{:?}:0-{horizon}",
+                gfs_sync_bbox(anchor)?
+            ))
+        }
+        "cams" => Ok(format!(
+            "v{COVERAGE_VERSION}:cams:{:?}",
+            cams_area_from_region(region_bounds(anchor)?)?
+        )),
+        _ => {
+            let horizon = settings
+                .lead_horizon_hours
+                .ok_or("lead_horizon_hours is not configured")?;
+            let source = settings
+                .ecmwf_source
+                .as_deref()
+                .ok_or("ecmwf_source is not configured")?;
+            Ok(format!("v{COVERAGE_VERSION}:ec:{source}:0-{horizon}"))
+        }
+    }
+}
+
+/// Cheap on-disk coverage probe for GFS: does the cache already cover every
+/// hourly lead of the sync footprint for this cycle? Uses the same
+/// index/schema/bbox-covering lookup as preflight, with downloads disabled.
+fn gfs_cache_complete(
+    context: &RunContext<'_>,
+    anchor: &str,
+    cycle: DateTime<Utc>,
+    horizon: u32,
+) -> Result<bool, String> {
+    let bbox = gfs_sync_bbox(anchor)?;
+    let client = gfs_data::GfsClient::new(gfs_data::Config {
+        cache_dir: context.gfs_cache_dir.clone(),
+        resolution: "0p25".into(),
+        region: Some(anchor.to_owned()),
+        timeout_seconds: 90.0,
+        lock_timeout_seconds: 300.0,
+        download_attempts: 4,
+    })?;
+    for hour in 0..=horizon {
+        let url = gfs_data::build_url(cycle, hour, Some(bbox), "0p25", false)?;
+        if client.find(cycle, hour, Some(bbox), Some(&url))?.is_none() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 fn sync_cams(
     context: &RunContext<'_>,
     anchor: &str,
@@ -811,7 +917,7 @@ fn sync_cams(
     let envelope = cams_area_from_region(region_bounds(anchor)?)?;
     let (_, area_key, _) = cams_data::area_identity(json!(envelope))?;
     let targets = cams_target_utcs(cycle)?;
-    let result = cams_data::execute(cams_data::Params {
+    let result = cams_data::execute_cancellable(cams_data::Params {
         operation: "batch".into(),
         cache_dir: context.cams_cache_dir.clone(),
         area: json!(envelope),
@@ -822,7 +928,7 @@ fn sync_cams(
         require_exact_valid_time: true,
         refresh_before_cycle: None,
         all_leads: true,
-    })?;
+    }, cancel)?;
     // Fail-closed: a partial continent cycle must not advance last_cycle.
     let group_errors = &result["group_errors"];
     let missing = &result["missing_valid_times"];
@@ -847,10 +953,11 @@ fn sync_gfs(
     cancel: &AtomicBool,
 ) -> Result<Value, String> {
     let started = Instant::now();
-    let bounds = region_bounds(anchor)?;
-    // REGIONS order [west, east, north, south] matches canonical_bbox's
-    // public convention; region is a storage-layout label only.
-    let bbox = gfs_data::canonical_bbox(bounds, "0p25")?;
+    // Point forecasts request hourly leads over a domain enlarged by
+    // source_radius (up to 2000 km). Prefetch the same hourly grid over an
+    // envelope covering any point domain inside the anchor, so a later point
+    // forecast reuses this cache instead of re-downloading (coverage reuse).
+    let bbox = gfs_sync_bbox(anchor)?;
     let client = gfs_data::GfsClient::new(gfs_data::Config {
         cache_dir: context.gfs_cache_dir.clone(),
         resolution: "0p25".into(),
@@ -859,7 +966,7 @@ fn sync_gfs(
         lock_timeout_seconds: 300.0,
         download_attempts: 4,
     })?;
-    let hours: Vec<u32> = (0..=horizon).step_by(3).collect();
+    let hours: Vec<u32> = (0..=horizon).collect();
     let mut files = Vec::new();
     let mut cache_hits = 0_usize;
     let mut downloaded = 0_usize;
@@ -898,9 +1005,9 @@ fn sync_ec(
     cancel: &AtomicBool,
 ) -> Result<Value, String> {
     check(cancel)?;
-    // ecmwf_data has no cancellation handle: the EC stage boundary is the
-    // whole per-hour download loop (existing provider contract, design 1.2).
-    let mut value = ecmwf_data::execute(ecmwf_data::Params {
+    // Per-hour cancellation: the provider checks the flag before every
+    // transfer, so a cancelled round stops within one file download.
+    let mut value = ecmwf_data::execute_cancellable(ecmwf_data::Params {
         operation: "download".into(),
         config: ecmwf_data::Config {
             cache_dir: context.ecmwf_cache_dir.clone(),
@@ -916,7 +1023,7 @@ fn sync_ec(
         max_cycles: 8,
         allow_download: true,
         use_cache_for_cycle: true,
-    })?;
+    }, cancel)?;
     value["lead_horizon_hours"] = json!(horizon);
     value["ecmwf_source"] = json!(source);
     Ok(value)
@@ -966,6 +1073,17 @@ pub fn run(
 
     let state_file = state_path(context.workspace);
     let task_json = task_id.map(|value| json!(value)).unwrap_or(Value::Null);
+
+    // Cross-process round lock: a scheduled helper (launchd / Task Scheduler)
+    // and the app are separate processes, so the in-process `sync` mutex cannot
+    // coordinate them. Try-lock (0s): contention means another process is
+    // already running a round; fail visibly instead of double-downloading.
+    let lock_path = state_file.with_file_name("sync.lock");
+    if let Some(parent) = lock_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let _round_lock = crate::cache_lock::Lock::acquire(&lock_path, 0.0)
+        .map_err(|_| "another data sync round is active in another process".to_string())?;
 
     // The publication probe runs before ANY state write: a failed probe
     // consumes neither the interval gate nor the breaker budget, and the
@@ -1037,6 +1155,7 @@ pub fn run(
                 name: (*name).to_owned(),
                 status: "cancelled",
                 last_cycle: None,
+                coverage_fingerprint: None,
                 source: source.clone(),
             });
             results.insert((*name).to_owned(), source);
@@ -1054,6 +1173,7 @@ pub fn run(
                 name: (*name).to_owned(),
                 status: "cancelled",
                 last_cycle: None,
+                coverage_fingerprint: None,
                 source: source.clone(),
             });
             results.insert((*name).to_owned(), source);
@@ -1072,6 +1192,9 @@ pub fn run(
         };
 
         let mut is_current = false;
+        let footprint = expected_fingerprint(name, &settings).ok();
+        let coverage_tracked = footprint.is_some()
+            && source_state.coverage_fingerprint == footprint;
         let outcome: Result<Value, String> = if !verified {
             Err("publication is unavailable or unverified; refusing to download (fail-closed)"
                 .to_string())
@@ -1084,7 +1207,7 @@ pub fn run(
                 .last_cycle
                 .as_deref()
                 .and_then(|value| time_contract::parse_utc(value).ok());
-            if let Some(last) = last.filter(|last| cycle <= *last) {
+            if let Some(last) = last.filter(|last| cycle <= *last && coverage_tracked) {
                 is_current = true;
                 Ok(json!({
                     "files": [],
@@ -1092,7 +1215,25 @@ pub fn run(
                     "elapsed_ms": 0.0,
                     "current_cycle": time_contract::iso(last),
                 }))
+            } else if *name == "gfs"
+                && last.is_some_and(|last| cycle <= last)
+                && gfs_cache_complete(context, &anchor, cycle, horizon)?
+            {
+                // Same cycle, untracked footprint, but the cache already
+                // covers every hourly lead: trust it without re-downloading
+                // and stamp the fingerprint (F1 fast path).
+                is_current = true;
+                Ok(json!({
+                    "files": [],
+                    "cache_hits": 0,
+                    "elapsed_ms": 0.0,
+                    "current_cycle": time_contract::iso(cycle),
+                    "coverage_verified": true,
+                }))
             } else {
+                // New cycle, or the same cycle with a stale/untracked
+                // footprint: re-run the provider; per-lead resolve reuses
+                // covering cache files and only downloads what is missing.
                 match *name {
                     "cams" => sync_cams(context, &anchor, cycle, cancel),
                     "gfs" => sync_gfs(context, &anchor, cycle, horizon, cancel),
@@ -1137,6 +1278,11 @@ pub fn run(
                 publication
                     .and_then(|p| p.cycle)
                     .map(|cycle| time_contract::iso(cycle))
+            } else {
+                None
+            },
+            coverage_fingerprint: if matches!(status, "synced" | "current") {
+                footprint.clone()
             } else {
                 None
             },
@@ -1348,6 +1494,32 @@ mod tests {
     }
 
     #[test]
+    fn run_fails_visibly_when_another_process_holds_the_round_lock() {
+        let workspace = tempfile::tempdir().unwrap();
+        save(workspace.path(), json!({"settings": settings_enabled()})).unwrap();
+        let lock_path = state_path(workspace.path()).with_file_name("sync.lock");
+        fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        // flock is per open-file-description, so a second fd in this process
+        // contends exactly like a separate helper process would.
+        let _held = crate::cache_lock::Lock::acquire(&lock_path, 0.0).unwrap();
+        let context = RunContext {
+            workspace: workspace.path(),
+            cams_cache_dir: workspace.path().join("cams"),
+            gfs_cache_dir: workspace.path().join("gfs"),
+            ecmwf_cache_dir: workspace.path().join("ec"),
+        };
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let err = run(&context, json!({"sources": ["cams"]}), None, &cancel, &|_| {
+            Ok(())
+        })
+        .unwrap_err();
+        assert!(
+            err.contains("another data sync round is active in another process"),
+            "{err}"
+        );
+    }
+
+    #[test]
     fn state_read_fails_closed_to_never_synced() {
         let workspace = tempfile::tempdir().unwrap();
         let state_file = state_path(workspace.path());
@@ -1386,7 +1558,7 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2026, 11, 13, 15, 0, 0).unwrap();
         let idle = SourceState::default();
         // Fresh source with a verified new cycle is due.
-        let (due, reason) = due_for_source(&idle, 60, Some(&publication(Some(cycle), true)), now);
+        let (due, reason) = due_for_source(&idle, 60, Some(&publication(Some(cycle), true)), now, false);
         assert!(due);
         assert_eq!(reason, "new_cycle:2026-11-13 12Z");
         // Suspended sources are never auto-scheduled.
@@ -1396,7 +1568,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            due_for_source(&suspended, 60, Some(&publication(Some(cycle), true)), now),
+            due_for_source(&suspended, 60, Some(&publication(Some(cycle), true)), now, false),
             (false, "suspended_failures".into())
         );
         // Interval not elapsed.
@@ -1405,7 +1577,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            due_for_source(&recent, 60, Some(&publication(Some(cycle), true)), now),
+            due_for_source(&recent, 60, Some(&publication(Some(cycle), true)), now, false),
             (false, "interval_not_elapsed".into())
         );
         // Elapsed interval proceeds to the publication gate.
@@ -1413,22 +1585,22 @@ mod tests {
             last_attempt_utc: Some(time_contract::iso(now - Duration::minutes(61))),
             ..Default::default()
         };
-        let (due, reason) = due_for_source(&old, 60, Some(&publication(Some(cycle), true)), now);
+        let (due, reason) = due_for_source(&old, 60, Some(&publication(Some(cycle), true)), now, false);
         assert!(due);
         assert_eq!(reason, "new_cycle:2026-11-13 12Z");
         // Heuristic (unverified) publications never trigger downloads.
         assert_eq!(
-            due_for_source(&old, 60, Some(&publication(Some(cycle), false)), now),
+            due_for_source(&old, 60, Some(&publication(Some(cycle), false)), now, false),
             (false, "publication_unverified".into())
         );
-        assert_eq!(due_for_source(&old, 60, None, now), (false, "publication_unverified".into()));
+        assert_eq!(due_for_source(&old, 60, None, now, false), (false, "publication_unverified".into()));
         // Verified cycle already synced is current.
         let synced = SourceState {
             last_cycle: Some(time_contract::iso(cycle)),
             ..Default::default()
         };
         assert_eq!(
-            due_for_source(&synced, 60, Some(&publication(Some(cycle), true)), now),
+            due_for_source(&synced, 60, Some(&publication(Some(cycle), true)), now, true),
             (false, "cycle_current".into())
         );
         // An older verified publication is also current.
@@ -1437,7 +1609,8 @@ mod tests {
                 &synced,
                 60,
                 Some(&publication(Some(cycle - Duration::hours(12)), true)),
-                now
+                now,
+                true
             ),
             (false, "cycle_current".into())
         );
@@ -1445,7 +1618,39 @@ mod tests {
         let mut unlocked = suspended;
         unlocked.suspended = false;
         unlocked.consecutive_failures = 0;
-        assert!(due_for_source(&unlocked, 60, Some(&publication(Some(cycle), true)), now).0);
+        assert!(due_for_source(&unlocked, 60, Some(&publication(Some(cycle), true)), now, false).0);
+    }
+
+    #[test]
+    fn due_reopens_a_current_cycle_when_coverage_is_stale() {
+        // F1 regression: a cycle marked `current` under the old 3-hour anchor
+        // sync (no coverage fingerprint) must become due again so run() can
+        // verify or backfill the hourly envelope.
+        let cycle = Utc.with_ymd_and_hms(2026, 11, 13, 12, 0, 0).unwrap();
+        let now = Utc.with_ymd_and_hms(2026, 11, 13, 15, 0, 0).unwrap();
+        let synced = SourceState {
+            last_cycle: Some(time_contract::iso(cycle)),
+            coverage_fingerprint: None,
+            ..Default::default()
+        };
+        assert_eq!(
+            due_for_source(&synced, 60, Some(&publication(Some(cycle), true)), now, false),
+            (true, "coverage_stale:2026-11-13 12Z".into())
+        );
+        // A recorded-but-different footprint (changed horizon/anchor) is also
+        // stale, while a matching fingerprint keeps the cycle current.
+        let tracked = SourceState {
+            coverage_fingerprint: Some("v1:gfs:old-bbox:0-120".into()),
+            ..synced.clone()
+        };
+        assert_eq!(
+            due_for_source(&tracked, 60, Some(&publication(Some(cycle), true)), now, false).0,
+            true
+        );
+        assert_eq!(
+            due_for_source(&synced, 60, Some(&publication(Some(cycle), true)), now, true),
+            (false, "cycle_current".into())
+        );
     }
 
     #[test]
@@ -1559,7 +1764,7 @@ mod tests {
             consecutive_failures: 2,
             ..Default::default()
         };
-        record_source_outcome(Some(&mut source), "failed", None, &json!({"error": "boom"}), None);
+        record_source_outcome(Some(&mut source), "failed", None, None, &json!({"error": "boom"}), None);
         assert_eq!(source.consecutive_failures, 3);
         assert_eq!(source.suspended, true);
         assert_eq!(source.last_cycle.as_deref(), Some("2026-11-12T00:00:00+00:00"));
@@ -1570,6 +1775,7 @@ mod tests {
             Some(&mut source),
             "synced",
             Some("2026-11-13T12:00:00+00:00".into()),
+            Some("v2:cams:test".into()),
             &json!({"files": ["a"], "elapsed_ms": 5.0}),
             Some("task-1"),
         );
@@ -1579,12 +1785,13 @@ mod tests {
         assert_eq!(source.last_result.as_ref().unwrap()["files"], 1);
         assert_eq!(source.last_result.as_ref().unwrap()["task_id"], "task-1");
         // "current" clears failures without touching last_cycle.
-        record_source_outcome(Some(&mut source), "current", None, &json!({}), None);
+        record_source_outcome(Some(&mut source), "current", None, None, &json!({}), None);
         assert_eq!(source.last_cycle.as_deref(), Some("2026-11-13T12:00:00+00:00"));
+        assert_eq!(source.coverage_fingerprint.as_deref(), Some("v2:cams:test"));
         assert_eq!(source.suspended, false);
         // Cancelled rounds are never counted as failures.
         source.consecutive_failures = 2;
-        record_source_outcome(Some(&mut source), "cancelled", None, &json!({}), None);
+        record_source_outcome(Some(&mut source), "cancelled", None, None, &json!({}), None);
         assert_eq!(source.consecutive_failures, 2);
         assert_eq!(source.last_result.as_ref().unwrap()["status"], "cancelled");
     }
@@ -1696,6 +1903,7 @@ mod tests {
             name: "cams".into(),
             status: "failed",
             last_cycle: None,
+            coverage_fingerprint: None,
             source: json!({"error": "boom"}),
         }];
         commit_round_outcomes(&state_file, &outcomes, None).unwrap();
@@ -1711,6 +1919,7 @@ mod tests {
             name: "cams".into(),
             status: "synced",
             last_cycle: Some("2026-11-13T12:00:00+00:00".into()),
+            coverage_fingerprint: Some("v2:cams:test".into()),
             source: json!({"files": ["a"], "elapsed_ms": 1.0}),
         }];
         commit_round_outcomes(&state_file, &outcomes, None).unwrap();

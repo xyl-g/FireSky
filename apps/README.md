@@ -1,7 +1,14 @@
 # FireSky Native Desktop
 
 > 桌面正式路线（2026-11-12）：原生 UI + Rust FFI，先 macOS，后 Windows/Linux。
-> Tauri 页面已冻结；完整合同见 `docs/NATIVE_UI_FFI_MIGRATION.zh-CN.md`。
+> Tauri 桌面壳已退役（2026-11-13）：共享 Web 迁至 `apps/shared-web/`（Docker 与
+> Rust HTTP 托管的浏览器页面），Tauri package 已删除。
+> 退役记录见 `docs/PYTHON_TAURI_PYSIDE_RETIREMENT_PLAN.zh-CN.md` 与
+> `docs/RETIREMENT_PHASE0_BASELINE.zh-CN.md`。
+> 产品与 UI 基准（2026-11-13，用户明确）：先完善并验收 macOS，其他 UI 最终向
+> macOS 对齐。见[基准规范](../docs/MACOS_UI_BASELINE.zh-CN.md)与
+> [当前计划](../docs/NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。Windows/Linux 开发仍暂停，
+> Docker/Web 部署列入后续交付。
 
 ## Architecture
 
@@ -13,12 +20,14 @@ Docker/Web                         ─ Rust HTTP ──────────�
 ```
 
 The native frontends use platform-native navigation, controls and modal dialogs.
-The visual baseline remains the existing Qt workbench, not a new design:
-196px navigation, 292px point-input rail, a small location map, score/time
-summaries, nine metric cells and the existing result tabs. Framework migration
-must not replace the point workbench with a full-window map. The Mac point
-screen has been aligned to that baseline; other screens and detailed views
-still need parity review before retiring Qt.
+The product and UI baseline is the validated macOS application. Complete its
+point, regional, nowcast, data/settings and history workflows first, then align
+the shared Web and future Windows/Linux interfaces to its capabilities,
+information hierarchy, result semantics and state feedback. Each platform keeps
+its native controls and system integrations. Existing Qt and Web screens are
+historical capability references; their dimensions and layouts do not dictate
+the Mac interface. Unverified Mac behavior must be corrected before it becomes
+part of the cross-platform baseline.
 The Mac navigation surface uses `glassEffect` on macOS 26+, with a system material
 fallback on macOS 14/15. Windows uses WinUI `MicaBackdrop`; the forecast map is a
 local Leaflet document hosted by WebView2, not a web-rendered application shell.
@@ -37,10 +46,9 @@ Data preparation lives in the prediction sheet and
 the separate data page, without a redundant input-rail data card or persistent
 engine-status badges. Connection failures still offer a reconnect action.
 
-Qt at `desktop/app.py` is a legacy reference only. Native apps do not import
-Qt. The old `desktop.data_access` Python alias remains only for legacy
-compatibility and differential tests. Production native clients never start
-that backend.
+The legacy PySide6 desktop (`desktop/`) and the Python reference stack
+(`src/firesky/`) were removed on 2026-11-13. Native apps are the only desktop
+clients; production native clients never start a Python backend.
 
 ## macOS
 
@@ -54,10 +62,9 @@ open dist/native-macos/FireSky.app
 
 This produces an ad-hoc signed app bundling the Rust engine, ecCodes dependency
 closure, definitions, samples and licenses. Its default data workspace is
-`~/Library/Application Support/FireSky/Data`, not this checkout or `.venv`.
+`~/Library/Application Support/FireSky/Data`, not this checkout.
 An explicit workspace setting or `FIRESKY_NATIVE_WORKSPACE` build override is
 supported. Notarization and clean-machine release acceptance remain separate.
-The build leaves existing Qt apps in `dist/` unchanged.
 The sidebar contains only a Settings entry at the bottom; appearance selection
 is in Settings. The app icon and sidebar mark share the same native vector
 source, and custom dates use a calendar popover rather than a stepper field.
@@ -210,10 +217,10 @@ sanitized per-source probe rows and returns the three final dataset results;
 no forecast session is created. Clients store stderr under the
 platform's FireSky application-support directory.
 
-### Legacy/Development IPC
+### Development IPC overrides
 
-The following section documents the historical JSONL and Python bridge used for
-diagnosis and differential testing. It is not the macOS production path: the
+The following section documents the JSONL development bridge used for
+diagnosis and contract testing. It is not the macOS production path: the
 bundled app loads `libfiresky_engine.dylib` directly through FFI, and a missing
 FFI library is a hard error in a packaged app.
 

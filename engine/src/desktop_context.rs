@@ -669,7 +669,15 @@ fn domain(
         !payload["points"].is_null() || code(payload, "point_mode", "") == "china-city-catalog";
     let bbox = if model == "ec" && explicit && forced.is_empty() {
         selected = None;
-        union_bbox(points, 0.)?
+        let mut bbox = union_bbox(points, 0.)?;
+        // 计划 bbox 拒绝零经度跨度（wrapped 语义下 west == east 有歧义，
+        // preflight 报 "invalid desktop plan bbox"）。单点显式 EC 包络会退化，
+        // 扩到 ±0.125°（EC 0.25° 半格）并夹回 [-180, 180]，仍紧贴原点集。
+        if bbox[0] == bbox[1] {
+            bbox[0] = (bbox[0] - 0.125).max(-180.0);
+            bbox[1] = (bbox[1] + 0.125).min(180.0);
+        }
+        bbox
     } else if selected.as_deref() == Some("china") && model == "gfs" {
         gfs_data::canonical_bbox(
             union_boxes(&corners(region("china").unwrap().2), source_radius(radius))?,
@@ -709,8 +717,30 @@ fn domain(
     };
     Ok((selected, bbox, grid))
 }
-fn source_radius(radius: f64) -> f64 {
+pub(crate) fn source_radius(radius: f64) -> f64 {
     (radius + (radius + 400.).min(1000.)).max(1000.)
+}
+
+/// Default point compute radius; also the worst case used to size the background
+/// sync envelope so any point forecast domain inside the anchor is covered.
+pub(crate) const DEFAULT_RADIUS_KM: f64 = 1000.;
+
+/// Expand an anchor bbox so it covers the GFS point-forecast domain of ANY point
+/// inside it. Point domains use `source_radius` (see `bounding`): lat margin is
+/// radius/111, lon margin is radius/(111*cos(point_lat)) with the denominator
+/// floored at 25. The lon margin is largest at the anchor's highest |latitude|
+/// (points live inside the anchor, not inside the expanded lat band), so use the
+/// anchor's own extreme latitude for the worst case. Caller canonicalizes/clamps.
+pub(crate) fn gfs_point_domain_envelope(bounds: [f64; 4], radius_km: f64) -> [f64; 4] {
+    let r = source_radius(radius_km);
+    let lat = r / 111.;
+    let north = (bounds[2] + lat).min(90.);
+    let south = (bounds[3] - lat).max(-90.);
+    let worst_lat = bounds[2].abs().max(bounds[3].abs());
+    let lon = r / (111. * worst_lat.to_radians().cos()).max(25.);
+    let west = (bounds[0] - lon).max(-180.);
+    let east = (bounds[1] + lon).min(180.);
+    [west, east, north, south]
 }
 fn iso(t: DateTime<Utc>) -> String {
     if t.timestamp_subsec_micros() == 0 {
@@ -815,6 +845,13 @@ fn cycle(
         [private, public]
     };
     for key in keys {
+        // The real (non-fast) EC path re-verifies publication below, so the
+        // heuristic private pin written by the fast check must not be honored
+        // literally: it can name a cycle the remote has not published yet,
+        // which prepare would then fail to download (EC index HTTP 404).
+        if model == "ec" && !input.fast && key.starts_with('_') {
+            continue;
+        }
         if !input.payload[&key].is_null() {
             let time = time_contract::parse_utc(
                 input.payload[&key]
@@ -839,11 +876,15 @@ fn cycle(
             }
         }
     }
-    if ec_point && !input.fast {
+    if model == "ec" && !input.fast {
         let ec_source = input.payload["ecmwf_source"].as_str().unwrap_or("ecmwf");
         if !["ecmwf", "aws", "google"].contains(&ec_source) {
             return Err("ecmwf_source must be ecmwf, aws or google".into());
         }
+        // Publication-aware selection for both point and regional EC: probe the
+        // remote and fall back 12h to the latest published cycle covering the
+        // event window, so prepare never targets an unpublished cycle. A fully
+        // cached cycle is accepted without network (use_cache_for_cycle).
         return ecmwf_data::snapshot_cycle(
             &ecmwf_data::Config {
                 cache_dir: input.config.ecmwf_cache_dir.clone(),
@@ -852,7 +893,7 @@ fn cycle(
                 ..Default::default()
             },
             None,
-            anchor.ok_or("missing EC point anchor")?,
+            anchor.unwrap_or(reference),
             Some(&iso(now)),
             evaluation,
         );
@@ -1049,7 +1090,7 @@ fn resolve(mut input: Input) -> Result<Value, String> {
         _ => return Err("phenomenon must be dawn or dusk".into()),
     };
     let radius = number(
-        input.payload.get("radius_km").unwrap_or(&json!(1000.)),
+        input.payload.get("radius_km").unwrap_or(&json!(DEFAULT_RADIUS_KM)),
         100.,
         1000.,
     )?;
@@ -1219,6 +1260,35 @@ mod tests {
     fn city_catalog() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("../resources/app-data/cities/china-city-catalog.json")
+    }
+
+    #[test]
+    fn gfs_sync_envelope_covers_every_point_domain_inside_anchor() {
+        let bounds = region("china").expect("china region").2;
+        let env = gfs_data::canonical_bbox(
+            gfs_point_domain_envelope(bounds, DEFAULT_RADIUS_KM),
+            "0p25",
+        )
+        .expect("canonical sync envelope");
+        for (lat, lon) in [(30.2741, 120.1551), (54.0, 136.0), (18.0, 73.0), (45.0, 90.0)] {
+            let p = Point {
+                name: "p".into(),
+                lat,
+                lon,
+                elevation_m: 0.,
+                timezone_name: "Asia/Shanghai".into(),
+                source: "test".into(),
+            };
+            let dom = gfs_data::canonical_bbox(
+                union_boxes(&[p], source_radius(DEFAULT_RADIUS_KM)).expect("point domain"),
+                "0p25",
+            )
+            .expect("canonical point domain");
+            assert!(
+                env[0] <= dom[0] && env[1] >= dom[1] && env[2] >= dom[2] && env[3] <= dom[3],
+                "envelope {env:?} must cover point domain {dom:?} at ({lat},{lon})"
+            );
+        }
     }
 
     #[test]

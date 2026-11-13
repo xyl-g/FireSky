@@ -6,6 +6,7 @@ use std::{
 
 fn usage() -> String {
     "Usage: firesky-engine [serve | desktop [--workspace PATH] | \
+desktop-call --workspace PATH METHOD [--params JSON | --input PATH] | \
 http [--workspace PATH] [--host HOST] [--port PORT] | \
 call METHOD [--params JSON | --input PATH] | \
 forecast --input PATH [--regional] [--workspace PATH] | \
@@ -93,6 +94,22 @@ fn run_sync(command: String, mut args: Vec<String>) -> Result<(), String> {
             no_extra(&args)?;
             firesky_engine::desktop_runtime::serve(io::stdin().lock(), io::stdout(), &root)
                 .map_err(|e| e.to_string())
+        }
+        "desktop-call" => {
+            let root = workspace(&mut args)?;
+            if args.is_empty() {
+                return Err(usage());
+            }
+            let method = args.remove(0);
+            let params = input(&mut args)?;
+            no_extra(&args)?;
+            let value =
+                firesky_engine::desktop_runtime::Runtime::new(&root)?.dispatch(&method, params)?;
+            println!(
+                "{}",
+                serde_json::to_string(&value).map_err(|e| e.to_string())?
+            );
+            Ok(())
         }
         "call" => {
             if args.is_empty() {

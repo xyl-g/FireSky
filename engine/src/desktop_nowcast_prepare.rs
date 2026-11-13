@@ -174,7 +174,12 @@ fn gfs_files(
         .collect()
 }
 
-fn cams_result(input: &Input, context: &Value, payload: &Value) -> Result<Value, String> {
+fn cams_result(
+    input: &Input,
+    context: &Value,
+    payload: &Value,
+    cancel: &AtomicBool,
+) -> Result<Value, String> {
     let areas = desktop_nowcast::cams_areas(context)?;
     let targets = context["cams_valid_times"]
         .as_array()
@@ -197,7 +202,8 @@ fn cams_result(input: &Input, context: &Value, payload: &Value) -> Result<Value,
         .map(time_contract::iso);
     let mut parts = Vec::with_capacity(areas.len());
     for area in &areas {
-        let result = cams_data::execute(cams_data::Params {
+        check(cancel)?;
+        let result = cams_data::execute_cancellable(cams_data::Params {
             operation: "resolve".into(),
             cache_dir: input.config.cams_cache_dir.clone(),
             area: area.clone(),
@@ -208,7 +214,7 @@ fn cams_result(input: &Input, context: &Value, payload: &Value) -> Result<Value,
             require_exact_valid_time: true,
             refresh_before_cycle: refresh.clone(),
             all_leads: false,
-        })?;
+        }, cancel)?;
         let missing = result["missing_valid_times"]
             .as_array()
             .ok_or("CAMS response is missing missing_valid_times")?;
@@ -305,7 +311,7 @@ pub fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result<Value,
     let hours = model_hours(&context, &frame_times)?;
     let gfs = gfs_files(&input, &context, cycle, &hours, cancel)?;
     check(cancel)?;
-    let cams = cams_result(&input, &context, &input.payload)?;
+    let cams = cams_result(&input, &context, &input.payload, cancel)?;
     check(cancel)?;
     Ok(json!({
         "contract": "rust-desktop-nowcast-prepare-v1",

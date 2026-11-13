@@ -148,7 +148,7 @@ fn download_ec(
     cancel: &AtomicBool,
 ) -> Result<Value, String> {
     check(cancel)?;
-    ecmwf_data::execute(ecmwf_data::Params {
+    ecmwf_data::execute_cancellable(ecmwf_data::Params {
         operation: "download".into(),
         config: ec_config(input),
         cycle_utc: Some(time_contract::iso(cycle)),
@@ -160,7 +160,7 @@ fn download_ec(
         max_cycles: 8,
         allow_download: true,
         use_cache_for_cycle: true,
-    })
+    }, cancel)
 }
 
 fn cams_targets(context: &Value) -> Result<Vec<DateTime<Utc>>, String> {
@@ -244,7 +244,8 @@ fn download_cams(input: &Input, context: &Value, cancel: &AtomicBool) -> Result<
     };
     let mut parts = Vec::with_capacity(download_areas.len());
     for area in &download_areas {
-        let result = cams_data::execute(cams_data::Params {
+        check(cancel)?;
+        let result = cams_data::execute_cancellable(cams_data::Params {
             operation: "resolve".into(),
             cache_dir: cache_dir.clone(),
             area: json!(area),
@@ -255,7 +256,7 @@ fn download_cams(input: &Input, context: &Value, cancel: &AtomicBool) -> Result<
             require_exact_valid_time: true,
             refresh_before_cycle: refresh.clone(),
             all_leads: cycle_scope,
-        })?;
+        }, cancel)?;
         let missing = result["missing_valid_times"]
             .as_array()
             .ok_or("CAMS response is missing missing_valid_times")?;

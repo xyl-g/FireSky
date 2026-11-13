@@ -50,6 +50,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var online = false
     @Published var percent = 0.0
     @Published var showPreflight = false
+    @Published var showCycleAgeConfirm = false
     @Published var checking = false
     @Published var publicationsPending = false
     @Published var rows: [DataRow] = []
@@ -187,6 +188,16 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var dataSyncRunning = false
     /// 每源 last_cycle/last_result/熔断状态（`rust-data-sync-state-v1` 镜像）。
     @Published var dataSyncState: JSONObject = [:]
+    /// 同步进行中的每源实时进度（source → {percent, message}），由进度事件喂入。
+    @Published var dataSyncProgress: JSONObject = [:]
+    /// 后台同步助手（launchd LaunchAgent）安装/运行状态与上次运行结果。
+    @Published var helperAvailable = false
+    @Published var helperInstalled = false
+    @Published var helperLoaded = false
+    @Published var helperBusy = false
+    @Published var helperMessage = ""
+    @Published var helperMessageFailed = false
+    @Published var helperStatus: JSONObject = [:]
     @Published var taskHistory: [NativeTaskHistoryItem] = []
     @Published var taskHistoryTotal = 0
     @Published var taskHistoryIssues = 0
@@ -304,6 +315,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             await loadRetentionSettings()
             await loadDataSyncSettings()
             startSyncTick()
+            refreshHelperStatus()
             status = "引擎已连接"
             UserDefaults.standard.set(workspace, forKey: "workspace")
             UserDefaults.standard.set(engineBinary, forKey: "engineBinary")
@@ -513,10 +525,13 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         let report = response["report"] as? JSONObject ?? [:]
         ready = report["ready"] as? Bool ?? false
         rows = (report["datasets"] as? [JSONObject] ?? []).map {
-            DataRow(source: $0["source"] as? String ?? "",
+            let verified = $0["verified"] as? Bool ?? false
+            let latest = $0["is_latest"] as? Bool ?? false
+            return DataRow(source: $0["source"] as? String ?? "",
                     ready: $0["ready"] as? Bool ?? false,
-                    old: ($0["verified"] as? Bool == true) && !($0["is_latest"] as? Bool ?? false),
-                    verified: $0["verified"] as? Bool ?? false,
+                    old: !latest,
+                    verified: verified,
+                    latest: latest,
                     missing: $0["missing_count"] as? Int ?? 0)
         }
         status = ready ? "本次数据已下载" : "缺少 " + rows.filter { !$0.ready }.map(\.title).joined(separator: "、")
@@ -559,7 +574,28 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         }
     }
 
+    /// Mirrors the engine's `needs_cycle_age_confirmation`: a ready dataset
+    /// that is unverified or not the latest release needs an explicit user
+    /// acknowledgment before forecasting (B6).
+    var needsCycleAgeConfirmation: Bool {
+        ready && rows.contains { $0.ready && (!$0.verified || !$0.latest) }
+    }
+
+    var cycleAgeSummary: String {
+        let titles = rows.filter { $0.ready && (!$0.verified || !$0.latest) }.map(\.title)
+        return titles.isEmpty ? "部分数据" : titles.joined(separator: "、")
+    }
+
     func confirm() {
+        guard let session, ready, !busy else { return }
+        if needsCycleAgeConfirmation {
+            showCycleAgeConfirm = true
+            return
+        }
+        runForecast(cycleAgeConfirmed: false)
+    }
+
+    private func runForecast(cycleAgeConfirmed: Bool) {
         guard let session, ready, !busy else { return }
         publicationTask?.cancel()
         showPreflight = false
@@ -573,9 +609,11 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         operation = Task {
             defer { if generation == revision { busy = false } }
             do {
-                let response = try await engine.call("forecast", [
+                var params: JSONObject = [
                     "session": session, "confirmed": true,
-                ], progress: updateProgress)
+                ]
+                if cycleAgeConfirmed { params["cycle_age_confirmed"] = true }
+                let response = try await engine.call("forecast", params, progress: updateProgress)
                 try Task.checkCancellation()
                 guard generation == revision else { return }
                 result = response
@@ -588,10 +626,19 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         }
     }
 
+    /// 周期龄确认对话框的「继续预测」：用户已知晓数据可能不是最新发布。
+    func confirmCycleAgeAndForecast() {
+        showCycleAgeConfirm = false
+        runForecast(cycleAgeConfirmed: true)
+    }
+
     func updateProgress(_ event: JSONObject) {
         percent = min(100, max(0, (event["percent"] as? NSNumber)?.doubleValue ?? 0))
         let source = event["source"] as? String ?? ""
         let message = event["message"] as? String ?? ""
+        if dataSyncRunning, !source.isEmpty {
+            dataSyncProgress[source] = ["percent": percent, "message": message]
+        }
         status = message.isEmpty
             ? (checking ? "正在准备 \(source) 数据" : "正在计算 \(source)")
             : message
@@ -610,6 +657,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         operation?.cancel()
         dismissToken()
         showPreflight = false
+        showCycleAgeConfirm = false
         checking = false
         publicationsPending = false
         busy = false
@@ -715,7 +763,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                           sequence > previous,
                           sequence <= next,
                           let atUTC = value["at_utc"] as? String,
-                          ISO8601DateFormatter().date(from: atUTC) != nil,
+                      taskTimestamp(atUTC) != nil,
                           let event = value["event"] as? String else {
                         throw EngineError(message: "任务事件顺序或时间无效。")
                     }
@@ -845,7 +893,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     }
 
     func fail(_ error: Error) {
-        self.error = error.localizedDescription
+        self.error = friendlyEngineMessage(error.localizedDescription)
         status = Task.isCancelled ? "已取消" : "操作未完成"
     }
 
@@ -922,9 +970,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 }
                 guard response["status"] as? String == "ready",
                       let section = response["cross_section"] as? JSONObject else {
-                    let reason = response["reason"] as? String ?? "所选时次没有可用剖面。"
+                    let status = response["status"] as? String ?? "unavailable"
+                    let reason = status == "expired"
+                        ? "冻结源已过期，请重新运行预测以获取新剖面。"
+                        : (response["reason"] as? String ?? "所选时次没有可用剖面。")
                     regionalProfile = nil
-                    regionalProfileState = response["status"] as? String ?? "unavailable"
+                    regionalProfileState = status
                     regionalProfileError = reason
                     return
                 }
@@ -998,9 +1049,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 }
                 guard response["status"] as? String == "ready",
                       var section = response["cross_section"] as? JSONObject else {
-                    let reason = response["reason"] as? String ?? "所选时次没有可用剖面。"
+                    let status = response["status"] as? String ?? "unavailable"
+                    let reason = status == "expired"
+                        ? "冻结源已过期，请重新运行预测以获取新剖面。"
+                        : (response["reason"] as? String ?? "所选时次没有可用剖面。")
                     frozenProfile = nil
-                    frozenProfileState = response["status"] as? String ?? "unavailable"
+                    frozenProfileState = status
                     frozenProfileError = reason
                     return
                 }
@@ -1212,6 +1266,15 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 // 重存设置即解锁通道：引擎在保存时清零熔断计数与挂起标记。
                 let response = try await engine.call("save_data_sync_settings", payload)
                 applyDataSyncStatus(response)
+                // 已安装助手时，重存设置同步刷新其 StartInterval（间隔可能变了）。
+                if helperInstalled {
+                    let ws = workspace
+                    let interval = Int(dataSyncInterval) ?? 30
+                    await Task.detached {
+                        try? SyncHelperInstaller.install(workspace: ws, intervalMinutes: interval)
+                    }.value
+                    refreshHelperStatus()
+                }
                 dataSyncMessage = dataSyncEnabled
                     ? "后台同步已保存；引擎按新设置在心跳周期内执行。"
                     : "后台同步已关闭。"
@@ -1270,6 +1333,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     /// 源未启用、状态写盘失败）不会进入任何持久记录，手动路径必须展示。
     private func runDataSyncRound(sources: [String]) async -> (response: JSONObject?, error: Error?) {
         dataSyncRunning = true
+        dataSyncProgress = [:]
         defer { dataSyncRunning = false }
         var response: JSONObject?
         var roundError: Error?
@@ -1303,11 +1367,16 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             guard !busy else { return }
             if let error = round.error {
                 // 轮级拒绝不进状态文件也不进任务历史，直接展示具体原因。
-                dataSyncMessage = error.localizedDescription
+                dataSyncMessage = friendlyEngineMessage(error.localizedDescription)
                 dataSyncSaveFailed = true
                 status = "立即同步未完成"
             } else {
-                status = round.response.map(dataSyncRoundSummary) ?? "立即同步未完成，详见任务历史。"
+                let summary = round.response.map(dataSyncRoundSummary) ?? "立即同步未完成，详见任务历史。"
+                status = summary
+                // 数据页可见反馈：逐源成败直接展示在「立即同步」旁，
+                // 不再只写全局 status（数据页不渲染它）。
+                dataSyncMessage = summary
+                dataSyncSaveFailed = summary.contains("失败") || summary.contains("未完成")
             }
         }
     }
@@ -1330,6 +1399,74 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             return "\(labels[name] ?? name) \(text)"
         }
         return parts.isEmpty ? "立即同步结束，没有可同步的数据源。" : "立即同步结束：" + parts.joined(separator: "、")
+    }
+
+    // MARK: 后台同步助手（launchd LaunchAgent，决策见跨平台选型文档）
+
+    /// 读取助手安装/加载状态与上次后台运行结果（helper-status.json）。
+    /// 应用关闭期间助手仍在同步，打开应用即可看到最近一轮结果。
+    func refreshHelperStatus() {
+        helperAvailable = SyncHelperInstaller.isAvailable
+        helperInstalled = SyncHelperInstaller.isInstalled()
+        helperLoaded = SyncHelperInstaller.isLoaded()
+        let path = URL(fileURLWithPath: workspace)
+            .appendingPathComponent(".firesky/state/helper-status.json")
+        if let data = try? Data(contentsOf: path),
+           let json = try? JSONSerialization.jsonObject(with: data) as? JSONObject {
+            helperStatus = json
+        } else {
+            helperStatus = [:]
+        }
+    }
+
+    func installHelper() {
+        guard helperAvailable, !helperBusy else { return }
+        helperBusy = true
+        helperMessage = ""
+        let interval = Int(dataSyncInterval) ?? 30
+        let ws = workspace
+        Task {
+            defer { helperBusy = false }
+            let outcome: Result<Void, Error> = await Task.detached {
+                do {
+                    try SyncHelperInstaller.install(workspace: ws, intervalMinutes: interval)
+                    return .success(())
+                } catch { return .failure(error) }
+            }.value
+            switch outcome {
+            case .success:
+                helperMessage = "后台助手已安装；关闭应用后仍按间隔同步。"
+                helperMessageFailed = false
+            case .failure(let error):
+                helperMessage = error.localizedDescription
+                helperMessageFailed = true
+            }
+            refreshHelperStatus()
+        }
+    }
+
+    func uninstallHelper() {
+        guard !helperBusy else { return }
+        helperBusy = true
+        helperMessage = ""
+        Task {
+            defer { helperBusy = false }
+            let outcome: Result<Void, Error> = await Task.detached {
+                do {
+                    try SyncHelperInstaller.uninstall()
+                    return .success(())
+                } catch { return .failure(error) }
+            }.value
+            switch outcome {
+            case .success:
+                helperMessage = "后台助手已卸载。"
+                helperMessageFailed = false
+            case .failure(let error):
+                helperMessage = error.localizedDescription
+                helperMessageFailed = true
+            }
+            refreshHelperStatus()
+        }
     }
 
     func saveCAMSKey() {
@@ -1440,4 +1577,41 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         syncTickTask?.cancel()
         engine.stop()
     }
+}
+
+/// F3：引擎锁/让路等机器可读错误串映射为中文 + 可操作建议，界面不透传裸英文。
+/// 仅映射已知的协议级错误；未知错误保留原文以便排查。
+func friendlyEngineMessage(_ message: String) -> String {
+    let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+    switch text {
+    case "another prepare/forecast is active":
+        return "已有预测准备或计算正在进行，请等待完成或先取消，再发起本次操作。"
+    case "data sync skipped because another prepare/forecast is active":
+        return "预测准备或计算正在进行，本轮同步已让路；待当前操作完成后再同步。"
+    case "another data sync is active":
+        return "已有一轮数据同步正在进行，请稍候再试。"
+    case "another data sync round is active in another process":
+        return "后台助手正在另一进程中同步数据，本轮已让路；稍后会自动重试。"
+    case "network probe is already active":
+        return "网络探测正在进行，请稍候再试。"
+    case "desktop operation cancelled", "nowcast preparation cancelled":
+        return "操作已取消。"
+    case "data cycle is unverified or older than the latest release; explicit cycle-age confirmation is required":
+        return "数据周期未核验或不是最新发布，请在确认提示中选择「继续预测」，或先更新数据。"
+    case "explicit confirmation is required before forecast":
+        return "请先在预检窗口确认后再开始预测。"
+    case "inputs are missing; prepare data before forecasting":
+        return "本次预测数据不完整，请先点击「下载缺失数据」补齐。"
+    case "strict input integrity check failed":
+        return "数据完整性校验未通过，请重新下载本次数据后再试。"
+    case "data sync is not enabled":
+        return "后台数据同步未启用，请先在设置中开启。"
+    default:
+        break
+    }
+    if text.hasPrefix("data sync source "), text.hasSuffix(" is not enabled in settings") {
+        let name = text.dropFirst("data sync source ".count).dropLast(" is not enabled in settings".count)
+        return "数据源 \(name.uppercased()) 未在设置中启用，请先勾选后再同步。"
+    }
+    return message
 }

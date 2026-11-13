@@ -838,6 +838,12 @@ curl -sS --get \
 python -u -m firesky.desktop_rpc
 ```
 
+> **【历史记录，2026-11-13 标注】** 上述 Python desktop IPC 已退役出桌面主线：
+> macOS SwiftUI 与（已冻结的）Tauri 壳现在都启动 Rust `firesky-engine desktop`
+> 子进程（同协议 JSON-lines），`firesky.desktop_rpc` 仅作为测试对照存在。
+> 新集成请参考 `apps/macos/Sources/FireSkyNative/EngineClient.swift` 与
+> `engine/src/rpc.rs`；协议要点（方法集、错误码、取消语义）仍如下文所述。
+
 该进程通过 stdin / stdout 通信，不监听 HTTP 端口。支持 `hello`、`search`、`metadata`、`inventory`、`check`、`publications`、`prepare`、`forecast`、`dismiss`、`cancel` 等方法。
 
 桌面流程是“检查数据 -> 获得 session -> 准备 -> 预测”，与 HTTP `job_id` 流程不是同一个合同。桌面单点 / 区域会分别尝试 GFS 和 EC，返回 `model_results` 和 `model_errors`；实况仍走单点卫星路径。桌面区域使用完整结果函数，因此能拿到的逐时数据可能比 HTTP 默认区域摘要多。
@@ -883,4 +889,4 @@ Rust 引擎的 JSON-lines 能力也不等于新增了 HTTP API。桌面能调用
 | 区域数据、时间帧与模式剖面 | `src/firesky/national_batch.py`、`national_frame_contract.py` |
 | 实况编排与缺测约束 | `src/firesky/service.py`、`satellite.py`、`satellite_cloud_column.py` |
 | 质量档位与代理诊断 | `src/firesky/forecast_characteristics.py` |
-| 桌面 IPC | `src/firesky/desktop_rpc.py` |
+| 桌面 IPC（历史 Python 对照；生产桌面为 `engine/src/rpc.rs`） | `src/firesky/desktop_rpc.py` |

@@ -1,7 +1,0 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "FireSky 主窗口默认能力：core:default 覆盖事件监听/窗口/应用信息；自定义 command（rpc_request/rpc_cancel/rpc_status）不需要额外权限。",
-  "windows": ["main"],
-  "permissions": ["core:default"]
-}
