@@ -173,3 +173,19 @@ test("disconnect during forget cannot mutate the next generation and disposal st
   await listing;
   assert.equal(f.updates.length, count);
 });
+
+test("background refresh updates the list without flipping loading or the spinner state", async () => {
+  const f = fixture();
+  await load(f, record());
+  assert.equal(f.controller.state.loading, false);
+  const poll = f.controller.refresh({ background: true });
+  assert.equal(f.controller.state.loading, false);
+  const blocked = f.controller.refresh();
+  f.requests.at(-1).resolve(response(record(first, "running")));
+  await poll;
+  await blocked;
+  assert.equal(f.controller.state.tasks[0].status, "running");
+  assert.equal(f.controller.state.loading, false);
+  assert.equal(f.controller.state.error, "");
+  assert.equal(f.requests.length, 2);
+});

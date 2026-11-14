@@ -73,7 +73,8 @@
   $effect(() => {
     if (!alive || !online || !visible) return;
     void controller.refresh();
-    const timer = setInterval(() => { void controller.refresh(); }, 5000);
+    // 5 秒后台轮询不翻转 loading，避免刷新图标与「正在读取」反复闪烁。
+    const timer = setInterval(() => { void controller.refresh({ background: true }); }, 5000);
     return () => clearInterval(timer);
   });
   $effect(() => {

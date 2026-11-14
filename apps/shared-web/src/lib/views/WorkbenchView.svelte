@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, tick, untrack } from "svelte";
-  import { Search, LocateFixed, Star, Maximize2, SlidersHorizontal, RotateCcw, Download, Square, MapPin, Map, ChevronDown, CalendarDays, RefreshCw, ExternalLink } from "@lucide/svelte";
+  import { Search, LocateFixed, Star, Maximize2, SlidersHorizontal, RotateCcw, Download, Square, MapPin, Map, ChevronDown, CalendarDays, RefreshCw, ExternalLink, X } from "@lucide/svelte";
   import MapView from "./MapView.svelte";
   import ForecastResults from "./ForecastResults.svelte";
   import RegionalResults from "./RegionalResults.svelte";
@@ -154,6 +154,11 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
     try { localStorage.setItem("firesky.favorites", JSON.stringify(favorites)); }
     catch { localError = "收藏暂时仅保留在本次运行中。"; }
   }
+  function removeFavorite(target: ObservationSpot) {
+    favorites = favorites.filter((item) => item.lat !== target.lat || item.lon !== target.lon);
+    try { localStorage.setItem("firesky.favorites", JSON.stringify(favorites)); }
+    catch { /* 列表仅在本次运行内更新，与新增收藏的降级一致。 */ }
+  }
   function beginCheck() {
     if (!online || busy || locationBusy || locating) return;
     localError = "";
@@ -306,7 +311,7 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
           <button type="button" class="icon-button" title="获取当前位置" aria-label="获取当前位置" disabled={locating || locationBusy} onclick={locate}><LocateFixed size={16} /></button>
         </form>
         {#if locationTab === "地图"}<div class="mini-map"><MapView {...mapOptions} {spot} mini onPick={(lat, lon) => { spot = { ...spot, lat, lon, name: "地图选点", metadataReady: false }; }} /></div>
-        {:else}<div class="favorites">{#each favorites as favorite}<button onclick={() => { ++locationRevision; locationBusy = false; locating = false; spot = { ...favorite }; }}><MapPin size={13} />{favorite.name}</button>{:else}<p>暂无收藏地点</p>{/each}</div>{/if}
+        {:else}<div class="favorites">{#each favorites as favorite (`${favorite.lat},${favorite.lon}`)}<div class="favorite-row"><button onclick={() => { ++locationRevision; locationBusy = false; locating = false; spot = { ...favorite }; }}><MapPin size={13} />{favorite.name}</button><button class="favorite-remove" title={`删除收藏 ${favorite.name}`} aria-label={`删除收藏 ${favorite.name}`} onclick={() => removeFavorite(favorite)}><X size={12} /></button></div>{:else}<p>暂无收藏地点</p>{/each}</div>{/if}
         <div class="location-name"><i></i><div><strong>{spot.name}</strong><span class="coordinates">{spot.lat.toFixed(4)}° N, {spot.lon.toFixed(4)}° E</span></div></div>
         <div class="location-meta"><span>{spot.metadataReady ? `海拔 ${spot.elevation_m.toFixed(0)} m` : "海拔未确认"}</span><span>{spot.timezone_name}</span></div>
         <div class="location-actions"><button class="plain" onclick={starLocation}><Star size={13} />收藏当前点</button><button class="plain" onclick={onOpenMap}><Maximize2 size={13} />大地图</button></div>
@@ -392,7 +397,11 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
   .icon-button { width: 32px; height: 32px; flex: 0 0 32px; padding: 0; }
   .mini-map { display: flex; height: 176px; overflow: hidden; border: 1px solid var(--fs-border); border-radius: 6px; background: var(--fs-bg-strong); }
   .favorites { display: flex; flex-direction: column; height: 176px; overflow: auto; padding: 8px; gap: 6px; }
+  .favorite-row { display: flex; align-items: center; gap: 4px; }
+  .favorite-row > button:first-child { flex: 1; min-width: 0; }
   .favorites button { justify-content: flex-start; border: 0; background: transparent; color: var(--fs-accent); font-size: 11px; }
+  .favorite-remove { flex: 0 0 22px; width: 22px; min-height: 22px; padding: 0; justify-content: center; color: var(--fs-ink2); box-shadow: none; }
+  .favorite-remove:hover:enabled { color: var(--fs-error); background: transparent; text-decoration: none; }
   .favorites p { color: var(--fs-ink2); font-size: 11px; }
   .location-name { display: flex; align-items: center; gap: 9px; }
   .location-name i { width: 8px; height: 8px; border-radius: 50%; background: var(--fs-accent); }

@@ -193,13 +193,11 @@
 
   function keydown(event: KeyboardEvent) {
     if (!visible) return;
+    // F5 刷新由 App 层统一处理（desktopAction → refresh），这里只负责 Escape 取消。
     if (event.key === "Escape") {
       if (confirmOpen) confirmOpen = false;
       else if (busy) void controller.cancel();
       else if (probeBusy) void cancelProbe();
-    } else if (event.key === "F5") {
-      event.preventDefault();
-      void refreshInventory();
     }
   }
 
@@ -282,7 +280,7 @@
         </div>
       {/each}
     </div>
-    <p class="muted probe-footer">{probeBusy ? probeCancelling ? "正在停止探测" : "正在验证真实数据下载" : probeTime ? `核验时间：${probeTime} · ${probeRows.filter((row) => row.state === "passed").length}/3 项下载验证通过` : "尚无本次网络的下载验证结果"}</p>
+    <p class="muted probe-footer">{probeBusy ? probeCancelling ? "正在停止探测" : "正在验证真实数据下载" : probeTime ? `核验时间：${probeTime} · ${probeRows.filter((row) => row.state === "passed").length}/${probeRows.length} 项下载验证通过` : "尚无本次网络的下载验证结果"}</p>
     {#if probeError}<p class="error" role="alert">{probeError}</p>{/if}
   </section>
 

@@ -46,7 +46,8 @@
   let showMap = $state(false);
   let mapVisited = $state(false);
   let mapDialog: HTMLDialogElement;
-  const dateLabel = new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", weekday: "short" }).format(new Date());
+  const dateFormat = new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", weekday: "short" });
+  let dateLabel = $state(dateFormat.format(new Date()));
   let engineOk = $state<boolean | null>(null); // null = 检测中
   let engineDetail = $state("正在连接引擎…");
   let reconnecting = $state(false);
@@ -55,7 +56,7 @@
   let engineGeneration = $state(0);
   let dataVisited = $state(false);
   let spot = $state<ObservationSpot>({ lat: 30.2741, lon: 120.1551, name: "杭州", elevation_m: 8, timezone_name: "Asia/Shanghai", metadataReady: true });
-  let mapState = $state("地图未初始化");
+  let mapState = $state("地图正在加载");
   let mapError = $state("");
   let mapProvider = $state<SourceId>(preference<SourceId>("firesky.mapProvider", ["tianditu", "openfreemap"], "tianditu"));
   let tdtKey = $state("");
@@ -211,14 +212,14 @@
   $effect(() => { if (showMap) { mapVisited = true; mapDialog?.showModal(); } else mapDialog?.close(); });
   $effect(() => { if (exitRequested) exitDialog?.showModal(); else exitDialog?.close(); });
   $effect(() => {
-    const provider = mapProvider;
-    const key = tdtKey;
-    mapState = provider === "tianditu" && !key ? "天地图待配置" : "地图正在切换";
+    void mapProvider;
+    void tdtKey;
     mapError = "";
   });
 
   onMount(() => {
     alive = true;
+    const clock = window.setInterval(() => { dateLabel = dateFormat.format(new Date()); }, 30_000);
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     systemDark = media.matches;
     const updateSystemTheme = () => { systemDark = media.matches; };
@@ -263,6 +264,7 @@
     })();
     return () => {
       alive = false;
+      window.clearInterval(clock);
       media.removeEventListener("change", updateSystemTheme);
       ++connectionAttempt;
       for (const unlisten of listeners) unlisten();
@@ -336,9 +338,9 @@
   <header><div><h2 id="map-picker-title">地图选点</h2><span class="coordinates">{spot.lat.toFixed(5)}°, {spot.lon.toFixed(5)}°</span></div><button onclick={() => { showMap = false; }}>完成</button></header>
   {#if mapVisited}<div class="persistent-map"><MapView {...mapOptions} {spot}
     onPick={(lat, lon) => { spot = { ...spot, lat, lon, name: "地图选点", metadataReady: false }; }}
-    onReady={() => { mapState = "地图对象已就绪"; mapError = ""; }}
+    onReady={() => { mapState = ""; mapError = ""; }}
     onError={(error) => { if (error.kind === "initialization") mapState = "地图初始化失败"; if (error.kind !== "tiles") mapError = error.message; }} /></div>{/if}
-  <footer aria-live="polite">{mapState}{mapError ? ` · ${mapError}` : ""}</footer>
+  {#if mapState || mapError}<footer aria-live="polite">{mapState}{mapError ? ` · ${mapError}` : ""}</footer>{/if}
 </dialog>
 
 <dialog bind:this={exitDialog} class="exit-dialog" aria-labelledby="exit-title" oncancel={(event) => { event.preventDefault(); if (!exiting) exitRequested = false; }}>
