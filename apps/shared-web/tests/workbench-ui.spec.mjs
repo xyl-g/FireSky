@@ -283,7 +283,7 @@ test("Swift workbench is the first screen with four business pages, a 292px rail
   await page.setViewportSize({ width: 1440, height: 900 });
   await fixture(page);
   const navigation = page.getByRole("navigation", { name: "主要导航" });
-  await expect(navigation.getByRole("button")).toHaveText(["单点预测", "区域预测", "实况观测", "数据与下载", "设置"]);
+  await expect(navigation.getByRole("button")).toHaveText(["单点预测", "区域预测", "实况观测", "数据与下载", "任务历史", "设置"]);
   await expect(navigation.getByRole("button", { name: "地图选点", exact: true })).toHaveCount(0);
   await expect(page.locator(".model-summary")).toHaveCount(2);
   await expect(page.locator(".metric")).toHaveCount(9);

@@ -4,7 +4,8 @@
   import WorkbenchView from "./lib/views/WorkbenchView.svelte";
   import SettingsView from "./lib/views/SettingsView.svelte";
   import DataView from "./lib/views/DataView.svelte";
-  import { Activity, Database, Map, MapPin, Settings, RefreshCw } from "@lucide/svelte";
+  import TaskHistoryView from "./lib/views/TaskHistoryView.svelte";
+  import { Activity, Database, Map, MapPin, Settings, RefreshCw, History } from "@lucide/svelte";
   import type { ForecastKind, MapOptions, ObservationSpot } from "./lib/workbench-types";
   import type { BaseId, SourceId } from "./lib/map-grid";
   import type { RetryRequest } from "./lib/task-history";
@@ -13,7 +14,7 @@
     hello, onDesktopAction, onEngineStatus, quitDesktop, rpcRestart, rpcStatus, RpcError, type DesktopAction, type EngineStatus,
   } from "./lib/ipc";
 
-  type ViewId = ForecastKind | "data" | "settings";
+  type ViewId = ForecastKind | "data" | "history" | "settings";
   function preference<T extends string>(key: string, choices: readonly T[], fallback: T): T {
     try { const value = localStorage.getItem(key); return choices.includes(value as T) ? value as T : fallback; }
     catch { return fallback; }
@@ -24,6 +25,7 @@
     { id: "regional", label: "区域预测", icon: Map },
     { id: "nowcast", label: "实况观测", icon: Activity },
     { id: "data", label: "数据与下载", icon: Database },
+    { id: "history", label: "任务历史", icon: History },
     { id: "settings", label: "设置", icon: Settings },
   ] as const;
   let activePage = $derived(nav.find((item) => item.id === current)!);
@@ -34,6 +36,7 @@
   let dataBusy = $state(false);
   let workbench = $state<WorkbenchView>();
   let dataView = $state<DataView>();
+  let historyView = $state<TaskHistoryView>();
   let exitRequested = $state(false);
   let exiting = $state(false);
   let exitError = $state("");
@@ -55,6 +58,7 @@
   let regions = $state<Array<Record<string, unknown>>>([]);
   let engineGeneration = $state(0);
   let dataVisited = $state(false);
+  let historyVisited = $state(false);
   let spot = $state<ObservationSpot>({ lat: 30.2741, lon: 120.1551, name: "杭州", elevation_m: 8, timezone_name: "Asia/Shanghai", metadataReady: true });
   let mapState = $state("地图正在加载");
   let mapError = $state("");
@@ -63,7 +67,7 @@
   let mapBase = $state<BaseId>(preference<BaseId>("firesky.mapBase", ["vector", "imagery", "terrain"], "imagery"));
   const dark = $derived(appearance === "dark" || appearance === "system" && systemDark);
   const mapOptions = $derived<MapOptions>({ provider: mapProvider, tdtKey, base: mapBase, dark });
-  const subtitle = $derived.by(() => current === "data" ? "原始数据 · 周期与时效 · 按需下载" : current === "settings" ? "外观、数据源与 Rust 服务" : current === "regional" ? "区域质量分布 · GFS / EC 双模式" : `${spot.name} · ${spot.lat.toFixed(4)}° N, ${spot.lon.toFixed(4)}° E`);
+  const subtitle = $derived.by(() => current === "data" ? "原始数据 · 周期与时效 · 按需下载" : current === "history" ? "最近任务 · 状态与事件 · 恢复参数" : current === "settings" ? "外观、数据源与 Rust 服务" : current === "regional" ? "区域质量分布 · GFS / EC 双模式" : `${spot.name} · ${spot.lat.toFixed(4)}° N, ${spot.lon.toFixed(4)}° E`);
   let alive = false;
   let connectionAttempt = 0;
   let generation = -1;
@@ -122,6 +126,27 @@
       }
     } finally {
       if (alive) reconnecting = false;
+    }
+  }
+
+  /** 浏览器无推送通道：定期探测状态，引擎退出/服务失联时降级徽章，恢复后走完整重连。 */
+  async function heartbeat() {
+    if (!alive || exiting || exitRequested || reconnecting) return;
+    try {
+      const status = await rpcStatus();
+      if (!alive || reconnecting) return;
+      if (!status.running) {
+        if (engineOk === true) { ++connectionAttempt; engineOk = false; }
+        if (engineOk === false) engineDetail = status.spawnError || "引擎已退出，请重新连接。";
+        return;
+      }
+      if (status.generation > generation) { generation = status.generation; engineGeneration = status.generation; }
+      if (engineOk === false) void reconnect();
+    } catch {
+      if (!alive || engineOk !== true || reconnecting) return;
+      ++connectionAttempt;
+      engineOk = false;
+      engineDetail = "引擎心跳失败，请检查服务。";
     }
   }
 
@@ -192,6 +217,7 @@
     }
     if (action === "refresh") {
       if (current === "data") dataView?.refresh();
+      else if (current === "history") historyView?.refresh();
       return;
     }
     if (forecastBusy) return;
@@ -202,6 +228,7 @@
   }
 
   $effect(() => { if (current === "data") dataVisited = true; });
+  $effect(() => { if (current === "history") historyVisited = true; });
   $effect(() => { if (current === "point" || current === "regional" || current === "nowcast") workKind = current; });
   $effect(() => {
     document.documentElement.dataset.theme = dark ? "dark" : "light";
@@ -220,6 +247,7 @@
   onMount(() => {
     alive = true;
     const clock = window.setInterval(() => { dateLabel = dateFormat.format(new Date()); }, 30_000);
+    const pulse = window.setInterval(() => { void heartbeat(); }, 4000);
     const media = window.matchMedia("(prefers-color-scheme: dark)");
     systemDark = media.matches;
     const updateSystemTheme = () => { systemDark = media.matches; };
@@ -265,6 +293,7 @@
     return () => {
       alive = false;
       window.clearInterval(clock);
+      window.clearInterval(pulse);
       media.removeEventListener("change", updateSystemTheme);
       ++connectionAttempt;
       for (const unlisten of listeners) unlisten();
@@ -324,7 +353,12 @@
     </div>
     {#if dataVisited}
       <div hidden={current !== "data"}>
-        <DataView bind:this={dataView} online={engineOk === true} generation={engineGeneration} {regions} bind:ecSource visible={current === "data"} onBusy={(value) => { dataBusy = value; }} retryDisabled={forecastBusy} onRestore={restoreTask} />
+        <DataView bind:this={dataView} online={engineOk === true} generation={engineGeneration} {regions} bind:ecSource visible={current === "data"} onBusy={(value) => { dataBusy = value; }} />
+      </div>
+    {/if}
+    {#if historyVisited}
+      <div hidden={current !== "history"}>
+        <TaskHistoryView bind:this={historyView} online={engineOk === true} generation={engineGeneration} visible={current === "history"} retryDisabled={forecastBusy || dataBusy} onRestore={restoreTask} />
       </div>
     {/if}
     {#if current === "settings"}

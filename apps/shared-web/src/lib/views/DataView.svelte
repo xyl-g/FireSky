@@ -3,22 +3,18 @@
   import { Database, Download, HardDrive, RefreshCw, Network, Square, CircleCheck, CircleAlert, SearchCheck } from "@lucide/svelte";
   import { onEngineProgress, rpcRequest, rpcStart, RpcError, type ProgressEvent, type RpcRequestHandle } from "../ipc";
   import { DataSessionController } from "../data-session";
-  import TaskHistoryView from "./TaskHistoryView.svelte";
-  import type { RetryRequest } from "../task-history";
   import {
     cycleCoverage, formatMB, initialProbes, localDate, probeLabel, sourceTitle,
     type InventoryDataset, type ProbeRow,
   } from "../data-display";
 
-  let { online, generation, regions = [], visible = true, ecSource = $bindable("ecmwf"), onBusy = () => {}, retryDisabled = false, onRestore = async () => false }: {
+  let { online, generation, regions = [], visible = true, ecSource = $bindable("ecmwf"), onBusy = () => {} }: {
     online: boolean;
     generation: number;
     regions?: Array<Record<string, unknown>>;
     visible?: boolean;
     ecSource?: string;
     onBusy?: (busy: boolean) => void;
-    retryDisabled?: boolean;
-    onRestore?: (request: RetryRequest) => Promise<boolean>;
   } = $props();
   const controller = new DataSessionController({ start: rpcStart, request: rpcRequest }, (next) => { session = next; });
   let session = $state(controller.state);
@@ -46,7 +42,6 @@
   let previouslyOnline = false;
   let previousECSource: string | undefined;
   let alive = false;
-  let historyView = $state<TaskHistoryView>();
 
   const busy = $derived(["checking", "preparing", "cancelling"].includes(session.phase));
   const percent = $derived(Math.min(100, Math.max(0, session.progress?.percent ?? 0)));
@@ -171,7 +166,7 @@
     await Promise.all([controller.cancel(), cancelProbe()]);
     if (probeResult) await probeResult.catch(() => undefined);
   }
-  export function refresh() { void refreshInventory(); historyView?.refresh(); }
+  export function refresh() { void refreshInventory(); }
   $effect(() => { onBusy(busy || probeBusy); });
 
   $effect(() => {
@@ -361,7 +356,6 @@
       </div>
     </div>
   </section>
-  <TaskHistoryView bind:this={historyView} {online} {generation} {visible} retryDisabled={retryDisabled || busy || probeBusy} {onRestore} />
 </div>
 
 <dialog bind:this={confirmationDialog} class="confirm-dialog" aria-labelledby="download-confirm" oncancel={(event) => { event.preventDefault(); confirmOpen = false; }} onclose={() => { confirmOpen = false; }}>
