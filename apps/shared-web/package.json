@@ -13,7 +13,8 @@
     "test:ui": "playwright test",
     "smoke:rpc": "node scripts/smoke-desktop-rpc.mjs",
     "smoke:data": "node scripts/smoke-data-rpc.mjs",
-    "smoke:http": "node scripts/smoke-http-runtime.mjs"
+    "smoke:http": "node scripts/smoke-http-runtime.mjs",
+    "build:analyze": "FIRESKY_ANALYZE=1 vite build"
   },
   "dependencies": {
     "@lucide/svelte": "^1.71.0",
@@ -27,6 +28,7 @@
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
     "@types/leaflet": "^1.9.21",
     "@types/leaflet-draw": "^1.0.13",
+    "rollup-plugin-visualizer": "^7.1.3",
     "svelte": "^5.28.0",
     "svelte-check": "^4.2.1",
     "typescript": "^5.8.3",
