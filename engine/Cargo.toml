@@ -1,6 +1,6 @@
 [package]
 name = "firesky-engine"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2021"
 license = "GPL-3.0-only"
 
@@ -14,7 +14,6 @@ bzip2 = "0.4.4"
 chrono = { version = "0.4", default-features = false, features = ["std"] }
 chrono-tz = "0.10"
 csv = "1"
-firesky-native = { path = "../native" }
 image = { version = "0.25", default-features = false, features = ["png"] }
 libc = "0.2"
 libloading = "0.8"
@@ -26,6 +25,7 @@ geo = { version = "0.33", default-features = false }
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 regex = "1"
 quick-xml = "0.42"
+rayon = "1.10"
 rustfft = "6"
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["float_roundtrip", "arbitrary_precision"] }

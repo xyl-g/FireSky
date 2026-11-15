@@ -1518,9 +1518,9 @@ struct WorkDiagnosticView: View {
                     if let map = report["map_capability"] as? JSONObject,
                        map["available"] as? Bool == false,
                        let reason = map["reason"] as? String {
-                        Label(reason, systemImage: "map")
+                        Label(friendlyEngineMessage(reason), systemImage: "map")
                             .font(.system(size: 10)).foregroundStyle(.secondary)
-                            .lineLimit(2).help(reason)
+                            .lineLimit(2).help(friendlyEngineMessage(reason))
                     }
                 }
             } else {
@@ -2059,21 +2059,14 @@ struct WorkRegionPage: View {
         VStack(spacing: 12) {
             controls
             HStack(spacing: 16) {
-                summary("gfs")
-                Divider().frame(height: 54)
-                summary("ec")
-            }.padding(.vertical, 6)
-            HStack(spacing: 12) {
-                regionalMetadata("GFS", store.regionalForecast.model("gfs"))
-                Divider().frame(height: 28)
-                regionalMetadata("EC", store.regionalForecast.model("ec"))
+                summary(store.regionalModel)
                 Spacer(minLength: 0)
-            }
+                regionalMetadata(store.regionalModel.uppercased(),
+                                 store.regionalForecast.model(store.regionalModel))
+            }.padding(.vertical, 6)
             HStack(spacing: 10) {
-                WorkSegments(options: ["gfs", "ec", "compare"], titles: ["GFS", "EC", "双图对照"],
-                             selection: $store.regionalDisplay).frame(width: 248)
-                Spacer()
                 Text(regionalGridLabel).font(.system(size: 10)).foregroundStyle(.secondary)
+                Spacer()
                 Toggle(isOn: $store.showRegionalGrid) {
                     Image(systemName: "square.grid.3x3").accessibilityLabel("显示网格")
                 }.toggleStyle(.button).help("显示网格")
@@ -2087,10 +2080,7 @@ struct WorkRegionPage: View {
             }.buttonStyle(.borderless)
             HStack(alignment: .top, spacing: 12) {
                 VStack(spacing: 0) {
-                    HStack(spacing: 1) {
-                        map(store.regionalDisplay == "compare" ? "gfs" : store.regionalDisplay)
-                        if store.regionalDisplay == "compare" { map("ec") }
-                    }
+                    map(store.regionalModel)
                     legend
                 }.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
                     .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -2152,6 +2142,8 @@ struct WorkRegionPage: View {
             WorkDateButton().frame(width: 150)
             WorkSegments(options: ["dawn", "dusk"], titles: ["朝霞", "晚霞"], selection: $store.phenomenon)
                 .frame(width: 112)
+            WorkSegments(options: ["gfs", "ec"], titles: ["GFS", "EC"],
+                         selection: $store.regionalModel).frame(width: 100)
             Spacer(minLength: 4)
             Button { store.beginCheck() } label: {
                 Label("开始预测", systemImage: "play.fill")
@@ -2213,9 +2205,8 @@ struct WorkRegionPage: View {
     }
 
     private var regionalGridLabel: String {
-        let models = store.regionalDisplay == "compare" ? ["gfs", "ec"] : [store.regionalDisplay]
-        let labels = models.compactMap { store.regionalForecast.model($0).precision }
-        return labels.isEmpty ? "网格精度 —" : labels.joined(separator: " / ")
+        let precision = store.regionalForecast.model(store.regionalModel).precision
+        return precision.map { "网格精度 \($0)" } ?? "网格精度 —"
     }
 
     private func map(_ model: String) -> some View {
@@ -2282,7 +2273,7 @@ struct WorkRegionPage: View {
                         .buttonStyle(.borderless).help("关闭网格详情")
                 }
                 Text(coordinate.label).font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
-                ForEach(["gfs", "ec"], id: \.self) { model in
+                ForEach([store.regionalModel], id: \.self) { model in
                     let cell = store.regionalForecast.model(model).cell(at: coordinate)
                     // 城市坐标不落在 0.25° 格点上（城市点由引擎单独计算），此时回退到
                     // 城市排名行携带的完整 point DTO，不得把真实值显示成「缺测」。
@@ -2319,11 +2310,7 @@ struct WorkRegionPage: View {
                 Text(store.regionalInspectorMode == "cities" ? "城市排名" : "高值排行")
                     .font(.system(size: 12, weight: .semibold))
                 Spacer()
-                if store.regionalDisplay == "compare" {
-                    WorkSegments(options: ["gfs", "ec"], titles: ["GFS", "EC"], selection: $store.selectedModel).frame(width: 100)
-                } else {
-                    Text(store.regionalDisplay.uppercased()).font(.system(size: 10)).foregroundStyle(.secondary)
-                }
+                Text(store.regionalModel.uppercased()).font(.system(size: 10)).foregroundStyle(.secondary)
             }
             WorkSegments(options: ["grid", "cities"], titles: ["网格", "城市"],
                          selection: $store.regionalInspectorMode).frame(width: 124)
@@ -2668,9 +2655,9 @@ private struct WorkNowcastResultsView: View {
             }
             if let map = report?["map_capability"] as? JSONObject,
                map["available"] as? Bool == false {
-                Label(map["reason"] as? String ?? "实况地图未发布", systemImage: "map")
+                Label(friendlyEngineMessage(map["reason"] as? String ?? "实况地图未发布"), systemImage: "map")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
-                    .lineLimit(2).help(map["reason"] as? String ?? "")
+                    .lineLimit(2).help(friendlyEngineMessage(map["reason"] as? String ?? ""))
             }
         }.padding(18).frame(maxWidth: .infinity, alignment: .leading).workSurface()
     }

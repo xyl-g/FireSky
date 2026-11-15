@@ -1,7 +1,7 @@
 //! Small, read-only ecCodes adapter. No Python interpreter or Python bindings.
 
+use crate::native::gfs::{self, GfsGrid};
 use chrono::{DateTime, Datelike, Timelike, Utc};
-use firesky_native::gfs::{self, GfsGrid};
 use libloading::Library;
 use serde::Serialize;
 use std::ffi::{CStr, CString};
@@ -19,6 +19,56 @@ type GetDoubles =
     unsafe extern "C" fn(*const c_void, *const c_char, *mut c_double, *mut usize) -> c_int;
 type ErrorMessage = unsafe extern "C" fn(c_int) -> *const c_char;
 type GetMessage = unsafe extern "C" fn(*const c_void, *mut *const c_void, *mut usize) -> c_int;
+
+/// Cumulative decoded-value budget for a full (non-subset) GFS frame. Kept
+/// at the historical bound: callers that need whole wide domains use the
+/// subset path instead.
+const GFS_FULL_DECODE_POINT_BUDGET: usize = 10_000_000;
+/// Cumulative retained-cell budget for subset decodes. The China production
+/// envelope keeps ~72k cells across ~150 retained fields per frame (~11M
+/// values); the old 10M full-file budget rejected it even though every
+/// decoded value outside the bbox is discarded. Per-message grids stay
+/// bounded by `max_points` (5M), so this only raises the cumulative ceiling.
+const GFS_RETAINED_DECODE_POINT_BUDGET: usize = 40_000_000;
+/// Per-message grid bound for subset decodes. NOMADS serves wide envelopes
+/// (e.g. a 2000 km point domain spans ~660k cells at 0.25°); the retained
+/// cells after subsetting stay bounded by the caller's `max_points`, so the
+/// full-message bound only needs to admit the widest served grid (global
+/// 0.25° = 1440×721 ≈ 1.04M cells).
+const GFS_SUBSET_MESSAGE_POINT_LIMIT: usize = 1_500_000;
+
+/// Expand a wrapped subset bbox into its as-served 0..360 equivalent when the
+/// message longitudes live in that convention. NOMADS files downloaded with
+/// rightlon > 180 store longitudes in 0..360 even though the request bbox was
+/// normalized to [-180,180]; without this expansion the subset filter would
+/// silently drop the 180..360 cells (or keep the complementary span).
+fn subset_for_message(mut subset: [f64; 4], longitudes: &[f32]) -> [f64; 4] {
+    let west = subset[0];
+    let east = subset[1];
+    if west > east && longitudes.iter().any(|&lon| lon > 180.0) {
+        subset[1] = east + 360.0;
+    }
+    subset
+}
+
+#[cfg(test)]
+mod subset_tests {
+    use super::subset_for_message;
+
+    #[test]
+    fn wrapped_subset_expands_only_for_0_360_messages() {
+        let wrapped = [99.25, -168.75, 48.5, 12.25];
+        let served_0_360 = [100.0_f32, 150.0, 185.0, 191.0];
+        assert_eq!(
+            subset_for_message(wrapped, &served_0_360),
+            [99.25, 191.25, 48.5, 12.25]
+        );
+        let normalized = [100.0_f32, 150.0, -175.0, -169.0];
+        assert_eq!(subset_for_message(wrapped, &normalized), wrapped);
+        let ordinary = [99.25, 141.25, 48.5, 12.25];
+        assert_eq!(subset_for_message(ordinary, &served_0_360), ordinary);
+    }
+}
 
 fn loaded_module_path(address: *const c_void) -> Result<std::path::PathBuf, String> {
     #[cfg(unix)]
@@ -405,12 +455,79 @@ impl EcCodes {
         self.decode_gfs_frame(path, max_messages, max_points, None)
     }
 
+    /// Decode only the surface orography field for the terrain prepass.
+    ///
+    /// Regional files cover whole domains with ~150 kept fields per message;
+    /// the full decode's cumulative point budget (10M) is exceeded long before
+    /// the orography message arrives. The prepass only samples terrain, so it
+    /// reads that single field and stops at the first matching message.
+    pub fn decode_gfs_terrain(
+        &self,
+        path: &Path,
+        max_messages: usize,
+        max_points: usize,
+    ) -> Result<GfsGrid, String> {
+        if !(1..=5_000_000).contains(&max_points) {
+            return Err("max_points must be 1..5000000".into());
+        }
+        let mut grid: Option<GfsGrid> = None;
+        self.visit_while(path, max_messages, |message| {
+            let name = message.string(b"shortName\0")?;
+            let level_type = message.string(b"typeOfLevel\0")?;
+            let level =
+                i32::try_from(message.long(b"level\0")?).map_err(|_| "GFS level out of range")?;
+            if level_type != "surface" || level != 0 || name != "orog" {
+                return Ok(true);
+            }
+            let count = message.size(b"values\0")?;
+            if count > max_points {
+                return Err("GFS decoded point limit exceeded".into());
+            }
+            let (latitudes, longitudes) = gfs::coordinates(
+                &message.array(b"latitudes\0", count)?,
+                &message.array(b"longitudes\0", count)?,
+            )?;
+            let mut terrain = GfsGrid::new(latitudes, longitudes);
+            terrain.insert((level_type, level, name), message.values(count)?)?;
+            grid = Some(terrain);
+            Ok(false)
+        })?;
+        grid.ok_or_else(|| "GFS GRIB has no surface orography field".into())
+    }
+
     pub fn decode_gfs_frame(
         &self,
         path: &Path,
         max_messages: usize,
         max_points: usize,
         expected: Option<(DateTime<Utc>, u32)>,
+    ) -> Result<GfsGrid, String> {
+        self.decode_gfs_frame_inner(path, max_messages, max_points, expected, None)
+    }
+
+    /// Frame decode restricted to a spatial subset. Regional files cover whole
+    /// domains, but the forecast only consumes `bbox`; reading values outside
+    /// it wastes the cumulative point budget (10M) on cells that are discarded
+    /// by `subset_gfs` immediately after decoding. Coordinates are still read
+    /// per message so the shared-grid and cycle/step contracts stay enforced.
+    pub fn decode_gfs_frame_subset(
+        &self,
+        path: &Path,
+        max_messages: usize,
+        max_points: usize,
+        expected: Option<(DateTime<Utc>, u32)>,
+        bbox: [f64; 4],
+    ) -> Result<GfsGrid, String> {
+        self.decode_gfs_frame_inner(path, max_messages, max_points, expected, Some(bbox))
+    }
+
+    fn decode_gfs_frame_inner(
+        &self,
+        path: &Path,
+        max_messages: usize,
+        max_points: usize,
+        expected: Option<(DateTime<Utc>, u32)>,
+        subset: Option<[f64; 4]>,
     ) -> Result<GfsGrid, String> {
         if !(1..=5_000_000).contains(&max_points) {
             return Err("max_points must be 1..5000000".into());
@@ -427,10 +544,18 @@ impl EcCodes {
                 return Ok(());
             }
             let count = message.size(b"values\0")?;
-            total_points = total_points
-                .checked_add(count)
-                .ok_or("GFS point count overflow")?;
-            if count > max_points || total_points > 10_000_000 {
+            // In subset mode the cumulative budget tracks retained cells only;
+            // the full-file count would exhaust the budget on wide regional
+            // envelopes before the subset is even selected. The per-message
+            // full-grid count is still bounded by max_points.
+            if subset.is_none() {
+                total_points = total_points
+                    .checked_add(count)
+                    .ok_or("GFS point count overflow")?;
+                if count > max_points || total_points > GFS_FULL_DECODE_POINT_BUDGET {
+                    return Err("GFS decoded point limit exceeded".into());
+                }
+            } else if count > GFS_SUBSET_MESSAGE_POINT_LIMIT {
                 return Err("GFS decoded point limit exceeded".into());
             }
             let current_cycle = (
@@ -468,6 +593,50 @@ impl EcCodes {
                 &message.array(b"latitudes\0", count)?,
                 &message.array(b"longitudes\0", count)?,
             )?;
+            if let Some([west, east, north, south]) =
+                subset.map(|b| subset_for_message(b, &longitudes))
+            {
+                let indices: Vec<usize> = latitudes
+                    .iter()
+                    .zip(&longitudes)
+                    .enumerate()
+                    .filter_map(|(i, (&lat, &lon))| {
+                        (lat <= north as f32
+                            && lat >= south as f32
+                            && if west <= east {
+                                lon >= west as f32 && lon <= east as f32
+                            } else {
+                                lon >= west as f32 || lon <= east as f32
+                            })
+                        .then_some(i)
+                    })
+                    .collect();
+                if indices.is_empty() {
+                    return Err("GFS stored bbox has no cells".into());
+                }
+                let kept = indices.len();
+                total_points = total_points
+                    .checked_add(kept)
+                    .ok_or("GFS point count overflow")?;
+                if kept > max_points || total_points > GFS_RETAINED_DECODE_POINT_BUDGET {
+                    return Err("GFS decoded point limit exceeded".into());
+                }
+                let sel = |v: &[f32]| indices.iter().map(|&i| v[i]).collect::<Vec<_>>();
+                let latitudes = sel(&latitudes);
+                // Normalize retained longitudes back to [-180,180] so grids
+                // from 0..360 files share the product coordinate convention.
+                let longitudes: Vec<f32> = sel(&longitudes)
+                    .into_iter()
+                    .map(|lon| if lon > 180.0 { lon - 360.0 } else { lon })
+                    .collect();
+                let grid =
+                    grid.get_or_insert_with(|| GfsGrid::new(latitudes.clone(), longitudes.clone()));
+                if grid.latitudes != latitudes || grid.longitudes != longitudes {
+                    return Err("GFS messages use different coordinate layouts".into());
+                }
+                let values = message.values(count)?;
+                return grid.insert((level_type, level, name), sel(&values));
+            }
             let grid =
                 grid.get_or_insert_with(|| GfsGrid::new(latitudes.clone(), longitudes.clone()));
             // Same point count does not prove that fields share a grid.
@@ -543,7 +712,7 @@ impl EcCodes {
         area.ok_or("CAMS file has no GRIB messages".into())
     }
 
-    fn visit_while(
+    pub(crate) fn visit_while(
         &self,
         path: &Path,
         max_messages: usize,

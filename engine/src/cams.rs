@@ -1,9 +1,9 @@
 //! Strict compact CAMS optical GRIB input and standalone model-grid sidecars.
 
 use crate::grib::{EcCodes, Message};
+use crate::native::cams::{self, Grid, Mapped, LEVELS};
 use crate::tensor_bundle::{source_identity, BundleWriter, CoordinateGrid, SourceIdentity};
 use chrono::{DateTime, Datelike, SecondsFormat, TimeZone, Timelike, Utc};
-use firesky_native::cams::{self, Grid, Mapped, LEVELS};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -76,7 +76,12 @@ pub fn merge(parts: &[Optics]) -> Result<Optics, String> {
             let output_index = latitudes.len();
             cells.insert(key, output_index);
             latitudes.push(part.latitudes[index]);
-            longitudes.push(normalized_longitude(part.longitudes[index]));
+            // Preserve the raw signed boundary column: the dedup key above is
+            // normalized, but the stored longitude keeps its +180/-180 sign so
+            // native::cams::map can restore the antimeridian axis end. Storing
+            // -180 for a raw +180 column would detach it from its 179.x
+            // neighbors and leave the (179.6, 180] seam gap uncovered.
+            longitudes.push(part.longitudes[index]);
             aod.push(part.aod[index]);
             let mut profile = [0.0; LEVELS.len()];
             for (level, value) in profile.iter_mut().enumerate() {
@@ -425,14 +430,21 @@ mod tests {
         };
         let merged = merge(&[left, right]).unwrap();
         assert_eq!(merged.latitudes.len(), 3);
+        // The raw +180 boundary sign is preserved (dedup still normalizes),
+        // so the scorer can restore the antimeridian axis end.
         assert!(merged
             .longitudes
             .iter()
-            .zip([179.6, -180.0, -179.6])
+            .zip([179.6, 180.0, -179.6])
             .all(|(left, right)| (left - right).abs() < 1e-9));
         assert_eq!(merged.aod, [1.0, 2.0, 3.0]);
         assert_eq!(merged.extinction.len(), 33);
         assert_eq!(merged.extinction[3], 2.0);
+        // The merged grid must cover the seam gap through the +180 column.
+        // -179.8 stays outside this synthetic grid (no raw -180 column); the
+        // cache coverage bridge handles that case for real wrapped groups.
+        let mapped = cams::map(&merged.grid(), &[0.5, 0.5], &[179.8, -179.8]).unwrap();
+        assert_eq!(mapped.covered, [true, false]);
     }
 
     #[test]

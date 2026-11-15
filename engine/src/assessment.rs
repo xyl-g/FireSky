@@ -1,19 +1,28 @@
 //! Offline raw-model -> CAMS -> regional ray-trace assessment.
 //! This preserves the complete native assessment tensor, not the public
 //! forecast/event-window/diagnostic JSON response.
+use crate::native::cams::{Mapped, LEVELS};
+use crate::native::{derivation, gfs, timeline, NATIONAL_OUTPUT_FIELDS};
 use crate::tensor_bundle::{
     source_identity, BundleWriter, ProfileTensor, SourceIdentity, MAX_BUNDLE_BYTES,
 };
 use crate::time_contract::{parse_date, parse_utc};
 use crate::{astronomy::Phenomenon, cams, ecmwf, grib::EcCodes, request_file};
 use chrono::{DateTime, Duration, Timelike, Utc};
-use firesky_native::cams::{Mapped, LEVELS};
-use firesky_native::{derivation, gfs, timeline, NATIONAL_OUTPUT_FIELDS};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
+
+fn cancelled(cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Acquire) {
+        Err("assessment cancelled".into())
+    } else {
+        Ok(())
+    }
+}
 
 #[derive(Clone, Copy, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -43,6 +52,9 @@ pub(crate) enum Elevation {
 pub(crate) struct Frame {
     pub hour: u32,
     pub path: PathBuf,
+    /// Extra longitude-segment files for wrapped (antimeridian) envelopes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<PathBuf>,
 }
 #[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -70,6 +82,12 @@ pub(crate) struct Input {
     pub compute_backend_requested: Option<String>,
     #[serde(default)]
     pub derived_cache: Option<crate::derived_cache::Config>,
+    /// Regional grid product: skip the per-cell grid/aerosol tensors, per-point
+    /// diagnostics tensors and the full observer DTO; keep the map/timeline
+    /// contract plus the bounded frozen profile source. Point and service
+    /// forecasts keep the full contract.
+    #[serde(default)]
+    pub compact_results: bool,
 }
 
 #[derive(Serialize)]
@@ -154,7 +172,7 @@ impl Geometry {
         let lats = unique(&grid.latitudes);
         let mut lons = unique(&grid.longitudes);
         let cells = grid.latitudes.len();
-        if cells == 0 || cells > derivation::MAX_CELLS || lats.len() * lons.len() != cells {
+        if cells == 0 || cells > derivation::MAX_WRAPPED_CELLS || lats.len() * lons.len() != cells {
             return Err("regional assessment requires a complete rectangular grid".into());
         }
         let spacing = lats
@@ -201,9 +219,7 @@ impl Geometry {
             );
         }
         let end = *lons.last().unwrap();
-        let unwrap = lons[0] < -180.0
-            || end > 180.0
-            || (end == 180.0 && lons[0] > -180.0);
+        let unwrap = lons[0] < -180.0 || end > 180.0 || (end == 180.0 && lons[0] > -180.0);
         let center = (lons[0] + lons[lons.len() - 1]) * 0.5;
         let mapped_lons: Vec<_> = grid
             .longitudes
@@ -391,6 +407,43 @@ fn subset_gfs(grid: &mut gfs::GfsGrid, bbox: Option<[f64; 4]>) -> Result<(), Str
     }
     Ok(())
 }
+/// Stitch a second longitude-segment grid onto `base` (wrapped envelopes).
+/// Both parts must share the latitude axis and field set; longitudes are
+/// concatenated in segment order and the rectangular layout is re-sorted.
+fn merge_gfs_grids(base: &mut gfs::GfsGrid, part: gfs::GfsGrid) -> Result<(), String> {
+    if base.fields.keys().collect::<Vec<_>>() != part.fields.keys().collect::<Vec<_>>() {
+        return Err("wrapped GFS segments carry different fields".into());
+    }
+    // Cells are (lat, lon) pairs; order the union by latitude then longitude
+    // so Geometry::canonicalize sees the same rectangular layout as a single
+    // ordinary file.
+    let mut cells: Vec<(f32, f32, usize, usize)> = Vec::new();
+    for (seg, grid) in [(0_usize, &*base), (1, &part)] {
+        for (j, (&lat, &lon)) in grid.latitudes.iter().zip(&grid.longitudes).enumerate() {
+            cells.push((lat, lon, seg, j));
+        }
+    }
+    cells.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    let mut seen = std::collections::HashSet::new();
+    for &(lat, lon, _, _) in &cells {
+        if !seen.insert((lat.to_bits(), lon.to_bits())) {
+            return Err("wrapped GFS segments overlap".into());
+        }
+    }
+    let keys: Vec<_> = base.fields.keys().cloned().collect();
+    for key in keys {
+        let a = &base.fields[&key];
+        let b = &part.fields[&key];
+        let merged: Vec<f32> = cells
+            .iter()
+            .map(|&(_, _, seg, j)| if seg == 0 { a[j] } else { b[j] })
+            .collect();
+        base.fields.insert(key, merged);
+    }
+    base.latitudes = cells.iter().map(|&(lat, _, _, _)| lat).collect();
+    base.longitudes = cells.iter().map(|&(_, lon, _, _)| lon).collect();
+    Ok(())
+}
 
 pub(crate) fn terrain_at(
     codes: &EcCodes,
@@ -401,9 +454,15 @@ pub(crate) fn terrain_at(
     points: &[Observer],
 ) -> Result<Vec<f64>, String> {
     let before = Source::capture(path.to_owned(), "terrain-prepass".into())?;
-    let mut grid =
-        codes.decode_gfs_frame(path, 4096, derivation::MAX_CELLS, Some((cycle, hour)))?;
-    subset_gfs(&mut grid, Some(bbox))?;
+    // Subset during decode: wide sync envelopes exceed the full-frame budget
+    // even though only the point domain's cells are ever consumed.
+    let mut grid = codes.decode_gfs_frame_subset(
+        path,
+        4096,
+        derivation::MAX_CELLS,
+        Some((cycle, hour)),
+        bbox,
+    )?;
     let geometry = Geometry::canonicalize(&mut grid)?;
     let surface = grid
         .fields
@@ -487,7 +546,7 @@ impl OpticalCatalog {
         if optics.valid_time != time {
             return Err("CAMS actual valid time differs from stored catalog".into());
         }
-        let mapped = firesky_native::cams::map(&optics.grid(), lats, lons)?;
+        let mapped = crate::native::cams::map(&optics.grid(), lats, lons)?;
         if mapped.covered.iter().any(|v| !v) {
             return Err("CAMS full profile does not cover every model cell".into());
         }
@@ -520,6 +579,29 @@ pub fn diagnose_profiles_to_files(path: &Path, output: &Path) -> Result<PathBuf,
 pub fn frames_to_files(path: &Path, output: &Path) -> Result<PathBuf, String> {
     run(path, output, Output::Frames)
 }
+
+/// Cancellable variant for desktop regional runs: the flag is checked
+/// between frames, CAMS brackets and inside the native observer batch.
+pub(crate) fn frames_to_files_cancellable(
+    path: &Path,
+    output: &Path,
+    cancel: &AtomicBool,
+    progress: &(dyn Fn(u128) + Sync),
+) -> Result<PathBuf, String> {
+    let started = Instant::now();
+    let (input, source): (Input, _) = request_file::read(path, 64 * 1024 * 1024)?;
+    run_input(
+        path,
+        output,
+        Output::Frames,
+        input,
+        source,
+        None,
+        started,
+        cancel,
+        progress,
+    )
+}
 pub fn point_to_files(path: &Path, output: &Path) -> Result<PathBuf, String> {
     run(path, output, Output::Point)
 }
@@ -536,7 +618,17 @@ enum Output {
 fn run(path: &Path, output: &Path, level: Output) -> Result<PathBuf, String> {
     let started = Instant::now();
     let (input, source): (Input, _) = request_file::read(path, 64 * 1024 * 1024)?;
-    run_input(path, output, level, input, source, None, started)
+    run_input(
+        path,
+        output,
+        level,
+        input,
+        source,
+        None,
+        started,
+        &AtomicBool::new(false),
+        &|_: u128| {},
+    )
 }
 
 pub(crate) fn planned_point_to_files(
@@ -546,6 +638,7 @@ pub(crate) fn planned_point_to_files(
     source: SourceIdentity,
     plan: serde_json::Value,
     started: Instant,
+    progress: &(dyn Fn(u128) + Sync),
 ) -> Result<PathBuf, String> {
     run_input(
         path,
@@ -555,6 +648,8 @@ pub(crate) fn planned_point_to_files(
         source,
         Some(plan),
         started,
+        &AtomicBool::new(false),
+        progress,
     )
 }
 
@@ -565,6 +660,7 @@ pub(crate) fn planned_service_to_files(
     source: SourceIdentity,
     plan: serde_json::Value,
     started: Instant,
+    progress: &(dyn Fn(u128) + Sync),
 ) -> Result<PathBuf, String> {
     run_input(
         path,
@@ -574,6 +670,8 @@ pub(crate) fn planned_service_to_files(
         source,
         Some(plan),
         started,
+        &AtomicBool::new(false),
+        progress,
     )
 }
 
@@ -581,6 +679,7 @@ pub(crate) fn planned_service_to_files(
 fn prepare_frame(
     codes: &EcCodes,
     path: &Path,
+    extra_paths: &[PathBuf],
     input: &Input,
     hour: u32,
     cycle: DateTime<Utc>,
@@ -590,12 +689,44 @@ fn prepare_frame(
     let start = Instant::now();
     let mut ec_proxy_coverage = None;
     let mut ec_native_grid_shape = None;
+    // Wrapped envelopes arrive as one file per longitude segment, ordered
+    // exactly like gfs_data::request_bboxes. Decode each file against its own
+    // segment: a cache hit may be a broader (even global) grid, and subsetting
+    // it with the combined wrapped bbox would duplicate the other segment's
+    // cells and fail the overlap check in merge_gfs_grids.
+    let segment_bboxes: Vec<[f64; 4]> = match input.bbox {
+        Some(bbox) if bbox[0] > bbox[1] => vec![
+            [bbox[0], 180.0, bbox[2], bbox[3]],
+            [-180.0, bbox[1], bbox[2], bbox[3]],
+        ],
+        Some(bbox) => vec![bbox],
+        None => vec![],
+    };
+    let base_bbox = if segment_bboxes.is_empty() {
+        input.bbox
+    } else {
+        Some(segment_bboxes[0])
+    };
     let mut decoded = match input.model {
         Model::Gfs => {
             if hour > 384 {
                 return Err("GFS forecast hour exceeds 384".into());
             }
-            codes.decode_gfs_frame(path, 4096, derivation::MAX_CELLS, Some((cycle, hour)))?
+            match base_bbox {
+                Some(bbox) => codes.decode_gfs_frame_subset(
+                    path,
+                    4096,
+                    derivation::MAX_CELLS,
+                    Some((cycle, hour)),
+                    bbox,
+                )?,
+                None => codes.decode_gfs_frame(
+                    path,
+                    4096,
+                    derivation::MAX_CELLS,
+                    Some((cycle, hour)),
+                )?,
+            }
         }
         Model::EcmwfBasic => {
             let raw = ecmwf::decode_basic(
@@ -617,6 +748,29 @@ fn prepare_frame(
         }
     };
     *decode_ms += start.elapsed().as_secs_f64() * 1000.0;
+    // Wrapped envelopes arrive as one file per longitude segment; decode each
+    // against the shared bbox and stitch the rectangular grid before derive.
+    for (index, extra) in extra_paths.iter().enumerate() {
+        let part_bbox = segment_bboxes.get(index + 1).copied().or(input.bbox);
+        let start = Instant::now();
+        let mut part = match part_bbox {
+            Some(bbox) => codes.decode_gfs_frame_subset(
+                extra,
+                4096,
+                derivation::MAX_CELLS,
+                Some((cycle, hour)),
+                bbox,
+            )?,
+            None => {
+                codes.decode_gfs_frame(extra, 4096, derivation::MAX_CELLS, Some((cycle, hour)))?
+            }
+        };
+        *decode_ms += start.elapsed().as_secs_f64() * 1000.0;
+        if matches!(input.model, Model::Gfs) {
+            subset_gfs(&mut part, part_bbox)?;
+        }
+        merge_gfs_grids(&mut decoded, part)?;
+    }
     let start = Instant::now();
     if matches!(input.model, Model::Gfs) {
         subset_gfs(&mut decoded, input.bbox)?;
@@ -673,6 +827,35 @@ fn prepare_frame(
     })
 }
 
+/// Bounded main-bundle estimate. Compact regional runs publish only the
+/// forecast.json report and never store the per-cell grid/aerosol tensors,
+/// so their budget mirrors exactly the arrays written below instead of the
+/// full-grid layout used by point/service snapshots.
+fn estimate_main_bundle_bytes(
+    cells: u128,
+    frames: u128,
+    observers: u128,
+    with_quality: bool,
+    with_diagnostics: bool,
+    with_profiles: bool,
+    compact: bool,
+) -> u128 {
+    let grid = if compact {
+        0
+    } else {
+        cells * frames * (36 + 11) * 4
+    };
+    grid + observers
+        * (7884 + if with_quality { 3640 } else { 0 } + if with_diagnostics { 160 } else { 0 })
+        + if with_profiles {
+            observers * 20 * 7 * 4
+        } else {
+            0
+        }
+        + cells * 8
+        + 65536
+}
+
 fn run_input(
     path: &Path,
     output: &Path,
@@ -681,7 +864,10 @@ fn run_input(
     request_source: SourceIdentity,
     plan: Option<serde_json::Value>,
     started: Instant,
+    cancel: &AtomicBool,
+    progress: &(dyn Fn(u128) + Sync),
 ) -> Result<PathBuf, String> {
+    cancelled(cancel)?;
     let with_quality = !matches!(level, Output::Assessment);
     let with_diagnostics = matches!(
         level,
@@ -698,6 +884,19 @@ fn run_input(
     let with_frames = matches!(level, Output::Frames | Output::Point | Output::Service);
     let with_point = matches!(level, Output::Point | Output::Service);
     let with_service = matches!(level, Output::Service);
+    if input.compact_results && !with_frames {
+        return Err("compact results require frame output".into());
+    }
+    if input.compact_results && (with_point || with_service) {
+        return Err("compact results are a regional grid product".into());
+    }
+    // Compact regional runs skip the per-point diagnostics extras, but the
+    // frozen cross-section source stays: the desktop inspector reads it back
+    // through profile_query, and its per-step profile rows carry the real
+    // geometry confidence. The heavy profile grids live in independently
+    // bounded children, so the compact main bundle stays small.
+    let with_diagnostics = with_diagnostics && !input.compact_results;
+    let with_profile_bundles = with_profiles || with_frames;
     if with_service && (!matches!(input.model, Model::EcmwfBasic) || plan.is_none()) {
         return Err("EC service requires independent EC input planning".into());
     }
@@ -838,6 +1037,8 @@ fn run_input(
         })
         .transpose()?;
     for (index, frame) in input.frames.iter().enumerate() {
+        cancelled(cancel)?;
+        progress(1000 * index as u128 / input.frames.len() as u128);
         let phase = Instant::now();
         let source = Source::capture(
             resolve(base, &frame.path),
@@ -855,6 +1056,7 @@ fn run_input(
                 prepare_frame(
                     &codes,
                     &source.path,
+                    &frame.paths,
                     &input,
                     frame.hour,
                     cycle,
@@ -892,18 +1094,15 @@ fn run_input(
             let observers = input.points.len() as u128;
             // Profiles live in independently bounded children; no temporal
             // chunk is dropped merely to fit the main tensor-bundle limit.
-            let main_bytes = cells * (input.frames.len() as u128) * (36 + 11) * 4
-                + observers
-                    * (7884
-                        + if with_quality { 3640 } else { 0 }
-                        + if with_diagnostics { 160 } else { 0 })
-                + if with_profiles {
-                    observers * 20 * 7 * 4
-                } else {
-                    0
-                }
-                + cells * 8
-                + 65536;
+            let main_bytes = estimate_main_bundle_bytes(
+                cells,
+                input.frames.len() as u128,
+                observers,
+                with_quality,
+                with_diagnostics,
+                with_profiles,
+                input.compact_results,
+            );
             if main_bytes > u128::from(MAX_BUNDLE_BYTES) {
                 return Err("assessment main bundle exceeds bounded output size".into());
             }
@@ -941,35 +1140,37 @@ fn run_input(
         } else if levels != derived.levels {
             return Err("model frames do not share pressure levels".into());
         }
-        let phase = Instant::now();
-        let child = output.join(format!("profiles_{index:03}"));
-        let mut profile = BundleWriter::create(
-            &child,
-            "regional-profiles-v1",
-            source.identity.clone(),
-            json!({"frame_index":index,"hour":frame.hour,"pressure_levels":levels,"profile_fields":24}),
-        )?;
-        profile.f32(
-            "profiles",
-            &[latitudes.len() as u64, levels.len() as u64, 24],
-            derived.profiles.iter().flatten().copied(),
-        )?;
-        source.revalidate()?;
-        let manifest = profile.commit(&source.path)?;
-        children.owned.push(child);
-        let identity = source_identity(&manifest)?;
-        if with_profiles {
-            profile_sources.push(ProfileTensor::open(
-                &manifest,
-                identity.clone(),
-                latitudes.len(),
-                levels.len(),
-            )?);
+        if with_profile_bundles {
+            let phase = Instant::now();
+            let child = output.join(format!("profiles_{index:03}"));
+            let mut profile = BundleWriter::create(
+                &child,
+                "regional-profiles-v1",
+                source.identity.clone(),
+                json!({"frame_index":index,"hour":frame.hour,"pressure_levels":levels,"profile_fields":24}),
+            )?;
+            profile.f32(
+                "profiles",
+                &[latitudes.len() as u64, levels.len() as u64, 24],
+                derived.profiles.iter().flatten().copied(),
+            )?;
+            source.revalidate()?;
+            let manifest = profile.commit(&source.path)?;
+            children.owned.push(child);
+            let identity = source_identity(&manifest)?;
+            if with_profiles {
+                profile_sources.push(ProfileTensor::open(
+                    &manifest,
+                    identity.clone(),
+                    latitudes.len(),
+                    levels.len(),
+                )?);
+            }
+            profiles.push(
+                json!({"manifest":format!("profiles_{index:03}/manifest.json"),"identity":identity}),
+            );
+            profile_write_ms += phase.elapsed().as_secs_f64() * 1000.0;
         }
-        profiles.push(
-            json!({"manifest":format!("profiles_{index:03}/manifest.json"),"identity":identity}),
-        );
-        profile_write_ms += phase.elapsed().as_secs_f64() * 1000.0;
         grid.extend(derived.columns);
         sources.push(source);
     }
@@ -1041,6 +1242,8 @@ fn run_input(
         row[26] = f32::NAN;
     }
     for index in time_indices {
+        cancelled(cancel)?;
+        progress(1000 + 200 * index as u128 / input.frames.len().max(1) as u128);
         let target = cycle
             .checked_add_signed(Duration::hours(i64::from(input.frames[index].hour)))
             .ok_or("forecast time overflow")?;
@@ -1058,7 +1261,9 @@ fn run_input(
         }
     }
     let mut anchor_brackets = Vec::with_capacity(points.len());
+    progress(1400);
     for (row, sample_row) in solar.rows.iter().zip(samples.iter_mut()) {
+        cancelled(cancel)?;
         let target = from_epoch(row.anchor)?;
         let (left, right, _) = bracket(target)?;
         catalog.load(left, &codes, &lats, &lons, &mut sources)?;
@@ -1117,7 +1322,9 @@ fn run_input(
         .collect();
     let mut result = vec![0.0; points.len() * timeline::STEPS * NATIONAL_OUTPUT_FIELDS];
     let span = step_stop - step_start;
-    firesky_native::assess_batch_with_status(
+    cancelled(cancel)?;
+    progress(1600);
+    crate::native::assess_batch_with_cancel(
         grid.as_slice().as_flattened(),
         aerosol.as_slice().as_flattened(),
         11,
@@ -1135,8 +1342,14 @@ fn run_input(
         geom.spacing,
         input.radius_km as f32,
         &mut result[..points.len() * span * NATIONAL_OUTPUT_FIELDS],
+        // AtomicBool::load only needs a shared borrow, so the batch can
+        // observe the desktop cancel flag without taking ownership.
+        &crate::native::BatchCancel::from_ref(cancel),
     )
-    .map_err(|e| format!("native regional assessment failed: {e:?}"))?;
+    .map_err(|e| match e {
+        crate::native::NationalAssessmentError::Cancelled => "assessment cancelled".to_string(),
+        other => format!("native regional assessment failed: {other:?}"),
+    })?;
     expand_steps(&mut result, points.len(), step_start, step_stop);
     let assess_ms = started.elapsed().as_secs_f64() * 1000.0 - model_ms - aerosol_ms;
     let n = points.len() as u64;
@@ -1155,12 +1368,17 @@ fn run_input(
         }),
     )?;
     writer.f64("hours", &[t], hours.iter().copied())?;
-    writer.f32("columns", &[t, c, 36], grid.iter().flatten().copied())?;
-    writer.f32(
-        "aerosol_profiles",
-        &[t, c, 11],
-        aerosol.iter().flatten().copied(),
-    )?;
+    // Compact consumers (desktop restore, cache read, map publish) only read
+    // forecast.json; storing the full per-cell grids would push continental
+    // runs past the bounded bundle size for data nobody reads back.
+    if !input.compact_results {
+        writer.f32("columns", &[t, c, 36], grid.iter().flatten().copied())?;
+        writer.f32(
+            "aerosol_profiles",
+            &[t, c, 11],
+            aerosol.iter().flatten().copied(),
+        )?;
+    }
     writer.f32(
         "observers",
         &[n, 3],
@@ -1283,6 +1501,7 @@ fn run_input(
             .collect::<Result<Vec<_>, String>>()?;
         let qualities = vec!["cams".to_owned(); points.len()];
         let retained = quality_data.as_ref().unwrap();
+        let empty_extras = vec![[0.0; 20]; points.len()];
         let payload = crate::frames::Payload::prepare(crate::frames::Input {
             points: &frame_points,
             times: &times,
@@ -1292,7 +1511,7 @@ fn run_input(
             profiles: profile_data.as_deref(),
             scores: &retained.scores,
             marks: &retained.marks,
-            extras: diagnostic_data.as_deref().unwrap(),
+            extras: diagnostic_data.as_deref().unwrap_or(&empty_extras),
             aerosol_sources: &sources,
             aerosol_qualities: &qualities,
             rows: geom.rows,
@@ -1305,6 +1524,7 @@ fn run_input(
             ec: matches!(input.model, Model::EcmwfBasic),
             include_point_core: input.include_point_core,
             point_spacing_deg: input.point_spacing_deg,
+            compact_results: input.compact_results,
         })?;
         frame_prepare_ms = started.elapsed().as_secs_f64() * 1000.0;
         if with_point {
@@ -1373,6 +1593,7 @@ fn run_input(
         Some(
             json!({"file":"forecast.json","identity":identity,"contract":"rust-regional-frames-v1",
             "frame_version":103,"point_core_version":8,"include_point_core":input.include_point_core,
+            "compact_results":input.compact_results,
             "assembly_serialization_and_output_ms":started.elapsed().as_secs_f64()*1000.0,
             "point_core_validator_ported":true,"point_materialization_ported":true,
             "point_core_validated":with_point,
@@ -1468,11 +1689,12 @@ fn run_input(
         "date":input.date,"phenomenon":if rising {"dawn"} else {"dusk"},
         "geometry":geom,"radius_km":input.radius_km,"grid_fields":36,"sample_fields":9,
         "assessment_fields":NATIONAL_OUTPUT_FIELDS,"pressure_levels":levels,"aerosol_pressure_levels":LEVELS,
+        "compact_results":input.compact_results,
         "profile_bundles":profiles,"sources":sources,
         "point_source_template":"cams-ads {left:%Y-%m-%d %H:%MZ}..{right:%Y-%m-%d %H:%MZ} w={weight:.6f}",
         "aerosol_anchor_bracket_fields":["left_epoch","right_epoch","right_weight"],
         "point_quality":"cams","optical_profile_coverage":1.0,
-        "native_step_range":[step_start,step_stop],"native_abi":firesky_native::NATIVE_ABI_VERSION,
+        "native_step_range":[step_start,step_stop],"native_abi":crate::native::NATIVE_ABI_VERSION,
         "compute_backend":"cpu","source_scope":"consumed-model-and-CAMS-files",
         "timezone_database":chrono_tz::IANA_TZDB_VERSION,"polar_policy":"legacy-hour-angle-clamp",
         "ec_basic_proxy_coverage":proxy_coverage,
@@ -1526,6 +1748,65 @@ fn run_input(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_budget_mirrors_actual_writes_and_admits_east_asia() {
+        // East Asia at 0.25 deg: 71217 observers, 20 frames. The full-grid
+        // layout exceeds the 1 GiB bound, but compact runs never store the
+        // per-cell tensors, so the same request must fit.
+        let cells = 300_000u128;
+        let observers = 71_217u128;
+        let full = estimate_main_bundle_bytes(cells, 20, observers, true, false, false, false);
+        assert!(full > u128::from(MAX_BUNDLE_BYTES));
+        let compact = estimate_main_bundle_bytes(cells, 20, observers, true, false, false, true);
+        assert!(compact <= u128::from(MAX_BUNDLE_BYTES));
+        // The compact estimate covers exactly the arrays written below
+        // (coordinates, hours, observers, samples, assessment, epochs,
+        // brackets, quality) plus a 400 B/observer manifest headroom.
+        let written = cells * 8
+            + observers
+                * (12
+                    + 20 * 9 * 4
+                    + 20 * NATIONAL_OUTPUT_FIELDS as u128 * 4
+                    + 20 * 8
+                    + 8
+                    + 24
+                    + 3640
+                    + 400)
+            + 65536;
+        assert_eq!(compact, written);
+    }
+
+    #[test]
+    fn wrapped_segments_subset_to_own_arc_before_merge() {
+        // A covering-cache hit may answer the west segment with a broader
+        // (even global) grid. Subsetting it with the combined wrapped bbox
+        // would keep the east strip too and collide with the east file.
+        let mut wide =
+            gfs::GfsGrid::new(vec![0.0, 0.0, 0.0, 0.0], vec![170.0, 180.0, -180.0, -170.0]);
+        wide.fields.insert(
+            ("surface".into(), 0, "orog".into()),
+            vec![1.0, 2.0, 3.0, 4.0],
+        );
+        let mut east = gfs::GfsGrid::new(vec![0.0, 0.0], vec![-180.0, -170.0]);
+        east.fields
+            .insert(("surface".into(), 0, "orog".into()), vec![30.0, 40.0]);
+        subset_gfs(&mut wide, Some([170.0, 180.0, 0.0, 0.0])).unwrap();
+        subset_gfs(&mut east, Some([-180.0, -170.0, 0.0, 0.0])).unwrap();
+        merge_gfs_grids(&mut wide, east).unwrap();
+        // merge sorts by numeric longitude; canonicalize later treats the
+        // ±180 seam as equivalent, so the axis stays contiguous.
+        assert_eq!(wide.longitudes, [-180.0, -170.0, 170.0, 180.0]);
+        assert_eq!(
+            wide.fields.values().next().unwrap(),
+            &[30.0, 40.0, 1.0, 2.0]
+        );
+        // True duplicates (same segment decoded twice) must still fail.
+        let mut dup = gfs::GfsGrid::new(vec![0.0, 0.0], vec![-180.0, -170.0]);
+        dup.fields
+            .insert(("surface".into(), 0, "orog".into()), vec![30.0, 40.0]);
+        assert!(merge_gfs_grids(&mut wide, dup).is_err());
+    }
 
     #[test]
     fn expands_every_possible_trim_span_without_cross_point_corruption() {

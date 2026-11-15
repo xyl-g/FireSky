@@ -3,7 +3,7 @@
 日期：2026-11-13。状态：**已定案（实现合同基线）**——6 个决策点按第 16 节提案
 于 2026-11-13 采纳（用户委托按推荐口径执行，后续可经设置更改）；本文只新增设计，
 不修改任何现有代码。所有引用基于当前工作区实际代码审计（`文件:行号`），下载能力的前提
-沿用 [CAMS 双路线提案](CAMS_DUAL_ROUTE_PROPOSAL.zh-CN.md) 第 0 节决定 5
+沿用 [CAMS 双路线提案](archive/CAMS_DUAL_ROUTE_PROPOSAL.zh-CN.md) 第 0 节决定 5
 （整周期/洲包络下载已实现并经 2026-11-13 真实验收）。
 
 ## 实现与验收状态（2026-11-13 复核）
@@ -16,7 +16,7 @@
 - 第 14 节 A1–A8 没有在本文记录完整真实执行证据，继续按待验收处理。
   CAMS 手动 prepare 的亚洲整周期/跨点复用证据不能代替后台同步轮次验收。
 - 本次只核对源码和文档，未重跑测试、启用同步或下载数据；后续顺序见
-  [最新接续计划](NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。以下章节保留为实现合同，
+  [最新接续计划](archive/NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。以下章节保留为实现合同，
   其中拟实施措辞/旧行号不代表当前缺实现；第 15 节第 8 项组锁风险仍须实测。
 
 ### 守护进程化 / 应用无关同步落地（2026-11-13）
@@ -40,11 +40,11 @@
 2. 引擎侧 Rust 实现（跨平台）；macOS 设置页提供开关与调度配置；**默认关闭，
    不擅设默认值**，用户显式启用。
 3. Windows「如果有就更好」：平台开发整体处于暂停（见
-   [RUST_REMAINING_WORK.zh-CN.md](RUST_REMAINING_WORK.zh-CN.md) 头部暂停声明），
+   [RUST_REMAINING_WORK.zh-CN.md](archive/RUST_REMAINING_WORK.zh-CN.md) 头部暂停声明），
    本设计只保证**引擎侧跨平台**（同一套 IPC 方法、同一 FFI ABI），不写 Windows UI。
 4. 卫星（HSD）**不在本设计范围内**：沿用 Q07（2026-11-11，已确认）——
    「不常驻后台定时下载/处理卫星数据；发起实况预测时进入统一预检弹窗」
-   （`docs/RUST_REMAINING_WORK.zh-CN.md` R04 节）。用户 2026-11-13 的新要求
+   （`docs/archive/RUST_REMAINING_WORK.zh-CN.md` R04 节）。用户 2026-11-13 的新要求
    仅覆盖 CAMS/GFS/EC 三个模式数据源，**不推翻 Q07**：卫星默认仍不自动定时，
    若将来用户明确要卫星后台同步，属于对 Q07 的新决定，须单独提案并记录。
 
@@ -138,7 +138,7 @@
 | 方案 | 结论 |
 | --- | --- |
 | 引擎内常驻调度线程 | 需要新造一套与 serve 队列并行的任务注册表和取消通道（现有 `cancel` 只认 serve 的 `active` 表，`desktop_runtime.rs:1819-1834`）；FFI 句柄模型（`ffi.rs:322-367`）无法被 UI 直接取消引擎自启线程；且收益为零——引擎进程本就随应用退出（`FireSkyApp.swift:43`）。 |
-| **UI tick + 引擎判定（选定）** | 完整复用现有 FFI 异步任务（`FFIEngineClient.swift:135-189` 每个调用都是可取消任务）、serve 取消、`begin_task` 历史与进度回调；引擎保持纯请求/响应，与 V03「原生 UI 负责系统能力，Rust Runtime 统一业务」的分工一致（`docs/RUST_REMAINING_WORK.zh-CN.md` V03 节）。 |
+| **UI tick + 引擎判定（选定）** | 完整复用现有 FFI 异步任务（`FFIEngineClient.swift:135-189` 每个调用都是可取消任务）、serve 取消、`begin_task` 历史与进度回调；引擎保持纯请求/响应，与 V03「原生 UI 负责系统能力，Rust Runtime 统一业务」的分工一致（`docs/archive/RUST_REMAINING_WORK.zh-CN.md` V03 节）。 |
 
 ### 3.2 新增 IPC 面（全部进入 `dispatch_cancellable` 的 match，`engine/src/desktop_runtime.rs:460-677`）
 

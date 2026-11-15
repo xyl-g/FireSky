@@ -1,9 +1,9 @@
 //! Strict EC public/basic and separate offline hybrid-level input contracts.
 
 use crate::grib::{EcCodes, Message};
+use crate::native::gfs::{FieldKey, GfsGrid};
 use crate::tensor_bundle::{BundleWriter, SourceIdentity};
 use chrono::{DateTime, Duration, SecondsFormat, TimeZone, Utc};
-use firesky_native::gfs::{FieldKey, GfsGrid};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -445,6 +445,121 @@ pub fn decode_full(
     decode(codes, path, Catalog::Full(model_levels), options)
 }
 
+/// Decode only the surface geopotential (z) field for the terrain prepass.
+///
+/// Regional bundles cover whole continents; the full basic catalog retains
+/// ~38 fields per cell and exceeds `MAX_RETAINED_VALUES` for large regional
+/// envelopes. The prepass only samples orography, so this reads the single z
+/// message (static hour 0 or the forecast step, matching `probe_basic`) and
+/// returns elevation in metres on the bbox-selected cells.
+pub fn decode_basic_terrain(
+    codes: &EcCodes,
+    path: &Path,
+    bbox: Option<[f64; 4]>,
+    expected_cycle_utc: Option<&str>,
+    expected_hour: Option<i64>,
+    max_messages: usize,
+    max_points: usize,
+) -> Result<GfsGrid, String> {
+    let bbox = validate_bbox(bbox)?;
+    let expected_cycle = expected_cycle_utc.map(expected_cycle).transpose()?;
+    if expected_hour.is_some_and(|hour| !published_step(hour)) {
+        return Err("EC expected forecast hour is not on the published open-data step grid".into());
+    }
+    if !(1..=5_000_000).contains(&max_points) {
+        return Err("EC max_points must be 1..5000000".into());
+    }
+    let mut grid: Option<GfsGrid> = None;
+    codes.visit_while(path, max_messages, |message| {
+        let level_type = message.string(b"typeOfLevel\0")?;
+        let level = message.long(b"level\0")?;
+        let name = message.string(b"shortName\0")?;
+        if level_type != "surface" || level != 0 || name != "z" {
+            return Ok(true);
+        }
+        let units = message.string(b"units\0")?;
+        if !["m**2 s**-2", "m2 s-2", "m^2 s^-2"].contains(&units.as_str()) {
+            return Err(format!("EC surface z units={units:?}"));
+        }
+        let cycle = date(message, b"dataDate\0", b"dataTime\0")
+            .or_else(|_| date(message, b"date\0", b"time\0"))?;
+        if expected_cycle.is_some_and(|expected| expected != cycle) {
+            return Err("EC messages do not share the expected cycle".into());
+        }
+        let hour: f64 = message
+            .string(b"step\0")?
+            .parse()
+            .map_err(|_| "EC invalid step")?;
+        if message.long(b"stepUnits\0")? != 1
+            || !hour.is_finite()
+            || !(0.0..=1_000_000.0).contains(&hour)
+            || hour.fract() != 0.0
+        {
+            return Err("EC step must be nonnegative integer hours".into());
+        }
+        let hour = hour as i64;
+        if hour != 0 && expected_hour.is_some_and(|expected| hour != expected) {
+            return Err("EC surface geopotential step is not static or forecast step".into());
+        }
+        let count = message.size(b"values\0")?;
+        if count == 0 || count > max_points {
+            return Err("EC invalid grid shape or decoded point limit exceeded".into());
+        }
+        let latitudes: Vec<f32> = message
+            .array(b"latitudes\0", count)?
+            .into_iter()
+            .map(|v| v as f32)
+            .collect();
+        let longitudes: Vec<f32> = message
+            .array(b"longitudes\0", count)?
+            .into_iter()
+            .map(|v| v as f32)
+            .collect();
+        let ni = message.long(b"Ni\0")?;
+        let nj = message.long(b"Nj\0")?;
+        if message.string(b"gridType\0")? != "regular_ll" || ni <= 0 || nj <= 0 {
+            return Err("EC requires a regular_ll grid with positive Ni/Nj".into());
+        }
+        validate_coordinates(&latitudes, &longitudes, [nj as usize, ni as usize])?;
+        let indices: Vec<usize> = (0..count)
+            .filter(|&i| {
+                bbox.is_none_or(|[west, east, north, south]| {
+                    let lon = normalise_longitude(longitudes[i]);
+                    latitudes[i] >= south
+                        && latitudes[i] <= north
+                        && if west <= east {
+                            lon >= west && lon <= east
+                        } else {
+                            lon >= west || lon <= east
+                        }
+                })
+            })
+            .collect();
+        if indices.is_empty() {
+            return Err("EC native grid has no cells inside bbox".into());
+        }
+        let values = message.values(count)?;
+        let elevation: Vec<f32> = indices.iter().map(|&i| values[i] / GRAVITY).collect();
+        if elevation
+            .iter()
+            .any(|v| !v.is_finite() || !(-500.0..=9000.0).contains(v))
+        {
+            return Err("EC surface geopotential produces invalid terrain elevation".into());
+        }
+        let mut terrain = GfsGrid::new(
+            indices.iter().map(|&i| latitudes[i]).collect(),
+            indices
+                .iter()
+                .map(|&i| normalise_longitude(longitudes[i]))
+                .collect(),
+        );
+        terrain.insert(key("surface", 0, "orog"), elevation)?;
+        grid = Some(terrain);
+        Ok(false)
+    })?;
+    grid.ok_or_else(|| "EC GRIB has no surface geopotential field".into())
+}
+
 fn hybrid_coordinates(message: &Message<'_>, levels: usize) -> Result<Option<Vec<f64>>, String> {
     let limit = 2 * (levels + 1);
     if let Some(pv) = message.optional_array(b"pv\0", limit)? {
@@ -505,6 +620,12 @@ fn decode(
         cycle = Some(meta.cycle);
         let is_terrain = meta.canonical == key("surface", 0, "z");
         if is_terrain {
+            // Bundles carry surface z either as a static analysis (hour 0)
+            // or at the forecast step; probe_basic accepts both, and the
+            // terrain prepass decodes non-zero hours from the same bundles.
+            if meta.hour != 0 && options.expected_hour.is_some_and(|hour| meta.hour != hour) {
+                return Err("EC surface geopotential step is not static or forecast step".into());
+            }
             terrain_step = Some(meta.hour);
         } else {
             let time = meta
@@ -862,18 +983,43 @@ impl InputTensor {
         for axis in [&lat_axis, &lon_axis] {
             if axis.len() > 1 {
                 let delta = axis[1] as f64 - axis[0] as f64;
-                if delta <= 0.0
-                    || axis
-                        .windows(2)
-                        .any(|v| (v[1] as f64 - v[0] as f64 - delta).abs() > 1e-6)
-                    || spacing.is_some_and(|spacing| (spacing - delta).abs() > 1e-4)
-                {
+                if delta <= 0.0 || spacing.is_some_and(|spacing| (spacing - delta).abs() > 1e-4) {
                     return Err("EC proxy requires equally spaced latitude/longitude axes".into());
                 }
                 if spacing.is_none() {
                     spacing = Some(delta);
                 }
             }
+        }
+        // A dateline-crossing regional envelope normalizes longitudes into
+        // [-180, 180], which introduces a single circular seam (e.g. 179.75 ->
+        // -180). The axis is still uniformly spaced around the circle; detect
+        // that one seam and accept it. Geometry::canonicalize rotates the seam
+        // downstream, so the proxy grid stays rectangular and equally spaced.
+        let regular_axis = |axis: &[f32], delta: f64| -> bool {
+            axis.windows(2)
+                .all(|v| (v[1] as f64 - v[0] as f64 - delta).abs() <= 1e-4)
+        };
+        if lon_axis.len() > 1 {
+            let delta = spacing.unwrap();
+            if !regular_axis(&lon_axis, delta) {
+                let breaks: Vec<usize> = (0..lon_axis.len())
+                    .filter(|&i| {
+                        let next = if i + 1 == lon_axis.len() {
+                            lon_axis[0] as f64 + 360.0
+                        } else {
+                            lon_axis[i + 1] as f64
+                        };
+                        (next - lon_axis[i] as f64 - delta).abs() > 1e-4
+                    })
+                    .collect();
+                if breaks.len() != 1 {
+                    return Err("EC proxy requires equally spaced latitude/longitude axes".into());
+                }
+            }
+        }
+        if lat_axis.len() > 1 && !regular_axis(&lat_axis, spacing.unwrap()) {
+            return Err("EC proxy requires equally spaced latitude/longitude axes".into());
         }
         let spacing = spacing.ok_or("EC proxy requires at least one non-singleton axis")?;
         let ordered = |values: &[f32]| order.iter().map(|&i| values[i]).collect::<Vec<_>>();
@@ -921,6 +1067,47 @@ impl InputTensor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    /// Regression for the dateline-crossing regional EC proxy grid: the
+    /// multi-region envelope wraps across +/-180, so the normalized longitude
+    /// axis carries one circular seam. native_grid must accept that seam and
+    /// produce a rectangular proxy grid instead of rejecting the spacing.
+    #[test]
+    fn ec_proxy_native_grid_accepts_dateline_seam() {
+        let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        let cache = root.join(".cache/ecmwf");
+        let cycle = chrono::Utc
+            .with_ymd_and_hms(2026, 11, 12, 12, 0, 0)
+            .unwrap();
+        let bundle = crate::ecmwf_data::path(&cache, cycle, 21);
+        if !bundle.is_file() {
+            return;
+        }
+        let codes = crate::grib::EcCodes::load().unwrap();
+        let bbox = [44.75, 173.25, 69.25, 2.75];
+        let area_bbox = crate::desktop_context::ec_regional_model_bbox(bbox, 1000.0).unwrap();
+        // The envelope must actually wrap across the dateline for this test.
+        assert!(area_bbox[0] > area_bbox[1], "expected a wrapped envelope");
+        let tensor = decode_basic(
+            &codes,
+            &bundle,
+            Some(area_bbox),
+            Some("2026-11-12T12:00:00+00:00"),
+            Some(21),
+            4096,
+            5_000_000,
+        )
+        .unwrap();
+        let (grid, spacing) = tensor
+            .native_grid()
+            .expect("dateline seam must be accepted");
+        assert!((spacing - 0.25).abs() < 1e-6);
+        assert!(grid
+            .fields
+            .contains_key(&("surface".into(), 0, "orog".into())));
+        assert!(grid.latitudes.len() > 100_000);
+    }
+
     #[test]
     fn converts_units_once_and_copies_only_when_values_change() {
         for (name, level_type, units) in [

@@ -590,6 +590,7 @@ pub fn fetch(workspace: &Path, payload: &Value, cancel: &AtomicBool) -> Result<V
                 require_exact_valid_time: true,
                 refresh_before_cycle: None,
                 all_leads: false,
+                model_bbox: None,
             };
             match cams_data::execute(params) {
                 Ok(value)

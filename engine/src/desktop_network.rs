@@ -113,7 +113,7 @@ impl<'a, F: Fn(Value) -> Result<(), String>> Transfer<'a, F> {
         };
         // Mirror the production ADS client posture: honor the ambient proxy
         // environment instead of forcing a direct connection.
-        let builder = Client::builder()
+        let builder = crate::http_client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .referer(false)
             .retry(reqwest::retry::never())

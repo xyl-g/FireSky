@@ -1,9 +1,9 @@
 //! Expanded 31-field CAMS diagnostics, separate from compact production optics.
 
 use crate::grib::EcCodes;
+use crate::native::spectral::{self, AOD_WAVELENGTHS, EXTINCTION_WAVELENGTHS, LEVELS};
 use crate::tensor_bundle::{source_identity, BundleWriter, SourceIdentity};
 use chrono::{DateTime, SecondsFormat, Utc};
-use firesky_native::spectral::{self, AOD_WAVELENGTHS, EXTINCTION_WAVELENGTHS, LEVELS};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::Path;

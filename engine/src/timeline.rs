@@ -1,8 +1,8 @@
 //! Stored-request regional solar/time-axis preparation, without Python.
 use crate::astronomy::Phenomenon;
+use crate::native::timeline::{self, ModelTimes, Point, Timeline, SAMPLE_FIELDS, STEPS};
 use crate::tensor_bundle::{BundleWriter, SourceIdentity};
 use crate::time_contract::{parse_date, parse_utc};
-use firesky_native::timeline::{self, ModelTimes, Point, Timeline, SAMPLE_FIELDS, STEPS};
 use serde::Deserialize;
 use serde_json::json;
 use std::path::{Path, PathBuf};

@@ -82,7 +82,11 @@ impl Job {
         } else {
             match outcome {
                 Ok(result) => {
-                    self.status = if result["status"] == "failed" { "failed" } else { "done" };
+                    self.status = if result["status"] == "failed" {
+                        "failed"
+                    } else {
+                        "done"
+                    };
                     self.result = Some(result);
                 }
                 Err(error) => {
@@ -906,7 +910,9 @@ async fn cancel_job(State(app): State<App>, Path(id): Path<String>) -> ApiResult
         .cancel_history(&job.request_id)
         .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error))?;
     job.cancel.store(true, Ordering::Release);
-    Ok(Json(json!({"job_id":id,"status":job.status,"cancel_requested":true})))
+    Ok(Json(
+        json!({"job_id":id,"status":job.status,"cancel_requested":true}),
+    ))
 }
 
 fn history_terminal_event(record: &Value) -> Option<Value> {
@@ -1127,7 +1133,10 @@ fn secured_router(workspace: &FsPath, runtime: Arc<Runtime>, policy: security::P
             axum::http::header::CACHE_CONTROL,
             HeaderValue::from_static("no-store"),
         ))
-        .layer(axum::middleware::from_fn_with_state(policy, security::enforce))
+        .layer(axum::middleware::from_fn_with_state(
+            policy,
+            security::enforce,
+        ))
         .with_state(state)
 }
 
@@ -1169,7 +1178,10 @@ mod tests {
     fn static_root_resolves_default_relative_and_absolute_paths() {
         let directory = tempfile::tempdir().unwrap();
         let workspace = directory.path();
-        assert_eq!(web_root(workspace, None), workspace.join("apps/shared-web/dist"));
+        assert_eq!(
+            web_root(workspace, None),
+            workspace.join("apps/shared-web/dist")
+        );
         assert_eq!(
             web_root(workspace, Some(PathBuf::from("shared-web"))),
             workspace.join("shared-web")
@@ -1343,10 +1355,15 @@ mod tests {
             jobs: Arc::new(Mutex::new(BTreeMap::new())),
             desktop_jobs: Arc::new(desktop::Registry::new()),
         };
-        let task = app.runtime.begin_task(
-            "test-request", "forecast",
-            &json!({"kind":"point","payload":{"lat":30.0,"lon":120.0}}),
-        ).unwrap().unwrap();
+        let task = app
+            .runtime
+            .begin_task(
+                "test-request",
+                "forecast",
+                &json!({"kind":"point","payload":{"lat":30.0,"lon":120.0}}),
+            )
+            .unwrap()
+            .unwrap();
         let history_id = task.id().to_owned();
         let cancel = Arc::new(AtomicBool::new(false));
         app.jobs.lock().unwrap().insert(
@@ -1374,12 +1391,14 @@ mod tests {
             let mut jobs = worker_app.jobs.lock().unwrap();
             let job = jobs.get_mut("test").unwrap();
             let outcome = Ok(json!({"should_not_publish":true}));
-            task.finish(&outcome, job.cancel.load(Ordering::Acquire)).unwrap();
+            task.finish(&outcome, job.cancel.load(Ordering::Acquire))
+                .unwrap();
             job.finish(outcome);
         });
         let response = cancel_job(State(app.clone()), Path("test".into()))
             .await
-            .unwrap().0;
+            .unwrap()
+            .0;
         assert!(cancel.load(Ordering::Acquire));
         assert_eq!(response["status"], "running");
         assert_eq!(response["cancel_requested"], true);
@@ -1388,8 +1407,13 @@ mod tests {
         let running = app.runtime.task_history_detail(&history_id).unwrap();
         assert_eq!(running["status"], "running");
         assert_eq!(running["cancel_requested"], true);
-        assert_eq!(app.jobs.lock().unwrap()["test"].snapshot("test")["cancel_requested"], true);
-        assert!(cancel_job(State(app.clone()), Path("test".into())).await.is_ok());
+        assert_eq!(
+            app.jobs.lock().unwrap()["test"].snapshot("test")["cancel_requested"],
+            true
+        );
+        assert!(cancel_job(State(app.clone()), Path("test".into()))
+            .await
+            .is_ok());
         assert!(job_result(State(app.clone()), Path("test".into()))
             .await
             .is_err());

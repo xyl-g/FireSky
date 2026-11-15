@@ -340,7 +340,7 @@ pub fn observation(
         return Err("invalid radar observation coordinates".into());
     }
     fs::create_dir_all(cache_dir).map_err(|e| e.to_string())?;
-    let client = Client::builder()
+    let client = crate::http_client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(20))

@@ -9,21 +9,19 @@ SHELL := /bin/bash
 PROJECT_DIR := $(CURDIR)
 PY ?= python3
 
-NATIVE_RELEASE_DIR := native/target/release
 FRONTEND_BUILD_DIR := apps/shared-web/dist
 FIRESKY_IMAGE_TAG ?= local
 FIRESKY_DOCKER_PLATFORMS ?= linux/amd64,linux/arm64
 FIRESKY_PUSH ?= 0
 
 .DEFAULT_GOAL := help
-.PHONY: help install engine native frontend build serve serve-frontend test test-rust check health contract docker-build docker-buildx docker-contract up down prune clean desktop-macos desktop-linux-ffi
+.PHONY: help install engine frontend build serve serve-frontend test test-rust check health contract docker-build docker-buildx docker-contract up down prune clean desktop-macos desktop-linux-ffi
 
 help:
 	@echo "firesky — burning-sunset prediction engine"
 	@echo ""
 	@echo "  make install    构建 Rust 服务与前端（运行不需要 Python）"
 	@echo "  make engine     编译独立 Rust 引擎"
-	@echo "  make native     编译 Rust 光追评分器并发布 _cpu 变体"
 	@echo "  make frontend   npm ci + 构建共享 Web SPA 到 apps/shared-web/dist"
 	@echo "  make desktop-macos  构建 SwiftUI + Rust 引擎"
 	@echo "  make desktop-linux-ffi  构建 Linux C++ FFI smoke（Linux 主机）"
@@ -42,10 +40,7 @@ help:
 # ── 安装 ─────────────────────────────────────────────────────────────────────
 install: build
 
-# ── 原生评分器 ───────────────────────────────────────────────────────────────
-native:
-	./scripts/build_native_variants.sh
-
+# ── Rust 引擎（含并入的光追评分核心 engine/src/native）─────────────────────
 engine:
 	./scripts/build_rust_engine.sh
 
@@ -75,13 +70,13 @@ contract:
 	@curl -fsS http://127.0.0.1:8765/api/v1/firesky/runtime
 
 # ── 测试 ─────────────────────────────────────────────────────────────────────
-# 注意：改过 native/src 后必须先 make native，否则加载旧 dylib。
+# 评分核心在 engine/src/native/，随引擎一起编译，无独立 dylib 步骤。
 test-rust:
 	cargo test --manifest-path engine/Cargo.toml --locked
 
 # 现架构契约测试（Rust IPC / Swift UI），需要 pytest 与 numpy：
 #   python3 -m pip install pytest numpy
-test: native engine test-rust
+test: engine test-rust
 	@FIRESKY_REQUIRE_RUST_TESTS=1 FIRESKY_RUST_ENGINE_BIN="$(PROJECT_DIR)/engine/target/release/firesky-engine" $(PY) -m pytest tests/ -q
 
 check:

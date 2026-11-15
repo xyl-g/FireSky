@@ -12,13 +12,12 @@
 //! Numeric contract: results must equal the Python reference bit-for-bit.
 //! Three details make that possible and are preserved deliberately:
 //! 1. `clamp` is Python's `max(low, min(high, value))`, so NaN clamps to the
-//!    upper bound instead of propagating (`firesky_native::py_clamp`).
+//!    upper bound instead of propagating (`crate::native::py_clamp`).
 //! 2. `column_key` rounding replicates `round(x, n)` half-even on the exact
 //!    binary expansion of the double (no float multiply rounding).
 //! 3. The signal sort is stable, so equal scores keep storage (query) order.
 
-use crate::request_file;
-use firesky_native::{
+use crate::native::{
     aerosol_transmission_samples_impl, angular_difference, curvature_drop_m, estimated_cloud_base,
     py_clamp, solar_illumination_elevation_deg, v2_apparent_cloud_elevation,
     v2_feature_metrics_row, FEATURE_ROW_V2_CLOUD_PROBABILITY_GIVEN_CLOUD,
@@ -26,6 +25,7 @@ use firesky_native::{
     FEATURE_ROW_V2_FOOTPRINT_FAR_DISTANCE_KM, FEATURE_ROW_V2_FOOTPRINT_NEAR_DISTANCE_KM,
     FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY, METRIC_COUNT,
 };
+use crate::request_file;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -1722,7 +1722,7 @@ fn assess_candidates(
         if sector_delta > 70.0 {
             continue;
         }
-        let required_height = firesky_native::required_illumination_height_m(
+        let required_height = crate::native::required_illumination_height_m(
             distance_km,
             solar_elevation_deg,
             sector_delta,
@@ -3149,7 +3149,7 @@ fn local_deck_edge_signals(
     }
     let current_reach_km = cloud_edge_reach_km(solar_elevation_deg);
     let required_base_m =
-        firesky_native::required_illumination_height_m(0.0, solar_elevation_deg, 0.0);
+        crate::native::required_illumination_height_m(0.0, solar_elevation_deg, 0.0);
     let mut signals: Vec<BoundarySignalOutput> = Vec::new();
     for layer in ["low", "mid", "high"] {
         let mut local_rows: Vec<&CloudColumnOutput> = column_values
@@ -3443,7 +3443,7 @@ fn boundary_lightpath_signals(
             Some(column) if column.cloud_base_m > 0.0 => column.cloud_base_m,
             _ => estimated_cloud_base_table(feature.row),
         };
-        let required_base = firesky_native::required_illumination_height_m(
+        let required_base = crate::native::required_illumination_height_m(
             feature.distance_km(),
             solar_elevation_deg,
             sector_delta,
@@ -3803,7 +3803,7 @@ fn cloud_hole_rear_target_score(
     if high_mid <= 0.0 {
         return 0.0;
     }
-    let required_height = firesky_native::required_illumination_height_m(
+    let required_height = crate::native::required_illumination_height_m(
         column.distance_km,
         solar_elevation_deg,
         sector_delta_deg,
@@ -4239,11 +4239,8 @@ fn column_blocker_opacity(
 fn target_column_score(column: &CloudColumnOutput, solar_elevation_deg: f64) -> f64 {
     let high_mid = column.high_presence.max(0.82 * column.mid_presence);
     let distance_score = clamp(1.0 - (column.distance_km - 170.0).abs() / 210.0);
-    let required_height = firesky_native::required_illumination_height_m(
-        column.distance_km,
-        solar_elevation_deg,
-        0.0,
-    );
+    let required_height =
+        crate::native::required_illumination_height_m(column.distance_km, solar_elevation_deg, 0.0);
     let high_enough = clamp((column.cloud_base_m - required_height + 1200.0) / 4200.0);
     clamp(
         high_mid
@@ -4339,7 +4336,7 @@ fn heuristic_lightpath_blocking_risk(
 ) -> f64 {
     let mut risks: Vec<f64> = Vec::new();
     for column in samples {
-        let required_height = firesky_native::required_illumination_height_m(
+        let required_height = crate::native::required_illumination_height_m(
             column.distance_km,
             solar_elevation_deg,
             0.0,
@@ -4449,11 +4446,8 @@ fn profile_blocking_risk(
     target_column: Option<&CloudColumnOutput>,
     observer_elevation_m: f64,
 ) -> f64 {
-    let required_height = firesky_native::required_illumination_height_m(
-        column.distance_km,
-        solar_elevation_deg,
-        0.0,
-    );
+    let required_height =
+        crate::native::required_illumination_height_m(column.distance_km, solar_elevation_deg, 0.0);
     let low_block =
         column_blocker_opacity(features, column, "low") * clamp(1.0 - column.distance_km / 160.0);
     let mid_block = column_blocker_opacity(features, column, "mid")
@@ -4495,7 +4489,7 @@ fn profile_sample(
     observer_elevation_m: f64,
 ) -> SolarPathProfileSampleOutput {
     let sector_delta = angular_difference_deg(column.bearing_deg, solar_azimuth_deg);
-    let required_height = firesky_native::required_illumination_height_m(
+    let required_height = crate::native::required_illumination_height_m(
         column.distance_km,
         solar_elevation_deg,
         sector_delta,

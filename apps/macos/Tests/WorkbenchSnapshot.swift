@@ -117,7 +117,18 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
                     guard store.restoringTaskHistoryID == nil, store.taskHistoryError.isEmpty else {
                         fputs("Historical UI restore failed: \(store.taskHistoryError)\n", stderr); exit(1)
                     }
-                    store.selectedModel = env["FIRESKY_TEST_MODEL"] ?? "gfs"
+                    // Single-model contract: a restored regional snapshot may
+                    // contain only one model. Keep the product's restored
+                    // selection when the requested model is absent instead of
+                    // forcing a model with no points to inspect.
+                    let requestedModel = env["FIRESKY_TEST_MODEL"] ?? "gfs"
+                    let restoredModels = store.result?["model_results"] as? JSONObject
+                    if restoredModels?[requestedModel] != nil || restoredModels == nil {
+                        store.selectedModel = requestedModel
+                    }
+                    if isRegional, store.regionalDisplay != "compare" {
+                        store.regionalDisplay = store.selectedModel
+                    }
                     if isRegional, let report = store.modelResult,
                        let point = (report["points"] as? [JSONObject])?.first,
                        let lat = point["lat"] as? NSNumber, let lon = point["lon"] as? NSNumber {

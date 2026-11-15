@@ -4,7 +4,7 @@
 > 使用与数据源注册见 [README.md](../README.md)。English: [DEPLOY.en.md](DEPLOY.en.md)
 
 2026-11-11：当前默认服务为 `firesky-engine http`，不启动 Python。
-已实现接口、配置和验收限制以 [原生运行时切换](RUST_RUNTIME_CUTOVER.zh-CN.md)
+已实现接口、配置和验收限制以 [原生运行时切换](archive/RUST_RUNTIME_CUTOVER.zh-CN.md)
 为准。旧 Python YAML、刷新/预热任务不自动兼容新运行时；下文明确标为
 legacy 的参考只能用于显式旧版部署。Docker、Windows/Linux 和 clean-machine
 发布验收尚未完成，以下是构建/启动配置，不是平台验收通过声明。
@@ -123,7 +123,7 @@ engine/target/release/firesky-engine http --workspace "$PWD" --host 127.0.0.1 --
 curl http://127.0.0.1:8765/api/v1/firesky/health   # {"status":"ok"}
 ```
 
-配置使用 [原生环境变量](RUST_RUNTIME_CUTOVER.zh-CN.md#配置)，例如
+配置使用 [原生环境变量](archive/RUST_RUNTIME_CUTOVER.zh-CN.md#配置)，例如
 `FIRESKY_GFS_CACHE_DIR`、`FIRESKY_CAMS_CACHE_DIR` 和 `FIRESKY_REPORT_DIR`。
 旧 `FIRESKY_CONFIG` / `web_server.yaml` 不控制原生进程。
 ADS 凭据可通过受权限保护的 `~/.cdsapirc` 或 `CDSAPI_RC` 指定文件提供，

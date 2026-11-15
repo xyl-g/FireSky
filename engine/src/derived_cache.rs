@@ -1,12 +1,12 @@
 //! Content-addressed, optional native model-frame cache. Never caches CAMS,
 //! scores, observers, or reports; complete profile children remain in outputs.
+use crate::native::{derivation, gfs};
 use crate::{
     assessment::{Geometry, Model},
     cache_lock::Lock,
     grib::EcCodes,
     tensor_bundle::{source_identity, BundleWriter, F32Bundle, SourceIdentity},
 };
-use firesky_native::{derivation, gfs};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -76,7 +76,7 @@ impl Data {
         let cells = self.latitudes.len();
         let levels = &self.derived.levels;
         if cells == 0
-            || cells > derivation::MAX_CELLS
+            || cells > derivation::MAX_WRAPPED_CELLS
             || self.longitudes.len() != cells
             || self.surface.len() != cells
             || self.derived.columns.len() != cells
@@ -128,7 +128,7 @@ impl Data {
         let meta = bundle.metadata().clone();
         if meta.key != key
             || meta.cells == 0
-            || meta.cells > derivation::MAX_CELLS
+            || meta.cells > derivation::MAX_WRAPPED_CELLS
             || meta.pressure_levels.is_empty()
             || meta.pressure_levels.len() > gfs::PRESSURE_LEVELS.len()
             || bundle.names().collect::<Vec<_>>()

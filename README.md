@@ -8,7 +8,7 @@ An independent burning-sunset prediction stack: **native Rust prediction engine 
 > English documentation: [README.en.md](README.en.md)
 
 > 当前主线：以 [macOS 产品与 UI 基准](docs/MACOS_UI_BASELINE.zh-CN.md)完善原生端，
-> 其他 UI 最终向其对齐；状态与顺序见 [2026-11-13 接续计划](docs/NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。
+> 其他 UI 最终向其对齐；状态与顺序见 [2026-11-13 接续计划](docs/archive/NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。
 
 ---
 
@@ -83,7 +83,7 @@ $$\mathrm{pre}=q_{\rm cov} f_m \iota c f_D,\qquad
 ## 系统要求与安装
 
 服务/CLI/原生桌面运行时均为 Rust，无 Python 运行时依赖。
-已实现范围与验收缺口见 [原生运行时切换](docs/RUST_RUNTIME_CUTOVER.zh-CN.md)。
+已实现范围与验收缺口见 [原生运行时切换](docs/archive/RUST_RUNTIME_CUTOVER.zh-CN.md)。
 
 | 依赖 | 版本 | 用途 | 必需? |
 |---|---|---|---|
@@ -139,7 +139,7 @@ curl -X POST http://127.0.0.1:8765/api/v1/firesky/data/fetch -H 'Content-Type: a
 
 ## 配置说明
 
-原生运行时使用 [环境变量](docs/RUST_RUNTIME_CUTOVER.zh-CN.md#配置) 和命令行参数；
+原生运行时使用 [环境变量](docs/archive/RUST_RUNTIME_CUTOVER.zh-CN.md#配置) 和命令行参数；
 Docker 部署的目录约定见 `docker/Dockerfile` 与 [部署文档](docs/DEPLOY.md)。
 
 ## 使用
@@ -161,7 +161,7 @@ engine/target/release/firesky-engine forecast --input request.json --workspace "
 
 ## API 端点清单
 
-原生已注册接口及未完成清单见 [原生运行时切换](docs/RUST_RUNTIME_CUTOVER.zh-CN.md#http-范围)。
+原生已注册接口及未完成清单见 [原生运行时切换](docs/archive/RUST_RUNTIME_CUTOVER.zh-CN.md#http-范围)。
 参数、返回字段与调用示例见 [预测接口说明](docs/FORECAST_API.md)。
 
 | 端点 | 方法 | 说明 |
@@ -191,8 +191,8 @@ cd apps/shared-web && npm run check && npm run build # 0 errors
 - `tests/test_rust_desktop_sync.py`：后台数据同步助手 JSONL 桥契约（设置持久化、
   到期门禁、熔断与解锁、fail-closed）。
 - `tests/test_native_preparation_ui.py`：macOS Swift 准备/展示逻辑编译检查。
-- 改动 `native/src/*.rs` 后先 `./scripts/build_native_variants.sh` 再跑测试
-  （否则加载的是旧 dylib，会误判）。
+- 评分核心已并入引擎 crate（`engine/src/native/`）；改动后直接重建引擎
+  （`make engine` / `make desktop-macos`）再跑测试。
 
 ## 桌面应用（本地单机）
 
@@ -201,7 +201,7 @@ cd apps/shared-web && npm run check && npm run build # 0 errors
 记录各平台的实际验收边界。Tauri 桌面壳与旧 PySide6 桌面均已退役（2026-11-13）：
 共享 Web 迁至 `apps/shared-web/`，由 Rust HTTP 与 Docker 托管；旧版用户数据
 （`~/.firesky-desktop/` 收藏点与当前点）由 macOS 新版启动时自动导入。退役记录见
-`docs/PYTHON_TAURI_PYSIDE_RETIREMENT_PLAN.zh-CN.md`。
+`docs/archive/PYTHON_TAURI_PYSIDE_RETIREMENT_PLAN.zh-CN.md`。
 
 ### 地图底图与天地图 Key
 
@@ -241,7 +241,7 @@ firesky/
 
 | 症状 | 原因与处理 |
 |---|---|
-| `national CPU scorer library not found` | 先跑 `./scripts/build_native_variants.sh` |
+| `national CPU scorer library not found` | 旧版独立评分器残留报错；评分核心已并入引擎，重建引擎（`make engine`）即可 |
 | `No cached CAMS optical profile covers ...` | CAMS 缓存缺该周期文件——预热端点下载（需 ADS key）或从其他部署拷贝 `.cache/cams` |
 | `CAMS full profile does not cover every model cell` | CAMS 水平范围不够——扩大预热 `area` |
 | 预测报"GFS 周期不可用" | NOMADS 发布延迟 ~5h45m；用更早的 cycle 或稍后重试 |

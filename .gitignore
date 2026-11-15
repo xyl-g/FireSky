@@ -14,7 +14,10 @@ apps/macos/.swiftpm/
 apps/windows/**/bin/
 apps/windows/**/obj/
 /output/
-/dist/
+/dist/*
+!/dist/v1.0.0/
+/dist/v1.0.0/*
+!/dist/v1.0.0/SHA256SUMS.txt
 /build/
 .playwright-cli/
 .qwen/

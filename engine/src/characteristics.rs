@@ -544,7 +544,7 @@ pub(crate) fn window(steps: &[Step], threshold: f64, regime: &str) -> Result<Val
 
 pub fn execute(operation: Operation) -> Result<Value, String> {
     match operation {
-        Operation::Level { index } => Ok(json!(firesky_native::empirical::quality_level(index))),
+        Operation::Level { index } => Ok(json!(crate::native::empirical::quality_level(index))),
         Operation::Scene {
             local_deck,
             distant_target,

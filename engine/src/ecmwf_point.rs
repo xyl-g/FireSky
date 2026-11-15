@@ -323,7 +323,7 @@ pub(crate) fn web_payload(report: &Value, quality: &Value, elevation: f64) -> Va
             .unwrap()
     });
     result["peak_quality_index"] = json!(peak);
-    result["peak_quality_level"] = json!(firesky_native::empirical::quality_level(peak));
+    result["peak_quality_level"] = json!(crate::native::empirical::quality_level(peak));
     result["analysis_radius_km"] = quality["quality_components"]["forward_field_radius_km"].clone();
     result["observer_elevation_asl_m"] = json!(elevation);
     result["source_roles"] =

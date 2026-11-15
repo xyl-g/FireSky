@@ -4,7 +4,7 @@
 本文原为选型提案；用户已就关键决策点拍板，macOS 基准平台已按定案实现。
 它承接 [后台数据同步助手设计](DATA_SYNC_HELPER_DESIGN.zh-CN.md)（已定案、已实现于 `75371d1`），
 把该设计第 1.2.5 / 2 / 15.6 节**显式推迟**的「守护进程化 / 应用无关同步」展开为四个平台的
-详细选型。平台范围与暂停声明以 [RUST_REMAINING_WORK](RUST_REMAINING_WORK.zh-CN.md) 头部为准：
+详细选型。平台范围与暂停声明以 [RUST_REMAINING_WORK](archive/RUST_REMAINING_WORK.zh-CN.md) 头部为准：
 macOS 为产品与 UI 基准；Windows/Linux 原生开发暂停；Docker 属后续 Web 部署；移动端为全新地基。
 
 > 用户诉求（2026-11-13）：

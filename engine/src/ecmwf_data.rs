@@ -264,6 +264,7 @@ fn retain_index(
     entries.push_back(entry);
 }
 struct Transfer {
+    cancel: Option<Arc<AtomicBool>>,
     client: Client,
     config: Config,
     indexes: VecDeque<IndexEntry>,
@@ -276,8 +277,8 @@ struct Transfer {
     header_probe_ms: f64,
 }
 impl Transfer {
-    fn new(config: Config) -> Result<Self, String> {
-        let client = Client::builder()
+    fn new(config: Config, cancel: Option<Arc<AtomicBool>>) -> Result<Self, String> {
+        let client = crate::http_client::builder()
             .retry(reqwest::retry::never())
             .referer(false)
             .user_agent("firesky-rust/0.1")
@@ -291,6 +292,7 @@ impl Transfer {
             .build()
             .map_err(|_| "cannot initialize EC HTTP client")?;
         Ok(Self {
+            cancel,
             client,
             config,
             indexes: VecDeque::new(),
@@ -302,6 +304,17 @@ impl Transfer {
             range_ms: 0.0,
             header_probe_ms: 0.0,
         })
+    }
+    fn check_cancelled(&self) -> Result<(), String> {
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Acquire))
+        {
+            Err("desktop operation cancelled".into())
+        } else {
+            Ok(())
+        }
     }
     fn send(
         &self,
@@ -315,6 +328,7 @@ impl Transfer {
             self.config.request_attempts
         };
         for attempt in 1..=attempts {
+            self.check_cancelled()?;
             let mut request = self
                 .client
                 .request(method.clone(), url.clone())
@@ -331,6 +345,7 @@ impl Transfer {
                 r.status().is_server_error() || r.status().as_u16() == 429
             });
             if retryable && attempt < attempts {
+                self.check_cancelled()?;
                 std::thread::sleep(std::time::Duration::from_secs_f64(
                     self.config.retry_seconds,
                 ));
@@ -569,6 +584,7 @@ impl Transfer {
                 let mut buffer = vec![0; 1024 * 1024];
                 let mut copied = 0;
                 loop {
+                    self.check_cancelled()?;
                     let count = response
                         .read(&mut buffer)
                         .map_err(|_| "EC range response read failed")?;
@@ -593,6 +609,7 @@ impl Transfer {
             if attempt == self.config.request_attempts {
                 return result;
             }
+            self.check_cancelled()?;
             std::thread::sleep(std::time::Duration::from_secs_f64(
                 self.config.retry_seconds,
             ));
@@ -723,7 +740,6 @@ fn check_cancelled(cancel: &AtomicBool) -> Result<(), String> {
 /// the operation lock within one file download instead of the whole loop.
 pub fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result<Value, String> {
     check_cancelled(cancel)?;
-    let started = Instant::now();
     params.config.validate()?;
     if !["plan", "probe", "resolve", "download"].contains(&params.operation.as_str())
         || !(1..=64).contains(&params.max_cycles)
@@ -740,12 +756,21 @@ pub fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result<Value,
     {
         return Err("EC requires published forecast hours".into());
     }
+    // Share the caller's flag with the transfer so range reads observe
+    // cancellation mid-file, not only at hour boundaries.
+    crate::cancel_scope::with_shared_cancel(cancel, |shared| {
+        let mut transfer = Transfer::new(params.config.clone(), Some(shared))?;
+        execute_with_transfer(params, &mut transfer)
+    })
+}
+
+fn execute_with_transfer(params: Params, mut transfer: &mut Transfer) -> Result<Value, String> {
+    let started = Instant::now();
     let targets = params
         .evaluation_utcs
         .iter()
         .map(|v| time_contract::parse_utc(v))
         .collect::<Result<Vec<_>, _>>()?;
-    let mut transfer = Transfer::new(params.config)?;
     let explicit = params.cycle_utc.as_deref().map(parse_cycle).transpose()?;
     let cycle = if let Some(cycle) = explicit {
         cycle
@@ -821,7 +846,7 @@ pub fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result<Value,
     } else if ["resolve", "download"].contains(&params.operation.as_str()) {
         let codes = EcCodes::load()?;
         for hour in &requested {
-            check_cancelled(cancel)?;
+            transfer.check_cancelled()?;
             files.push(download(
                 &mut transfer,
                 &codes,

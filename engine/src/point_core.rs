@@ -1,11 +1,11 @@
 //! Exact generated-core validation and public point payload materialization.
+use crate::native::{empirical, quality};
 use crate::{
     astronomy,
     characteristics::{self, Operation, Phase},
     frames, time_contract,
 };
 use chrono::{DateTime, Datelike, Duration, FixedOffset, Offset, Utc};
-use firesky_native::{empirical, quality};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 

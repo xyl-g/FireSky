@@ -147,31 +147,36 @@ fn gfs_files(
         .collect::<Result<Vec<_>, _>>()?;
     let bbox = [bbox[0], bbox[1], bbox[2], bbox[3]];
     let region = context["region"].as_str().map(str::to_owned);
-    let client = gfs_data::GfsClient::new(gfs_data::Config {
-        cache_dir: input.config.gfs_cache_dir.clone(),
-        resolution: "0p25".into(),
-        region,
-        timeout_seconds: 90.0,
-        lock_timeout_seconds: 300.0,
-        download_attempts: 4,
-    })?;
-    hours
-        .iter()
-        .map(|&hour| {
-            check(cancel)?;
-            let row = client
-                .resolve(cycle, hour, Some(bbox), false, true)?
-                .ok_or_else(|| format!("GFS f{hour:03} did not resolve to a cache file"))?;
-            let path = row["path"]
-                .as_str()
-                .ok_or("GFS resolve response has no path")?;
-            Ok(json!({
-                "forecast_hour": hour,
-                "path": path,
-                "status": row["status"].as_str().unwrap_or("resolved"),
-            }))
-        })
-        .collect()
+    crate::cancel_scope::with_shared_cancel(cancel, |shared| {
+        let client = gfs_data::GfsClient::with_cancel(
+            gfs_data::Config {
+                cache_dir: input.config.gfs_cache_dir.clone(),
+                resolution: "0p25".into(),
+                region,
+                timeout_seconds: 90.0,
+                lock_timeout_seconds: 300.0,
+                download_attempts: 4,
+            },
+            shared,
+        )?;
+        hours
+            .iter()
+            .map(|&hour| {
+                check(cancel)?;
+                let row = client
+                    .resolve(cycle, hour, Some(bbox), false, true)?
+                    .ok_or_else(|| format!("GFS f{hour:03} did not resolve to a cache file"))?;
+                let path = row["path"]
+                    .as_str()
+                    .ok_or("GFS resolve response has no path")?;
+                Ok(json!({
+                    "forecast_hour": hour,
+                    "path": path,
+                    "status": row["status"].as_str().unwrap_or("resolved"),
+                }))
+            })
+            .collect()
+    })
 }
 
 fn cams_result(
@@ -203,18 +208,22 @@ fn cams_result(
     let mut parts = Vec::with_capacity(areas.len());
     for area in &areas {
         check(cancel)?;
-        let result = cams_data::execute_cancellable(cams_data::Params {
-            operation: "resolve".into(),
-            cache_dir: input.config.cams_cache_dir.clone(),
-            area: area.clone(),
-            target_utcs: targets.clone(),
-            target_utc: None,
-            config: ads::Config::default(),
-            allow_download: true,
-            require_exact_valid_time: true,
-            refresh_before_cycle: refresh.clone(),
-            all_leads: false,
-        }, cancel)?;
+        let result = cams_data::execute_cancellable(
+            cams_data::Params {
+                operation: "resolve".into(),
+                cache_dir: input.config.cams_cache_dir.clone(),
+                area: area.clone(),
+                target_utcs: targets.clone(),
+                target_utc: None,
+                config: ads::Config::default(),
+                allow_download: true,
+                require_exact_valid_time: true,
+                refresh_before_cycle: refresh.clone(),
+                all_leads: false,
+                model_bbox: None,
+            },
+            cancel,
+        )?;
         let missing = result["missing_valid_times"]
             .as_array()
             .ok_or("CAMS response is missing missing_valid_times")?;

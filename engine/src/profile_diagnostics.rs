@@ -1,7 +1,7 @@
 //! Observer-column sampling and material/geometry diagnostics.
 
+use crate::native::profile_diagnostics::{self as native, Stencil};
 use crate::tensor_bundle::{BundleWriter, ProfileTensor, MAX_BUNDLE_BYTES};
-use firesky_native::profile_diagnostics::{self as native, Stencil};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;

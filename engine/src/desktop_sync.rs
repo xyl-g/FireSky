@@ -25,7 +25,10 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    sync::{Mutex, atomic::{AtomicBool, Ordering}},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Mutex,
+    },
     time::{Instant, SystemTime},
 };
 
@@ -57,6 +60,26 @@ fn check(cancel: &AtomicBool) -> Result<(), String> {
 
 fn clip(text: &str, limit: usize) -> String {
     text.chars().take(limit).collect()
+}
+
+/// User-facing source name for progress messages (F3 localization).
+fn source_label(name: &str) -> &'static str {
+    match name {
+        "cams" => "CAMS",
+        "gfs" => "GFS",
+        _ => "EC",
+    }
+}
+
+/// User-facing round status for progress messages (F3 localization).
+fn sync_status_label(status: &str) -> &'static str {
+    match status {
+        "synced" => "已同步",
+        "current" => "已是最新",
+        "failed" => "失败",
+        "cancelled" => "已取消",
+        _ => "结束",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -113,7 +136,9 @@ fn enabled_sources(settings: &Settings) -> Vec<&'static str> {
 }
 
 fn region_code(name: &str) -> bool {
-    desktop_context::REGIONS.iter().any(|(code, _, _)| *code == name)
+    desktop_context::REGIONS
+        .iter()
+        .any(|(code, _, _)| *code == name)
 }
 
 fn validate(settings: &Settings) -> Result<(), String> {
@@ -130,10 +155,7 @@ fn validate(settings: &Settings) -> Result<(), String> {
         }
     }
     if let Some(hours) = settings.lead_horizon_hours {
-        if hours < MIN_LEAD_HORIZON_HOURS
-            || hours > MAX_LEAD_HORIZON_HOURS
-            || hours % 3 != 0
-        {
+        if hours < MIN_LEAD_HORIZON_HOURS || hours > MAX_LEAD_HORIZON_HOURS || hours % 3 != 0 {
             return Err(format!(
                 "lead_horizon_hours must be a multiple of 3 within {MIN_LEAD_HORIZON_HOURS}..{MAX_LEAD_HORIZON_HOURS}"
             ));
@@ -210,9 +232,7 @@ pub fn load(workspace: &Path) -> Result<Settings, String> {
 }
 
 fn retention_configured(workspace: &Path) -> Result<bool, String> {
-    Ok(
-        retention_settings::load(workspace)? != retention_settings::RetentionSettings::default(),
-    )
+    Ok(retention_settings::load(workspace)? != retention_settings::RetentionSettings::default())
 }
 
 /// Merged settings + state + retention status (design 9/11.1: the macOS page
@@ -242,9 +262,7 @@ pub fn save(workspace: &Path, payload: Value) -> Result<Value, String> {
         return Err("data sync settings exceed limit".into());
     }
     let destination = settings_path(workspace);
-    if fs::symlink_metadata(&destination)
-        .is_ok_and(|metadata| metadata.file_type().is_symlink())
-    {
+    if fs::symlink_metadata(&destination).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
         return Err("data sync settings path cannot be a symlink".into());
     }
     let parent = destination
@@ -269,11 +287,7 @@ pub fn save(workspace: &Path, payload: Value) -> Result<Value, String> {
     with_state_lock(|| {
         let state_file = state_path(workspace);
         let mut state = read_state(&state_file);
-        for source in [
-            &mut state.cams,
-            &mut state.gfs,
-            &mut state.ec,
-        ] {
+        for source in [&mut state.cams, &mut state.gfs, &mut state.ec] {
             source.consecutive_failures = 0;
             source.suspended = false;
         }
@@ -628,7 +642,10 @@ fn publication_name(source: &str) -> &'static str {
     }
 }
 
-fn probe_publications(sources: &[&str], now_utc: Option<&str>) -> Result<Map<String, Value>, String> {
+fn probe_publications(
+    sources: &[&str],
+    now_utc: Option<&str>,
+) -> Result<Map<String, Value>, String> {
     let params: desktop_publications::Params = serde_json::from_value(json!({
         "sources": sources.iter().map(|name| publication_name(name)).collect::<Vec<_>>(),
         "now_utc": now_utc,
@@ -725,8 +742,13 @@ pub fn due(workspace: &Path, busy: bool, now_utc: Option<&str>) -> Result<Value,
             .is_some_and(|expected| {
                 source_state.coverage_fingerprint.as_deref() == Some(expected.as_str())
             });
-        let (is_due, reason) =
-            due_for_source(source_state, interval, publication.as_ref(), now, coverage_matches);
+        let (is_due, reason) = due_for_source(
+            source_state,
+            interval,
+            publication.as_ref(),
+            now,
+            coverage_matches,
+        );
         if is_due {
             due_sources.push(name);
         }
@@ -813,7 +835,12 @@ fn cams_target_utcs(run: DateTime<Utc>) -> Result<Vec<String>, String> {
             )
         })
         .collect::<Result<Vec<_>, String>>()
-        .map(|targets| targets.iter().map(|target| time_contract::iso(*target)).collect())
+        .map(|targets| {
+            targets
+                .iter()
+                .map(|target| time_contract::iso(*target))
+                .collect()
+        })
 }
 
 /// The configured horizon applied on the EC open-data publication grid
@@ -917,18 +944,22 @@ fn sync_cams(
     let envelope = cams_area_from_region(region_bounds(anchor)?)?;
     let (_, area_key, _) = cams_data::area_identity(json!(envelope))?;
     let targets = cams_target_utcs(cycle)?;
-    let result = cams_data::execute_cancellable(cams_data::Params {
-        operation: "batch".into(),
-        cache_dir: context.cams_cache_dir.clone(),
-        area: json!(envelope),
-        target_utcs: targets,
-        target_utc: None,
-        config: crate::ads::Config::default(),
-        allow_download: true,
-        require_exact_valid_time: true,
-        refresh_before_cycle: None,
-        all_leads: true,
-    }, cancel)?;
+    let result = cams_data::execute_cancellable(
+        cams_data::Params {
+            operation: "batch".into(),
+            cache_dir: context.cams_cache_dir.clone(),
+            area: json!(envelope),
+            target_utcs: targets,
+            target_utc: None,
+            config: crate::ads::Config::default(),
+            allow_download: true,
+            require_exact_valid_time: true,
+            refresh_before_cycle: None,
+            all_leads: true,
+            model_bbox: None,
+        },
+        cancel,
+    )?;
     // Fail-closed: a partial continent cycle must not advance last_cycle.
     let group_errors = &result["group_errors"];
     let missing = &result["missing_valid_times"];
@@ -958,34 +989,40 @@ fn sync_gfs(
     // envelope covering any point domain inside the anchor, so a later point
     // forecast reuses this cache instead of re-downloading (coverage reuse).
     let bbox = gfs_sync_bbox(anchor)?;
-    let client = gfs_data::GfsClient::new(gfs_data::Config {
-        cache_dir: context.gfs_cache_dir.clone(),
-        resolution: "0p25".into(),
-        region: Some(anchor.to_owned()),
-        timeout_seconds: 90.0,
-        lock_timeout_seconds: 300.0,
-        download_attempts: 4,
-    })?;
     let hours: Vec<u32> = (0..=horizon).collect();
     let mut files = Vec::new();
     let mut cache_hits = 0_usize;
     let mut downloaded = 0_usize;
-    for &hour in &hours {
-        check(cancel)?;
-        let row = client
-            .resolve(cycle, hour, Some(bbox), false, true)?
-            .ok_or_else(|| format!("GFS f{hour:03} did not resolve to a cache file"))?;
-        match row["status"].as_str() {
-            Some("downloaded") => downloaded += 1,
-            Some(_) => cache_hits += 1,
-            _ => {}
+    crate::cancel_scope::with_shared_cancel(cancel, |shared| {
+        let client = gfs_data::GfsClient::with_cancel(
+            gfs_data::Config {
+                cache_dir: context.gfs_cache_dir.clone(),
+                resolution: "0p25".into(),
+                region: Some(anchor.to_owned()),
+                timeout_seconds: 90.0,
+                lock_timeout_seconds: 300.0,
+                download_attempts: 4,
+            },
+            shared,
+        )?;
+        for &hour in &hours {
+            check(cancel)?;
+            let row = client
+                .resolve(cycle, hour, Some(bbox), false, true)?
+                .ok_or_else(|| format!("GFS f{hour:03} did not resolve to a cache file"))?;
+            match row["status"].as_str() {
+                Some("downloaded") => downloaded += 1,
+                Some(_) => cache_hits += 1,
+                _ => {}
+            }
+            files.push(json!({
+                "forecast_hour": hour,
+                "path": row["path"],
+                "status": row["status"],
+            }));
         }
-        files.push(json!({
-            "forecast_hour": hour,
-            "path": row["path"],
-            "status": row["status"],
-        }));
-    }
+        Ok(())
+    })?;
     Ok(json!({
         "region": anchor,
         "bbox": bbox,
@@ -1007,23 +1044,26 @@ fn sync_ec(
     check(cancel)?;
     // Per-hour cancellation: the provider checks the flag before every
     // transfer, so a cancelled round stops within one file download.
-    let mut value = ecmwf_data::execute_cancellable(ecmwf_data::Params {
-        operation: "download".into(),
-        config: ecmwf_data::Config {
-            cache_dir: context.ecmwf_cache_dir.clone(),
-            source: source.to_owned(),
-            ..Default::default()
+    let mut value = ecmwf_data::execute_cancellable(
+        ecmwf_data::Params {
+            operation: "download".into(),
+            config: ecmwf_data::Config {
+                cache_dir: context.ecmwf_cache_dir.clone(),
+                source: source.to_owned(),
+                ..Default::default()
+            },
+            cycle_utc: Some(time_contract::iso(cycle)),
+            forecast_hour: None,
+            forecast_hours: Some(ec_forecast_hours(horizon)),
+            reference_utc: None,
+            now_utc: None,
+            evaluation_utcs: Vec::new(),
+            max_cycles: 8,
+            allow_download: true,
+            use_cache_for_cycle: true,
         },
-        cycle_utc: Some(time_contract::iso(cycle)),
-        forecast_hour: None,
-        forecast_hours: Some(ec_forecast_hours(horizon)),
-        reference_utc: None,
-        now_utc: None,
-        evaluation_utcs: Vec::new(),
-        max_cycles: 8,
-        allow_download: true,
-        use_cache_for_cycle: true,
-    }, cancel)?;
+        cancel,
+    )?;
     value["lead_horizon_hours"] = json!(horizon);
     value["ecmwf_source"] = json!(source);
     Ok(value)
@@ -1048,7 +1088,9 @@ pub fn run(
     let requested = requested_sources(&params)?;
     for name in &requested {
         if !settings.sources.toggle(name) {
-            return Err(format!("data sync source {name} is not enabled in settings"));
+            return Err(format!(
+                "data sync source {name} is not enabled in settings"
+            ));
         }
     }
     let anchor = settings
@@ -1161,7 +1203,7 @@ pub fn run(
             results.insert((*name).to_owned(), source);
             continue;
         }
-        let message = format!("syncing {name} latest cycle");
+        let message = format!("正在同步 {} 最新周期", source_label(name));
         if progress(
             json!({"stage":"sync","percent":index * 100 / total,"source":name,"message":message}),
         )
@@ -1193,11 +1235,13 @@ pub fn run(
 
         let mut is_current = false;
         let footprint = expected_fingerprint(name, &settings).ok();
-        let coverage_tracked = footprint.is_some()
-            && source_state.coverage_fingerprint == footprint;
+        let coverage_tracked =
+            footprint.is_some() && source_state.coverage_fingerprint == footprint;
         let outcome: Result<Value, String> = if !verified {
-            Err("publication is unavailable or unverified; refusing to download (fail-closed)"
-                .to_string())
+            Err(
+                "publication is unavailable or unverified; refusing to download (fail-closed)"
+                    .to_string(),
+            )
         } else {
             let cycle = publication
                 .as_ref()
@@ -1289,7 +1333,7 @@ pub fn run(
             source: source.clone(),
         });
         if !stop {
-            let message = format!("{name} sync {status}");
+            let message = format!("{} 同步{}", source_label(name), sync_status_label(status));
             if progress(
                 json!({"stage":"sync","percent":(index + 1) * 100 / total,"source":name,"message":message}),
             )
@@ -1322,10 +1366,8 @@ pub fn run(
                 if let Some(sources) = round["sources"].as_object_mut() {
                     for name in &requested {
                         if let Some(source) = sources.get_mut(*name) {
-                            if matches!(
-                                source["status"].as_str(),
-                                Some("synced") | Some("current")
-                            ) {
+                            if matches!(source["status"].as_str(), Some("synced") | Some("current"))
+                            {
                                 source["retention"] = report.clone();
                             }
                         }
@@ -1385,8 +1427,7 @@ mod tests {
         assert_eq!(value["configured"], false);
         assert_eq!(value["retention_configured"], false);
         assert_eq!(value["settings"]["enabled"], false);
-        assert!(settings_path(workspace.path())
-            .ends_with(".firesky/settings/data_sync.json"));
+        assert!(settings_path(workspace.path()).ends_with(".firesky/settings/data_sync.json"));
         assert!(state_path(workspace.path()).ends_with(".firesky/state/data-sync.json"));
     }
 
@@ -1398,14 +1439,21 @@ mod tests {
         assert_eq!(value["settings"]["interval_minutes"], 60);
         assert_eq!(value["settings"]["sources"]["ec"], true);
         assert_eq!(value["state"]["contract"], STATE_CONTRACT);
-        assert_eq!(load(workspace.path()).unwrap(), Settings {
-            enabled: true,
-            sources: SourceToggles { cams: true, gfs: true, ec: true },
-            interval_minutes: Some(60),
-            anchor_region: Some("china".into()),
-            lead_horizon_hours: Some(120),
-            ecmwf_source: Some("aws".into()),
-        });
+        assert_eq!(
+            load(workspace.path()).unwrap(),
+            Settings {
+                enabled: true,
+                sources: SourceToggles {
+                    cams: true,
+                    gfs: true,
+                    ec: true
+                },
+                interval_minutes: Some(60),
+                anchor_region: Some("china".into()),
+                lead_horizon_hours: Some(120),
+                ecmwf_source: Some("aws".into()),
+            }
+        );
         // Disabled settings may keep valid optional values.
         save(
             workspace.path(),
@@ -1509,9 +1557,13 @@ mod tests {
             ecmwf_cache_dir: workspace.path().join("ec"),
         };
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        let err = run(&context, json!({"sources": ["cams"]}), None, &cancel, &|_| {
-            Ok(())
-        })
+        let err = run(
+            &context,
+            json!({"sources": ["cams"]}),
+            None,
+            &cancel,
+            &|_| Ok(()),
+        )
         .unwrap_err();
         assert!(
             err.contains("another data sync round is active in another process"),
@@ -1543,7 +1595,8 @@ mod tests {
         fs::write(
             &state_file,
             serde_json::to_vec(&json!({"contract": STATE_CONTRACT,
-                "sources": {"cams": {}, "himawari": {}}})).unwrap(),
+                "sources": {"cams": {}, "himawari": {}}}))
+            .unwrap(),
         )
         .unwrap();
         assert_eq!(read_state(&state_file), State::default());
@@ -1558,7 +1611,8 @@ mod tests {
         let now = Utc.with_ymd_and_hms(2026, 11, 13, 15, 0, 0).unwrap();
         let idle = SourceState::default();
         // Fresh source with a verified new cycle is due.
-        let (due, reason) = due_for_source(&idle, 60, Some(&publication(Some(cycle), true)), now, false);
+        let (due, reason) =
+            due_for_source(&idle, 60, Some(&publication(Some(cycle), true)), now, false);
         assert!(due);
         assert_eq!(reason, "new_cycle:2026-11-13 12Z");
         // Suspended sources are never auto-scheduled.
@@ -1568,7 +1622,13 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            due_for_source(&suspended, 60, Some(&publication(Some(cycle), true)), now, false),
+            due_for_source(
+                &suspended,
+                60,
+                Some(&publication(Some(cycle), true)),
+                now,
+                false
+            ),
             (false, "suspended_failures".into())
         );
         // Interval not elapsed.
@@ -1577,7 +1637,13 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            due_for_source(&recent, 60, Some(&publication(Some(cycle), true)), now, false),
+            due_for_source(
+                &recent,
+                60,
+                Some(&publication(Some(cycle), true)),
+                now,
+                false
+            ),
             (false, "interval_not_elapsed".into())
         );
         // Elapsed interval proceeds to the publication gate.
@@ -1585,7 +1651,8 @@ mod tests {
             last_attempt_utc: Some(time_contract::iso(now - Duration::minutes(61))),
             ..Default::default()
         };
-        let (due, reason) = due_for_source(&old, 60, Some(&publication(Some(cycle), true)), now, false);
+        let (due, reason) =
+            due_for_source(&old, 60, Some(&publication(Some(cycle), true)), now, false);
         assert!(due);
         assert_eq!(reason, "new_cycle:2026-11-13 12Z");
         // Heuristic (unverified) publications never trigger downloads.
@@ -1593,14 +1660,23 @@ mod tests {
             due_for_source(&old, 60, Some(&publication(Some(cycle), false)), now, false),
             (false, "publication_unverified".into())
         );
-        assert_eq!(due_for_source(&old, 60, None, now, false), (false, "publication_unverified".into()));
+        assert_eq!(
+            due_for_source(&old, 60, None, now, false),
+            (false, "publication_unverified".into())
+        );
         // Verified cycle already synced is current.
         let synced = SourceState {
             last_cycle: Some(time_contract::iso(cycle)),
             ..Default::default()
         };
         assert_eq!(
-            due_for_source(&synced, 60, Some(&publication(Some(cycle), true)), now, true),
+            due_for_source(
+                &synced,
+                60,
+                Some(&publication(Some(cycle), true)),
+                now,
+                true
+            ),
             (false, "cycle_current".into())
         );
         // An older verified publication is also current.
@@ -1618,7 +1694,16 @@ mod tests {
         let mut unlocked = suspended;
         unlocked.suspended = false;
         unlocked.consecutive_failures = 0;
-        assert!(due_for_source(&unlocked, 60, Some(&publication(Some(cycle), true)), now, false).0);
+        assert!(
+            due_for_source(
+                &unlocked,
+                60,
+                Some(&publication(Some(cycle), true)),
+                now,
+                false
+            )
+            .0
+        );
     }
 
     #[test]
@@ -1634,7 +1719,13 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            due_for_source(&synced, 60, Some(&publication(Some(cycle), true)), now, false),
+            due_for_source(
+                &synced,
+                60,
+                Some(&publication(Some(cycle), true)),
+                now,
+                false
+            ),
             (true, "coverage_stale:2026-11-13 12Z".into())
         );
         // A recorded-but-different footprint (changed horizon/anchor) is also
@@ -1644,11 +1735,24 @@ mod tests {
             ..synced.clone()
         };
         assert_eq!(
-            due_for_source(&tracked, 60, Some(&publication(Some(cycle), true)), now, false).0,
+            due_for_source(
+                &tracked,
+                60,
+                Some(&publication(Some(cycle), true)),
+                now,
+                false
+            )
+            .0,
             true
         );
         assert_eq!(
-            due_for_source(&synced, 60, Some(&publication(Some(cycle), true)), now, true),
+            due_for_source(
+                &synced,
+                60,
+                Some(&publication(Some(cycle), true)),
+                now,
+                true
+            ),
             (false, "cycle_current".into())
         );
     }
@@ -1721,7 +1825,8 @@ mod tests {
                 "2026-11-15T00:00:00+00:00",
             ]
         );
-        for target in cams_target_utcs(Utc.with_ymd_and_hms(2026, 11, 13, 0, 0, 0).unwrap()).unwrap()
+        for target in
+            cams_target_utcs(Utc.with_ymd_and_hms(2026, 11, 13, 0, 0, 0).unwrap()).unwrap()
         {
             let parsed = time_contract::parse_utc(target.as_str()).unwrap();
             assert_eq!(parsed.hour() % 3, 0);
@@ -1764,10 +1869,20 @@ mod tests {
             consecutive_failures: 2,
             ..Default::default()
         };
-        record_source_outcome(Some(&mut source), "failed", None, None, &json!({"error": "boom"}), None);
+        record_source_outcome(
+            Some(&mut source),
+            "failed",
+            None,
+            None,
+            &json!({"error": "boom"}),
+            None,
+        );
         assert_eq!(source.consecutive_failures, 3);
         assert_eq!(source.suspended, true);
-        assert_eq!(source.last_cycle.as_deref(), Some("2026-11-12T00:00:00+00:00"));
+        assert_eq!(
+            source.last_cycle.as_deref(),
+            Some("2026-11-12T00:00:00+00:00")
+        );
         assert_eq!(source.last_result.as_ref().unwrap()["status"], "failed");
         assert_eq!(source.last_result.as_ref().unwrap()["errors"][0], "boom");
         // A success clears the breaker and advances the cycle.
@@ -1781,12 +1896,18 @@ mod tests {
         );
         assert_eq!(source.consecutive_failures, 0);
         assert_eq!(source.suspended, false);
-        assert_eq!(source.last_cycle.as_deref(), Some("2026-11-13T12:00:00+00:00"));
+        assert_eq!(
+            source.last_cycle.as_deref(),
+            Some("2026-11-13T12:00:00+00:00")
+        );
         assert_eq!(source.last_result.as_ref().unwrap()["files"], 1);
         assert_eq!(source.last_result.as_ref().unwrap()["task_id"], "task-1");
         // "current" clears failures without touching last_cycle.
         record_source_outcome(Some(&mut source), "current", None, None, &json!({}), None);
-        assert_eq!(source.last_cycle.as_deref(), Some("2026-11-13T12:00:00+00:00"));
+        assert_eq!(
+            source.last_cycle.as_deref(),
+            Some("2026-11-13T12:00:00+00:00")
+        );
         assert_eq!(source.coverage_fingerprint.as_deref(), Some("v2:cams:test"));
         assert_eq!(source.suspended, false);
         // Cancelled rounds are never counted as failures.
@@ -1886,7 +2007,10 @@ mod tests {
             committed.cams.last_result.as_ref().unwrap()["task_id"],
             "task-9"
         );
-        assert_eq!(committed.gfs.last_result.as_ref().unwrap()["status"], "failed");
+        assert_eq!(
+            committed.gfs.last_result.as_ref().unwrap()["status"],
+            "failed"
+        );
     }
 
     #[test]

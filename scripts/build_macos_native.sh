@@ -4,6 +4,10 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="${FIRESKY_NATIVE_DIST:-$ROOT/dist/native-macos}"
 CODESIGN_IDENTITY="${FIRESKY_CODESIGN_IDENTITY:--}"
 CODESIGN_ENTITLEMENTS="${FIRESKY_CODESIGN_ENTITLEMENTS:-}"
+# Optional cargo target dir override (e.g. keep artifacts outside repo paths
+# that third-party cleaners may purge). Defaults to engine/target.
+CARGO_TARGET_ROOT="${FIRESKY_CARGO_TARGET_DIR:-$ROOT/engine/target}"
+export CARGO_TARGET_DIR="$CARGO_TARGET_ROOT"
 
 sign_nested() {
     local path="$1"
@@ -73,7 +77,12 @@ cargo build --manifest-path "$ROOT/engine/Cargo.toml" --release --locked \
 swift build --package-path "$ROOT/apps/macos" -c release --triple "$SWIFT_TARGET"
 BIN="$(swift build --package-path "$ROOT/apps/macos" -c release \
     --triple "$SWIFT_TARGET" --show-bin-path)"
-ENGINE_OUT="$ROOT/engine/target/$CARGO_TARGET/release"
+ENGINE_OUT="$CARGO_TARGET_ROOT/$CARGO_TARGET/release"
+if [ ! -x "$ENGINE_OUT/firesky-engine" ] || \
+   [ ! -f "$ENGINE_OUT/libfiresky_engine.dylib" ]; then
+    echo "engine artifacts missing under $ENGINE_OUT; aborting before replacing $APP" >&2
+    exit 1
+fi
 APP="$OUT/FireSky.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Frameworks"
@@ -104,7 +113,7 @@ PLIST="$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string app.firesky.native" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :CFBundleName string FireSky" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string APPL" "$PLIST"
-/usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 0.2.0" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.0.0" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 1" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string FireSky.icns" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 14.0" "$PLIST"
@@ -117,4 +126,56 @@ if [ -n "${FIRESKY_NATIVE_WORKSPACE:-}" ]; then
 fi
 sign_app "$APP"
 codesign --verify --deep --strict "$APP"
+
+# Repeated builds leave superseded crate artifacts (same crate name, older
+# metadata hash) and incremental sessions behind. Move that residue to the
+# Trash after a successful bundle so the shared target dir stays bounded.
+# Set FIRESKY_BUILD_CLEAN=0 to keep everything for debugging.
+if [ "${FIRESKY_BUILD_CLEAN:-1}" = "1" ]; then
+    python3 - "$CARGO_TARGET_ROOT" <<'PY'
+import os, re, shutil, sys, time
+root = sys.argv[1]
+trash = os.path.expanduser("~/.Trash")
+stamp = time.strftime("%Y%m%d-%H%M%S")
+moved = 0
+def to_trash(path):
+    global moved
+    dest = os.path.join(trash, f"firesky-build-residue-{stamp}-{os.path.basename(path)}")
+    try:
+        shutil.move(path, dest)
+        moved += 1
+    except OSError:
+        pass
+for dirpath, dirnames, filenames in os.walk(root):
+    if os.path.basename(dirpath) == "incremental":
+        for name in list(dirnames):
+            to_trash(os.path.join(dirpath, name))
+        dirnames[:] = []
+        continue
+    if os.path.basename(dirpath) != "deps":
+        continue
+    groups = {}
+    for name in filenames:
+        match = re.match(r"^(lib)?([A-Za-z0-9_]+)-[0-9a-f]{16}(\..+)?$", name)
+        if match:
+            # Codegen objects carry a unique CGU id in their extension; group
+            # them by crate so superseded generations are actually pruned.
+            ext = ".rcgu.o" if name.endswith(".rcgu.o") else (match.group(3) or "")
+            groups.setdefault((match.group(2), ext), []).append(name)
+    for names in groups.values():
+        if len(names) < 3:
+            continue
+        names.sort(key=lambda n: os.path.getmtime(os.path.join(dirpath, n)), reverse=True)
+        # Keep the two newest hashes: the fresh bundle and the previously
+        # running app may hardlink different generations.
+        for name in names[2:]:
+            to_trash(os.path.join(dirpath, name))
+    # Codegen intermediates are regenerable; later builds reuse the linked
+    # binaries/rlibs, not the per-CGU objects. Drop them after every bundle.
+    for name in filenames:
+        if name.endswith(".rcgu.o"):
+            to_trash(os.path.join(dirpath, name))
+print(f"build residue: moved {moved} superseded artifacts to Trash")
+PY
+fi
 printf '%s\n' "$APP"

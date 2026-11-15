@@ -17,8 +17,6 @@ jobs:
           python-version: "3.13"
       - name: 安装测试依赖（仅 pytest/numpy，无产品 Python 运行时）
         run: pip install pytest numpy
-      - name: 构建原生评分器
-        run: ./scripts/build_native_variants.sh
       - name: 构建独立 Rust 引擎
         run: cargo build --manifest-path engine/Cargo.toml --release --locked
       - name: pytest
@@ -28,7 +26,7 @@ jobs:
         run: python -m pytest tests/ -q
 
   rust:
-    name: cargo test（native + Python-free runtime）
+    name: cargo test（引擎 + 并入的评分核心，Python-free runtime）
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,11 +34,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: |
-            native
             engine
-      - name: cargo test
-        working-directory: native
-        run: cargo test --release --locked
       - name: Build and test native runtime
         run: cargo test --manifest-path engine/Cargo.toml --locked
 

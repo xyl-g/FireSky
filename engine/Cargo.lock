@@ -477,7 +477,7 @@ checksum = "1c66915cc5391097de7a2b0b972e8505aa33c0df401fd3a6811dbdb32881ba48"
 
 [[package]]
 name = "firesky-engine"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "base64 0.22.1",
@@ -485,7 +485,6 @@ dependencies = [
  "chrono",
  "chrono-tz",
  "csv",
- "firesky-native",
  "flate2",
  "fs2",
  "futures-util",
@@ -495,6 +494,7 @@ dependencies = [
  "libloading",
  "npyz",
  "quick-xml",
+ "rayon",
  "regex",
  "reqwest",
  "rustfft",
@@ -505,15 +505,6 @@ dependencies = [
  "tokio",
  "tower",
  "tower-http",
-]
-
-[[package]]
-name = "firesky-native"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "chrono-tz",
- "rayon",
 ]
 
 [[package]]

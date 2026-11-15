@@ -73,16 +73,22 @@ logging:
 ### 3.3 Native scorer knobs (performance / debugging — leave defaults)
 
 All optional; defaults are production values. The authoritative list:
-`grep -rhoE 'FIRESKY_[A-Z0-9_]+' src/firesky native/src | sort -u`.
+`grep -rhoE 'FIRESKY_[A-Z0-9_]+' engine/src | sort -u`.
 
 | Group | Representative variables | Purpose |
 |---|---|---|
+| Temporal cache mode | `FIRESKY_NATIVE_EXACT_TEMPORAL_KEYS` (exact bit-level keys), `FIRESKY_NATIVE_CONSISTENT_TEMPORAL_KEYS` (self-consistent 120 s buckets, guarantees left+right==span); default `Quantized120` when neither is set | temporal-key quantization for the shared motion / layer caches. Default and consistent are explicit approximations (<=60 s per side); exact keys auto-disable the shared dense table when the key count exceeds its budget. See the performance roadmap "11-14 follow-up" section |
 | Shared path caches | `FIRESKY_NATIVE_SHARED_SOLAR_PATH_SAMPLE_MIN_OBSERVERS` (2048), `..._MAX_BYTES` (8 GiB cap), `DISABLE_SHARED_SOLAR_PATH_SAMPLE_CACHE` | solar-path templates shared above the observer threshold; use DISABLE_* to shed memory |
 | Shared geometry caches | `DISABLE_SHARED_MOTION_CACHE` / `DISABLE_SHARED_TERRAIN_CACHE` / `DISABLE_SHARED_WIND_CACHE` / `DISABLE_SHARED_AEROSOL_COLUMN_CACHE` + `*_MAX_BYTES` | cross-observer advection wind / terrain / aerosol columns |
 | Multi-bearing legs | `DISABLE_MULTI_BEARING_PATH_CACHE` / `ENABLE_MULTI_BEARING_PATH_AEROSOL_SAMPLE_CACHE` / `MULTI_BEARING_PATH_MIN_OBSERVERS` | observer-return multi-bearing expansion |
 | GPU (optional feature) | `FIRESKY_GPU_REDUCTION_MIN_TARGETS` (2048), `GPU_MIN_FEATURES`, `DISABLE_NATIONAL_GPU_*`, `NATIONAL_GPU_*_MAX_BYTES`, `ENABLE_NATIONAL_PROFILE_GPU` | only meaningful with `--features gpu`; ignore in the CPU minimal set |
 | NEON | `FIRESKY_NATIVE_DISABLE_NEON_BLOCKING` (NEON on by default) | aarch64 blocking vectorisation switch |
 | Diagnostics | `FIRESKY_NATIVE_GPU_TIMING` / `GPU_PARITY_DUMP` / `CANONICAL_PATH_DIAG` / `DISABLE_ANGULAR_FOOTPRINT_CACHE` … | debugging / validation |
+
+> Note: the `*_MAX_BYTES` caps above (e.g. shared path 8 GiB, shared motion 3 GiB) bound a
+> **single cache structure**, not total process memory. The accepted process peak physical
+> footprint is ~4 GiB including worker caches and outputs; acceptance must measure physical
+> footprint, not a single cache cap or RSS.
 
 ## 4. `pyproject.toml` extras
 

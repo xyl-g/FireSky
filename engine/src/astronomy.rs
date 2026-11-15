@@ -1,11 +1,11 @@
 // Modified Rust event-time arithmetic adapted from Astral 3.2 (Apache-2.0).
 // Copyright 2009-2021, Simon Kennedy, sffjunkie+code@gmail.com
 // Attribution and license: third_party/astral/NOTICE and LICENSE.
+use crate::native::astronomy::{julian_day, transit_minutes, SolarTerms};
+use crate::native::solar_time;
 use crate::time_contract::{checked, iso, parse_date, parse_zoned};
 use chrono::{DateTime, Datelike, Duration, NaiveDate, Offset, TimeZone, Timelike, Utc};
 use chrono_tz::Tz;
-use firesky_native::astronomy::{julian_day, transit_minutes, SolarTerms};
-use firesky_native::solar_time;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::collections::HashMap;

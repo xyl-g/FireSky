@@ -334,11 +334,28 @@ impl Runtime {
         )?;
         check(cancel)?;
         let mut report = result["report"].clone();
-        report["ready"] = json!(
-            report["ready"] == true
-                && frames.len() >= 2
-                && frame_times.iter().all(|time| *time >= cycle)
-        );
+        let satellite_ready = frames.len() >= 2 && frame_times.iter().all(|time| *time >= cycle);
+        report["ready"] = json!(report["ready"] == true && satellite_ready);
+        // Surface the satellite requirement as a first-class dataset row so the
+        // preflight UI can name what is missing (instead of an empty "缺少"
+        // list) and the download button has a visible target.
+        if let Some(datasets) = report["datasets"].as_array_mut() {
+            datasets.push(json!({
+                "source": "hsd",
+                "ready": satellite_ready,
+                "verified": satellite_ready,
+                "is_latest": satellite_ready,
+                "missing_count": if satellite_ready { 0 } else { 2 - frames.len() as i64 },
+                "missing_hours": [],
+                "missing_keys": [],
+                "missing_valid_times": [],
+                "local_files": frames.len(),
+                "request_cycle": context["lookup"],
+                "latest_local_cycle": context["lookup"],
+                "latest_available_cycle": "未核验",
+                "latest_available_cycle_utc": Value::Null,
+            }));
+        }
         report["satellite_frames"] = json!(frames.len());
         report["satellite_reference"] = context["lookup"].clone();
         report["satellite_valid_times"] = json!(frames
@@ -415,8 +432,14 @@ impl Runtime {
         };
         if !matches!(
             method,
-            "check" | "prepare" | "forecast" | "publications" | "network_probe"
-                | "data_sync" | "data_sync_run" | "data_sync_tick"
+            "check"
+                | "prepare"
+                | "forecast"
+                | "publications"
+                | "network_probe"
+                | "data_sync"
+                | "data_sync_run"
+                | "data_sync_tick"
         ) {
             return Ok(None);
         }
@@ -542,7 +565,9 @@ impl Runtime {
                 // dedicated sync mutex keeps at most one round at a time.
                 let operation_free = self.operation.try_lock().is_ok();
                 if !operation_free {
-                    return Err("data sync skipped because another prepare/forecast is active".into());
+                    return Err(
+                        "data sync skipped because another prepare/forecast is active".into(),
+                    );
                 }
                 let _sync_guard = self
                     .sync
@@ -591,7 +616,9 @@ impl Runtime {
                 }
                 let operation_free = self.operation.try_lock().is_ok();
                 if !operation_free {
-                    return Err("data sync skipped because another prepare/forecast is active".into());
+                    return Err(
+                        "data sync skipped because another prepare/forecast is active".into(),
+                    );
                 }
                 let _sync_guard = self
                     .sync
@@ -656,10 +683,18 @@ impl Runtime {
                     return Ok(json!({"session":created["session"],"report":report}));
                 }
                 let mut payload = Self::normalized(params["payload"].clone())?;
-                // Desktop always checks both sources, even when one model is unavailable.
-                payload["model_source"] = json!("both");
                 if kind == "regional" {
+                    // 区域预测一次只跑一个模式；默认 GFS，调用方可显式选 EC。
+                    let model = payload["model_source"].as_str().unwrap_or("gfs");
+                    if !matches!(model, "gfs" | "ec") {
+                        return Err("regional forecast runs one model per request: model_source must be gfs or ec".into());
+                    }
+                    payload["model_source"] = json!(model);
+                    // 区域网格固定 0.25°（产品契约，不做粗化）。
                     payload["spacing_deg"] = json!(0.25);
+                } else {
+                    // Desktop point checks always check both sources, even when one model is unavailable.
+                    payload["model_source"] = json!("both");
                 }
                 let report =
                     self.preflight(&payload, kind == "regional", true, &json!({}), &cancel)?;
@@ -724,13 +759,13 @@ impl Runtime {
                     )?;
                     if nowcast {
                         progress(json!({"stage":"prepare","percent":10,"source":"satellite",
-                            "message":"Preparing native HSD, GFS and CAMS inputs"}))?;
+                            "message":"正在准备卫星、GFS 与 CAMS 数据"}))?;
                         self.prepare_nowcast(&payload, &cancel)?;
                     } else {
                         for model in Self::models(&payload)? {
                             check(&cancel)?;
                             progress(json!({"stage":"prepare","percent":10,"source":model,
-                            "message":format!("Preparing {model} model and CAMS inputs")}))?;
+                            "message":format!("正在准备 {} 模式与 CAMS 数据", model.to_uppercase())}))?;
                             let mut request = payload.clone();
                             request["model_source"] = json!(model);
                             self.prepare_one(&request, regional, &cancel)?;
@@ -770,14 +805,12 @@ impl Runtime {
                 check(&cancel)?;
                 self.session("update", token, json!({"report":report}))?;
                 self.session("consume", token, json!({}))?;
-                progress(
-                    json!({"stage":"forecast","percent":20,"message":"Native forecast started"}),
-                )?;
+                progress(json!({"stage":"forecast","percent":20,"message":"预测计算已开始"}))?;
                 if nowcast {
                     payload["allow_download"] = json!(false);
                     self.compute_nowcast(payload, &cancel)
                 } else {
-                    self.forecast_models(&payload, regional, &cancel)
+                    self.forecast_models(&payload, regional, &cancel, progress)
                 }
             }
             _ => Err(format!("unsupported Rust desktop method: {method}")),
@@ -807,7 +840,7 @@ impl Runtime {
             return self.compute_nowcast(payload, &cancel);
         }
         let payload = Self::normalized(payload)?;
-        self.forecast_models(&payload, regional, &cancel)
+        self.forecast_models(&payload, regional, &cancel, &|_| Ok(()))
     }
 
     fn forecast_models(
@@ -815,6 +848,7 @@ impl Runtime {
         payload: &Value,
         regional: bool,
         cancel: &AtomicBool,
+        progress: &(dyn Fn(Value) -> Result<(), String> + Sync),
     ) -> Result<Value, String> {
         let key = cache_key(payload, regional)?;
         if payload["force_refresh"] != true {
@@ -839,9 +873,9 @@ impl Runtime {
                     }
                     Self::pin(&mut request, &report);
                     if regional {
-                        self.regional(&request, model, cancel)
+                        self.regional(&request, model, cancel, progress)
                     } else {
-                        self.point(&request, model, cancel)
+                        self.point(&request, model, cancel, progress)
                     }
                 });
             match result {
@@ -1072,7 +1106,13 @@ impl Runtime {
         Ok(result)
     }
 
-    fn point(&self, payload: &Value, model: &str, cancel: &AtomicBool) -> Result<Value, String> {
+    fn point(
+        &self,
+        payload: &Value,
+        model: &str,
+        cancel: &AtomicBool,
+        progress: &(dyn Fn(Value) -> Result<(), String> + Sync),
+    ) -> Result<Value, String> {
         let context = self.context(payload, false, false)?;
         let point = context["points"]
             .as_array()
@@ -1119,9 +1159,21 @@ impl Runtime {
         let output = dir.path().join("output");
         json_file(&path, &request)?;
         let manifest = if model == "gfs" {
-            input_plan::forecast(&path, &output)?
+            input_plan::forecast_with_progress(&path, &output, &|permille| {
+                let _ = progress(json!({
+                    "stage":"forecast",
+                    "percent":20 + permille * 70 / 2000,
+                    "message":"单点预测计算",
+                }));
+            })?
         } else {
-            ecmwf_plan::forecast(&path, &output)?
+            ecmwf_plan::forecast_with_progress(&path, &output, &|permille| {
+                let _ = progress(json!({
+                    "stage":"forecast",
+                    "percent":20 + permille * 70 / 2000,
+                    "message":"单点预测计算",
+                }));
+            })?
         };
         let files = tensor_bundle::verify_files(&manifest, "point-forecast-v1")?;
         if files.source != tensor_bundle::regular_identity(&path)? {
@@ -1224,6 +1276,24 @@ impl Runtime {
                     .ok_or("offset_minutes must be finite and within -240..240")?,
                 None => best_offset,
             };
+            // Report anchors (sunset/sunrise) can sit sub-minute away from the
+            // frozen profile timeline anchor; snap before the strict check.
+            let offset = cross_section::snap_offset_to_event_grid(
+                &output.join("cross_section_source.json"),
+                &crate::frames::Point {
+                    name: String::new(),
+                    lat: point["lat"].as_f64().ok_or("point lat missing")?,
+                    lon: point["lon"].as_f64().ok_or("point lon missing")?,
+                    timezone_name: point["timezone_name"]
+                        .as_str()
+                        .ok_or("point timezone missing")?
+                        .to_owned(),
+                    elevation_m: point["elevation_m"]
+                        .as_f64()
+                        .ok_or("point elevation missing")?,
+                },
+                offset,
+            )?;
             result["cross_section"] = cross_section::execute(decode(json!({
                 "source_path":output.join("cross_section_source.json"),"source_identity":cross["identity"],
                 "point":{"lat":point["lat"],"lon":point["lon"],"elevation_m":point["elevation_m"],
@@ -1265,7 +1335,13 @@ impl Runtime {
         Ok(result)
     }
 
-    fn regional(&self, payload: &Value, model: &str, cancel: &AtomicBool) -> Result<Value, String> {
+    fn regional(
+        &self,
+        payload: &Value,
+        model: &str,
+        cancel: &AtomicBool,
+        progress: &(dyn Fn(Value) -> Result<(), String> + Sync),
+    ) -> Result<Value, String> {
         let context = self.context(payload, true, false)?;
         check(cancel)?;
         let prepared = self.prepare_one(payload, true, cancel)?;
@@ -1297,7 +1373,18 @@ impl Runtime {
                 .as_u64()
                 .ok_or("invalid model forecast hour")?;
             let path = row["path"].as_str().ok_or("invalid model frame path")?;
-            if frames.insert(hour, path).is_some() {
+            let mut paths = vec![path.to_owned()];
+            if let Some(extra) = row["parts"].as_array() {
+                for part in extra {
+                    paths.push(
+                        part["path"]
+                            .as_str()
+                            .ok_or("invalid wrapped model frame path")?
+                            .to_owned(),
+                    );
+                }
+            }
+            if frames.insert(hour, paths).is_some() {
                 return Err("duplicate regional model forecast hour".into());
             }
         }
@@ -1361,33 +1448,43 @@ impl Runtime {
             }
             observer
         }).collect::<Vec<_>>();
-        let model_bbox = if model == "ec" {
-            desktop_context::ec_regional_model_bbox(
-                decode(context["bbox"].clone())?,
-                context["common"]["radius_km"]
-                    .as_f64()
-                    .ok_or("regional radius is invalid")?,
-            )?
-        } else {
-            decode(context["bbox"].clone())?
-        };
+        // The regional context bbox already carries the full source buffer
+        // (>=1000 km around the point union). Re-expanding it for EC would
+        // double the buffered envelope, multiplying the decoded grid cells
+        // past the bounded output size. Use the same buffered bbox for both
+        // models; it covers every observer and the derived cloud fields.
+        let model_bbox = decode(context["bbox"].clone())?;
         let request = json!({
             "model":if model == "gfs" {"gfs"} else {"ecmwf-basic"},
             "cycle_utc":context["cycle"],"date":payload["target_date"],
             "phenomenon":payload["phenomenon"],"points":observers,
-            "frames":frames.iter().map(|(hour,path)|json!({"hour":hour,"path":path})).collect::<Vec<_>>(),
+            "frames":frames.iter().map(|(hour,paths)|json!({
+                "hour":hour,"path":paths[0],
+                "paths":paths.iter().skip(1).collect::<Vec<_>>(),
+            })).collect::<Vec<_>>(),
             "cams":cams.values().cloned().collect::<Vec<_>>(),
             "radius_km":context["common"]["radius_km"],"bbox":model_bbox,
             "include_point_core":false,"point_spacing_deg":payload["spacing_deg"].as_f64().unwrap_or(0.25),
             "compute_backend_requested":payload["compute_backend"].as_str().unwrap_or("auto"),
             "derived_cache":null,
+            "compact_results":true,
         });
         let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
         let path = dir.path().join("request.json");
         let output = dir.path().join("output");
         json_file(&path, &request)?;
         check(cancel)?;
-        let manifest = assessment::frames_to_files(&path, &output)?;
+        let manifest =
+            assessment::frames_to_files_cancellable(&path, &output, cancel, &|permille| {
+                let percent = 20 + permille * 65 / 2000;
+                let message = match permille {
+                    p if p < 1000 => "解码模型帧",
+                    p if p < 1400 => "装配 CAMS 气溶胶",
+                    p if p < 1600 => "对齐观测点锚点",
+                    _ => "光线追踪评估",
+                };
+                let _ = progress(json!({"stage":"forecast","percent":percent,"message":message}));
+            })?;
         check(cancel)?;
         let files = tensor_bundle::verify_files(&manifest, "regional-frames-v1")?;
         if files.source != tensor_bundle::regular_identity(&path)?
@@ -1400,6 +1497,7 @@ impl Runtime {
         if document["point_core"] != Value::Null
             || document["results"].as_array().map(Vec::len) != Some(points.len())
             || !document["frames"]["precision"].is_object()
+            || files.metadata["frame_payload"]["compact_results"] != true
         {
             return Err("regional frame artifact payload identity is invalid".into());
         }
@@ -1412,6 +1510,7 @@ impl Runtime {
             &coverage,
             dir.path(),
             cancel,
+            progress,
         ) {
             Ok(value) => value,
             Err(error) if cancel.load(Ordering::Acquire) => return Err(error),
@@ -1497,6 +1596,7 @@ impl Runtime {
         coverage: &[Value],
         dir: &Path,
         cancel: &AtomicBool,
+        progress: &(dyn Fn(Value) -> Result<(), String> + Sync),
     ) -> Result<Value, String> {
         check(cancel)?;
         let bounds = coverage
@@ -1540,10 +1640,18 @@ impl Runtime {
         city_request["points"] = Value::Array(cities.clone());
         city_request["include_point_core"] = json!(false);
         city_request["point_spacing_deg"] = request["point_spacing_deg"].clone();
+        city_request["compact_results"] = json!(true);
         let request_path = dir.join(format!("city-ranking-{model}.json"));
         json_file(&request_path, &city_request)?;
         let output = dir.join(format!("city-ranking-{model}"));
-        let manifest = assessment::frames_to_files(&request_path, &output)?;
+        let manifest =
+            assessment::frames_to_files_cancellable(&request_path, &output, cancel, &|permille| {
+                let _ = progress(json!({
+                    "stage":"forecast",
+                    "percent":85 + permille * 10 / 2000,
+                    "message":"城市排行评估",
+                }));
+            })?;
         let files = tensor_bundle::verify_files(&manifest, "regional-frames-v1")?;
         let payload_identity = files.metadata["frame_payload"].clone();
         if payload_identity["contract"] != "rust-regional-frames-v1"
@@ -2140,7 +2248,9 @@ mod tests {
         task.finish(&Ok(result.clone()), false).unwrap();
         // No runtime cache record was ever published, yet the snapshot restores.
         assert_eq!(
-            runtime.dispatch("result_restore", json!({"task_id":id})).unwrap(),
+            runtime
+                .dispatch("result_restore", json!({"task_id":id}))
+                .unwrap(),
             result
         );
         assert!(runtime.dispatch("result_restore", json!({})).is_err());
@@ -2193,6 +2303,34 @@ mod tests {
         let runtime = Runtime::new(dir.path()).unwrap();
         let result = runtime.compute_with_cancel(json!({}), false, Arc::new(AtomicBool::new(true)));
         assert!(result.unwrap_err().contains("cancelled"));
+    }
+
+    /// Regional requests run exactly one model per call; "both" must be
+    /// rejected before any planning work, and an explicit choice is kept.
+    #[test]
+    fn regional_check_requires_a_single_model() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::new(dir.path()).unwrap();
+        let payload = json!({
+            "regions": ["east-asia"], "target_date": "2026-11-13",
+            "phenomenon": "dusk", "model_source": "both",
+        });
+        let error = runtime
+            .dispatch("check", json!({"kind":"regional","payload":payload}))
+            .unwrap_err();
+        assert!(error.contains("one model per request"), "{error}");
+        let mut payload = payload.clone();
+        payload["model_source"] = json!("ec");
+        let checked = runtime
+            .dispatch("check", json!({"kind":"regional","payload":payload}))
+            .unwrap();
+        let token = checked["session"].as_str().unwrap();
+        let snapshot = runtime.session("get", token, json!({})).unwrap();
+        assert_eq!(snapshot["payload"]["model_source"], json!("ec"));
+        assert_eq!(snapshot["payload"]["spacing_deg"], json!(0.25));
+        runtime
+            .dispatch("dismiss", json!({"session":token}))
+            .unwrap();
     }
 
     #[test]
@@ -2341,7 +2479,10 @@ mod tests {
         assert_eq!(status["state"]["contract"], "rust-data-sync-state-v1");
         // Invalid payloads are rejected and leave the saved settings intact.
         assert!(runtime
-            .dispatch("save_data_sync_settings", json!({"settings":{"enabled":true}}))
+            .dispatch(
+                "save_data_sync_settings",
+                json!({"settings":{"enabled":true}})
+            )
             .is_err());
         assert!(runtime
             .dispatch(
@@ -2388,7 +2529,9 @@ mod tests {
             .unwrap();
         let id = task.id().to_owned();
         task.finish(&Ok(json!({"sources":{}})), false).unwrap();
-        let list = runtime.dispatch("task_history", json!({"limit":10})).unwrap();
+        let list = runtime
+            .dispatch("task_history", json!({"limit":10}))
+            .unwrap();
         assert_eq!(list["tasks"][0]["method"], "data_sync");
         assert_eq!(list["tasks"][0]["status"], "done");
         assert_eq!(list["tasks"][0]["task_id"], id);
@@ -2398,7 +2541,9 @@ mod tests {
             .unwrap()
             .unwrap();
         task.finish(&Ok(json!({"sources":{}})), true).unwrap();
-        let list = runtime.dispatch("task_history", json!({"limit":10})).unwrap();
+        let list = runtime
+            .dispatch("task_history", json!({"limit":10}))
+            .unwrap();
         let cancelled = list["tasks"]
             .as_array()
             .unwrap()
@@ -2423,9 +2568,14 @@ mod tests {
             .begin_task("sync-wire-1", "data_sync_run", &json!({"sources":[]}))
             .unwrap()
             .unwrap();
-        task.finish(&Err("data sync requires an explicit nonempty sources array".into()), false)
+        task.finish(
+            &Err("data sync requires an explicit nonempty sources array".into()),
+            false,
+        )
+        .unwrap();
+        let list = runtime
+            .dispatch("task_history", json!({"limit":10}))
             .unwrap();
-        let list = runtime.dispatch("task_history", json!({"limit":10})).unwrap();
         assert_eq!(list["tasks"][0]["method"], "data_sync");
         assert_eq!(list["tasks"][0]["status"], "failed");
         // Read-only setup methods never create workflow history.

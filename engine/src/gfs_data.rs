@@ -9,6 +9,7 @@ use std::collections::VecDeque;
 use std::fs::{self, File, Metadata};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 #[cfg(not(unix))]
 use std::time::UNIX_EPOCH;
@@ -173,6 +174,47 @@ fn bbox_covers(outer: [f64; 4], inner: [f64; 4]) -> bool {
         })
 }
 
+/// NOMADS serves longitudes in 0..360 and returns the literal requested
+/// interval, even when rightlon > 180. Legacy cache metadata normalized that
+/// interval back into [-180,180] as a wrapped bbox, hiding the fact that the
+/// file physically covers the 180..360 span. Recover the as-served extent
+/// from the stored request URL so coverage checks and subset decodes do not
+/// mistake a trans-antimeridian file for a wrapped one.
+pub(crate) fn served_extent(stored: [f64; 4], url: &str) -> [f64; 4] {
+    if stored[0] <= stored[1] {
+        return stored;
+    }
+    let pairs = query_pairs(url);
+    let value = |key: &str| {
+        pairs
+            .iter()
+            .find(|(k, _)| k == key)
+            .and_then(|(_, v)| v.parse::<f64>().ok())
+    };
+    let Some(left) = value("leftlon") else {
+        return stored;
+    };
+    let Some(right) = value("rightlon") else {
+        return stored;
+    };
+    if !(0.0..=360.0).contains(&left) || right < left || right > 540.0 {
+        return stored;
+    }
+    // Confirm the URL really is the wrapped request this entry stored.
+    let normalize = |v: f64| {
+        let n = (v + 180.0).rem_euclid(360.0) - 180.0;
+        if n == -180.0 && v > 0.0 {
+            180.0
+        } else {
+            n
+        }
+    };
+    if (normalize(left) - stored[0]).abs() > 0.01 || (normalize(right) - stored[1]).abs() > 0.01 {
+        return stored;
+    }
+    [left, right, stored[2], stored[3]]
+}
+
 pub fn build_url(
     cycle: DateTime<Utc>,
     hour: u32,
@@ -200,18 +242,26 @@ pub fn build_url(
     );
     if let Some(bbox) = bbox {
         let [west, east, north, south] = canonical_bbox(bbox, resolution)?;
-        let longitude = |v: f64| format!("{:.3}", if v < 0.0 { 360.0 + v } else { v });
+        // NOMADS expects longitudes in 0..360 with rightlon >= leftlon. A
+        // wrapped request (west > east) is served as the complementary span
+        // when sent as negative leftlon, so express it as west..east+360.
+        let mut left = if west < 0.0 { west + 360.0 } else { west };
+        let mut right = if east < 0.0 { east + 360.0 } else { east };
+        if right < left {
+            right += 360.0;
+        }
+        let longitude = |v: f64| format!("{v:.3}");
         for (key, value) in [
             ("subregion", String::new()),
-            ("leftlon", longitude(west)),
-            ("rightlon", longitude(east)),
+            ("leftlon", longitude(left)),
+            ("rightlon", longitude(right)),
             ("toplat", format!("{north:.3}")),
             ("bottomlat", format!("{south:.3}")),
         ] {
             query.append_pair(key, &value);
         }
     }
-    for level in firesky_native::gfs::PRESSURE_LEVELS
+    for level in crate::native::gfs::PRESSURE_LEVELS
         .into_iter()
         .chain([1000, 975, 950, 900].into_iter().filter(|_| diagnostic))
     {
@@ -240,6 +290,37 @@ pub fn build_url(
     }
     drop(query);
     Ok(url.into())
+}
+
+/// NOMADS serves a single contiguous 0..360 longitude span per request. A
+/// wrapped bbox (west > east) therefore cannot be requested literally: the
+/// filter would answer with the complementary span. Split it into its two
+/// ordinary segments so every request matches the physical file extent.
+pub fn request_bboxes(bbox: [f64; 4], resolution: &str) -> Result<Vec<[f64; 4]>, String> {
+    let canonical = canonical_bbox(bbox, resolution)?;
+    if canonical[0] <= canonical[1] {
+        return Ok(vec![canonical]);
+    }
+    Ok(vec![
+        [canonical[0], 180.0, canonical[2], canonical[3]],
+        [-180.0, canonical[1], canonical[2], canonical[3]],
+    ])
+}
+
+pub fn build_urls(
+    cycle: DateTime<Utc>,
+    hour: u32,
+    bbox: Option<[f64; 4]>,
+    resolution: &str,
+    diagnostic: bool,
+) -> Result<Vec<String>, String> {
+    match bbox {
+        None => Ok(vec![build_url(cycle, hour, None, resolution, diagnostic)?]),
+        Some(bbox) => request_bboxes(bbox, resolution)?
+            .into_iter()
+            .map(|part| build_url(cycle, hour, Some(part), resolution, diagnostic))
+            .collect(),
+    }
 }
 
 fn cycle_key(cycle: DateTime<Utc>) -> String {
@@ -602,11 +683,53 @@ fn load_index(root: &Path, seconds: f64, force: bool) -> Result<Arc<Index>, Stri
 
 pub struct GfsClient {
     config: Config,
+    cancel: Option<Arc<AtomicBool>>,
 }
 impl GfsClient {
     pub fn new(config: Config) -> Result<Self, String> {
         config.validate()?;
-        Ok(Self { config })
+        Ok(Self {
+            config,
+            cancel: None,
+        })
+    }
+    /// Interactive variant: the flag is checked inside transfer read loops so
+    /// a cancelled prepare/sync releases the operation lock within ~1 MiB of
+    /// progress instead of riding out a stalled multi-minute download.
+    /// Callers mirror their borrowed flag into this Arc (a 100 ms scoped
+    /// poller) for the duration of the download session.
+    pub fn with_cancel(config: Config, cancel: Arc<AtomicBool>) -> Result<Self, String> {
+        config.validate()?;
+        Ok(Self {
+            config,
+            cancel: Some(cancel),
+        })
+    }
+    fn check_cancelled(&self) -> Result<(), String> {
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Acquire))
+        {
+            Err("desktop operation cancelled".into())
+        } else {
+            Ok(())
+        }
+    }
+    fn served_bbox(&self, entry: &Entry) -> Option<[f64; 4]> {
+        let stored = entry.bbox?;
+        if stored[0] <= stored[1] {
+            return Some(stored);
+        }
+        // Only wrapped entries need the URL check; read their sidecar once.
+        let metadata = std::fs::read_to_string(self.config.cache_dir.join(&entry.metadata_path))
+            .ok()
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        let url = metadata
+            .as_ref()
+            .and_then(|data| data["url"].as_str())
+            .unwrap_or("");
+        Some(served_extent(stored, url))
     }
     pub fn find(
         &self,
@@ -649,12 +772,16 @@ impl GfsClient {
                 {
                     continue;
                 }
+                // Coverage uses the as-served extent: legacy metadata stored
+                // wrapped bboxes for NOMADS 0..360 downloads, which must not
+                // satisfy ordinary requests they do not physically cover.
+                let outer = self.served_bbox(entry);
                 if entry.global_cache {
                     if entry.bbox == Some([-180.0, 180.0, 90.0, -90.0]) && entry.spatially_unbounded
                     {
                         return Ok(Some(file));
                     }
-                } else if let (Some(outer), Some(inner)) = (entry.bbox, bbox) {
+                } else if let (Some(outer), Some(inner)) = (outer, bbox) {
                     if bbox_covers(outer, inner) {
                         return Ok(Some(file));
                     }
@@ -691,6 +818,41 @@ impl GfsClient {
             return Ok(None);
         }
         Ok(Some(self.download(&url, Some(cycle), Some(hour), bbox)?))
+    }
+
+    /// Resolve every longitude segment of a possibly wrapped bbox. Wrapped
+    /// requests are split so each NOMADS download covers exactly the span it
+    /// is asked for; ordinary bboxes keep the single-URL `resolve` contract.
+    pub fn resolve_parts(
+        &self,
+        cycle: DateTime<Utc>,
+        hour: u32,
+        bbox: Option<[f64; 4]>,
+        diagnostic: bool,
+        allow_download: bool,
+    ) -> Result<Vec<Value>, String> {
+        let Some(bbox) = bbox else {
+            return Ok(
+                match self.resolve(cycle, hour, None, diagnostic, allow_download)? {
+                    Some(row) => vec![row],
+                    None => vec![],
+                },
+            );
+        };
+        let mut rows = Vec::new();
+        for part in request_bboxes(bbox, &self.config.resolution)? {
+            let url = build_url(cycle, hour, Some(part), &self.config.resolution, diagnostic)?;
+            if let Some(path) = self.find(cycle, hour, Some(part), Some(&url))? {
+                rows.push(json!({"path":path,"status":"covering_cache","url":url,
+                    "content_verified":false}));
+                continue;
+            }
+            if !allow_download {
+                return Ok(vec![]);
+            }
+            rows.push(self.download(&url, Some(cycle), Some(hour), Some(part))?);
+        }
+        Ok(rows)
     }
     fn target(&self, url: &str, cycle: Option<DateTime<Utc>>) -> PathBuf {
         let digest: String = Sha256::digest(url.as_bytes())
@@ -798,7 +960,7 @@ impl GfsClient {
         if fs::symlink_metadata(&target).is_ok_and(|m| !m.file_type().is_file()) {
             return Err("GFS destination is not a regular file".into());
         }
-        let client = Client::builder()
+        let client = crate::http_client::builder()
             .timeout(Duration::from_secs_f64(self.config.timeout_seconds))
             .connect_timeout(Duration::from_secs_f64(self.config.timeout_seconds))
             .redirect(reqwest::redirect::Policy::limited(10))
@@ -809,11 +971,12 @@ impl GfsClient {
             .map_err(|e| e.without_url().to_string())?;
         let mut last_error = String::new();
         for attempt in 1..=self.config.download_attempts {
+            self.check_cancelled()?;
             let mut temporary = tempfile::Builder::new()
                 .prefix(".firesky-tmp-")
                 .tempfile_in(parent)
                 .map_err(|e| e.to_string())?;
-            match download_once(&client, &parsed, &mut temporary) {
+            match download_once(&client, &parsed, &mut temporary, self.cancel.as_deref()) {
                 Ok(identity) => {
                     if nonempty(&target) {
                         self.metadata(&target, url, cycle, hour, bbox)?;
@@ -841,6 +1004,7 @@ impl GfsClient {
             }
             drop(temporary);
             if attempt < self.config.download_attempts {
+                self.check_cancelled()?;
                 std::thread::sleep(Duration::from_secs((1_u64 << (attempt - 1).min(4)).min(12)));
             }
         }
@@ -855,7 +1019,16 @@ fn download_once(
     client: &Client,
     url: &Url,
     temporary: &mut tempfile::NamedTempFile,
+    cancel: Option<&AtomicBool>,
 ) -> Result<Value, String> {
+    let check = || -> Result<(), String> {
+        if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+            Err("desktop operation cancelled".into())
+        } else {
+            Ok(())
+        }
+    };
+    check()?;
     let mut response = client
         .get(url.clone())
         .header("Accept-Encoding", "identity")
@@ -874,6 +1047,7 @@ fn download_once(
     let mut bytes = 0_u64;
     let mut hash = Sha256::new();
     loop {
+        check()?;
         let count = response
             .read(&mut buffer)
             .map_err(|e| format!("GFS response read: {e}"))?;
@@ -993,6 +1167,102 @@ pub fn execute(params: Params) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::{bbox_covers, canonical_bbox};
+
+    #[test]
+    fn wrapped_request_uses_nomads_0_360_interval() {
+        use super::build_url;
+        use chrono::TimeZone;
+        let cycle = chrono::Utc
+            .with_ymd_and_hms(2026, 11, 13, 12, 0, 0)
+            .unwrap();
+        // Hangzhou 2000 km point domain: wrapped in [-180,180].
+        let url = build_url(
+            cycle,
+            20,
+            Some([99.25, -168.75, 48.5, 12.25]),
+            "0p25",
+            false,
+        )
+        .unwrap();
+        assert!(url.contains("leftlon=99.250"), "{url}");
+        assert!(url.contains("rightlon=191.250"), "{url}");
+        // Ordinary western-hemisphere request keeps both values in 0..360.
+        let url = build_url(cycle, 20, Some([-100.0, -80.0, 40.0, 20.0]), "0p25", false).unwrap();
+        assert!(url.contains("leftlon=260.000"), "{url}");
+        assert!(url.contains("rightlon=280.000"), "{url}");
+    }
+
+    #[test]
+    fn wrapped_request_bboxes_split_into_two_ordinary_segments() {
+        use super::{build_urls, request_bboxes};
+        use chrono::TimeZone;
+        let cycle = chrono::Utc
+            .with_ymd_and_hms(2026, 11, 13, 12, 0, 0)
+            .unwrap();
+        let parts = request_bboxes([51.75, -170.75, 78.25, -6.25], "0p25").unwrap();
+        assert_eq!(
+            parts,
+            vec![
+                [51.75, 180.0, 78.25, -6.25],
+                [-180.0, -170.75, 78.25, -6.25]
+            ]
+        );
+        let urls = build_urls(
+            cycle,
+            20,
+            Some([51.75, -170.75, 78.25, -6.25]),
+            "0p25",
+            false,
+        )
+        .unwrap();
+        assert_eq!(urls.len(), 2);
+        assert!(urls[0].contains("leftlon=51.750") && urls[0].contains("rightlon=180.000"));
+        assert!(urls[1].contains("leftlon=180.000") && urls[1].contains("rightlon=189.250"));
+        // Ordinary bboxes keep a single request.
+        assert_eq!(
+            request_bboxes([99.25, 141.25, 48.5, 12.25], "0p25").unwrap(),
+            vec![[99.25, 141.25, 48.5, 12.25]]
+        );
+    }
+
+    #[test]
+    fn served_extent_recovers_trans_antimeridian_span() {
+        use super::served_extent;
+        let url = "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?file=gfs.t12z.pgrb2.0p25.f020&leftlon=26.750&rightlon=191.250&toplat=78.250&bottomlat=-6.250";
+        let stored = [26.75, -168.75, 78.25, -6.25];
+        assert_eq!(served_extent(stored, url), [26.75, 191.25, 78.25, -6.25]);
+        // A request crossing the antimeridian is NOT covered by the served
+        // 26.75..191.25 span (its -180..-170 part lives at 180..190 only
+        // partially); the old wrapped-bbox logic wrongly accepted it.
+        assert!(!bbox_covers(
+            served_extent(stored, url),
+            [170.0, -170.0, 40.0, 20.0]
+        ));
+        // The China-side request IS physically covered and may be reused.
+        assert!(bbox_covers(
+            served_extent(stored, url),
+            [99.25, 141.25, 48.5, 12.25]
+        ));
+        // Without a matching URL the stored bbox is kept unchanged.
+        assert_eq!(served_extent(stored, ""), stored);
+        // Ordinary entries pass through untouched.
+        let ordinary = [99.25, 141.25, 48.5, 12.0];
+        assert_eq!(served_extent(ordinary, url), ordinary);
+    }
+
+    #[test]
+    fn cancelled_transfer_stops_before_first_byte() {
+        use super::download_once;
+        use std::sync::atomic::AtomicBool;
+        let cancel = AtomicBool::new(true);
+        let client = reqwest::blocking::Client::new();
+        let url = reqwest::Url::parse("https://nomads.example.invalid/test.grib2").unwrap();
+        let mut temporary = tempfile::NamedTempFile::new().unwrap();
+        let started = std::time::Instant::now();
+        let error = download_once(&client, &url, &mut temporary, Some(&cancel)).unwrap_err();
+        assert!(error.contains("cancelled"), "{error}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+    }
 
     #[test]
     fn canonical_bbox_preserves_wrapped_longitude_order() {

@@ -119,7 +119,11 @@ fn decoded_prior_grid(
         }
         return Ok(target);
     }
-    let mut grid = codes.decode_gfs_frame(path, 512, 5_000_000, Some((cycle, hour)))?;
+    // Covering caches (e.g. the China envelope) hold more cells per message
+    // than the full-decode budget allows; the nowcast only consumes the local
+    // bbox, so decode the subset directly instead of the whole domain.
+    let mut grid =
+        codes.decode_gfs_frame_subset(path, 512, 5_000_000, Some((cycle, hour)), bbox)?;
     // Covering regional caches may have different extents at adjacent hours.
     // Canonicalize their shared requested domain before interpolation.
     let mut indexes = (0..grid.latitudes.len())
@@ -410,62 +414,68 @@ fn ordinary_payload(payload: &Value, cancel: &AtomicBool) -> Result<Value, Strin
         "FIRESKY_GFS_CACHE_DIR",
         ".cache/gfs",
     )?;
-    let client = crate::gfs_data::GfsClient::new(
-        serde_json::from_value(json!({
-            "cache_dir":gfs_root,"resolution":"0p25","region":context["region"],
-            "timeout_seconds":90.0,"lock_timeout_seconds":300.0,"download_attempts":4,
-        }))
-        .map_err(|e| e.to_string())?,
-    )?;
-    let codes = crate::grib::EcCodes::load()?;
-    let mut grids = BTreeMap::<u32, PathBuf>::new();
-    let mut encode_frame = |frame: &Value| -> Result<Value, String> {
-        check_cancel(cancel)?;
-        let valid_time = utc(text(frame, "valid_time_utc")?)?;
-        let elapsed = (valid_time - cycle).num_milliseconds() as f64 / 3_600_000.0;
-        if elapsed < -1e-6 {
-            return Err("HSD observation precedes GFS prior cycle".into());
-        }
-        let left = elapsed.floor().max(0.0) as u32;
-        let right = if (elapsed - left as f64).abs() < 1e-6 {
-            left
-        } else {
-            left + 1
-        };
-        for hour in [left, right] {
-            if grids.contains_key(&hour) {
-                continue;
-            }
+    // Scoped mirror: the GFS client's Arc flag tracks the caller's borrowed
+    // flag for the whole frame loop, so mid-transfer reads stop promptly too.
+    let (encoded, display) = crate::cancel_scope::with_shared_cancel(cancel, |shared| {
+        let client = crate::gfs_data::GfsClient::with_cancel(
+            serde_json::from_value(json!({
+                "cache_dir":gfs_root,"resolution":"0p25","region":context["region"],
+                "timeout_seconds":90.0,"lock_timeout_seconds":300.0,"download_attempts":4,
+            }))
+            .map_err(|e| e.to_string())?,
+            shared,
+        )?;
+        let codes = crate::grib::EcCodes::load()?;
+        let mut grids = BTreeMap::<u32, PathBuf>::new();
+        let mut encode_frame = |frame: &Value| -> Result<Value, String> {
             check_cancel(cancel)?;
-            let found = client
-                .resolve(cycle, hour, Some(bbox), false, allow_download)?
-                .ok_or_else(|| format!("native nowcast missing GFS f{hour:03} cache"))?;
-            let path = Path::new(text(&found, "path")?);
-            let grid = decoded_prior_grid(
-                path,
-                &gfs_root.join(".rust-nowcast-prior-v1"),
-                cycle,
-                hour,
-                bbox,
-                &codes,
+            let valid_time = utc(text(frame, "valid_time_utc")?)?;
+            let elapsed = (valid_time - cycle).num_milliseconds() as f64 / 3_600_000.0;
+            if elapsed < -1e-6 {
+                return Err("HSD observation precedes GFS prior cycle".into());
+            }
+            let left = elapsed.floor().max(0.0) as u32;
+            let right = if (elapsed - left as f64).abs() < 1e-6 {
+                left
+            } else {
+                left + 1
+            };
+            for hour in [left, right] {
+                if grids.contains_key(&hour) {
+                    continue;
+                }
+                check_cancel(cancel)?;
+                let found = client
+                    .resolve(cycle, hour, Some(bbox), false, allow_download)?
+                    .ok_or_else(|| format!("native nowcast missing GFS f{hour:03} cache"))?;
+                let path = Path::new(text(&found, "path")?);
+                let grid = decoded_prior_grid(
+                    path,
+                    &gfs_root.join(".rust-nowcast-prior-v1"),
+                    cycle,
+                    hour,
+                    bbox,
+                    &codes,
+                )
+                .map_err(|e| format!("native nowcast GFS f{hour:03} decoding: {e}"))?;
+                grids.insert(hour, grid);
+            }
+            Ok(
+                json!({"manifest_path":frame["manifest_path"],"valid_time_utc":frame["valid_time_utc"],
+                "retrieval":{"cycle_time_utc":time_contract::iso(cycle),"left_forecast_hour":left,
+                    "right_forecast_hour":right,"fraction":elapsed-left as f64,
+                    "left_cache_path":grids[&left],"right_cache_path":grids[&right],
+                    "local_radius_km":55.6,"domain_hash":hash(format!("{:?}|{:?}",grids[&left],grids[&right]).as_bytes()),
+                    "resolution":"0p25"}}),
             )
-            .map_err(|e| format!("native nowcast GFS f{hour:03} decoding: {e}"))?;
-            grids.insert(hour, grid);
-        }
-        Ok(
-            json!({"manifest_path":frame["manifest_path"],"valid_time_utc":frame["valid_time_utc"],
-            "retrieval":{"cycle_time_utc":time_contract::iso(cycle),"left_forecast_hour":left,
-                "right_forecast_hour":right,"fraction":elapsed-left as f64,
-                "left_cache_path":grids[&left],"right_cache_path":grids[&right],
-                "local_radius_km":55.6,"domain_hash":hash(format!("{:?}|{:?}",grids[&left],grids[&right]).as_bytes()),
-                "resolution":"0p25"}}),
-        )
-    };
-    let encoded = frames
-        .iter()
-        .map(&mut encode_frame)
-        .collect::<Result<Vec<_>, _>>()?;
-    let display = encode_frame(&display)?;
+        };
+        let encoded = frames
+            .iter()
+            .map(&mut encode_frame)
+            .collect::<Result<Vec<_>, _>>()?;
+        let display = encode_frame(&display)?;
+        Ok((encoded, display))
+    })?;
     check_cancel(cancel)?;
     let aerosol = aerosol_reading(payload, &context, azimuth, allow_download)?;
     let mut result = payload.clone();
@@ -1068,6 +1078,36 @@ mod tests {
             decoded_prior_grid(&source, root.path(), cycle, 9, bbox, &codes).unwrap(),
             grid,
         );
+    }
+
+    #[test]
+    fn wide_covering_gfs_cache_decodes_local_subset() {
+        // Real continental covering caches exceed the 5M full-decode budget
+        // per message; the local prior must still decode via the subset path.
+        let Ok(source) = std::env::var("FIRESKY_NOWCAST_WIDE_GRIB") else {
+            return;
+        };
+        let source = PathBuf::from(source);
+        let root = tempfile::tempdir().unwrap();
+        let codes = crate::grib::EcCodes::load().unwrap();
+        let cycle = utc("2026-11-13T12:00:00Z").unwrap();
+        let bbox = [110.0, 130.0, 40.0, 20.0];
+        let grid = decoded_prior_grid(&source, root.path(), cycle, 8, bbox, &codes).unwrap();
+        let bytes = fs::read(grid.join("coordinates.npy")).unwrap();
+        let array = npyz::NpyFile::new(&bytes[..]).unwrap();
+        let n = array.shape()[1];
+        assert!(n > 0 && n < 100_000, "subset should stay local, got {n}");
+        let values = array
+            .data::<f32>()
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        for lat in &values[..n as usize] {
+            assert!((20.0..=40.0).contains(lat));
+        }
+        for lon in &values[n as usize..] {
+            assert!((110.0..=130.0).contains(lon));
+        }
     }
 
     fn fixture() -> (Value, Value, Value) {

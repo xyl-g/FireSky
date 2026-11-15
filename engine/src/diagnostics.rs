@@ -1,6 +1,6 @@
 //! Complete event-quality diagnostics, independent of public frame assembly.
+use crate::native::{empirical, observer_diagnostics as diagnostic, quality as core};
 use crate::{quality, tensor_bundle::BundleWriter};
-use firesky_native::{empirical, observer_diagnostics as diagnostic, quality as core};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -103,7 +103,7 @@ pub fn execute(params: Params) -> Result<Value, String> {
             || event
                 .values
                 .iter()
-                .any(|v| v.len() != firesky_native::NATIONAL_OUTPUT_FIELDS)
+                .any(|v| v.len() != crate::native::NATIONAL_OUTPUT_FIELDS)
             || event.samples.len() != n
             || event.offsets.len() != n
             || event.samples.iter().flatten().any(|v| !v.is_finite())
@@ -168,7 +168,7 @@ pub(crate) fn append_with_data(
     rising: bool,
     ec: bool,
 ) -> Result<(Value, Vec<[f64; 20]>), String> {
-    let stride = 20 * firesky_native::NATIONAL_OUTPUT_FIELDS;
+    let stride = 20 * crate::native::NATIONAL_OUTPUT_FIELDS;
     if values.len() != points * stride {
         return Err("invalid diagnostic tensor shape".into());
     }

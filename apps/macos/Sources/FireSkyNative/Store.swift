@@ -104,6 +104,11 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var regionalDisplay = "gfs" {
         didSet { if regionalDisplay != "compare" { selectedModel = regionalDisplay } }
     }
+    /// 区域预测一次只跑一个模式（GFS 或 EC），选择器与展示共用同一状态。
+    var regionalModel: String {
+        get { regionalDisplay == "ec" ? "ec" : "gfs" }
+        set { regionalDisplay = newValue == "ec" ? "ec" : "gfs" }
+    }
     @Published var regionalCamera: RegionalCamera?
     @Published var selectedRegionalCoordinate: GridCoordinate?
     @Published var regionalFocusVersion = 0
@@ -453,6 +458,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             value["radius_km"] = 900.0
         }
         if page == .regional {
+            // 单模型区域预测：只检查/准备/计算所选模式，避免双模式串行翻倍耗时。
+            value["model_source"] = regionalModel
             value["regions"] = selectedRegions.sorted() + (customRegion ? ["custom"] : [])
             value["custom_bounds"] = ["west": west, "east": east, "south": south, "north": north]
             value["spacing_deg"] = 0.25
@@ -587,7 +594,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     }
 
     func confirm() {
-        guard let session, ready, !busy else { return }
+        guard session != nil, ready, !busy else { return }
         if needsCycleAgeConfirmation {
             showCycleAgeConfirm = true
             return
@@ -876,6 +883,9 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         if let value = payload["phenomenon"] as? String { phenomenon = value }
         if let value = payload["ecmwf_source"] as? String { ecmwfSource = value }
         if kind == .regional {
+            if let model = payload["model_source"] as? String, ["gfs", "ec"].contains(model) {
+                regionalModel = model
+            }
             let regionCodes = (payload["regions"] as? [String]) ?? []
             selectedRegions = Set(regionCodes.filter { $0 != "custom" })
             if let bounds = payload["custom_bounds"] as? JSONObject,
@@ -1529,7 +1539,9 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                     downloadProbeRows[index].detail = cancelled ? "已停止，尚未验证下载。" : "探测中断，尚未验证下载。"
                 }
                 downloadProbeDate = Date()
-                downloadProbeError = cancelled ? "探测已取消；已完成的结果保留。" : error.localizedDescription
+                downloadProbeError = cancelled
+                    ? "探测已取消；已完成的结果保留。"
+                    : friendlyEngineMessage(error.localizedDescription)
             }
         }
     }
@@ -1596,6 +1608,24 @@ func friendlyEngineMessage(_ message: String) -> String {
         return "网络探测正在进行，请稍候再试。"
     case "desktop operation cancelled", "nowcast preparation cancelled":
         return "操作已取消。"
+    case "nowcast operation cancelled":
+        return "操作已取消。"
+    case "nowcast targets more than four hours in the future":
+        return "实况观测仅支持距朝霞/晚霞时刻 4 小时以内的目标；当前时间距离太远，请在事件前 4 小时内再来，或改用单点/区域预测。"
+    case "native nowcast preparation requires two recent HSD frames":
+        return "实况分析需要最近两帧卫星数据，当前缓存不足；请检查网络后点击「下载缺失数据」重试。"
+    case "native nowcast preparation requires a non-fast context":
+        return "实况准备需要先完成完整预检，请刷新预检后再下载数据。"
+    case "nowcast GFS requirements exceed the bounded hour limit":
+        return "实况所需 GFS 时次超出上限，请刷新预检后重试；若持续出现请更换目标日期。"
+    case "HSD preflight frames missing", "HSD preflight frame time missing":
+        return "卫星数据预检结果不完整，请刷新预检后重试。"
+    case "nowcast cycle is missing":
+        return "实况数据周期缺失，请刷新预检后重试。"
+    case "native nowcast requires fresh paired motion for a future event":
+        return "未来时刻的实况分析需要最新成对卫星运动数据，请先点击「下载缺失数据」补齐卫星数据。"
+    case "HSD observation precedes GFS prior cycle":
+        return "卫星观测早于 GFS 先验周期，暂无可用组合；请稍后刷新预检重试。"
     case "data cycle is unverified or older than the latest release; explicit cycle-age confirmation is required":
         return "数据周期未核验或不是最新发布，请在确认提示中选择「继续预测」，或先更新数据。"
     case "explicit confirmation is required before forecast":
@@ -1604,14 +1634,36 @@ func friendlyEngineMessage(_ message: String) -> String {
         return "本次预测数据不完整，请先点击「下载缺失数据」补齐。"
     case "strict input integrity check failed":
         return "数据完整性校验未通过，请重新下载本次数据后再试。"
+    case "assessment main bundle exceeds bounded output size":
+        return "区域范围或格点密度超出单次输出上限，请缩小区域、降低密度或改用自定义格点后重试。"
+    case "Himawari calibrated scan is outside the supported five-minute nowcast window":
+        return "卫星扫描与目标时刻相差超过 30 分钟，实况窗口尚未开启；请在朝霞/晚霞时刻前半小时再来，或改用单点/区域预测。"
+    case "cross-section offset must exactly match the event's five-minute grid":
+        return "剖面时刻与事件网格不匹配，请重新发起预测；若持续出现请刷新预检后重试。"
+    case "native terrain prepass did not produce a final event plan":
+        return "地形数据预下载未完成，请重试「下载缺失数据」；若持续失败请检查网络后刷新预检。"
+    case "unknown regional domain":
+        return "所选预测区域无效，请重新选择区域或自定义范围。"
+    case "invalid EC data operation/planning limits":
+        return "EC 数据计划超出规模限制，请缩小预测区域或减少目标日期后重试。"
     case "data sync is not enabled":
         return "后台数据同步未启用，请先在设置中开启。"
+    case "native-report-has-no-map-cells":
+        return "本次结果未生成地图格网（单点报告不含区域地图）。"
     default:
         break
     }
     if text.hasPrefix("data sync source "), text.hasSuffix(" is not enabled in settings") {
         let name = text.dropFirst("data sync source ".count).dropLast(" is not enabled in settings".count)
         return "数据源 \(name.uppercased()) 未在设置中启用，请先勾选后再同步。"
+    }
+    if text.hasPrefix("all model forecasts failed") {
+        if text.contains("wrapped GFS segments overlap")
+            || text.contains("wrapped GFS segments carry different fields")
+        {
+            return "跨日界线区域的数据段拼接失败，请重新点击「开始预测」重试；若持续出现请刷新预检后重试。"
+        }
+        return "模型预测失败，请检查数据完整性后重试；若持续出现请刷新预检或缩小预测区域。"
     }
     return message
 }

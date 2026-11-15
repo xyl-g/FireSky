@@ -447,7 +447,7 @@ pub fn execute(params: Value) -> Result<Value, String> {
             return Ok(result);
         }
     }
-    let client = Client::builder()
+    let client = crate::http_client::builder()
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Timeout::from_secs(5))
         .timeout(Timeout::from_secs(20))

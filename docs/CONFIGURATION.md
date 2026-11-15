@@ -74,16 +74,21 @@ logging:
 ### 3.3 原生评分器开关（性能/调试，日常不动）
 
 以下全部是**可选**微调，默认值即生产值；完整清单以
-`grep -rhoE 'FIRESKY_[A-Z0-9_]+' src/firesky native/src | sort -u` 为准。
+`grep -rhoE 'FIRESKY_[A-Z0-9_]+' engine/src | sort -u` 为准。
 
 | 组 | 代表变量 | 作用 |
 |---|---|---|
+| 时间缓存模式 | `FIRESKY_NATIVE_EXACT_TEMPORAL_KEYS`（精确位级键）、`FIRESKY_NATIVE_CONSISTENT_TEMPORAL_KEYS`（自洽 120s 桶，保证 left+right==span）；均不设时默认 `Quantized120` | 共享 motion/各层缓存的时间键量化策略。默认与 consistent 均为显式近似（每侧 ≤60s）；exact 键数爆炸时共享稠密表按预算自动关闭。详见性能路线图「11-14 续轮」 |
 | 共享路径缓存 | `FIRESKY_NATIVE_SHARED_SOLAR_PATH_SAMPLE_MIN_OBSERVERS`（默认 2048）、`..._MAX_BYTES`（8 GiB 上限）、`FIRESKY_NATIVE_DISABLE_SHARED_SOLAR_PATH_SAMPLE_CACHE` | 观测点 ≥ 阈值时共享太阳路径模板；内存紧张时用 DISABLE_* 逐个关 |
 | 共享几何缓存 | `DISABLE_SHARED_MOTION_CACHE` / `DISABLE_SHARED_TERRAIN_CACHE` / `DISABLE_SHARED_WIND_CACHE` / `DISABLE_SHARED_AEROSOL_COLUMN_CACHE` + 对应 `*_MAX_BYTES` | 平流风/地形/气溶胶列的跨观测点共享 |
 | 多方位路径 | `DISABLE_MULTI_BEARING_PATH_CACHE` / `ENABLE_MULTI_BEARING_PATH_AEROSOL_SAMPLE_CACHE` / `MULTI_BEARING_PATH_MIN_OBSERVERS` | 观测者返程多方位扩展 |
 | GPU（可选 feature） | `FIRESKY_GPU_REDUCTION_MIN_TARGETS`（2048）、`GPU_MIN_FEATURES`、`DISABLE_NATIONAL_GPU_*`、`NATIONAL_GPU_*_MAX_BYTES`、`ENABLE_NATIONAL_PROFILE_GPU` | 仅 `--features gpu` 编译时有意义；CPU 最小集可忽略 |
 | NEON | `FIRESKY_NATIVE_DISABLE_NEON_BLOCKING`（默认开 NEON） | aarch64 阻挡向量化开关 |
 | 诊断 | `FIRESKY_NATIVE_GPU_TIMING` / `GPU_PARITY_DUMP` / `CANONICAL_PATH_DIAG` / `DISABLE_ANGULAR_FOOTPRINT_CACHE` 等 | 排查/校验用 |
+
+> 注：上表 `*_MAX_BYTES`（如共享路径 8 GiB、共享 motion 3 GiB）是**单个缓存结构**的
+> 估算上限，不是进程总内存预算。用户接受的进程峰值 physical footprint 上限约 4 GiB，
+> 含 worker 缓存与输出；验收须测 physical footprint，不能只看单缓存上限或 RSS。
 
 ## 4. `pyproject.toml` 依赖组
 

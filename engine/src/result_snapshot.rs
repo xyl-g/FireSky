@@ -76,9 +76,7 @@ pub fn shared_lease(dir: &Path, sha: &str) -> Result<File, String> {
     loop {
         match fs2::FileExt::try_lock_shared(&file) {
             Ok(()) => return Ok(file),
-            Err(error)
-                if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
-            {
+            Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => {
                 if Instant::now() >= deadline {
                     return Err("result snapshot read lease timed out".into());
                 }
@@ -131,7 +129,9 @@ pub fn publish(dir: &Path, result: &Value) -> Result<Value, String> {
         .as_file()
         .sync_all()
         .map_err(|error| error.to_string())?;
-    temporary.persist(&path).map_err(|error| error.to_string())?;
+    temporary
+        .persist(&path)
+        .map_err(|error| error.to_string())?;
     Ok(json!({"contract":CONTRACT,"sha256":sha,"bytes":bytes.len()}))
 }
 
@@ -197,7 +197,10 @@ mod tests {
         let result = json!({"model_results":{"gfs":{"score":0.8}},"model_errors":{}});
         let identity = publish(dir.path(), &result).unwrap();
         assert_eq!(identity["contract"], CONTRACT);
-        assert_eq!(identity["bytes"], serde_json::to_vec(&result).unwrap().len());
+        assert_eq!(
+            identity["bytes"],
+            serde_json::to_vec(&result).unwrap().len()
+        );
         assert_eq!(read(dir.path(), &identity).unwrap(), result);
     }
 
@@ -216,7 +219,9 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let result = json!({"a":1});
         let identity = publish(dir.path(), &result).unwrap();
-        let path = dir.path().join(format!("{}.json", identity["sha256"].as_str().unwrap()));
+        let path = dir
+            .path()
+            .join(format!("{}.json", identity["sha256"].as_str().unwrap()));
         fs::write(&path, b"tampered").unwrap();
         assert!(read(dir.path(), &identity).is_err());
         let mut wrong_size = identity.clone();
@@ -227,10 +232,26 @@ mod tests {
     #[test]
     fn rejects_invalid_identity_and_traversal() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(read(dir.path(), &json!({"contract":CONTRACT,"sha256":"../escape","bytes":1})).is_err());
-        assert!(read(dir.path(), &json!({"contract":"other","sha256":"a".repeat(64),"bytes":1})).is_err());
-        assert!(read(dir.path(), &json!({"contract":CONTRACT,"sha256":"a".repeat(64),"bytes":0})).is_err());
-        assert!(read(dir.path(), &json!({"contract":CONTRACT,"sha256":"A".repeat(64),"bytes":1})).is_err());
+        assert!(read(
+            dir.path(),
+            &json!({"contract":CONTRACT,"sha256":"../escape","bytes":1})
+        )
+        .is_err());
+        assert!(read(
+            dir.path(),
+            &json!({"contract":"other","sha256":"a".repeat(64),"bytes":1})
+        )
+        .is_err());
+        assert!(read(
+            dir.path(),
+            &json!({"contract":CONTRACT,"sha256":"a".repeat(64),"bytes":0})
+        )
+        .is_err());
+        assert!(read(
+            dir.path(),
+            &json!({"contract":CONTRACT,"sha256":"A".repeat(64),"bytes":1})
+        )
+        .is_err());
     }
 
     #[test]

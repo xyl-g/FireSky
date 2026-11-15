@@ -3,7 +3,7 @@
 更新日期：2026-11-12
 
 本轮交付、已知缺口及用户要求暂停的接续入口见
-[交接记录](HANDOFF_2026-11-12.zh-CN.md)。Windows/Linux 当前暂停，先验收 macOS。
+[交接记录](archive/HANDOFF_2026-11-12.zh-CN.md)。Windows/Linux 当前暂停，先验收 macOS。
 
 本文定义 macOS 正式桌面端的完成基线。Windows/Linux 后续只复制平台壳和
 FFI 适配层，不复制预测、下载、预检、缓存或报告业务逻辑。

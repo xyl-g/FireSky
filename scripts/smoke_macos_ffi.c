@@ -127,7 +127,7 @@ int main(int argc, char **argv) {
             "{\"name\":\"Hangzhou region\",\"lat\":30.2741,\"lon\":120.1551,"
             "\"elevation_m\":8,\"timezone_name\":\"Asia/Shanghai\","
             "\"target_date\":\"2026-11-12\",\"phenomenon\":\"dusk\","
-            "\"model_source\":\"both\",\"forecast_mode\":\"model\","
+            "\"model_source\":\"gfs\",\"forecast_mode\":\"model\","
             "\"satellite_source\":\"off\",\"regions\":[\"custom\"],"
             "\"custom_bounds\":{\"west\":120.0,\"east\":120.5,"
             "\"south\":30.0,\"north\":30.5},"

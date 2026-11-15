@@ -519,8 +519,11 @@ fn roots(workspace: &Path, key: &str, default: &str) -> PathBuf {
 
 fn snapshot_sha(name: &str) -> Option<&str> {
     let sha = name.strip_suffix(".json")?;
-    (sha.len() == 64 && sha.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
-        .then_some(sha)
+    (sha.len() == 64
+        && sha
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+    .then_some(sha)
 }
 
 /// Sweep a crashed-publish leftover that is not a snapshot, lease or live
@@ -912,10 +915,7 @@ mod tests {
             &json!({"map_token":token,"model_results":{}}),
         )
         .unwrap();
-        let snapshot = snapshot_root.join(format!(
-            "{}.json",
-            identity["sha256"].as_str().unwrap()
-        ));
+        let snapshot = snapshot_root.join(format!("{}.json", identity["sha256"].as_str().unwrap()));
         // Snapshot survives (long report window); the old map is kept by its ref.
         let kept = apply(
             workspace.path(),

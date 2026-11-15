@@ -90,15 +90,22 @@ fn compute_region(context: &Value) -> Result<Option<String>, String> {
     }
 }
 
-fn gfs_client(input: &Input, context: &Value) -> Result<gfs_data::GfsClient, String> {
-    gfs_data::GfsClient::new(gfs_data::Config {
-        cache_dir: input.config.gfs_cache_dir.clone(),
-        resolution: "0p25".into(),
-        region: compute_region(context)?,
-        timeout_seconds: 90.0,
-        lock_timeout_seconds: 300.0,
-        download_attempts: 4,
-    })
+fn gfs_client(
+    input: &Input,
+    context: &Value,
+    cancel: std::sync::Arc<AtomicBool>,
+) -> Result<gfs_data::GfsClient, String> {
+    gfs_data::GfsClient::with_cancel(
+        gfs_data::Config {
+            cache_dir: input.config.gfs_cache_dir.clone(),
+            resolution: "0p25".into(),
+            region: compute_region(context)?,
+            timeout_seconds: 90.0,
+            lock_timeout_seconds: 300.0,
+            download_attempts: 4,
+        },
+        cancel,
+    )
 }
 
 fn ec_config(input: &Input) -> ecmwf_data::Config {
@@ -121,24 +128,39 @@ fn download_gfs(
     cancel: &AtomicBool,
 ) -> Result<Vec<Value>, String> {
     let bbox = array4(context, "bbox")?;
-    let client = gfs_client(input, context)?;
-    requested
-        .iter()
-        .map(|&hour| {
-            check(cancel)?;
-            let row = client
-                .resolve(cycle, hour, Some(bbox), false, true)?
-                .ok_or_else(|| format!("GFS f{hour:03} did not resolve to a cache file"))?;
-            let path = row["path"]
-                .as_str()
-                .ok_or("GFS resolve response has no path")?;
-            Ok(json!({
-                "forecast_hour": hour,
-                "path": path,
-                "status": row["status"].as_str().unwrap_or("resolved"),
-            }))
-        })
-        .collect()
+    // Mirror the caller's borrowed flag into the client's Arc flag so mid-file
+    // reads observe cancellation; the scoped poller stops when downloads end.
+    crate::cancel_scope::with_shared_cancel(cancel, |shared| {
+        let client = gfs_client(input, context, shared)?;
+        requested
+            .iter()
+            .map(|&hour| {
+                check(cancel)?;
+                let rows = client.resolve_parts(cycle, hour, Some(bbox), false, true)?;
+                if rows.is_empty() {
+                    return Err(format!("GFS f{hour:03} did not resolve to a cache file"));
+                }
+                let mut parts = Vec::new();
+                for row in rows {
+                    let path = row["path"]
+                        .as_str()
+                        .ok_or("GFS resolve response has no path")?;
+                    parts.push(json!({
+                        "forecast_hour": hour,
+                        "path": path,
+                        "status": row["status"].as_str().unwrap_or("resolved"),
+                    }));
+                }
+                // Wrapped bboxes resolve to two longitude segments; the first
+                // part keeps the legacy single-path row shape.
+                let mut primary = parts.remove(0);
+                if !parts.is_empty() {
+                    primary["parts"] = json!(parts);
+                }
+                Ok(primary)
+            })
+            .collect::<Result<Vec<Value>, String>>()
+    })
 }
 
 fn download_ec(
@@ -148,19 +170,22 @@ fn download_ec(
     cancel: &AtomicBool,
 ) -> Result<Value, String> {
     check(cancel)?;
-    ecmwf_data::execute_cancellable(ecmwf_data::Params {
-        operation: "download".into(),
-        config: ec_config(input),
-        cycle_utc: Some(time_contract::iso(cycle)),
-        forecast_hour: None,
-        forecast_hours: Some(requested.iter().map(|v| i64::from(*v)).collect()),
-        reference_utc: None,
-        now_utc: None,
-        evaluation_utcs: Vec::new(),
-        max_cycles: 8,
-        allow_download: true,
-        use_cache_for_cycle: true,
-    }, cancel)
+    ecmwf_data::execute_cancellable(
+        ecmwf_data::Params {
+            operation: "download".into(),
+            config: ec_config(input),
+            cycle_utc: Some(time_contract::iso(cycle)),
+            forecast_hour: None,
+            forecast_hours: Some(requested.iter().map(|v| i64::from(*v)).collect()),
+            reference_utc: None,
+            now_utc: None,
+            evaluation_utcs: Vec::new(),
+            max_cycles: 8,
+            allow_download: true,
+            use_cache_for_cycle: true,
+        },
+        cancel,
+    )
 }
 
 fn cams_targets(context: &Value) -> Result<Vec<DateTime<Utc>>, String> {
@@ -245,18 +270,22 @@ fn download_cams(input: &Input, context: &Value, cancel: &AtomicBool) -> Result<
     let mut parts = Vec::with_capacity(download_areas.len());
     for area in &download_areas {
         check(cancel)?;
-        let result = cams_data::execute_cancellable(cams_data::Params {
-            operation: "resolve".into(),
-            cache_dir: cache_dir.clone(),
-            area: json!(area),
-            target_utcs: targets.iter().copied().map(time_contract::iso).collect(),
-            target_utc: None,
-            config: ads::Config::default(),
-            allow_download: true,
-            require_exact_valid_time: true,
-            refresh_before_cycle: refresh.clone(),
-            all_leads: cycle_scope,
-        }, cancel)?;
+        let result = cams_data::execute_cancellable(
+            cams_data::Params {
+                operation: "resolve".into(),
+                cache_dir: cache_dir.clone(),
+                area: json!(area),
+                target_utcs: targets.iter().copied().map(time_contract::iso).collect(),
+                target_utc: None,
+                config: ads::Config::default(),
+                allow_download: true,
+                require_exact_valid_time: true,
+                refresh_before_cycle: refresh.clone(),
+                all_leads: cycle_scope,
+                model_bbox: Some(array4(context, "bbox")?),
+            },
+            cancel,
+        )?;
         let missing = result["missing_valid_times"]
             .as_array()
             .ok_or("CAMS response is missing missing_valid_times")?;
@@ -290,7 +319,21 @@ fn download_cams(input: &Input, context: &Value, cancel: &AtomicBool) -> Result<
                 .ok_or("CAMS response contains an empty file group")?;
             let paths = rows
                 .iter()
-                .map(|value| value["path"].clone())
+                .map(|value| {
+                    // Per-part rows carry only `path`; a wrapped group must
+                    // retain every part (including the first) or the scorer
+                    // sees a hole over the dropped part's longitude arc.
+                    value
+                        .get("paths")
+                        .and_then(Value::as_array)
+                        .map(|extra| {
+                            let mut all = vec![value["path"].clone()];
+                            all.extend(extra.iter().cloned());
+                            all
+                        })
+                        .unwrap_or_else(|| vec![value["path"].clone()])
+                })
+                .flatten()
                 .collect::<Vec<_>>();
             row["paths"] = Value::Array(paths.into_iter().skip(1).collect());
             Ok(row)

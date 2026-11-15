@@ -1135,7 +1135,10 @@ mod tests {
             let id = task.id().to_owned();
             task.finish(&Ok(result.clone()), false).unwrap();
             let row = &history.list(10).unwrap()["tasks"][0];
-            assert_eq!(row["result_ref"]["snapshot"]["contract"], "firesky-result-snapshot-v1");
+            assert_eq!(
+                row["result_ref"]["snapshot"]["contract"],
+                "firesky-result-snapshot-v1"
+            );
             id
         };
         let reopened = TaskHistory::open(root.path()).unwrap();
@@ -1148,10 +1151,14 @@ mod tests {
         let history = TaskHistory::open(root.path()).unwrap();
         let first = json!({"model_results":{"gfs":{"score":0.1}}});
         let second = json!({"model_results":{"gfs":{"score":0.9}}});
-        let first_task = history.begin("same-request", "forecast", request()).unwrap();
+        let first_task = history
+            .begin("same-request", "forecast", request())
+            .unwrap();
         let first_id = first_task.id().to_owned();
         first_task.finish(&Ok(first.clone()), false).unwrap();
-        let second_task = history.begin("same-request", "forecast", request()).unwrap();
+        let second_task = history
+            .begin("same-request", "forecast", request())
+            .unwrap();
         let second_id = second_task.id().to_owned();
         second_task.finish(&Ok(second.clone()), false).unwrap();
         assert_eq!(history.restore(&first_id).unwrap(), first);

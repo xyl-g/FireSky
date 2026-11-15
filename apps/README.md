@@ -3,11 +3,11 @@
 > 桌面正式路线（2026-11-12）：原生 UI + Rust FFI，先 macOS，后 Windows/Linux。
 > Tauri 桌面壳已退役（2026-11-13）：共享 Web 迁至 `apps/shared-web/`（Docker 与
 > Rust HTTP 托管的浏览器页面），Tauri package 已删除。
-> 退役记录见 `docs/PYTHON_TAURI_PYSIDE_RETIREMENT_PLAN.zh-CN.md` 与
-> `docs/RETIREMENT_PHASE0_BASELINE.zh-CN.md`。
+> 退役记录见 `docs/archive/PYTHON_TAURI_PYSIDE_RETIREMENT_PLAN.zh-CN.md` 与
+> `docs/archive/RETIREMENT_PHASE0_BASELINE.zh-CN.md`。
 > 产品与 UI 基准（2026-11-13，用户明确）：先完善并验收 macOS，其他 UI 最终向
 > macOS 对齐。见[基准规范](../docs/MACOS_UI_BASELINE.zh-CN.md)与
-> [当前计划](../docs/NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。Windows/Linux 开发仍暂停，
+> [当前计划](../docs/archive/NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。Windows/Linux 开发仍暂停，
 > Docker/Web 部署列入后续交付。
 
 ## Architecture
@@ -248,7 +248,7 @@ startup JSON file:
 ```
 
 Prepare the complete timezone resource with `scripts/export_timezone_data.py`;
-see Stage 26 in `docs/RUST_MIGRATION.md` for pinned versions and licensing.
+see Stage 26 in `docs/archive/RUST_MIGRATION.md` for pinned versions and licensing.
 The app workspace is the child's working directory. Without a config file,
 online provider defaults work, but offline timezone fallback needs its explicit
 prepared resource. No resource is downloaded or synthesized automatically.
@@ -291,7 +291,7 @@ The bridge reuses one bounded native connection, rescans on every check and
 has no Python checking fallback. Non-China generated grids need the verified
 timezone manifest configured through `FIRESKY_TIMEZONE_MANIFEST`; uncovered
 coordinates use the existing `Etc/GMT` fallback. See Stage 30 of
-`docs/RUST_MIGRATION.md`. Nowcast checks use the same native GFS/CAMS cache
+`docs/archive/RUST_MIGRATION.md`. Nowcast checks use the same native GFS/CAMS cache
 gate and native event-window context. Preparation uses the native
 `desktop_nowcast_prepare` boundary for compact-HSD validation, GFS hours/bbox
 and CAMS bracket downloads after the Python HSD provider has discovered and
@@ -318,7 +318,7 @@ B07/B13/B15 cloud posterior through `desktop_nowcast_hsd_retrieval`; the
 existing `SatelliteCloudColumn` and feature contracts are reconstructed in
 Python. HCAI categorical columns stay on the Python path. This retrieval
 boundary is correctness-focused and does not claim an end-to-end speedup over
-the in-process Python posterior; see `docs/RUST_PERFORMANCE.md` Stage 37.
+the in-process Python posterior; see `docs/archive/RUST_PERFORMANCE.md` Stage 37.
 
 The native first version presents scores, summaries, the point quality curve,
 ledger, model-specific failures and actual regional cells. The legacy Qt profile canvas,

@@ -155,6 +155,8 @@ struct CamsCatalog {
     candidates: Vec<cams_cache::Selection>,
     areas: AreaReader,
     codes: Option<crate::grib::EcCodes>,
+    /// Memoized true-longitude-arc coverage for wrapped multi-area candidates.
+    arc_checks: BTreeMap<(PathBuf, [u64; 4]), bool>,
 }
 impl CamsCatalog {
     fn new(paths: Vec<PathBuf>) -> Self {
@@ -163,7 +165,30 @@ impl CamsCatalog {
             candidates,
             areas: AreaReader::default(),
             codes: None,
+            arc_checks: BTreeMap::new(),
         }
+    }
+    /// Whether the candidate's actual longitude arc (not its normalized
+    /// min/max) covers `bounds`. ADS can answer a wrapped part request with a
+    /// global grid stored under the part's hash; the min/max then spans both
+    /// parts and cannot prove coverage of either. Read the unique longitudes
+    /// and require a contiguous 0.4-degree-spaced run spanning the part.
+    fn arc_covers(&mut self, path: &Path, bounds: [f64; 4], cancel: &AtomicBool) -> bool {
+        let key = (path.to_owned(), bounds.map(|v| v.to_bits()));
+        if let Some(&cached) = self.arc_checks.get(&key) {
+            return cached;
+        }
+        let result = self.compute_arc_covers(path, bounds, cancel);
+        self.arc_checks.insert(key, result);
+        result
+    }
+    fn compute_arc_covers(&mut self, path: &Path, bounds: [f64; 4], cancel: &AtomicBool) -> bool {
+        if check(cancel).is_err() {
+            return false;
+        }
+        // Shared with the download/resolve selector so both layers apply the
+        // same true-arc coverage contract for wrapped (antimeridian) plans.
+        cams_cache::arc_covers(path, bounds)
     }
     fn select(
         &mut self,
@@ -179,7 +204,7 @@ impl CamsCatalog {
             .filter(|v| plan.targets.contains(&v.valid_time))
             .map(|v| {
                 (
-                    v,
+                    v.clone(),
                     v.path
                         .file_name()
                         .is_some_and(|n| n.to_string_lossy().ends_with(&suffix)),
@@ -187,13 +212,47 @@ impl CamsCatalog {
             })
             .collect();
         candidates.sort_by(|(a, ae), (b, be)| b.run_time_utc.cmp(&a.run_time_utc).then(be.cmp(ae)));
+        // Wrapped groups share the physical +/-180 boundary column. Gather
+        // the newest sibling-part candidate per valid time so the seam bridge
+        // can close the (179.6, 180] gap exactly like the scorer's merge.
+        let sibling_groups: BTreeMap<DateTime<Utc>, Vec<std::path::PathBuf>> = if plan.areas.len()
+            > 1
+        {
+            let mut newest: BTreeMap<(DateTime<Utc>, String), (DateTime<Utc>, std::path::PathBuf)> =
+                BTreeMap::new();
+            for (candidate, exact) in &candidates {
+                if *exact {
+                    continue;
+                }
+                let name = candidate
+                    .path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let sibling = plan.areas.iter().any(|other| {
+                    other.key != area.key && name.ends_with(&format!("-{}.grib", other.key))
+                });
+                if !sibling {
+                    continue;
+                }
+                let entry = newest
+                    .entry((candidate.valid_time, name))
+                    .or_insert((candidate.run_time_utc, candidate.path.clone()));
+                if candidate.run_time_utc > entry.0 {
+                    *entry = (candidate.run_time_utc, candidate.path.clone());
+                }
+            }
+            let mut groups: BTreeMap<DateTime<Utc>, Vec<std::path::PathBuf>> = BTreeMap::new();
+            for ((time, _), (_, path)) in newest {
+                groups.entry(time).or_default().push(path);
+            }
+            groups
+        } else {
+            BTreeMap::new()
+        };
         let mut selected = BTreeMap::new();
         for (candidate, exact) in candidates {
             check(cancel)?;
-            // Normalized min/max bounds cannot prove continuity at +/-180.
-            if plan.areas.len() > 1 && !exact {
-                continue;
-            }
             if selected.contains_key(&candidate.valid_time) {
                 continue;
             }
@@ -216,9 +275,61 @@ impl CamsCatalog {
                 {
                     continue;
                 }
+                // A wrapped plan splits into two parts, but ADS may answer a
+                // part request with a broader (even global) longitude grid that
+                // is stored under that part's area hash. The normalized min/max
+                // bounds then span both parts, so the sibling part must still
+                // accept the file when its true longitude arc covers the part.
+                // This mirrors the download path's coverage contract and keeps
+                // preflight from reporting spurious missing CAMS targets.
+                if plan.areas.len() > 1 && !self.arc_covers(&candidate.path, area.bounds, cancel) {
+                    continue;
+                }
             }
             if !fast && !cams_cache::optics_valid(&candidate.path, &mut self.codes) {
                 continue;
+            }
+            // Enforce the scorer's fail-closed model-grid coverage contract so
+            // a newer run whose tile misses the padded model boundary falls
+            // through to the next candidate instead of failing the forecast.
+            if !fast {
+                // The assessment maps CAMS onto the padded prepared bbox, not
+                // the raw request bbox; enforce coverage on the same grid.
+                let prepared = gfs_data::canonical_bbox(plan.input.bbox, "0p25")?;
+                let (lats, lons) = cams_cache::model_axes(prepared);
+                // A wrapped plan splits into parts; each part's tile only has
+                // to cover the model cells inside its own longitude arc.
+                let (part_west, part_east) = if area.bounds[1] <= area.bounds[3] {
+                    (area.bounds[1], area.bounds[3])
+                } else {
+                    (area.bounds[1], area.bounds[3] + 360.0)
+                };
+                let part_lons: Vec<f64> = lons
+                    .iter()
+                    .copied()
+                    .filter(|&lon| {
+                        let unwrapped = if lon < part_west { lon + 360.0 } else { lon };
+                        unwrapped >= part_west && unwrapped <= part_east
+                    })
+                    .collect();
+                if part_lons.len() < 2 {
+                    continue;
+                }
+                let coverage = cams_cache::ModelCoverage {
+                    lats: &lats,
+                    lons: &part_lons,
+                };
+                let codes = match &mut self.codes {
+                    Some(codes) => codes,
+                    None => self.codes.insert(crate::grib::EcCodes::load()?),
+                };
+                let mut group = vec![candidate.path.clone()];
+                if let Some(siblings) = sibling_groups.get(&candidate.valid_time) {
+                    group.extend(siblings.iter().cloned());
+                }
+                if !cams_cache::model_grid_covers_group(&group, codes, &coverage) {
+                    continue;
+                }
             }
             let Ok(after) = fs::metadata(&candidate.path) else {
                 continue;
@@ -281,11 +392,20 @@ fn report(
         })?;
         for hour in hours {
             check(cancel)?;
-            let url = gfs_data::build_url(plan.cycle, hour, Some(plan.input.bbox), "0p25", false)?;
-            if client
-                .find(plan.cycle, hour, Some(plan.input.bbox), Some(&url))?
-                .is_none()
-            {
+            // Wrapped envelopes are served as two longitude segments; the
+            // hour is ready only when every segment has a covering cache.
+            let mut covered = true;
+            for part in gfs_data::request_bboxes(plan.input.bbox, "0p25")? {
+                let url = gfs_data::build_url(plan.cycle, hour, Some(part), "0p25", false)?;
+                if client
+                    .find(plan.cycle, hour, Some(part), Some(&url))?
+                    .is_none()
+                {
+                    covered = false;
+                    break;
+                }
+            }
+            if !covered {
                 missing.push(hour);
             }
         }
@@ -565,6 +685,61 @@ mod tests {
         assert!(execute_cancellable(input, &AtomicBool::new(true))
             .unwrap_err()
             .contains("cancelled"));
+    }
+
+    /// Regression for the wrapped multi-region CAMS preflight: ADS answers the
+    /// dateline part request with a global longitude grid stored under that
+    /// part's area hash. The sibling part must accept the file via true-arc
+    /// coverage instead of reporting spurious missing targets.
+    #[test]
+    fn wrapped_multi_area_cams_accepts_global_grid_sibling() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        let cams = root.join(".cache/cams");
+        // The global-grid part file cached for the GFS east-asia envelope.
+        if !cams
+            .join("2026-11-13/00Z/cams-optics-v2-2026-11-13-0000-003-689bc94c330f.grib")
+            .is_file()
+        {
+            return;
+        }
+        let plan: Plan = serde_json::from_value(json!({
+            "model_source":"gfs",
+            "cycle_utc":"2026-11-13T00:00:00Z",
+            "event_start":"2026-11-13T09:00:00Z",
+            "bbox":[44.75,173.25,69.25,2.75],
+            "area":[78.85,26.15,-6.85,-168.15],
+            "hours":[9],
+            "cams_valid_times":["2026-11-13T03:00:00Z","2026-11-13T06:00:00Z",
+                "2026-11-13T09:00:00Z","2026-11-13T12:00:00Z","2026-11-13T15:00:00Z"],
+            "point_count":71217,
+            "terrain_pending":false,
+            "compute_region":null,
+        }))
+        .unwrap();
+        let params = Params {
+            plans: vec![plan],
+            config: desktop_inventory::Config {
+                gfs_cache_dir: root.join(".cache/gfs"),
+                ecmwf_cache_dir: root.join(".cache/ecmwf"),
+                cams_cache_dir: cams,
+            },
+            publications: BTreeMap::new(),
+            fast: true,
+        };
+        let result = execute_cancellable(params, &AtomicBool::new(false)).expect("preflight");
+        let report = &result["report"];
+        let cams_row = report["datasets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|d| d["source"] == "cams")
+            .expect("cams dataset");
+        assert_eq!(
+            cams_row["missing_count"],
+            json!(0),
+            "wrapped sibling part must be covered by the global grid: {cams_row}"
+        );
+        assert_eq!(cams_row["ready"], json!(true));
     }
 
     #[test]

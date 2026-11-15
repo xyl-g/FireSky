@@ -4,7 +4,7 @@
 > usage & data-source registration: [README.en.md](../README.en.md). 中文版: [DEPLOY.md](DEPLOY.md)
 
 November 11, 2026: the default service is `firesky-engine http`, without Python.
-The [native cutover audit](RUST_RUNTIME_CUTOVER.zh-CN.md) defines implemented
+The [native cutover audit](archive/RUST_RUNTIME_CUTOVER.zh-CN.md) defines implemented
 routes, configuration and acceptance limits. Legacy YAML and refresh/warmup
 tasks do not automatically work with the native runtime. Sections marked legacy
 apply only to an explicitly deployed Python service. Docker, Windows/Linux and
@@ -133,7 +133,7 @@ engine/target/release/firesky-engine http --workspace "$PWD" --host 127.0.0.1 --
 curl http://127.0.0.1:8765/api/v1/firesky/health   # {"status":"ok"}
 ```
 
-Use [native environment variables](RUST_RUNTIME_CUTOVER.zh-CN.md#配置), such as
+Use [native environment variables](archive/RUST_RUNTIME_CUTOVER.zh-CN.md#配置), such as
 `FIRESKY_GFS_CACHE_DIR`, `FIRESKY_CAMS_CACHE_DIR` and `FIRESKY_REPORT_DIR`.
 `FIRESKY_CONFIG` and Python YAML do not configure the native process.
 Provide ADS credentials via a permission-protected `~/.cdsapirc` or a file

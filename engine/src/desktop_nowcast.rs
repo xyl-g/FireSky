@@ -8,7 +8,6 @@ use crate::{
     cams_data, time_contract,
 };
 use chrono::{DateTime, Duration, Timelike, Utc};
-use reqwest::blocking::Client;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::time::Duration as StdDuration;
@@ -102,7 +101,10 @@ fn choose_cycle(reference: DateTime<Utc>) -> DateTime<Utc> {
 
 fn published_cycle(reference: DateTime<Utc>) -> DateTime<Utc> {
     let heuristic = choose_cycle(reference);
-    let client = match Client::builder().timeout(StdDuration::from_secs(6)).build() {
+    let client = match crate::http_client::builder()
+        .timeout(StdDuration::from_secs(6))
+        .build()
+    {
         Ok(client) => client,
         Err(_) => return heuristic,
     };

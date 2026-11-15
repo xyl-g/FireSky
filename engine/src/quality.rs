@@ -1,5 +1,5 @@
 //! Debug JSON adapter and tensor schema for the shared empirical scorer.
-use firesky_native::quality::{self, Mode, Options, Quality, Row};
+use crate::native::quality::{self, Mode, Options, Quality, Row};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 
@@ -260,11 +260,11 @@ pub fn assessment_rows(
     samples: &[f32],
     rising: bool,
 ) -> Result<[Row; 20], String> {
-    if assessment.len() != 20 * firesky_native::NATIONAL_OUTPUT_FIELDS || samples.len() != 20 * 9 {
+    if assessment.len() != 20 * crate::native::NATIONAL_OUTPUT_FIELDS || samples.len() != 20 * 9 {
         return Err("quality preparation requires one complete canonical observer".into());
     }
     Ok(std::array::from_fn(|step| {
-        let v = &assessment[step * firesky_native::NATIONAL_OUTPUT_FIELDS..];
+        let v = &assessment[step * crate::native::NATIONAL_OUTPUT_FIELDS..];
         let s = &samples[step * 9..];
         // Native ledger: view/burn/local, then total/material/incoming loads.
         assessment_row(v, s, step, rising)
@@ -339,7 +339,7 @@ pub(crate) fn append_with_data(
     radius: f64,
     retain: bool,
 ) -> Result<(Value, Option<Retained>), String> {
-    let assessment_stride = 20 * firesky_native::NATIONAL_OUTPUT_FIELDS;
+    let assessment_stride = 20 * crate::native::NATIONAL_OUTPUT_FIELDS;
     if assessment.len() != points * assessment_stride || samples.len() != points * 20 * 9 {
         return Err("quality source tensors have invalid dimensions".into());
     }
@@ -377,7 +377,7 @@ pub(crate) fn append_with_data(
         "instant_quality",
         &[points as u64, 20, quality::INSTANT_NAMES.len() as u64],
         (0..points * 20).flat_map(|i| {
-            let v = &assessment[i * firesky_native::NATIONAL_OUTPUT_FIELDS..];
+            let v = &assessment[i * crate::native::NATIONAL_OUTPUT_FIELDS..];
             let s = &samples[i * 9..];
             let row = assessment_row(v, s, i % 20, rising);
             let instant = quality::score_instant(&row, row[17] >= 0.5 && row[6] >= 0.05, true);
@@ -420,9 +420,9 @@ mod tests {
     }
     #[test]
     fn projects_the_current_native_ledger_without_reusing_legacy_slots() {
-        let mut values = vec![0.0; 20 * firesky_native::NATIONAL_OUTPUT_FIELDS];
+        let mut values = vec![0.0; 20 * crate::native::NATIONAL_OUTPUT_FIELDS];
         for row in values
-            .as_chunks_mut::<{ firesky_native::NATIONAL_OUTPUT_FIELDS }>()
+            .as_chunks_mut::<{ crate::native::NATIONAL_OUTPUT_FIELDS }>()
             .0
         {
             for (i, v) in row.iter_mut().enumerate() {

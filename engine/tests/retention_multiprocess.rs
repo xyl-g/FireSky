@@ -259,7 +259,10 @@ fn multiprocess_readers_publishers_and_cleaners_share_one_workspace() {
     );
     for role in ["cleaner-0", "cleaner-1"] {
         assert!(
-            read_stats(workspace.path(), role)["passes"].as_u64().unwrap() > 0,
+            read_stats(workspace.path(), role)["passes"]
+                .as_u64()
+                .unwrap()
+                > 0,
             "cleaner never ran"
         );
     }
@@ -270,7 +273,10 @@ fn multiprocess_readers_publishers_and_cleaners_share_one_workspace() {
                 .exists()
         })
         .count();
-    assert_eq!(expired_left, 0, "expired snapshots survived concurrent cleanup");
+    assert_eq!(
+        expired_left, 0,
+        "expired snapshots survived concurrent cleanup"
+    );
     // Cleaners legitimately expire everything published during the churn
     // (now_utc is 2030), so a churn-time snapshot surviving the final pass is
     // timing luck, not an invariant. With every child exited, the workspace
@@ -349,7 +355,10 @@ fn crashed_cross_process_reader_lease_is_reclaimed_under_concurrent_cleaners() {
     assert!(!child.0.wait().unwrap().success());
     let deadline = Instant::now() + Duration::from_secs(10);
     while snapshot.exists() {
-        assert!(Instant::now() < deadline, "crashed reader lease was never reclaimed");
+        assert!(
+            Instant::now() < deadline,
+            "crashed reader lease was never reclaimed"
+        );
         expire(workspace.path());
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -408,7 +417,11 @@ fn publish_fails_closed_on_a_full_disk_and_restore_still_works() {
     );
     let mount = PathBuf::from(format!("/Volumes/{volume_name}"));
     let _volume = Volume(mount.clone());
-    assert!(mount.is_dir(), "volume did not mount at {}", mount.display());
+    assert!(
+        mount.is_dir(),
+        "volume did not mount at {}",
+        mount.display()
+    );
 
     let workspace = mount.join("workspace");
     let root = snapshot_root(&workspace);

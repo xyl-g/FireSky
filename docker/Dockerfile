@@ -1,9 +1,8 @@
 # syntax=docker/dockerfile:1.7
 
-# ── Stage 1: independent native runtime ────────────────────────────────────
+# ── Stage 1: independent Rust runtime (engine + merged scoring core) ───────
 FROM rust:1.91-bookworm AS engine-builder
 WORKDIR /build
-COPY native ./native
 COPY engine/Cargo.toml engine/Cargo.lock engine/build.rs ./engine/
 COPY engine/src ./engine/src
 RUN cargo build --manifest-path engine/Cargo.toml --release --locked

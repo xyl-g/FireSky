@@ -132,7 +132,7 @@ fn heuristic(source: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>, String> 
 }
 
 fn http_client(timeout: StdDuration) -> Result<Client, String> {
-    Client::builder()
+    crate::http_client::builder()
         .timeout(timeout)
         .connect_timeout(timeout)
         .redirect(reqwest::redirect::Policy::limited(5))

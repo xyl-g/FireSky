@@ -1,9 +1,9 @@
 //! Complete theoretical pressure-profile cross-sections over verified per-hour bundles.
 use crate::astronomy::Phenomenon;
+use crate::native::profile_diagnostics::Stencil;
+use crate::native::timeline::{self, ModelTimes, Point};
 use crate::tensor_bundle::{source_identity, ProfileTensor, SourceIdentity};
 use crate::time_contract::{parse_date, parse_utc};
-use firesky_native::profile_diagnostics::Stencil;
-use firesky_native::timeline::{self, ModelTimes, Point};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::path::{Component, Path, PathBuf};
@@ -215,7 +215,7 @@ pub fn execute(params: Params) -> Result<Value, String> {
         .collect();
     let mut stencils = Vec::with_capacity(count);
     for &distance in &distances {
-        let (lat, lon) = firesky_native::destination_point(
+        let (lat, lon) = crate::native::destination_point(
             point.lat,
             point.lon,
             f64::from(sample[1]),
@@ -340,6 +340,57 @@ fn rounded(value: f64, places: i32) -> Value {
     json!(value)
 }
 
+/// Pick the evaluation step closest to the requested offset. Callers derive
+/// offsets from report anchors (sunset/sunrise), which can differ from the
+/// timeline anchor by sub-minute amounts; exact matching would reject every
+/// such request. On-grid offsets still resolve to their exact step.
+fn nearest_evaluation_index(evaluation: &[f64], anchor: f64, offset_minutes: f64) -> Option<usize> {
+    let target = anchor + offset_minutes * 60.0;
+    evaluation
+        .iter()
+        .enumerate()
+        .min_by(|a, b| (a.1 - target).abs().total_cmp(&(b.1 - target).abs()))
+        .map(|(index, _)| index)
+}
+
+/// Snap a report-derived offset onto the event's five-minute evaluation grid.
+/// Desktop point/service reports anchor steps at sunset/sunrise while the
+/// frozen profile timeline uses its own anchor; the two can differ by
+/// sub-minute amounts. Strict `execute` keeps its exact contract for frozen
+/// profile queries; automatic cross-sections snap first.
+pub(crate) fn snap_offset_to_event_grid(
+    source_path: &Path,
+    point: &crate::frames::Point,
+    offset_minutes: f64,
+) -> Result<f64, String> {
+    let (source, _identity): (Source, _) = crate::request_file::read(source_path, 256 * 1024)?;
+    let cycle = parse_utc(&source.cycle_utc)?;
+    let zone: chrono_tz::Tz = point
+        .timezone_name
+        .parse()
+        .map_err(|_| "unknown observer timezone")?;
+    let prepared = timeline::prepare(
+        &[Point {
+            lat: point.lat,
+            lon: point.lon,
+            elevation_m: point.elevation_m,
+            timezone: zone,
+        }],
+        parse_date(&source.target_date)?,
+        matches!(source.phenomenon, Phenomenon::Dawn),
+        Some(ModelTimes {
+            cycle_epoch: cycle.timestamp() as f64
+                + f64::from(cycle.timestamp_subsec_micros()) / 1e6,
+            hours: &source.hours,
+        }),
+    )
+    .map_err(|e| e.to_string())?;
+    let row = &prepared.rows[0];
+    let index = nearest_evaluation_index(&row.evaluation, row.anchor, offset_minutes)
+        .ok_or("cross-section event has no evaluation grid")?;
+    Ok((row.evaluation[index] - row.anchor) / 60.0)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn assemble(
     source: &Source,
@@ -357,7 +408,7 @@ fn assemble(
     let shadow: Vec<f32> = distances
         .iter()
         .map(|&distance| {
-            firesky_native::required_illumination_height_m(f64::from(distance), solar, 0.0) as f32
+            crate::native::required_illumination_height_m(f64::from(distance), solar, 0.0) as f32
         })
         .collect();
     let mut targets = Vec::new();
@@ -369,7 +420,7 @@ fn assemble(
     for (distance_index, profile) in profiles.iter().enumerate() {
         let amount: Vec<_> = profile
             .iter()
-            .map(|p| firesky_native::cloud::effective_profile(p)[0])
+            .map(|p| crate::native::cloud::effective_profile(p)[0])
             .collect();
         let max_where = |condition: &dyn Fn(f32) -> bool| {
             levels
@@ -603,4 +654,43 @@ fn sight_height(observer: f64, target: f64, distance: f64, sample: f64) -> f64 {
     (origin + fraction * (target_radius * angle.cos() - origin))
         .hypot(fraction * target_radius * angle.sin())
         - radius
+}
+
+#[cfg(test)]
+mod tests {
+    use super::nearest_evaluation_index;
+
+    #[test]
+    fn offset_snaps_to_nearest_event_grid_step() {
+        let anchor = 1_000_000.25;
+        let evaluation: Vec<f64> = (-20..0)
+            .map(|step| anchor + f64::from(step * 5) * 60.0)
+            .collect();
+        // Exact on-grid offsets keep their step.
+        assert_eq!(
+            nearest_evaluation_index(&evaluation, anchor, -75.0),
+            Some(5)
+        );
+        // Report anchors can sit sub-minute away from the timeline anchor;
+        // the derived offset must snap instead of failing the whole forecast.
+        assert_eq!(
+            nearest_evaluation_index(&evaluation, anchor, -75.0 - 0.25 / 60.0),
+            Some(5)
+        );
+        // The grid spans -100..-5; -72.9 still snaps to the -75 step (5),
+        // while -70 lands exactly on step 6.
+        assert_eq!(
+            nearest_evaluation_index(&evaluation, anchor, -72.9),
+            Some(5)
+        );
+        assert_eq!(
+            nearest_evaluation_index(&evaluation, anchor, -70.0),
+            Some(6)
+        );
+        assert_eq!(
+            nearest_evaluation_index(&evaluation, anchor, -20.0),
+            Some(16)
+        );
+        assert_eq!(nearest_evaluation_index(&[], anchor, 0.0), None);
+    }
 }

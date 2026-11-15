@@ -350,8 +350,13 @@ async fn start(
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         run_tracked_job(&app.desktop_jobs, &request_id, task, |progress| {
-            app.runtime
-                .dispatch_cancellable(&request.method, request.params, cancel, progress, job_task_id.as_deref())
+            app.runtime.dispatch_cancellable(
+                &request.method,
+                request.params,
+                cancel,
+                progress,
+                job_task_id.as_deref(),
+            )
         });
     });
     Ok((StatusCode::ACCEPTED, Json(response)))

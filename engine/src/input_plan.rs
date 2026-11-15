@@ -1,4 +1,5 @@
 //! Automatic GFS event-hour/terrain planning and local CAMS file selection.
+use crate::native::timeline::{self, Point};
 use crate::{
     assessment::{self, Elevation, Frame, Observer, OpticalFile},
     astronomy, cams, cams_cache, cams_data,
@@ -9,7 +10,6 @@ use crate::{
     time_contract,
 };
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Timelike, Utc};
-use firesky_native::timeline::{self, Point};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -53,6 +53,14 @@ pub fn execute(params: Params) -> Result<Value, String> {
 }
 
 pub fn forecast(path: &Path, output: &Path) -> Result<PathBuf, String> {
+    forecast_with_progress(path, output, &|_: u128| {})
+}
+
+pub fn forecast_with_progress(
+    path: &Path,
+    output: &Path,
+    progress: &(dyn Fn(u128) + Sync),
+) -> Result<PathBuf, String> {
     let started = Instant::now();
     let prepared = prepare(path, true)?;
     if prepared.summary["inputs_located"] != true {
@@ -68,6 +76,7 @@ pub fn forecast(path: &Path, output: &Path) -> Result<PathBuf, String> {
         prepared.source,
         prepared.summary,
         started,
+        progress,
     )
 }
 
@@ -89,13 +98,75 @@ fn cams_plan(
     area: [f64; 4],
     targets: &BTreeSet<DateTime<Utc>>,
     download: Option<&crate::ads::Config>,
+    coverage: Option<&cams_cache::ModelCoverage<'_>>,
 ) -> Result<CamsPlan, String> {
     let areas = cams_data::split_areas(area)?;
     let mut selected_by_time = BTreeMap::<DateTime<Utc>, Vec<cams_cache::Selection>>::new();
     let mut download_reports = Vec::new();
     let mut cache_hits = 0;
     for sub_area in &areas {
-        let mut selected = cams_cache::select(root, *sub_area, targets)?;
+        let (part_west, part_east) = if sub_area[1] <= sub_area[3] {
+            (sub_area[1], sub_area[3])
+        } else {
+            (sub_area[1], sub_area[3] + 360.0)
+        };
+        let part_lons: Vec<f64> = coverage
+            .map(|c| {
+                c.lons
+                    .iter()
+                    .copied()
+                    .filter(|&lon| {
+                        let unwrapped = if lon < part_west { lon + 360.0 } else { lon };
+                        unwrapped >= part_west && unwrapped <= part_east
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let part_coverage = coverage.map(|c| cams_cache::ModelCoverage {
+            lats: c.lats,
+            lons: &part_lons,
+        });
+        let key = cams_cache::area_key(*sub_area)?;
+        let mut selected = cams_cache::select_with_key(
+            root,
+            *sub_area,
+            targets,
+            &key,
+            part_coverage.as_ref(),
+            &[],
+        )?;
+        // Wrapped groups share the physical +/-180 boundary column: retry
+        // missing targets with the sibling part's newest tile so the seam
+        // bridge can close the (179.6, 180] gap before any ADS download.
+        if part_coverage.is_some() && selected.len() < targets.len() && areas.len() > 1 {
+            let (bounds, _, _) = cams_data::area_identity(serde_json::json!(sub_area))?;
+            let part = cams_data::Area::from_bounds(bounds);
+            let siblings = cams_data::sibling_tiles(
+                root,
+                &part,
+                &targets.iter().copied().collect::<Vec<_>>(),
+                true,
+            )?;
+            for target in targets {
+                if selected.contains_key(target) {
+                    continue;
+                }
+                let empty = Vec::new();
+                let group_siblings = siblings.get(target).unwrap_or(&empty);
+                if let Some(hit) = cams_cache::select_with_key(
+                    root,
+                    *sub_area,
+                    &[*target].into_iter().collect(),
+                    &key,
+                    part_coverage.as_ref(),
+                    group_siblings,
+                )?
+                .remove(target)
+                {
+                    selected.insert(*target, hit);
+                }
+            }
+        }
         cache_hits += selected.len();
         if selected.len() < targets.len() {
             if let Some(config) = download {
@@ -105,7 +176,14 @@ fn cams_plan(
                     targets.iter().copied().collect(),
                     config.clone(),
                 )?);
-                selected = cams_cache::select(root, *sub_area, targets)?;
+                selected = cams_cache::select_with_key(
+                    root,
+                    *sub_area,
+                    targets,
+                    &key,
+                    part_coverage.as_ref(),
+                    &[],
+                )?;
             }
         }
         for target in targets {
@@ -417,16 +495,21 @@ fn located(
     cycle: DateTime<Utc>,
     hour: u32,
     bbox: [f64; 4],
-) -> Result<Option<PathBuf>, String> {
-    let result = client.resolve(cycle, hour, Some(bbox), false, input.allow_gfs_download)?;
-    result
-        .map(|v| {
-            v["path"]
+) -> Result<Option<Vec<PathBuf>>, String> {
+    let rows = client.resolve_parts(cycle, hour, Some(bbox), false, input.allow_gfs_download)?;
+    if rows.is_empty() {
+        return Ok(None);
+    }
+    let mut paths = Vec::new();
+    for row in rows {
+        paths.push(
+            row["path"]
                 .as_str()
                 .map(PathBuf::from)
-                .ok_or("invalid resolved GFS path".into())
-        })
-        .transpose()
+                .ok_or("invalid resolved GFS path")?,
+        );
+    }
+    Ok(Some(paths))
 }
 
 fn prepare(path: &Path, point_only: bool) -> Result<Prepared, String> {
@@ -512,26 +595,30 @@ fn prepare(path: &Path, point_only: bool) -> Result<Prepared, String> {
     if terrain_pending {
         for attempt in 0..2 {
             let hour = *required.hours.first().unwrap();
-            let Some(path) = located(&client, &input, cycle, hour, domain)? else {
+            let Some(paths) = located(&client, &input, cycle, hour, domain)? else {
                 break;
             };
             let targets: Vec<_> = model_grid
                 .iter()
                 .map(|&i| input.points[i].clone())
                 .collect();
-            let values = assessment::terrain_at(
-                &EcCodes::load()?,
-                &path,
-                cycle,
-                hour,
-                prepared_bbox,
-                &targets,
-            )?;
+            let codes = EcCodes::load()?;
+            let mut values =
+                assessment::terrain_at(&codes, &paths[0], cycle, hour, prepared_bbox, &targets)?;
+            for extra in &paths[1..] {
+                let part =
+                    assessment::terrain_at(&codes, extra, cycle, hour, prepared_bbox, &targets)?;
+                for (v, p) in values.iter_mut().zip(part) {
+                    if p.is_finite() {
+                        *v = p;
+                    }
+                }
+            }
             for (&index, value) in model_grid.iter().zip(values) {
                 elevations[index] = value;
             }
             required = requirements(&input, &elevations, date, cycle)?;
-            terrain = Some(json!({"path":path,"forecast_hour":hour}));
+            terrain = Some(json!({"path":paths[0],"forecast_hour":hour}));
             if required.hours.contains(&hour) {
                 terrain_pending = false;
                 break;
@@ -546,8 +633,12 @@ fn prepare(path: &Path, point_only: bool) -> Result<Prepared, String> {
     let mut frames = Vec::new();
     let mut missing = Vec::new();
     for &hour in &required.hours {
-        if let Some(path) = located(&client, &input, cycle, hour, domain)? {
-            frames.push(Frame { hour, path });
+        if let Some(paths) = located(&client, &input, cycle, hour, domain)? {
+            frames.push(Frame {
+                hour,
+                path: paths[0].clone(),
+                paths: paths.into_iter().skip(1).collect(),
+            });
         } else {
             missing.push(hour);
         }
@@ -561,11 +652,20 @@ fn prepare(path: &Path, point_only: bool) -> Result<Prepared, String> {
         round(domain[1] + 0.6),
     ];
     let phase = Instant::now();
+    // The assessment maps CAMS onto the regular 0.25-degree model grid of the
+    // prepared bbox; reuse the shared axes so selection enforces the scorer's
+    // fail-closed coverage contract, including the +/-180 seam column.
+    let (coverage_lats, coverage_lons) = cams_cache::model_axes(prepared_bbox);
+    let model_coverage = cams_cache::ModelCoverage {
+        lats: &coverage_lats,
+        lons: &coverage_lons,
+    };
     let cams_plan = cams_plan(
         &input.cams_cache_dir,
         area,
         &required.cams,
         input.cams_download.as_ref(),
+        Some(&model_coverage),
     )?;
     let cams_ms = phase.elapsed().as_secs_f64() * 1000.0;
     let missing_cams: Vec<_> = required
@@ -658,6 +758,7 @@ fn prepare(path: &Path, point_only: bool) -> Result<Prepared, String> {
             point_spacing_deg: None,
             compute_backend_requested: None,
             derived_cache: input.derived_cache,
+            compact_results: false,
         },
     })
 }

@@ -80,7 +80,7 @@ $$\mathrm{pre}=q_{\rm cov} f_m \iota c f_D,\qquad
 ## Requirements & installation
 
 The HTTP/CLI and native desktop runtimes are Rust and do not require Python.
-The [cutover audit](docs/RUST_RUNTIME_CUTOVER.zh-CN.md) records implemented
+The [cutover audit](docs/archive/RUST_RUNTIME_CUTOVER.zh-CN.md) records implemented
 paths and validation limits.
 
 | Dependency | Version | Purpose | Required? |
@@ -140,7 +140,7 @@ curl -X POST http://127.0.0.1:8765/api/v1/firesky/data/fetch \
 
 ## Configuration
 
-The native runtime uses [environment variables and CLI arguments](docs/RUST_RUNTIME_CUTOVER.zh-CN.md#配置).
+The native runtime uses [environment variables and CLI arguments](docs/archive/RUST_RUNTIME_CUTOVER.zh-CN.md#配置).
 Docker directory conventions are in `docker/Dockerfile` and the [deployment guide](docs/DEPLOY.en.md).
 
 ## Usage
@@ -162,7 +162,7 @@ engine/target/release/firesky-engine forecast --input request.json --workspace "
 
 ## API endpoints
 
-See the [native HTTP contract and outstanding routes](docs/RUST_RUNTIME_CUTOVER.zh-CN.md#http-范围).
+See the [native HTTP contract and outstanding routes](docs/archive/RUST_RUNTIME_CUTOVER.zh-CN.md#http-范围).
 
 | Endpoint | Method | Purpose |
 |---|---|---|
@@ -205,7 +205,7 @@ the legacy PySide6 app are retired (2026-11-13); the shared browser web now
 lives in `apps/shared-web/` and is served by the Rust HTTP service and Docker.
 Old user data (~/.firesky-desktop favorites and current spot) imports
 automatically into the macOS native app. Retirement record:
-`docs/PYTHON_TAURI_PYSIDE_RETIREMENT_PLAN.zh-CN.md`.
+`docs/archive/PYTHON_TAURI_PYSIDE_RETIREMENT_PLAN.zh-CN.md`.
 
 ### Map basemaps and the Tianditu key
 

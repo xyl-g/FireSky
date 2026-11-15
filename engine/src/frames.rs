@@ -1,4 +1,5 @@
 //! Complete compact regional frames and generated point cores, not cache APIs.
+use crate::native::{empirical, profile_diagnostics::Stencil, quality as scoring};
 use crate::{
     astronomy,
     characteristics::{self, Operation, Phase},
@@ -8,7 +9,6 @@ use crate::{
 };
 use base64::{engine::general_purpose::STANDARD, Engine};
 use chrono::{DateTime, Utc};
-use firesky_native::{empirical, profile_diagnostics::Stencil, quality as scoring};
 use serde::{
     ser::{SerializeMap, SerializeSeq},
     Deserialize, Serialize,
@@ -22,6 +22,7 @@ pub(crate) const CORE_ALGORITHM: &str = "national-point-core-2026.11.04.87-pre-v
 const CONFIDENCE: &str = "input-and-geometry-support-not-event-hit-probability";
 const QUALITY_SEMANTICS: &str = "empirical-potential-index-0-to-2.5-not-probability";
 const LEAD: &str = "valid-time-minus-model-cycle-hours";
+const DEFAULT_GEOMETRY_CONFIDENCE: f32 = 0.55;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,7 +89,7 @@ pub fn execute(params: DebugInput) -> Result<Value, String> {
     let offsets: Vec<_> = (0..20)
         .map(|s| f64::from(if rising { -75 + s * 5 } else { -20 + s * 5 }))
         .collect();
-    let extras = firesky_native::observer_diagnostics::summarize_many(&values, n, &offsets, true)?;
+    let extras = crate::native::observer_diagnostics::summarize_many(&values, n, &offsets, true)?;
     let mut scores = Vec::with_capacity(n);
     let mut marks = Vec::with_capacity(n * 20);
     for i in 0..n {
@@ -143,6 +144,7 @@ pub fn execute(params: DebugInput) -> Result<Value, String> {
         ec: params.model_source == "ec",
         include_point_core: params.include_point_core,
         point_spacing_deg: params.point_spacing_deg,
+        compact_results: false,
     })?;
     serde_json::to_value(payload).map_err(|e| e.to_string())
 }
@@ -215,6 +217,10 @@ pub(crate) struct Input<'a> {
     pub ec: bool,
     pub include_point_core: bool,
     pub point_spacing_deg: Option<f64>,
+    /// Regional grid product: keep only the observer DTO fields the desktop
+    /// and web consumers read, plus the frame columns the web timeline decodes.
+    /// Full per-point diagnostics remain the point-core contract.
+    pub compact_results: bool,
 }
 
 /// Stream results one observer at a time; do not retain N JSON component maps.
@@ -359,6 +365,7 @@ impl<'a> Payload<'a> {
                 .profiles
                 .is_some_and(|p| p.len() != n * 20 || p.iter().flatten().any(|v| !v.is_finite()))
             || input.include_point_core && n != 1
+            || input.compact_results && input.include_point_core
             || input
                 .values
                 .iter()
@@ -516,11 +523,37 @@ impl<'a> Payload<'a> {
                     selected[3],
                     -1.0,
                     0.0,
-                    0.55,
+                    DEFAULT_GEOMETRY_CONFIDENCE,
                 ]
             },
             |p| p[i * 20 + s],
         )
+    }
+
+    fn confidence_step(best: Option<usize>, first: Option<usize>) -> Option<usize> {
+        best.or(first)
+    }
+
+    fn geometry_confidence(
+        &self,
+        i: usize,
+        best: Option<usize>,
+        first: Option<usize>,
+    ) -> Result<f64, String> {
+        Ok(if let Some(s) = Self::confidence_step(best, first) {
+            self.profile(i, s, self.selected(i, s)?)[6] as f64
+        } else {
+            f64::from(DEFAULT_GEOMETRY_CONFIDENCE)
+        })
+    }
+
+    fn confidence_score(&self, i: usize, geometry_confidence: f64) -> f64 {
+        (if self.input.aerosol_qualities[i].eq_ignore_ascii_case("cams") {
+            0.82
+        } else {
+            0.60
+        } * (0.70 + 0.30 * geometry_confidence.clamp(0.0, 1.0)))
+            .clamp(0.25, 0.96)
     }
     fn geometry(&self, i: usize, s: usize) -> (Option<&'static str>, [f64; 3]) {
         let v = self.v(i, s);
@@ -605,17 +638,42 @@ impl<'a> Payload<'a> {
     }
     fn compact_frames(&self) -> Result<Value, String> {
         let n = self.input.points.len();
+        let compact = self.input.compact_results;
+        // The web selected-point timeline decodes exactly these columns;
+        // every other map column is unused by the regional grid product.
+        let web_columns = [
+            "forward_view_cloud_field_amount",
+            "forward_burnable_cloud_field_amount",
+            "forward_burnable_cloud_ratio",
+            "vividness_score",
+            "solar_incoming_block_risk",
+            "observer_return_transmission",
+            "burnable_cloud_coverage",
+            "instant_quality_index",
+            "local_aod550",
+            "valid",
+        ];
         let mut frames = Vec::with_capacity(20);
         for s in 0..20 {
-            let selected = (0..n)
-                .map(|i| self.selected(i, s))
-                .collect::<Result<Vec<_>, _>>()?;
-            let profiles: Vec<_> = (0..n).map(|i| self.profile(i, s, selected[i])).collect();
+            let selected = if compact {
+                Vec::new()
+            } else {
+                (0..n)
+                    .map(|i| self.selected(i, s))
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            let profiles: Vec<_> = if compact {
+                Vec::new()
+            } else {
+                (0..n).map(|i| self.profile(i, s, selected[i])).collect()
+            };
             let mut frame = Map::new();
-            frame.insert(
-                "selected_column_diagnostic_source".into(),
-                json!(self.source()),
-            );
+            if !compact {
+                frame.insert(
+                    "selected_column_diagnostic_source".into(),
+                    json!(self.source()),
+                );
+            }
             frame.insert(
                 "offset_minutes".into(),
                 json!(if self.input.rising {
@@ -663,10 +721,49 @@ impl<'a> Payload<'a> {
                 ("observer_local_return_optical_depth", 75, 1, 0.001),
                 ("observer_local_return_transmission", 76, 0, 1.0),
             ] {
+                if compact && !web_columns.contains(&name) {
+                    continue;
+                }
                 frame.insert(
                     name.into(),
                     json!(encode((0..n).map(|i| self.v(i, s)[field]), mode, scale)),
                 );
+            }
+            if compact {
+                for (name, mode, scale) in [
+                    ("valid", 3, 1.0),
+                    ("instant_quality_index", 1, 0.001),
+                    ("burnable_cloud_coverage", 0, 1.0),
+                    ("forward_burnable_cloud_ratio", 0, 1.0),
+                    ("local_aod550", 1, 0.001),
+                ] {
+                    frame.insert(
+                        name.into(),
+                        json!(encode(
+                            (0..n).map(|i| {
+                                let v = self.v(i, s);
+                                let m = self.input.marks[i * 20 + s];
+                                match name {
+                                    "valid" => f32::from(v[0] >= 0.5),
+                                    "instant_quality_index" => m.index as f32,
+                                    "burnable_cloud_coverage" => m.coverage,
+                                    "forward_burnable_cloud_ratio" => {
+                                        if v[43] > 1e-6 {
+                                            v[44] / v[43].max(1e-6)
+                                        } else {
+                                            0.0
+                                        }
+                                    }
+                                    _ => self.sample(i, s)[5],
+                                }
+                            }),
+                            mode,
+                            scale
+                        )),
+                    );
+                }
+                frames.push(Value::Object(frame));
+                continue;
             }
             for (name, field) in [
                 ("forward_candidate_cloud_field_amount", 77),
@@ -899,6 +996,9 @@ impl<'a> Payload<'a> {
                 best = Some(s);
             }
         }
+        if self.input.compact_results {
+            return Ok((self.compact_point(i, best, first, &scores)?, None));
+        }
         let mut quality = diagnostics::render(
             &self.input.scores[i],
             &self.input.extras[i],
@@ -977,18 +1077,8 @@ impl<'a> Payload<'a> {
             deep,
             &selected_phase,
         )?;
-        let confidence_step = best.or(first);
-        let geometry_confidence = if let Some(s) = confidence_step {
-            self.profile(i, s, self.selected(i, s)?)[6] as f64
-        } else {
-            0.55
-        };
-        let confidence = (if self.input.aerosol_qualities[i].to_lowercase() == "cams" {
-            0.82
-        } else {
-            0.60
-        } * (0.70 + 0.30 * geometry_confidence.clamp(0.0, 1.0)))
-        .clamp(0.25, 0.96);
+        let geometry_confidence = self.geometry_confidence(i, best, first)?;
+        let confidence = self.confidence_score(i, geometry_confidence);
         let cycle_epoch = self.input.cycle.timestamp() as f64
             + self.input.cycle.timestamp_subsec_micros() as f64 / 1e6;
         let lead = best.map(|s| (time.evaluation[s] - cycle_epoch) / 3600.0);
@@ -1011,7 +1101,7 @@ impl<'a> Payload<'a> {
             "forecast_lead_semantics":LEAD,"quality_index_semantics":QUALITY_SEMANTICS,
             "cloud_geometry_proxy_source":self.proxy_source(),"cloud_geometry_boundary_semantics":self.boundary(),
             "cloud_geometry_support_count":profile[4] as i32,"cloud_geometry_uncertainty_m":profile[5] as f64,
-            "cloud_geometry_confidence":best.map_or(0.55,|_|profile[6] as f64),
+            "cloud_geometry_confidence":geometry_confidence,
             "best_time_local":best.map(|s|local(time.evaluation[s],&observer.timezone_name)).transpose()?,
             "anchor_local":local(time.anchor,&observer.timezone_name)?,"near_cloud_ratio":null,"far_cloud_ratio":null,
             "compute_backend":"cpu","point_refinement":REFINEMENT,"high_cloud":selected[0] as f64,"mid_cloud":selected[1] as f64,
@@ -1031,7 +1121,7 @@ impl<'a> Payload<'a> {
                 "quality_index_semantics":QUALITY_SEMANTICS,"cloud_optics":optics(self.input.ec),
                 "cloud_geometry_proxy_source":self.proxy_source(),"cloud_geometry_boundary_semantics":self.boundary(),
                 "cloud_geometry_support_count":profile[4] as i32,"cloud_geometry_uncertainty_m":profile[5] as f64,
-                "cloud_geometry_confidence":best.map_or(0.55,|_|profile[6] as f64),"model_disagreement_score":0.0,"model_weights":{(self.model()):1.0},
+                "cloud_geometry_confidence":geometry_confidence,"model_disagreement_score":0.0,"model_weights":{(self.model()):1.0},
                 "quality_index":quality["index"],"quality_level":quality["level"],"peak_quality_index":peak,
                 "peak_quality_level":empirical::quality_level(peak),"overall_score":mean(&scores)/2.5,
                 "best_offset_minutes":best.map(|s|if self.input.rising {-75+s as i32*5}else{-20+s as i32*5}),
@@ -1062,6 +1152,64 @@ impl<'a> Payload<'a> {
         // Move the large component map into the result, rather than cloning it again.
         result["quality_components"] = quality["components"].take();
         Ok((result, core))
+    }
+
+    /// Regional-grid DTO: identical scalar semantics to the full result, but
+    /// only the fields the desktop inspector, map and web timeline consume.
+    /// Skips per-observer genus/color/optics diagnostics and the component map.
+    fn compact_point(
+        &self,
+        i: usize,
+        best: Option<usize>,
+        first: Option<usize>,
+        scores: &[f64],
+    ) -> Result<Value, String> {
+        let observer = &self.input.points[i];
+        let time = &self.input.times[i];
+        let selected = if let Some(s) = best {
+            self.selected(i, s)?
+        } else {
+            [0.0; 7]
+        };
+        let (family, _) = best.map_or((None, [0.0; 3]), |s| self.geometry(i, s));
+        let peak = best.map_or(0.0, |s| self.input.marks[i * 20 + s].index as f32 as f64);
+        let score = &self.input.scores[i];
+        let components = quality::render(
+            score,
+            score.values[scoring::FIELDS
+                .iter()
+                .position(|&s| s == "forward_field_radius_km")
+                .unwrap()],
+        );
+        let components = components["components"].as_object().unwrap();
+        let mut retained = Map::new();
+        for key in [
+            "burnable_cloud_coverage_effective",
+            "duration_minutes",
+            "quality_aod550",
+            "incoming_aod_adjustment",
+            "observer_aod_adjustment",
+        ] {
+            if let Some(value) = components.get(key) {
+                retained.insert(key.into(), value.clone());
+            }
+        }
+        let geometry_confidence = self.geometry_confidence(i, best, first)?;
+        let confidence = self.confidence_score(i, geometry_confidence);
+        Ok(json!({
+            "name":observer.name,"lat":observer.lat,"lon":observer.lon,
+            "observer_elevation_asl_m":observer.elevation_m,"frame_index":i,
+            "peak_quality_index":peak,"peak_quality_level":empirical::quality_level(peak),
+            "quality_index":score.index(),"quality_level":empirical::quality_level(score.index()),
+            "overall_score":mean(scores)/2.5,
+            "confidence_score":confidence,
+            "dominant_burnable_pressure_family":family,
+            "best_time_local":best.map(|s|local(time.evaluation[s],&observer.timezone_name)).transpose()?,
+            "anchor_local":local(time.anchor,&observer.timezone_name)?,
+            "high_cloud":selected[0] as f64,"mid_cloud":selected[1] as f64,
+            "low_cloud":selected[2] as f64,
+            "quality_components":Value::Object(retained),
+        }))
     }
 }
 
@@ -1163,6 +1311,329 @@ mod tests {
         }
     }
 
+    fn fixture_input(
+        n: usize,
+    ) -> (
+        Vec<Point>,
+        Vec<Times>,
+        Vec<f32>,
+        Vec<f32>,
+        Vec<[f32; 36]>,
+        Vec<scoring::Quality>,
+        Vec<quality::InstantMark>,
+        Vec<[f64; 20]>,
+        Vec<String>,
+    ) {
+        let anchor = 1794217501.123456;
+        let points: Vec<_> = (0..n)
+            .map(|i| Point {
+                name: format!("Observer {i}"),
+                lat: 0.25,
+                lon: 100.75,
+                timezone_name: "Asia/Shanghai".into(),
+                elevation_m: 50.0,
+            })
+            .collect();
+        let times: Vec<_> = (0..n)
+            .map(|_| Times {
+                anchor,
+                evaluation: std::array::from_fn(|s| anchor + (-20.0 + s as f64 * 5.0) * 60.0),
+            })
+            .collect();
+        let mut values = vec![0.0; n * 20 * 82];
+        for row in values.as_chunks_mut::<82>().0.iter_mut() {
+            row.fill(0.2);
+            row[0] = 1.0;
+            row[5] = 1.0;
+            row[43] = 0.8;
+            row[44] = 0.4;
+            row[45] = 1.7;
+            row[47] = 1.0;
+            row[70] = 4500.0;
+            row[71] = 8000.0;
+            row[72] = 125.0;
+        }
+        let mut samples = vec![0.0; n * 180];
+        for row in samples.as_chunks_mut::<9>().0 {
+            row[0] = -3.0;
+            row[1] = 280.0;
+            row[3] = 1.0;
+            row[4] = 0.25;
+            row[5] = 0.12;
+        }
+        let rows = quality::assessment_rows(&values[..1640], &samples[..180], false).unwrap();
+        let score = scoring::score(
+            &rows,
+            scoring::Options {
+                mode: scoring::Mode::Regional,
+                apply_duration: true,
+                local_columns: true,
+                score_ceiling: false,
+                radius_km: 200.0,
+            },
+            None,
+        )
+        .unwrap();
+        let scores = vec![score; n];
+        let step_marks: Vec<_> = rows
+            .iter()
+            .map(|r| {
+                let instant = scoring::score_instant(r, true, true);
+                quality::InstantMark {
+                    index: instant[0],
+                    coverage: instant[6] as f32,
+                    physically_burnable: instant[5] >= 0.5,
+                }
+            })
+            .collect();
+        let marks: Vec<_> = (0..n).flat_map(|_| step_marks.iter().copied()).collect();
+        let offsets: Vec<_> = (0..20).map(|s| -20.0 + s as f64 * 5.0).collect();
+        let extra =
+            crate::native::observer_diagnostics::summarize_many(&values[..1640], 1, &offsets, true)
+                .unwrap()[0];
+        let extras = vec![extra; n];
+        let sources = vec!["frozen-source".to_owned(); n];
+        (
+            points,
+            times,
+            values,
+            samples,
+            vec![[0.2; 36]; 4],
+            scores,
+            marks,
+            extras,
+            sources,
+        )
+    }
+
+    #[test]
+    fn compact_results_keep_consumed_fields_and_drop_diagnostics() {
+        let n = 3;
+        let (points, times, values, samples, columns, scores, marks, extras, sources) =
+            fixture_input(n);
+        let qualities = vec!["cams".to_owned(); n];
+        let profiles = vec![[1.0, 1e-6, 4e-6, 0.2, 3.0, 1000.0, 0.6875]; n * 20];
+        let make = |compact: bool| {
+            Payload::prepare(Input {
+                points: &points,
+                times: &times,
+                values: &values,
+                samples: &samples,
+                columns: &columns,
+                profiles: Some(&profiles),
+                scores: &scores,
+                marks: &marks,
+                extras: &extras,
+                aerosol_sources: &sources,
+                aerosol_qualities: &qualities,
+                rows: 1,
+                cols: 2,
+                origin: [0.0, 100.0],
+                spacing: 1.0,
+                date: "2026-11-09",
+                cycle: time_contract::parse_utc("2026-11-09T00:00:00Z").unwrap(),
+                rising: false,
+                ec: false,
+                include_point_core: false,
+                point_spacing_deg: Some(0.25),
+                compact_results: compact,
+            })
+            .unwrap()
+        };
+        let full = make(false);
+        let compact = make(true);
+        let retained_keys = [
+            "name",
+            "lat",
+            "lon",
+            "observer_elevation_asl_m",
+            "frame_index",
+            "peak_quality_index",
+            "peak_quality_level",
+            "quality_index",
+            "quality_level",
+            "overall_score",
+            "confidence_score",
+            "dominant_burnable_pressure_family",
+            "best_time_local",
+            "anchor_local",
+            "high_cloud",
+            "mid_cloud",
+            "low_cloud",
+        ];
+        let component_keys = [
+            "burnable_cloud_coverage_effective",
+            "duration_minutes",
+            "quality_aod550",
+            "incoming_aod_adjustment",
+            "observer_aod_adjustment",
+        ];
+        for i in 0..n {
+            let (full_row, _) = full.point(i).unwrap();
+            let (compact_row, core) = compact.point(i).unwrap();
+            assert!(core.is_none());
+            for key in retained_keys {
+                assert_eq!(full_row[key], compact_row[key], "point {i} key {key}");
+            }
+            for key in component_keys {
+                assert_eq!(
+                    full_row["quality_components"][key], compact_row["quality_components"][key],
+                    "point {i} component {key}"
+                );
+            }
+            assert!(compact_row.get("color_diagnosis").is_none());
+            assert!(compact_row.get("cloud_genus_proxy").is_none());
+            assert!(compact_row.get("cloud_optics").is_none());
+            assert_eq!(
+                compact_row["quality_components"].as_object().unwrap().len(),
+                component_keys.len()
+            );
+        }
+        let full_frames = full.frames.as_object().unwrap();
+        let compact_frames = compact.frames.as_object().unwrap();
+        assert_eq!(full_frames["version"], compact_frames["version"]);
+        assert_eq!(full_frames["point_count"], compact_frames["point_count"]);
+        let full_steps = full_frames["frames"].as_array().unwrap();
+        let compact_steps = compact_frames["frames"].as_array().unwrap();
+        assert_eq!(full_steps.len(), compact_steps.len());
+        for (full_step, compact_step) in full_steps.iter().zip(compact_steps) {
+            let compact_step = compact_step.as_object().unwrap();
+            for (key, value) in compact_step {
+                assert_eq!(full_step[key], *value, "frame column {key}");
+            }
+            assert!(compact_step.get("burn_score").is_none());
+            assert!(compact_step.get("high_cloud").is_none());
+            assert!(compact_step.get("cloud_optical_depth").is_none());
+        }
+        let full_bytes = serde_json::to_vec(&full).unwrap().len();
+        let compact_bytes = serde_json::to_vec(&compact).unwrap().len();
+        assert!(
+            compact_bytes * 2 < full_bytes,
+            "compact {compact_bytes} full {full_bytes}"
+        );
+    }
+
+    #[test]
+    fn compact_confidence_matches_full_without_profiles_or_a_best_step() {
+        let n = 1;
+        let (points, times, mut values, samples, columns, scores, mut marks, extras, sources) =
+            fixture_input(n);
+        values[0] = 0.0;
+        marks.fill(quality::InstantMark {
+            index: 0.0,
+            coverage: 0.0,
+            physically_burnable: false,
+        });
+        let qualities = vec!["cams".to_owned(); n];
+        let make = |compact: bool| {
+            Payload::prepare(Input {
+                points: &points,
+                times: &times,
+                values: &values,
+                samples: &samples,
+                columns: &columns,
+                profiles: None,
+                scores: &scores,
+                marks: &marks,
+                extras: &extras,
+                aerosol_sources: &sources,
+                aerosol_qualities: &qualities,
+                rows: 1,
+                cols: 2,
+                origin: [0.0, 100.0],
+                spacing: 1.0,
+                date: "2026-11-09",
+                cycle: time_contract::parse_utc("2026-11-09T00:00:00Z").unwrap(),
+                rising: false,
+                ec: false,
+                include_point_core: false,
+                point_spacing_deg: Some(0.25),
+                compact_results: compact,
+            })
+            .unwrap()
+        };
+        let full = make(false);
+        let compact = make(true);
+        let (full_row, _) = full.point(0).unwrap();
+        let (compact_row, _) = compact.point(0).unwrap();
+        assert!(full_row["best_time_local"].is_null());
+        assert_eq!(
+            full_row["confidence_score"].as_f64().unwrap().to_bits(),
+            compact_row["confidence_score"].as_f64().unwrap().to_bits()
+        );
+        let expected = (0.82 * (0.70 + 0.30 * f64::from(DEFAULT_GEOMETRY_CONFIDENCE)))
+            .clamp(0.25, 0.96);
+        assert_eq!(full_row["confidence_score"].as_f64(), Some(expected));
+    }
+
+    #[test]
+    fn compact_confidence_uses_first_valid_step_when_no_step_is_burnable() {
+        let n = 1;
+        let (points, times, mut values, mut samples, columns, scores, mut marks, extras, sources) =
+            fixture_input(n);
+        values.fill(0.0);
+        for row in values.as_chunks_mut::<82>().0 {
+            row[0] = 1.0;
+            row[5] = 1.0;
+        }
+        samples.fill(0.0);
+        for row in samples.as_chunks_mut::<9>().0 {
+            row[3] = 1.0;
+            row[4] = 0.25;
+            row[6] = 1.0;
+        }
+        marks.fill(quality::InstantMark {
+            index: 0.0,
+            coverage: 0.0,
+            physically_burnable: false,
+        });
+        let qualities = vec!["cams".to_owned(); n];
+        let mut profiles = vec![[0.0; 7]; 20];
+        profiles[0][6] = 0.9;
+        let make = |compact: bool| {
+            Payload::prepare(Input {
+                points: &points,
+                times: &times,
+                values: &values,
+                samples: &samples,
+                columns: &columns,
+                profiles: Some(&profiles),
+                scores: &scores,
+                marks: &marks,
+                extras: &extras,
+                aerosol_sources: &sources,
+                aerosol_qualities: &qualities,
+                rows: 1,
+                cols: 2,
+                origin: [0.0, 100.0],
+                spacing: 1.0,
+                date: "2026-11-09",
+                cycle: time_contract::parse_utc("2026-11-09T00:00:00Z").unwrap(),
+                rising: false,
+                ec: false,
+                include_point_core: false,
+                point_spacing_deg: Some(0.25),
+                compact_results: compact,
+            })
+            .unwrap()
+        };
+        let full = make(false);
+        let compact = make(true);
+        let (full_row, _) = full.point(0).unwrap();
+        let (compact_row, _) = compact.point(0).unwrap();
+        assert!(full_row["best_time_local"].is_null());
+        assert_eq!(full_row["confidence_score"], compact_row["confidence_score"]);
+        assert_eq!(
+            full_row["cloud_geometry_confidence"].as_f64(),
+            Some(f64::from(0.9_f32))
+        );
+        let expected = (0.82 * (0.70 + 0.30 * f64::from(0.9_f32))).clamp(0.25, 0.96);
+        assert_eq!(
+            full_row["confidence_score"].as_f64().unwrap().to_bits(),
+            expected.to_bits()
+        );
+    }
+
     /// Run each mode in a separate process for comparable process high-water RSS.
     #[test]
     #[ignore = "component benchmark: set FIRESKY_BENCH_MODE=streaming|materialized"]
@@ -1242,13 +1713,9 @@ mod tests {
             .collect();
         let marks: Vec<_> = (0..n).flat_map(|_| step_marks.iter().copied()).collect();
         let offsets: Vec<_> = (0..20).map(|s| -20.0 + s as f64 * 5.0).collect();
-        let extra = firesky_native::observer_diagnostics::summarize_many(
-            &values[..1640],
-            1,
-            &offsets,
-            true,
-        )
-        .unwrap()[0];
+        let extra =
+            crate::native::observer_diagnostics::summarize_many(&values[..1640], 1, &offsets, true)
+                .unwrap()[0];
         let extras = vec![extra; n];
         let profiles = vec![[1.0, 1e-6, 4e-6, 0.2, 3.0, 1000.0, 0.6875]; n * 20];
         let columns = vec![[0.2; 36]; 4];
@@ -1280,6 +1747,7 @@ mod tests {
                 ec: false,
                 include_point_core: false,
                 point_spacing_deg: None,
+                compact_results: false,
             })
             .unwrap();
             let mut writer = std::io::BufWriter::with_capacity(

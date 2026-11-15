@@ -1,11 +1,54 @@
 # 更新日志（Changelog）
 
-产品版本遵循语义化版本（SemVer）。算法版本（`2026.*.*.*`）独立演进，
-记录在 `src/firesky/version.py` 与预测契约端点中，与产品版本互不影响。
+产品版本遵循语义化版本（SemVer）。v1.0.0 起产品版本与 Rust 引擎
+`engine/Cargo.toml` 的 `version` 一致；旧 Python 栈（`src/firesky/version.py`）
+已于 2026-11-13 退役删除。
 
-English: product releases follow SemVer; the scoring algorithm version
-(`2026.*.*.*`) evolves independently — see `src/firesky/version.py` and the
-contract endpoint.
+English: product releases follow SemVer. Since v1.0.0 the product version
+matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
+Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
+
+## v1.0.0 (2026-11-15)
+
+首个原生正式版：macOS SwiftUI/AppKit + Rust FFI 单引擎。
+First native major release: macOS SwiftUI/AppKit with a single Rust engine.
+
+**架构 / Architecture**
+
+- 正式产品为 macOS 原生 `.app`（SwiftUI/AppKit + `libfiresky_engine.dylib`
+  ABI v1）；Python/PySide/Tauri 旧栈已全部退役删除，正式包不含 Python，
+  不因 FFI 缺失静默回退。
+- 点、区域、实况统一 `check -> publications -> prepare -> forecast` 工作流；
+  区域独立城市排名、冻结结果剖面、任务历史/回放/恢复、后台同步助手。
+- 内置资源包（695 城市目录 + 时区数据，sha256 清单审计）；资源缺失硬失败。
+
+**数值与性能 / Numerics & performance**
+
+- 时间缓存单位/键一致性修复；新增 opt-in consistent/exact 时间键模式
+  （默认 quantized-120s 不变）。
+- 全国 0.25° 批量（36,685 点 / 365,794 样本）：共享 motion 缓存、单层快
+  路径、NEON blocking、统一投影排序等已落地；4 核忙机 wall ≈ 551s、峰值
+  ≈ 3.25 GiB（< 4 GiB 门槛）。位级一致门槛下精确复用已审计穷尽
+  （见 docs/archive/ALGORITHM_AUDIT_2026-11-15.zh-CN.md）。
+- 近似光路模板缓存保持 opt-in（实测 4 核 CPU -18.4%，但改变 10.6% 点的
+  最佳时刻步，未获容差审批，默认关闭）。
+
+**发布模拟 / Release rehearsal**
+
+- 见 `docs/RELEASE_V1_SIMULATION_2026-11-15.zh-CN.md`（构建、测试、冒烟、
+  打包与校验记录）；DMG 校验和见 `dist/v1.0.0/SHA256SUMS.txt`。
+- 已知限制：ad-hoc 签名（无 Developer ID/公证）；Windows/Linux 原生端
+  暂停；Docker/Web 部署验收未完成；空闲受控性能窗口未获得。
+
+**清理 / Cleanup**
+
+- 历史计划/迁移/退役文档移入 `docs/archive/`；删除误生成 `-q/` 目录、
+  `desktop/` 空壳与重复文档副本；旧 UI 实验产物移出 `dist/`。
+- 发布前精简（2026-11-16）：24 个历史 output 目录（约 10 GB）与
+  `engine/target-profile`（1.7 GB）移入废纸篓；15 个开发期 bench/audit
+  examples 删除（不参与 release 构建，CI 无引用）；归档文档链接修正。
+  测试套件（cargo test / pytest / Swift 夹具 / CI 冒烟脚本）保留为
+  质量门禁，不进入发布包。
 
 ## v0.1.1 (2026-11-07)
 

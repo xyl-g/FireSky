@@ -10,6 +10,10 @@ use std::{
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 
@@ -152,6 +156,7 @@ pub(crate) struct Ads {
     base: Url,
     config: Config,
     deadline: Instant,
+    cancel: Option<Arc<AtomicBool>>,
     pub constraints_requests: usize,
     pub submissions: usize,
     pub downloads: usize,
@@ -160,6 +165,12 @@ pub(crate) struct Ads {
 }
 impl Ads {
     pub fn new(config: Config) -> Result<Self, String> {
+        Self::with_cancel(config, None)
+    }
+    /// Interactive variant: the flag is polled inside queue waits and asset
+    /// transfers so a cancelled prepare/sync releases the operation lock in
+    /// seconds instead of riding out the whole ADS job.
+    pub fn with_cancel(config: Config, cancel: Option<Arc<AtomicBool>>) -> Result<Self, String> {
         config.validate()?;
         let (url, key) = credentials(&config)?;
         let mut headers = HeaderMap::new();
@@ -167,7 +178,7 @@ impl Ads {
         // Honor the ambient proxy environment (HTTP(S)_PROXY/ALL_PROXY/NO_PROXY)
         // like the GFS/EC clients; ADS often needs the user's proxy for reachability.
         let make = || {
-            Client::builder()
+            crate::http_client::builder()
                 .referer(false)
                 .retry(reqwest::retry::never())
                 .user_agent("firesky-rust/0.1")
@@ -199,6 +210,7 @@ impl Ads {
             base,
             config,
             deadline,
+            cancel,
             constraints_requests: 0,
             submissions: 0,
             downloads: 0,
@@ -208,6 +220,17 @@ impl Ads {
         let process = result.process("");
         result.json(Method::GET, &process, None, true)?;
         Ok(result)
+    }
+    fn check_cancelled(&self) -> Result<(), String> {
+        if self
+            .cancel
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Acquire))
+        {
+            Err("desktop operation cancelled".into())
+        } else {
+            Ok(())
+        }
     }
     fn remaining(&self) -> Result<Duration, String> {
         let value = self.deadline.saturating_duration_since(Instant::now());
@@ -237,8 +260,16 @@ impl Ads {
         Ok(url)
     }
     fn pause(&self, seconds: f64) -> Result<(), String> {
-        let sleep = Duration::from_secs_f64(seconds).min(self.remaining()?);
-        std::thread::sleep(sleep);
+        let budget = Duration::from_secs_f64(seconds).min(self.remaining()?);
+        let started = Instant::now();
+        // Sleep in short slices so a cancel request interrupts the ADS queue
+        // wait instead of blocking until the job finishes.
+        while started.elapsed() < budget {
+            self.check_cancelled()?;
+            let slice = (budget - started.elapsed()).min(Duration::from_millis(200));
+            std::thread::sleep(slice);
+        }
+        self.check_cancelled()?;
         self.remaining().map(|_| ())
     }
     fn json(
@@ -335,6 +366,7 @@ impl Ads {
         )?;
         let mut delay = self.config.poll_initial_seconds;
         let state = loop {
+            self.check_cancelled()?;
             let state = self.json(Method::GET, &monitor, None, true)?;
             match state["status"].as_str() {
                 Some("successful") => break state,
@@ -414,6 +446,7 @@ impl Ads {
                 let mut buffer = vec![0; 1024 * 1024];
                 let mut bytes = 0_u64;
                 loop {
+                    self.check_cancelled()?;
                     let count = response
                         .read(&mut buffer)
                         .map_err(|_| "ADS asset response read failed")?;
@@ -479,6 +512,30 @@ pub(crate) fn resolve_credentials_path(config: &mut Config, base: &Path) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn cancelled_pause_returns_promptly() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let ads = Ads {
+            api: Client::new(),
+            assets: Client::new(),
+            base: Url::parse("https://ads.example.invalid/retrieve/v1/").unwrap(),
+            config: Config::default(),
+            deadline: Instant::now() + Duration::from_secs(60),
+            cancel: Some(cancel.clone()),
+            constraints_requests: 0,
+            submissions: 0,
+            downloads: 0,
+            constraints_ms: 0.0,
+            retrieval_ms: 0.0,
+        };
+        cancel.store(true, Ordering::Release);
+        let started = Instant::now();
+        let error = ads.pause(30.0).unwrap_err();
+        assert!(error.contains("cancelled"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
 
     #[test]
     fn operation_budget_timeout_is_not_a_generic_network_failure() {

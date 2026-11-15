@@ -1,4 +1,5 @@
 //! Independent EC point event planning and one-request basic/CAMS resolution.
+use crate::native::timeline;
 use crate::{
     assessment::{self, Elevation, Frame, Observer, OpticalFile},
     astronomy, cams, cams_cache, cams_data, ecmwf_data, ecmwf_point, request_file,
@@ -6,7 +7,6 @@ use crate::{
     time_contract,
 };
 use chrono::{DateTime, Utc};
-use firesky_native::timeline;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -97,12 +97,24 @@ pub fn execute(params: Params) -> Result<Value, String> {
     Ok(prepare(&params.path)?.summary)
 }
 pub fn forecast(path: &Path, output: &Path) -> Result<PathBuf, String> {
-    forecast_mode(path, output, false)
+    forecast_mode(path, output, false, &|_: u128| {})
 }
 pub fn forecast_service(path: &Path, output: &Path) -> Result<PathBuf, String> {
-    forecast_mode(path, output, true)
+    forecast_mode(path, output, true, &|_: u128| {})
 }
-fn forecast_mode(path: &Path, output: &Path, service: bool) -> Result<PathBuf, String> {
+pub fn forecast_with_progress(
+    path: &Path,
+    output: &Path,
+    progress: &(dyn Fn(u128) + Sync),
+) -> Result<PathBuf, String> {
+    forecast_mode(path, output, false, progress)
+}
+fn forecast_mode(
+    path: &Path,
+    output: &Path,
+    service: bool,
+    progress: &(dyn Fn(u128) + Sync),
+) -> Result<PathBuf, String> {
     let started = Instant::now();
     let prepared = prepare(path)?;
     // Hold the shared library through assessment as well as input resolution.
@@ -126,6 +138,7 @@ fn forecast_mode(path: &Path, output: &Path, service: bool) -> Result<PathBuf, S
         prepared.source,
         prepared.summary,
         started,
+        progress,
     )
 }
 
@@ -174,7 +187,7 @@ pub(crate) fn service_request(path: &Path) -> Result<ServiceRequest, String> {
         "cams_cache_dir":std::path::absolute(&input.cams_cache_dir).map_err(|e|e.to_string())?,
         "provider":{"source":input.ec.source,"resolution":input.ec.resolution,"base_url":input.ec.base_url},
         "engine_source":env!("FIRESKY_ENGINE_SOURCE_ID"),
-        "timezone_database":chrono_tz::IANA_TZDB_VERSION,"native_abi":firesky_native::NATIVE_ABI_VERSION,
+        "timezone_database":chrono_tz::IANA_TZDB_VERSION,"native_abi":crate::native::NATIVE_ABI_VERSION,
         "architecture":std::env::consts::ARCH,"os":std::env::consts::OS,
     });
     Ok(ServiceRequest {
@@ -205,6 +218,7 @@ pub(crate) fn service_from_request(
         prepared.source,
         prepared.summary,
         started,
+        &|_: u128| {},
     )
 }
 
@@ -363,6 +377,7 @@ fn prepare_context(
             frames.push(Frame {
                 hour,
                 path: row["path"].as_str().ok_or("missing EC plan path")?.into(),
+                paths: Vec::new(),
             });
         } else {
             missing.push(hour);
@@ -513,6 +528,7 @@ fn prepare_context(
             point_spacing_deg: None,
             compute_backend_requested: Some(input.compute_backend),
             derived_cache: input.derived_cache,
+            compact_results: false,
         },
     })
 }

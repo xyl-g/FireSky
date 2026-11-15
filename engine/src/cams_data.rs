@@ -81,9 +81,15 @@ pub struct Params {
     /// cache without re-queueing ADS jobs.
     #[serde(default)]
     pub all_leads: bool,
+    /// Optional model bbox [west, east, north, south]; when present the cache
+    /// selectors enforce the scorer's fail-closed model-grid coverage contract
+    /// so broad dateline-spanning tiles cannot silently satisfy a part they
+    /// miss (which would suppress the ADS download that fixes the hole).
+    #[serde(default)]
+    pub model_bbox: Option<[f64; 4]>,
 }
 
-struct Area {
+pub(crate) struct Area {
     bounds: [f64; 4],
     raw: Value,
     key: String,
@@ -151,6 +157,12 @@ pub(crate) fn area_identity(raw: Value) -> Result<([f64; 4], String, String), St
     Ok((area.bounds, area.key, area.tuple))
 }
 
+impl Area {
+    pub(crate) fn from_bounds(bounds: [f64; 4]) -> Self {
+        Self::new(json!(bounds)).expect("validated CAMS area bounds")
+    }
+}
+
 /// Convert a CAMS area into one or two ordinary rectangles.  CAMS/ADS does
 /// not accept a west/east interval that wraps across the dateline, so a
 /// wrapped request is represented as two bounded requests whose edge cells
@@ -208,7 +220,7 @@ pub(crate) fn split_areas(area: [f64; 4]) -> Result<Vec<[f64; 4]>, String> {
 }
 fn base_query(area: &Area) -> Value {
     json!({"variable":["total_aerosol_optical_depth_550nm","aerosol_extinction_coefficient_532nm"],
-        "pressure_level":firesky_native::cams::LEVELS.iter().map(ToString::to_string).collect::<Vec<_>>(),
+        "pressure_level":crate::native::cams::LEVELS.iter().map(ToString::to_string).collect::<Vec<_>>(),
         "type":["forecast"],"data_format":"grib","area":area.raw})
 }
 
@@ -359,23 +371,69 @@ fn current_cache(
     targets: &[DateTime<Utc>],
     exact: bool,
     refresh: Option<DateTime<Utc>>,
+    model_bbox: Option<[f64; 4]>,
 ) -> Result<BTreeMap<DateTime<Utc>, PathBuf>, String> {
+    let axes = model_bbox.map(cams_cache::model_axes);
+    let part_lons: Vec<f64> = axes
+        .as_ref()
+        .map(|(_, lons)| {
+            let (part_west, part_east) = if area.bounds[1] <= area.bounds[3] {
+                (area.bounds[1], area.bounds[3])
+            } else {
+                (area.bounds[1], area.bounds[3] + 360.0)
+            };
+            lons.iter()
+                .copied()
+                .filter(|&lon| {
+                    let unwrapped = if lon < part_west { lon + 360.0 } else { lon };
+                    unwrapped >= part_west && unwrapped <= part_east
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let coverage = axes.as_ref().map(|(lats, _)| cams_cache::ModelCoverage {
+        lats,
+        lons: &part_lons,
+    });
+    // Wrapped groups share the physical +/-180 boundary column. Collect the
+    // sibling part's newest cached tile per valid time so the seam bridge can
+    // use it; interior coverage still has to come from this part itself.
+    let siblings_by_time = sibling_tiles(root, area, targets, coverage.is_some())?;
     let selected = if exact {
-        cams_cache::select_with_key(
-            root,
-            area.bounds,
-            &targets.iter().copied().collect(),
-            &area.key,
-        )?
+        let mut hits = BTreeMap::new();
+        for &target in targets {
+            let siblings = siblings_by_time.get(&target).cloned().unwrap_or_default();
+            if let Some(selection) = cams_cache::select_with_key(
+                root,
+                area.bounds,
+                &[target].into_iter().collect(),
+                &area.key,
+                coverage.as_ref(),
+                &siblings,
+            )?
+            .remove(&target)
+            {
+                hits.insert(target, selection);
+            }
+        }
+        hits
     } else {
         BTreeMap::new()
     };
     let mut result = BTreeMap::new();
     for &target in targets {
+        let siblings = siblings_by_time.get(&target).cloned().unwrap_or_default();
         let selection = if exact {
             selected.get(&target).cloned()
         } else {
-            cams_cache::nearest_with_key(root, area.bounds, target, &area.key)?
+            cams_cache::nearest_with_key(
+                root,
+                area.bounds,
+                target,
+                &area.key,
+                coverage.as_ref(),
+                &siblings,
+            )?
         };
         if let Some(value) = selection {
             if exact && refresh.is_some_and(|r| r <= target && value.run_time_utc < r) {
@@ -383,6 +441,58 @@ fn current_cache(
             }
             result.insert(target, value.path);
         }
+    }
+    Ok(result)
+}
+
+/// Newest cached tile of every sibling part (same wrapped group, different
+/// area hash) for each requested valid time. Only used when a model-grid
+/// coverage contract is active; ordinary single-area plans keep the legacy
+/// header-only selection.
+pub(crate) fn sibling_tiles(
+    root: &Path,
+    area: &Area,
+    targets: &[DateTime<Utc>],
+    active: bool,
+) -> Result<BTreeMap<DateTime<Utc>, Vec<PathBuf>>, String> {
+    let mut result: BTreeMap<DateTime<Utc>, Vec<PathBuf>> = BTreeMap::new();
+    if !active {
+        return Ok(result);
+    }
+    let rectangles = split_areas(area.bounds)?;
+    if rectangles.len() < 2 {
+        return Ok(result);
+    }
+    let required: BTreeSet<_> = targets.iter().copied().collect();
+    let mut newest: BTreeMap<(DateTime<Utc>, String), (DateTime<Utc>, PathBuf)> = BTreeMap::new();
+    for path in cams_cache::paths(root)? {
+        let Some(selection) = cams_cache::parse(&path) else {
+            continue;
+        };
+        if !required.contains(&selection.valid_time) {
+            continue;
+        }
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        if name.ends_with(&format!("-{}.grib", area.key)) {
+            continue;
+        }
+        let sibling = rectangles.iter().any(|rect| {
+            *rect != area.bounds
+                && cams_cache::area_key(*rect)
+                    .is_ok_and(|key| name.ends_with(&format!("-{key}.grib")))
+        });
+        if !sibling {
+            continue;
+        }
+        let entry = newest
+            .entry((selection.valid_time, name))
+            .or_insert((selection.run_time_utc, path.clone()));
+        if selection.run_time_utc > entry.0 {
+            *entry = (selection.run_time_utc, path);
+        }
+    }
+    for ((time, _), (_, path)) in newest {
+        result.entry(time).or_default().push(path);
     }
     Ok(result)
 }
@@ -479,10 +589,11 @@ fn retrieve_group(
     leads: &BTreeSet<u32>,
     config: &Config,
     base: &Value,
+    cancel: &AtomicBool,
 ) -> Result<BTreeMap<u32, PathBuf>, String> {
     let started = Instant::now();
     let network_before = session.ads.retrieval_ms;
-    let result = retrieve_group_inner(session, root, area, run, leads, config, base);
+    let result = retrieve_group_inner(session, root, area, run, leads, config, base, cancel);
     session.local_work_ms +=
         started.elapsed().as_secs_f64() * 1000.0 - (session.ads.retrieval_ms - network_before);
     result
@@ -496,7 +607,9 @@ fn retrieve_group_inner(
     leads: &BTreeSet<u32>,
     config: &Config,
     base: &Value,
+    cancel: &AtomicBool,
 ) -> Result<BTreeMap<u32, PathBuf>, String> {
+    check_cancelled(cancel)?;
     let first = target_path(
         root,
         area,
@@ -590,6 +703,7 @@ fn single(
     target: DateTime<Utc>,
     exact: bool,
     config: &Config,
+    cancel: &AtomicBool,
 ) -> Result<PathBuf, String> {
     let run = availability
         .choose(&mut session.ads, target)?
@@ -604,20 +718,9 @@ fn single(
     .into_iter()
     .map(|v| v.parse().map_err(|_| "invalid ADS lead constraint".into()))
     .collect::<Result<_, String>>()?;
-    let mut candidates: Vec<_> = [
-        Some(run.lead),
-        run.lead.checked_add(3),
-        run.lead.checked_sub(3),
-        run.lead.checked_add(6),
-    ]
-    .into_iter()
-    .flatten()
-    .filter(|v| *v <= 999 && (eligible.is_empty() || eligible.contains(v)))
-    .collect();
-    if candidates.is_empty() {
-        candidates.push(run.lead);
-    }
+    let candidates = fallback_candidates(run.time, run.lead, target, exact, &eligible)?;
     for candidate in candidates {
+        check_cancelled(cancel)?;
         let result = retrieve_group(
             session,
             root,
@@ -626,6 +729,7 @@ fn single(
             &[candidate].into_iter().collect(),
             config,
             &availability.base,
+            cancel,
         )?;
         if let Some(path) = result.get(&candidate) {
             return Ok(path.clone());
@@ -635,6 +739,44 @@ fn single(
         "downloaded CAMS optical profile failed strict validation at every eligible fallback lead"
             .into(),
     )
+}
+
+/// Strict-validation retry leads for one CAMS run. The ±3/+6 neighbors exist
+/// to re-fetch the *same* valid time when a file fails strict validation; in
+/// exact mode a candidate that lands on a different instant must never be
+/// returned, because exact consumers (regional forecasts) fail closed on any
+/// row whose valid time differs from the request.
+fn fallback_candidates(
+    run_time: DateTime<Utc>,
+    lead: u32,
+    target: DateTime<Utc>,
+    exact: bool,
+    eligible: &BTreeSet<u32>,
+) -> Result<Vec<u32>, String> {
+    let mut candidates: Vec<_> = [
+        Some(lead),
+        lead.checked_add(3),
+        lead.checked_sub(3),
+        lead.checked_add(6),
+    ]
+    .into_iter()
+    .flatten()
+    .filter(|v| *v <= 999 && (eligible.is_empty() || eligible.contains(v)))
+    .collect();
+    if candidates.is_empty() {
+        candidates.push(lead);
+    }
+    if exact {
+        candidates.retain(|lead| {
+            run_time
+                .checked_add_signed(Duration::hours(i64::from(*lead)))
+                .is_some_and(|valid| valid == target)
+        });
+        if candidates.is_empty() {
+            return Err("CAMS did not provide the exact requested valid time".into());
+        }
+    }
+    Ok(candidates)
 }
 
 pub(crate) fn resolve(
@@ -654,6 +796,7 @@ pub(crate) fn resolve(
         require_exact_valid_time: true,
         refresh_before_cycle: None,
         all_leads: false,
+        model_bbox: None,
     })
 }
 
@@ -724,7 +867,14 @@ fn run(params: Params, cancel: &AtomicBool) -> Result<Value, String> {
     {
         return Err("CAMS operation must be batch, resolve or single-target download".into());
     }
-    let mut results = current_cache(&params.cache_dir, &area, &targets, exact, refresh)?;
+    let mut results = current_cache(
+        &params.cache_dir,
+        &area,
+        &targets,
+        exact,
+        refresh,
+        params.model_bbox,
+    )?;
     let cache_hits = results.len();
     let missing: Vec<_> = targets
         .iter()
@@ -737,110 +887,127 @@ fn run(params: Params, cancel: &AtomicBool) -> Result<Value, String> {
     let mut fallbacks = 0;
     if params.allow_download && !missing.is_empty() {
         let _slot = Slot::acquire(params.config.lock_timeout_seconds)?;
-        let mut client = Ads::new(params.config.clone())?;
-        let mut availability = Availability::new(&mut client, &area)?;
-        let mut session = Session {
-            ads: client,
-            codes: None,
-            local_work_ms: 0.0,
-            decoder_load_ms: 0.0,
-            decode_ms: 0.0,
-        };
-        if params.operation == "download" {
-            check_cancelled(cancel)?;
-            results.insert(
-                missing[0],
-                single(
-                    &mut session,
-                    &mut availability,
-                    &params.cache_dir,
-                    &area,
-                    missing[0],
-                    exact,
-                    &params.config,
-                )?,
-            );
-            fallbacks = 1;
-        } else {
-            let mut groups = BTreeMap::<(NaiveDate, String), Vec<(DateTime<Utc>, Run)>>::new();
-            for &target in &missing {
-                check_cancelled(cancel)?;
-                if let Some(run) = availability.choose(&mut session.ads, target)? {
-                    groups
-                        .entry((run.day, run.clock.clone()))
-                        .or_default()
-                        .push((target, run));
-                }
-            }
-            groups_count = groups.len();
-            for group in groups.values() {
-                check_cancelled(cancel)?;
-                let run = &group[0].1;
-                let mut leads: BTreeSet<_> = group
-                    .iter()
-                    .filter_map(|(target, _)| {
-                        let seconds = (*target - run.time).num_seconds();
-                        (seconds >= 0).then_some((seconds / 3600) as u32)
-                    })
-                    .collect();
-                if params.all_leads {
-                    let constraints = availability
-                        .days
-                        .get(&run.day)
-                        .ok_or("missing CAMS day constraints for full-cycle download")?;
-                    for value in strings(constraints.get("leadtime_hour"), &[])? {
-                        let lead: u32 = value
-                            .parse()
-                            .map_err(|_| "invalid ADS lead constraint".to_string())?;
-                        if lead > 999 {
-                            return Err("ADS lead exceeds three-digit CAMS cache range".into());
-                        }
-                        leads.insert(lead);
-                    }
-                }
-                match retrieve_group(
-                    &mut session,
-                    &params.cache_dir,
-                    &area,
-                    run,
-                    &leads,
-                    &params.config,
-                    &availability.base,
-                ) {
-                    Ok(written) => {
-                        for (target, _) in group {
-                            let lead = ((*target - run.time).num_seconds() / 3600) as u32;
-                            if let Some(path) = written.get(&lead) {
-                                results.insert(*target, path.clone());
-                            }
-                        }
-                    }
-                    Err(error) => errors.push(error),
-                }
-            }
-            if params.operation == "resolve" {
-                for &target in &missing {
-                    if results.contains_key(&target) {
-                        continue;
-                    }
+        // The ADS client owns an Arc flag; a scoped mirror thread copies the
+        // caller's borrowed flag into it so queue waits and asset reads also
+        // observe cancellation without any unsafe lifetime extension.
+        let outcome = crate::cancel_scope::with_shared_cancel(cancel, |shared_cancel| {
+            let mut client = Ads::with_cancel(params.config.clone(), Some(shared_cancel))?;
+            let mut availability = Availability::new(&mut client, &area)?;
+            let mut session = Session {
+                ads: client,
+                codes: None,
+                local_work_ms: 0.0,
+                decoder_load_ms: 0.0,
+                decode_ms: 0.0,
+            };
+            let result = (|| -> Result<(), String> {
+                if params.operation == "download" {
                     check_cancelled(cancel)?;
-                    fallbacks += 1;
                     results.insert(
-                        target,
+                        missing[0],
                         single(
                             &mut session,
                             &mut availability,
                             &params.cache_dir,
                             &area,
-                            target,
+                            missing[0],
                             exact,
                             &params.config,
+                            cancel,
                         )?,
                     );
+                    fallbacks = 1;
+                } else {
+                    let mut groups =
+                        BTreeMap::<(NaiveDate, String), Vec<(DateTime<Utc>, Run)>>::new();
+                    for &target in &missing {
+                        check_cancelled(cancel)?;
+                        if let Some(run) = availability.choose(&mut session.ads, target)? {
+                            groups
+                                .entry((run.day, run.clock.clone()))
+                                .or_default()
+                                .push((target, run));
+                        }
+                    }
+                    groups_count = groups.len();
+                    for group in groups.values() {
+                        check_cancelled(cancel)?;
+                        let run = &group[0].1;
+                        let mut leads: BTreeSet<_> = group
+                            .iter()
+                            .filter_map(|(target, _)| {
+                                let seconds = (*target - run.time).num_seconds();
+                                (seconds >= 0).then_some((seconds / 3600) as u32)
+                            })
+                            .collect();
+                        if params.all_leads {
+                            let constraints = availability
+                                .days
+                                .get(&run.day)
+                                .ok_or("missing CAMS day constraints for full-cycle download")?;
+                            for value in strings(constraints.get("leadtime_hour"), &[])? {
+                                let lead: u32 = value
+                                    .parse()
+                                    .map_err(|_| "invalid ADS lead constraint".to_string())?;
+                                if lead > 999 {
+                                    return Err(
+                                        "ADS lead exceeds three-digit CAMS cache range".into()
+                                    );
+                                }
+                                leads.insert(lead);
+                            }
+                        }
+                        match retrieve_group(
+                            &mut session,
+                            &params.cache_dir,
+                            &area,
+                            run,
+                            &leads,
+                            &params.config,
+                            &availability.base,
+                            cancel,
+                        ) {
+                            Ok(written) => {
+                                for (target, _) in group {
+                                    let lead = ((*target - run.time).num_seconds() / 3600) as u32;
+                                    if let Some(path) = written.get(&lead) {
+                                        results.insert(*target, path.clone());
+                                    }
+                                }
+                            }
+                            Err(error) => errors.push(error),
+                        }
+                        check_cancelled(cancel)?;
+                    }
+                    if params.operation == "resolve" {
+                        for &target in &missing {
+                            if results.contains_key(&target) {
+                                continue;
+                            }
+                            check_cancelled(cancel)?;
+                            fallbacks += 1;
+                            results.insert(
+                                target,
+                                single(
+                                    &mut session,
+                                    &mut availability,
+                                    &params.cache_dir,
+                                    &area,
+                                    target,
+                                    exact,
+                                    &params.config,
+                                    cancel,
+                                )?,
+                            );
+                        }
+                    }
                 }
-            }
-        }
-        ads = Some(session);
+                Ok(())
+            })();
+            ads = Some(session);
+            result
+        });
+        outcome?;
     }
     let mut rows = Vec::new();
     for (target, path) in &results {
@@ -881,7 +1048,7 @@ pub(crate) fn latest_publication_cycle(
             "total_aerosol_optical_depth_550nm",
             "aerosol_extinction_coefficient_532nm",
         ],
-        "pressure_level": firesky_native::cams::LEVELS
+        "pressure_level": crate::native::cams::LEVELS
             .iter()
             .map(ToString::to_string)
             .collect::<Vec<_>>(),
@@ -954,6 +1121,38 @@ mod tests {
     }
 
     #[test]
+    fn exact_fallback_candidates_never_shift_the_requested_valid_time() {
+        let run = time_contract::parse_utc("2026-11-14T12:00:00Z").unwrap();
+        let target = time_contract::parse_utc("2026-11-14T12:00:00Z").unwrap();
+        // ADS offered the 12Z run at lead 6 (valid 18Z) for a 12Z request:
+        // every retry neighbor (9/3/12) lands on a different instant, so
+        // exact mode must reject them all instead of returning a shifted
+        // file that the regional contract would later fail closed on.
+        let error = fallback_candidates(run, 6, target, true, &BTreeSet::new()).unwrap_err();
+        assert!(error.contains("exact requested valid time"), "{error}");
+        // A lead-3 start keeps its lead-0 neighbor, which is the exact instant.
+        assert_eq!(
+            fallback_candidates(run, 3, target, true, &BTreeSet::new()).unwrap(),
+            vec![0]
+        );
+        // Non-exact consumers keep the historical ±3/+6 retry ladder.
+        assert_eq!(
+            fallback_candidates(run, 3, target, false, &BTreeSet::new()).unwrap(),
+            vec![3, 6, 0, 9]
+        );
+        // Eligibility constraints still apply in both modes.
+        let eligible: BTreeSet<u32> = [0, 6].into_iter().collect();
+        assert_eq!(
+            fallback_candidates(run, 3, target, false, &eligible).unwrap(),
+            vec![6, 0]
+        );
+        assert_eq!(
+            fallback_candidates(run, 3, target, true, &eligible).unwrap(),
+            vec![0]
+        );
+    }
+
+    #[test]
     fn split_wrapped_area_rejects_zero_width() {
         assert!(split_areas([70.0, 10.0, 10.0, 10.0]).is_err());
         assert!(split_areas([70.0, 180.0, 10.0, -180.0]).is_err());
@@ -961,6 +1160,16 @@ mod tests {
 
     #[test]
     fn split_padded_boundary_normalizes_without_expanding_the_arc() {
+        // The multi-region EC envelope (east-asia + custom, radius 1000 km)
+        // pads east past +180; prepare and preflight must split it into the
+        // same two bounded parts.
+        assert_eq!(
+            split_areas([78.85, 71.15, -6.85, 191.85]).unwrap(),
+            vec![
+                [78.85, 71.15, -6.85, 180.0],
+                [78.85, -180.0, -6.85, -168.15]
+            ]
+        );
         for area in [[20.0, 169.4, -20.0, 180.6], [20.0, -180.6, -20.0, -169.4]] {
             let parts = split_areas(area).unwrap();
             assert_eq!(parts.len(), 2);

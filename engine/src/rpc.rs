@@ -1,11 +1,11 @@
 use crate::grib::EcCodes;
+use crate::native::empirical;
+use crate::native::{cloud, derivation, gfs::GfsGrid};
 use crate::tensor_bundle::{source_identity, BundleWriter};
 use crate::{
     assessment, astronomy, cams, characteristics, diagnostics, ecmwf, profile_diagnostics, quality,
     spectral, time_contract, timeline,
 };
-use firesky_native::empirical;
-use firesky_native::{cloud, derivation, gfs::GfsGrid};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::{self, BufRead, Write};
@@ -218,7 +218,7 @@ pub fn dispatch(method: &str, params: Value) -> Result<Value, String> {
             "engine": "firesky-rust",
             "source_id": env!("FIRESKY_ENGINE_SOURCE_ID"),
             "migration_stage": "desktop-data-preflight",
-            "native_abi": firesky_native::NATIVE_ABI_VERSION,
+            "native_abi": crate::native::NATIVE_ABI_VERSION,
             "astronomy": {"contract": "rust-astronomy-v1", "timezone_database": chrono_tz::IANA_TZDB_VERSION},
             "capabilities": ["score_window", "decode_grib", "decode_gfs", "prepare_gfs_features", "derive_gfs",
                 "decode_gfs_to_files", "derive_gfs_to_files", "decode_ecmwf_basic_to_files", "derive_ecmwf_basic_to_files",
@@ -350,9 +350,9 @@ pub fn dispatch(method: &str, params: Value) -> Result<Value, String> {
         "cams_data" => {
             crate::cams_data::execute(serde_json::from_value(params).map_err(|e| e.to_string())?)
         }
-        "calculate_earth_engine_aod" => {
-            crate::earth_engine_aod::execute(serde_json::from_value(params).map_err(|e| e.to_string())?)
-        }
+        "calculate_earth_engine_aod" => crate::earth_engine_aod::execute(
+            serde_json::from_value(params).map_err(|e| e.to_string())?,
+        ),
         "ecmwf_data" => {
             crate::ecmwf_data::execute(serde_json::from_value(params).map_err(|e| e.to_string())?)
         }

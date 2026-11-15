@@ -57,7 +57,8 @@ fn parallel_restore_never_returns_corrupt_data_while_cleanup_deletes() {
                     }
                     Err(error) => {
                         assert!(
-                            !error.contains("mismatch") && !error.contains("invalid result snapshot"),
+                            !error.contains("mismatch")
+                                && !error.contains("invalid result snapshot"),
                             "cleanup race produced a spurious integrity failure: {error}"
                         );
                     }
@@ -69,7 +70,10 @@ fn parallel_restore_never_returns_corrupt_data_while_cleanup_deletes() {
     let mut deleted = false;
     while Instant::now() < deadline {
         expire(workspace.path());
-        if !root.join(format!("{}.json", identity["sha256"].as_str().unwrap())).exists() {
+        if !root
+            .join(format!("{}.json", identity["sha256"].as_str().unwrap()))
+            .exists()
+        {
             deleted = true;
             break;
         }
@@ -81,7 +85,10 @@ fn parallel_restore_never_returns_corrupt_data_while_cleanup_deletes() {
         handle.join().unwrap();
     }
     assert!(deleted, "cleanup never removed the expired snapshot");
-    assert!(ok.load(Ordering::Relaxed) > 0, "no concurrent restore succeeded");
+    assert!(
+        ok.load(Ordering::Relaxed) > 0,
+        "no concurrent restore succeeded"
+    );
 }
 
 #[test]
@@ -127,7 +134,10 @@ fn cleanup_never_follows_a_symlinked_snapshot_to_delete_outside_files() {
     symlink(&target, &link).unwrap();
     expire(workspace.path());
     assert!(target.exists(), "cleanup deleted the symlink target");
-    assert!(fs::symlink_metadata(&link).unwrap().file_type().is_symlink());
+    assert!(fs::symlink_metadata(&link)
+        .unwrap()
+        .file_type()
+        .is_symlink());
     assert!(result_snapshot::read(&root, &identity).is_err());
 }
 
@@ -136,7 +146,10 @@ fn expiring_many_snapshots_reclaims_disk_and_repeated_cleanup_is_idempotent() {
     let workspace = tempfile::tempdir().unwrap();
     let root = snapshot_root(workspace.path());
     for index in 0..150 {
-        publish(workspace.path(), &json!({"index":index,"payload":"x".repeat(64)}));
+        publish(
+            workspace.path(),
+            &json!({"index":index,"payload":"x".repeat(64)}),
+        );
     }
     let first = expire(workspace.path());
     assert_eq!(first["removed_count"], 150);
@@ -144,9 +157,7 @@ fn expiring_many_snapshots_reclaims_disk_and_repeated_cleanup_is_idempotent() {
     let remaining = fs::read_dir(&root)
         .unwrap()
         .filter_map(Result::ok)
-        .filter(|entry| {
-            entry.path().extension().and_then(|v| v.to_str()) == Some("json")
-        })
+        .filter(|entry| entry.path().extension().and_then(|v| v.to_str()) == Some("json"))
         .count();
     assert_eq!(remaining, 0);
     let second = expire(workspace.path());

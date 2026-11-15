@@ -178,7 +178,7 @@ pub(crate) fn append(writer: &mut BundleWriter, context: Context<'_>) -> Result<
     let identity_input = json!({"contract":"rust-ecmwf-service-profile-v1",
         "profile_source":profile,"point":{"lat":point.lat,"lon":point.lon,"elevation_m":point.elevation_m,
             "timezone_name":point.timezone_name},
-        "timezone_database":chrono_tz::IANA_TZDB_VERSION,"native_abi":firesky_native::NATIVE_ABI_VERSION});
+        "timezone_database":chrono_tz::IANA_TZDB_VERSION,"native_abi":crate::native::NATIVE_ABI_VERSION});
     let digest: String =
         Sha256::digest(serde_json::to_vec(&identity_input).map_err(|e| e.to_string())?)
             .iter()
@@ -201,6 +201,7 @@ pub(crate) fn append(writer: &mut BundleWriter, context: Context<'_>) -> Result<
                 / 60e6,
         )
     })?;
+    let offset = cross_section::snap_offset_to_event_grid(&source_path, point, offset)?;
     let section = cross_section::for_point(source_path, profile_identity, point, offset)?;
     response["cross_section"] = section;
     response["cross_section_request"] = json!({
