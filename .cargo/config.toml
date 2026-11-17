@@ -1,0 +1,50 @@
+# Mobile cross-target linker wiring.
+# Android recipe copied from spikes/mm0-eccodes-cross/crate/.cargo/config.toml
+# (ecCodes 静态库含 C++ 段 → -lc++_static -lc++abi，见 MM0 坑 5）。
+# iOS 链接需 Xcode 工具链（MM0 坑 11；真机 SDK 的 ___chkstk_darwin 需显式补
+# libclang_rt.ios.a，坑 6）。仅影响移动目标；host 构建不受影响。
+
+# MM0 坑 8：本机 /opt/homebrew/bin 在 PATH 中先于 ~/.cargo/bin，默认 `cargo`
+# 会解析到无 cross std 的 Homebrew rustc（E0463）。此处强制 rustup rustc，
+# 使任意 cwd 在仓库内的 cargo 调用（含门禁脚本）不再依赖 PATH 顺序。
+# rustdoc 必须显式对齐：cargo test 的 Doc-tests 阶段单独解析 rustdoc，
+# 缺省仍命中 Homebrew rustdoc，读取 rustup rustc 编译的 rlib 时报 E0514。
+[build]
+rustc = "/Users/xiaoyang/.cargo/bin/rustc"
+rustdoc = "/Users/xiaoyang/.cargo/bin/rustdoc"
+
+# MM0 坑 4/8 配套：移动目标的 C 依赖（ring/zstd-sys/bzip2-sys）工具链注入。
+# 变量名均为 target 专属（cc crate 仅在对应 target 下读取）或 host 不读取
+# （ANDROID_NDK_ROOT），桌面 host 构建不受影响；[env] 默认不覆盖已存在的
+# 进程环境变量，外部显式注入仍优先生效。
+[env]
+# MM0 坑 11：本机 xcode-select 仍指 CommandLineTools，cc-rs 对 ios 目标会执行
+# `xcrun --show-sdk-path --sdk iphoneos`（无 DEVELOPER_DIR 时失败）。全局设置
+# 仅影响 xcrun/xcodebuild 的开发者目录解析，host C 构建不受破坏。
+DEVELOPER_DIR = "/Applications/Xcode.app/Contents/Developer"
+ANDROID_NDK_ROOT = "/opt/homebrew/share/android-ndk"
+CC_aarch64_linux_android = "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android26-clang"
+AR_aarch64_linux_android = "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar"
+CC_aarch64_apple_ios = "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+CFLAGS_aarch64_apple_ios = "-isysroot /Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
+
+[target.aarch64-linux-android]
+linker = "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android26-clang"
+rustflags = ["-C", "link-arg=-lc++_static", "-C", "link-arg=-lc++abi"]
+
+[target.aarch64-apple-ios]
+linker = "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+rustflags = [
+    "-C", "link-arg=-isysroot",
+    "-C", "link-arg=/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk",
+    "-C", "link-arg=-lc++",
+    "-C", "link-arg=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.ios.a",
+]
+
+[target.aarch64-apple-ios-sim]
+linker = "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+rustflags = [
+    "-C", "link-arg=-isysroot",
+    "-C", "link-arg=/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk",
+    "-C", "link-arg=-lc++",
+]

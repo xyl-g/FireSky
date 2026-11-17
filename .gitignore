@@ -12,3 +12,7 @@ apps/macos/.build/
 apps/macos/.swiftpm/
 apps/windows/**/bin/
 apps/windows/**/obj/
+# 仓库根 Gradle 门禁入口（settings.gradle.kts）的运行产物
+.gradle/
+build/
+local.properties

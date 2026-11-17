@@ -204,7 +204,8 @@ fn grid_payload(grid: &GfsGrid) -> Value {
     json!({"latitudes": grid.latitudes, "longitudes": grid.longitudes, "fields": fields})
 }
 
-fn dispatch(method: &str, params: Value) -> Result<Value, String> {
+/// Engine method arm shared by the stdio service and the engine-mobile host.
+pub fn dispatch(method: &str, params: Value) -> Result<Value, String> {
     match method {
         "hello" => Ok(json!({
             "protocol": 1,

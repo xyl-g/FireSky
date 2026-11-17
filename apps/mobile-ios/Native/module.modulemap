@@ -1,0 +1,4 @@
+module FSMobileKit {
+    header "fsmobile.h"
+    export *
+}
