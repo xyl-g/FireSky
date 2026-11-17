@@ -1,0 +1,84 @@
+name: FireSkyMobile
+options:
+  bundleIdPrefix: cn.firesky
+  createIntermediateGroups: true
+  deploymentTarget:
+    iOS: "16.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGNING_ALLOWED: "NO"
+targets:
+  FireSkyMobile:
+    type: application
+    platform: iOS
+    sources:
+      - path: FireSkyMobile
+      # engine-mobile C 契约镜像（Native/fsmobile.h）+ Clang module map（FSMobileKit）：
+      # Swift 经 SWIFT_INCLUDE_PATHS 直接 import，无需独立静态库目标（原 fsmobile_stub.c
+      # 占位桩已删除）。实现符号来自 engine-mobile 的 libengine_mobile.a——先运行
+      # scripts/build-engine.sh 构建两个切片（device + simulator），再 xcodegen + 构建。
+      - path: Native
+        buildPhase: none
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cn.firesky.mobile
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/Native
+        # 显式按 SDK 指到静态库文件，而非 -lengine_mobile：cargo 同目录还产出
+        # libengine_mobile.dylib（crate-type 含 cdylib），ld 的 -l 搜索动态库优先，
+        # 会静默改成动态链接（dylib 未打进 App，运行即崩）。产物由
+        # scripts/build-engine.sh 构建（含 Apple ranlib 重建符号索引的必做步骤）。
+        OTHER_LDFLAGS[sdk=iphoneos*]: $(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios/release/libengine_mobile.a
+        OTHER_LDFLAGS[sdk=iphonesimulator*]: $(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios-sim/release/libengine_mobile.a
+    info:
+      path: FireSkyMobile/Info.plist
+      properties:
+        CFBundleDisplayName: FireSky
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UILaunchScreen: {}
+        NSLocationWhenInUseUsageDescription: 用于获取当前位置作为观测点，以便预测朝霞与晚霞。
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        ITSAppUsesNonExemptEncryption: false
+    scheme:
+      testTargets:
+        - FireSkyMobileTests
+        - FireSkyMobileUITests
+  FireSkyMobileTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: FireSkyMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cn.firesky.mobile.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/FireSkyMobile.app/FireSkyMobile
+        BUNDLE_LOADER: $(TEST_HOST)
+        SWIFT_INCLUDE_PATHS: $(SRCROOT)/Native
+  FireSkyMobileUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: UITests
+    dependencies:
+      - target: FireSkyMobile
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: cn.firesky.mobile.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: FireSkyMobile

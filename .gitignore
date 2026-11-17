@@ -23,3 +23,7 @@ apps/windows/**/obj/
 .qwen/
 .workbuddy/
 .zcode/
+# 仓库根 Gradle 门禁入口（settings.gradle.kts）的运行产物
+.gradle/
+build/
+local.properties

@@ -1,0 +1,23 @@
+# Cross-target linker wiring for the MM0 spike.
+[target.aarch64-linux-android]
+linker = "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android26-clang"
+# ecCodes 静态库含 C++ 部分（ExceptionHandler/std::exception）→ 需静态 libc++
+rustflags = ["-C", "link-arg=-lc++_static", "-C", "link-arg=-lc++abi"]
+
+[target.aarch64-apple-ios]
+linker = "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+# 真机 SDK clang 默认插桩 ___chkstk_darwin；rustc -nodefaultlibs 关闭了 compiler-rt 自动链接，需显式补
+rustflags = [
+    "-C", "link-arg=-isysroot",
+    "-C", "link-arg=/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk",
+    "-C", "link-arg=-lc++",
+    "-C", "link-arg=/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/21/lib/darwin/libclang_rt.ios.a",
+]
+
+[target.aarch64-apple-ios-sim]
+linker = "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+rustflags = [
+    "-C", "link-arg=-isysroot",
+    "-C", "link-arg=/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk",
+    "-C", "link-arg=-lc++",
+]
