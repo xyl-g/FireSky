@@ -9,8 +9,8 @@ use crate::desktop_hsd_retrieval::{
     OutputColumn, Prior, Sample,
 };
 use crate::desktop_nowcast_prior::{
-    build_prior, features_at, read_cached_decoded_grid, select_geometry, terrain_at,
-    validate_feature, DecodedGrid, Feature, PriorContext,
+    build_prior, features_at, interpolate, read_cached_decoded_grid, select_geometry, terrain_at,
+    validate_feature, DecodedGrid, PriorContext,
 };
 use crate::tensor_bundle::F32Bundle;
 use crate::time_contract;
@@ -548,48 +548,9 @@ fn build_prior_for_target(
         target.lat,
         target.lon
     );
-    let interpolated_feature = |feature: &Feature| Feature {
-        lat: feature.lat,
-        lon: feature.lon,
-        pressure_hpa: feature.pressure_hpa,
-        geopotential_height_m: feature.geopotential_height_m,
-        rh_percent: feature.rh_percent,
-        temperature_k: feature.temperature_k,
-        cloud_fraction_percent: feature.cloud_fraction_percent,
-    };
-    let left_column = nearest_column(&left_features, target.lat, target.lon)?;
-    let right_column = nearest_column(&right_features, target.lat, target.lon)?;
-    if left_column.len() != right_column.len() {
-        return Err("GFS left/right vertical feature domains do not match".into());
-    }
-    let mut features = Vec::with_capacity(left_column.len().max(right_column.len()));
-    for feature in left_column {
-        let Some(right_feature) = right_column.iter().find(|item| {
-            item.pressure_hpa == feature.pressure_hpa
-                && (item.lat - feature.lat).abs() <= 1e-5
-                && (item.lon - feature.lon).abs() <= 1e-5
-        }) else {
-            return Err("GFS left/right vertical feature domains do not match".into());
-        };
-        let mut value = interpolated_feature(feature);
-        value.geopotential_height_m +=
-            params.fraction * (right_feature.geopotential_height_m - feature.geopotential_height_m);
-        value.temperature_k = match (feature.temperature_k, right_feature.temperature_k) {
-            (Some(left), Some(right)) => Some(left + params.fraction * (right - left)),
-            _ => feature.temperature_k.or(right_feature.temperature_k),
-        };
-        value.rh_percent += params.fraction * (right_feature.rh_percent - feature.rh_percent);
-        value.cloud_fraction_percent = match (
-            feature.cloud_fraction_percent,
-            right_feature.cloud_fraction_percent,
-        ) {
-            (Some(left), Some(right)) => Some(left + params.fraction * (right - left)),
-            _ => feature
-                .cloud_fraction_percent
-                .or(right_feature.cloud_fraction_percent),
-        };
-        validate_feature(&value)?;
-        features.push(value);
+    let features = interpolate(&left_features, &right_features, params.fraction)?;
+    for feature in &features {
+        validate_feature(feature)?;
     }
     build_prior(
         &PriorContext {
@@ -606,29 +567,6 @@ fn build_prior_for_target(
         target.lat,
         target.lon,
     )
-}
-
-fn nearest_column(
-    features: &[Feature],
-    target_lat: f64,
-    target_lon: f64,
-) -> Result<Vec<&Feature>, String> {
-    let nearest = features
-        .iter()
-        .filter(|feature| finite(feature.lat) && finite(feature.lon))
-        .min_by(|left, right| {
-            let left_distance = (left.lat - target_lat).powi(2) + (left.lon - target_lon).powi(2);
-            let right_distance =
-                (right.lat - target_lat).powi(2) + (right.lon - target_lon).powi(2);
-            left_distance.total_cmp(&right_distance)
-        })
-        .ok_or("GFS vertical prior has no horizontal samples")?;
-    Ok(features
-        .iter()
-        .filter(|feature| {
-            (feature.lat - nearest.lat).abs() <= 1e-5 && (feature.lon - nearest.lon).abs() <= 1e-5
-        })
-        .collect())
 }
 
 fn prior_identity(prior: &Prior) -> &str {

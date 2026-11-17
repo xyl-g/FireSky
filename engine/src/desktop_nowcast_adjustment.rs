@@ -24,6 +24,10 @@ const MAX_REQUEST_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_RESULT_BYTES: usize = 128 * 1024 * 1024;
 const MAX_FRAMES: usize = 16;
 const MAX_FRAME_WORKERS: usize = 4;
+const COVERAGE_PROXIMITY_TAU_MINUTES: f64 = 15.0;
+// Mirrors the motion module's default acceptance gate; advection only runs above it.
+const MOTION_ACCEPT_CORRELATION: f64 = 0.35;
+const MOTION_RELIABILITY_FLOOR: f64 = 0.7;
 const NOWCAST_ALGORITHM: &str =
     "satellite-nowcast-2026.11.04.87-hsd-only-multi-observation-aerosol-ground-touchdown-coverage-gate-v4";
 const CLOUD_COLUMN_SCHEMA_VERSION: u64 = 4;
@@ -325,7 +329,22 @@ fn calibrated_coverage(sets: &[ColumnSetRecord], samples: &[(f64, f64)]) -> f64 
     usable as f64 / samples.len() as f64
 }
 
-fn cloud_column_coverage<'a>(sets: impl IntoIterator<Item = &'a ColumnSetRecord>) -> f64 {
+fn frame_proximity_weight(valid_time_utc: &str, target: DateTime<Utc>) -> f64 {
+    match parse_utc(valid_time_utc, "column.valid_time_utc") {
+        Ok(valid_time) => {
+            let offset_minutes = (valid_time - target).num_seconds() as f64 / 60.0;
+            (-(offset_minutes / COVERAGE_PROXIMITY_TAU_MINUTES).powi(2)).exp()
+        }
+        Err(_) => 1.0,
+    }
+}
+
+/// Usable cloud-column fraction weighted by each scan's temporal proximity to the
+/// target; reduces to the unweighted fraction for a single scan or equal coverage.
+fn cloud_column_coverage<'a>(
+    sets: impl IntoIterator<Item = &'a ColumnSetRecord>,
+    target: DateTime<Utc>,
+) -> f64 {
     let mut statuses = BTreeMap::<(String, i64, i64, i64, i64), String>::new();
     for column in sets.into_iter().flat_map(|set| set.columns.iter()) {
         let key = (
@@ -345,14 +364,39 @@ fn cloud_column_coverage<'a>(sets: impl IntoIterator<Item = &'a ColumnSetRecord>
             .or_insert_with(|| column.retrieval_quality.clone());
     }
     if statuses.is_empty() {
+        return 0.0;
+    }
+    let mut weights = BTreeMap::<String, f64>::new();
+    let mut weighted_usable = 0.0;
+    let mut weighted_total = 0.0;
+    for ((valid_time_utc, ..), quality) in &statuses {
+        let weight = *weights
+            .entry(valid_time_utc.clone())
+            .or_insert_with(|| frame_proximity_weight(valid_time_utc, target));
+        weighted_total += weight;
+        if quality != "unknown" {
+            weighted_usable += weight;
+        }
+    }
+    if weighted_total <= 0.0 {
         0.0
     } else {
-        statuses
-            .values()
-            .filter(|quality| *quality != "unknown")
-            .count() as f64
-            / statuses.len() as f64
+        weighted_usable / weighted_total
     }
+}
+
+/// Reliability credit for the motion estimate used to advect clouds: correlation
+/// normalized over the acceptance range, floored so accepted motion keeps baseline
+/// credit. Returns 1.0 when no advection is applied (motion never used).
+fn motion_reliability_factor(request: &AdjustmentRequest) -> f64 {
+    if !request.advection.as_ref().is_some_and(|plan| plan.applied) {
+        return 1.0;
+    }
+    let correlation = request.motion_correlation.clamp(0.0, 1.0);
+    let normalized = ((correlation - MOTION_ACCEPT_CORRELATION)
+        / (1.0 - MOTION_ACCEPT_CORRELATION))
+        .clamp(0.0, 1.0);
+    MOTION_RELIABILITY_FLOOR + (1.0 - MOTION_RELIABILITY_FLOOR) * normalized
 }
 
 fn run_frame(
@@ -884,8 +928,9 @@ fn assemble_result(
         1.0
     };
     let confidence = (0.62
-        * (0.55 + 0.45 * cloud_column_coverage(all_sets.iter().copied()))
+        * (0.55 + 0.45 * cloud_column_coverage(all_sets.iter().copied(), target))
         * confidence_factor
+        * motion_reliability_factor(request)
         * historical_decay)
         .clamp(0.0, 1.0);
     let observed_time = source_times.first().copied().unwrap_or(display_valid);
@@ -1458,5 +1503,94 @@ mod tests {
         })
         .unwrap_err();
         assert_eq!(error, "failed 3");
+    }
+
+    fn coverage_set(valid_time: DateTime<Utc>, quality: &str) -> ColumnSetRecord {
+        let mut column = test_column(valid_time);
+        column.retrieval_quality = quality.into();
+        ColumnSetRecord {
+            schema_version: 4,
+            valid_time_utc: time_contract::iso(valid_time),
+            source: "fixture".into(),
+            vertical_prior_identity: "gfs-prior:fixture".into(),
+            retrieval_quality: quality.into(),
+            low_cloud_state: "detected".into(),
+            columns: vec![column],
+            motion_dx_px_per_hour: 3.5,
+            motion_dy_px_per_hour: -2.0,
+        }
+    }
+
+    #[test]
+    fn coverage_weights_nearer_frames_more_than_distant_ones() {
+        let target = parse_utc("2026-11-10T08:00:00Z", "target").unwrap();
+        let near = coverage_set(target, "high");
+        let far = coverage_set(target - chrono::Duration::minutes(60), "unknown");
+
+        // Unweighted this is 1 usable / 2 total = 0.5; the fresh usable scan
+        // should dominate because the distant scan carries large advection error.
+        let weighted = cloud_column_coverage([&near, &far], target);
+        assert!(weighted > 0.9, "weighted coverage was {weighted}");
+
+        // Reversed: the fresh scan is unusable, so coverage collapses toward 0
+        // even though the distant scan is usable.
+        let near_unknown = coverage_set(target, "unknown");
+        let far_usable = coverage_set(target - chrono::Duration::minutes(60), "high");
+        let reversed = cloud_column_coverage([&near_unknown, &far_usable], target);
+        assert!(reversed < 0.1, "reversed coverage was {reversed}");
+    }
+
+    #[test]
+    fn coverage_reduces_to_unweighted_for_equal_quality_frames() {
+        let target = parse_utc("2026-11-10T08:00:00Z", "target").unwrap();
+        let near = coverage_set(target, "high");
+        let far = coverage_set(target - chrono::Duration::minutes(30), "high");
+        assert_eq!(cloud_column_coverage([&near, &far], target), 1.0);
+        assert_eq!(cloud_column_coverage([&near], target), 1.0);
+
+        let unknown = coverage_set(target, "unknown");
+        assert_eq!(cloud_column_coverage([&unknown], target), 0.0);
+        assert_eq!(cloud_column_coverage(std::iter::empty(), target), 0.0);
+    }
+
+    #[test]
+    fn motion_reliability_rises_with_correlation_when_advection_applied() {
+        let mut request = test_adjustment_request();
+        request.motion_correlation = MOTION_ACCEPT_CORRELATION;
+        assert_eq!(
+            motion_reliability_factor(&request),
+            MOTION_RELIABILITY_FLOOR
+        );
+        request.motion_correlation = 1.0;
+        assert_eq!(motion_reliability_factor(&request), 1.0);
+
+        request.motion_correlation = 0.5;
+        let low = motion_reliability_factor(&request);
+        request.motion_correlation = 0.8;
+        let high = motion_reliability_factor(&request);
+        assert!(low < high && high < 1.0);
+        assert!(low > MOTION_RELIABILITY_FLOOR);
+    }
+
+    #[test]
+    fn motion_reliability_is_neutral_when_advection_not_applied() {
+        let mut request = test_adjustment_request();
+        request.motion_correlation = 0.0;
+        request.advection.as_mut().unwrap().applied = false;
+        assert_eq!(motion_reliability_factor(&request), 1.0);
+        request.advection = None;
+        assert_eq!(motion_reliability_factor(&request), 1.0);
+    }
+
+    #[test]
+    fn motion_reliability_clamps_out_of_range_correlation() {
+        let mut request = test_adjustment_request();
+        request.motion_correlation = -1.0;
+        assert_eq!(
+            motion_reliability_factor(&request),
+            MOTION_RELIABILITY_FLOOR
+        );
+        request.motion_correlation = 5.0;
+        assert_eq!(motion_reliability_factor(&request), 1.0);
     }
 }
