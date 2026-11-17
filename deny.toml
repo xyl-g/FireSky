@@ -1,6 +1,6 @@
 # FireSky Rust 依赖审计策略（cargo-deny 0.20）。
-# 覆盖 native/ 与 engine/ 两个 manifest；本文件放仓库根，CI 与本地命令用
-# --config deny.toml 指向它。见 docs/OPEN_SOURCE_ADOPTION_PLAN.zh-CN.md P0-1。
+# 覆盖 engine/ manifest（v1.0.0 起 native 并入 engine）；本文件放仓库根，
+# CI 与本地命令用 --config deny.toml 指向它。见 docs/OPEN_SOURCE_ADOPTION_PLAN.zh-CN.md P0-1。
 [graph]
 # 构建脚本/特性开关产生的额外依赖也纳入检查
 all-features = false
@@ -20,6 +20,14 @@ ignore = [
   { id = "RUSTSEC-2026-0369", reason = "zip extract() 权限穿透；NpzArchive 内存读取不受影响" },
   { id = "RUSTSEC-2026-0403", reason = "zip 系列公告；NpzArchive 内存读取不受影响" },
   { id = "RUSTSEC-2026-0429", reason = "zip 系列公告；NpzArchive 内存读取不受影响" },
+  # 2026-11-17 复核新增（advisory-db 更新）：
+  { id = "RUSTSEC-2026-0545", reason = "zip WinZip AES 加密条目 HMAC 校验；引擎仅读无加密 HSD npz，不走 by_name_decrypt/aes-crypto" },
+  { id = "RUSTSEC-2026-0548", reason = "zip ZipStreamReader 局部头名提取；NpzArchive 内存读取不受影响" },
+  # chrono/chrono-tz 被标 unmaintained（非安全漏洞）。chrono 是引擎核心时间
+  # 依赖（57 个源文件），chrono-tz 提供 IANA 时区解析；替换需专项迁移评估。
+  # 复核条件：上游恢复维护或出现安全公告时立即重评。复核日期：2026-11-17。
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained（非漏洞）；核心时间依赖，替换需专项迁移" },
+  { id = "RUSTSEC-2026-0555", reason = "chrono-tz unmaintained（非漏洞）；IANA 时区解析依赖，随 chrono 一并重评" },
 ]
 
 [licenses]
