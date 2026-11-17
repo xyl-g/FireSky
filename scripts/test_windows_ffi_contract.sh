@@ -63,6 +63,9 @@ done
 for capability in profile_query task_history task_events result_restore; do
   rg -F -q "\"$capability\"" "$WINDOW"
 done
+for method in task_forget result_restore; do
+  rg -F -q "\"$method\"" "$WINDOW"
+done
 rg -F -q '"city_ranking"' "$WINDOW"
 rg -q '"forecast"' "$WINDOW"
 rg -q '\["confirmed"\][[:space:]]*=[[:space:]]*true' "$WINDOW"

@@ -73,7 +73,10 @@ Web 的工作台、摘要、图表/地图、逐时台账、数据与任务页按
 macOS 日常预测页面，也不在完成消费者核对前删除。Docker 仅承载 Web/HTTP 部署，其构建
 和运行问题在 Web 交付阶段处理。
 
-Windows/Linux 开发当前仍暂停；“最终向 macOS 对齐”记录未来方向，本次不启动平台开发。
+Windows/Linux/Docker 对齐开发已于 2026-11-14 在 `feat/win-linux-docker-parity`
+分支恢复：三端均按本文的 macOS 基准接入（Windows 数据页任务历史/恢复/重查、
+Linux 统一预检/任务历史/恢复、Docker/Web 本地构建与运行冒烟）；目标机验收
+与后续差异登记见[跨平台基线](NATIVE_UI_CROSS_PLATFORM_BASELINE.zh-CN.md)。
 
 ## 7. 与旧文档的关系
 

@@ -69,8 +69,15 @@ git diff --check: passed
 当前主机没有 `dotnet` 和 Windows 运行环境，尚未完成 WinUI 编译、x64/ARM64
 真机启动、资源缺失负例和真实 CAMS 数据验收。
 
-Windows 的任务历史、结果恢复和手动重试 UI 仍需按 macOS 数据页合同接入；
-`EngineClient` 已具备同一 FFI 能力检查。
+Windows 数据页已按 macOS 数据页合同接入任务历史 UI（2026-11-14）：
+`task_history(limit=100)` 响应与单条记录校验（schema、automatic_restart、
+total、64 位十六进制 task_id、状态枚举、ISO8601 时间、event_seq、重复记录）、
+`task_events` 事件回放（seq 严格递增、next_seq、truncated）、删除确认
+（running 禁止，`task_forget` 需 `forgotten==true`）、`result_restore`
+（非 nowcast 必须含 model_results，retry.kind 页切换、gfs/ec 模型回退）与
+恢复参数重查（应用 payload 后走统一预检入口）。恢复与删除互斥、随 busy
+禁用；文案与 macOS 一致。`scripts/test_windows_ffi_contract.sh` 已加入
+`task_forget`/`result_restore` 在窗口层的存在性断言。
 
 ## 4. Linux 对齐实现
 
@@ -82,9 +89,18 @@ Windows 的任务历史、结果恢复和手动重试 UI 仍需按 macOS 数据�
 - 设置页接入六项 retention；区域页提供独立城市排名视图。
 - 冻结 profile 查询绑定结果 ID、输入身份、模式、坐标和 UTC 时次。
 - FFI smoke 覆盖 hello capability、同步/异步调用、错误 envelope、任务历史、
-  task events、retention 保存/恢复、profile 缺失响应和三类预检。
-- GTK 当前仍是独立的 Check/Prepare/Forecast 控件；统一 modal 预检、任务历史和
-  结果恢复 UI 必须在 Linux 目标机阶段按 macOS 行为补齐。
+  task events、task_forget 软失败、result_restore 缺记录硬失败、retention 保存/
+  恢复、profile 缺失响应和三类预检。
+- 统一 modal 预检已按 macOS 行为接入：点/区域/实况共用一个「预测」入口，
+  打开 modal 自动执行 check → 报告（缺失/可更新/待核验分列）→ 下载缺失数据/
+  更新数据（准备进度）→ 确定预测（数据周期未核验或过期需确认；confirmed=true，
+  可选 cycle_age_confirmed）；未准备成功不得确认，取消 sheet 即丢弃令牌，
+  发布核验异步进行且不阻塞本地可用性。
+- 任务历史已接入：task_history(limit=100) 响应与单条记录校验（schema、
+  automatic_restart、total、task_id 64 位十六进制、状态枚举、ISO8601 时间、
+  event_seq、重复记录）、事件回放（seq 递增、next_seq、truncated）、
+  删除确认（running 禁止）、恢复参数重查和已发布结果恢复（model_results 校验、
+  retry.kind 页切换、gfs/ec 模型选择回退）。
 - `FIRESKY_REQUIRE_APP_RESOURCES=1` 下，缺少 immutable resource bundle 的运行时
   直接失败；不会退回源码资源、Python 或 JSONL。
 

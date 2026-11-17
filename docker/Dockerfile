@@ -20,6 +20,7 @@ FROM debian:bookworm-slim AS runtime
 
 ENV FIRESKY_WORKSPACE=/app \
     FIRESKY_HTTP_ALLOW_REMOTE=1 \
+    FIRESKY_WEB_ROOT=/app/frontend/build \
     FIRESKY_RESOURCE_DIR=/app/resources/app-data \
     FIRESKY_REQUIRE_APP_RESOURCES=1 \
     FIRESKY_ECCODES_LIBRARY=libeccodes.so.0 \

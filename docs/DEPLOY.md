@@ -6,8 +6,11 @@
 2026-11-11：当前默认服务为 `firesky-engine http`，不启动 Python。
 已实现接口、配置和验收限制以 [原生运行时切换](archive/RUST_RUNTIME_CUTOVER.zh-CN.md)
 为准。旧 Python YAML、刷新/预热任务不自动兼容新运行时；下文明确标为
-legacy 的参考只能用于显式旧版部署。Docker、Windows/Linux 和 clean-machine
-发布验收尚未完成，以下是构建/启动配置，不是平台验收通过声明。
+legacy 的参考只能用于显式旧版部署。2026-11-14：Docker 镜像已在
+`feat/win-linux-docker-parity` 修复 SPA 静态根（`FIRESKY_WEB_ROOT`）并通过
+本地 compose 冒烟（首页/资产/桌面任务/令牌与任务历史持久化）；Windows/Linux
+桌面与双架构镜像发布、clean-machine 验收仍待目标机，以下是构建/启动配置，
+不是平台验收通过声明。
 
 ## 1. 部署形态总览
 

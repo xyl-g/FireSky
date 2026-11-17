@@ -22,18 +22,17 @@ runtime/library state while it is alive, so destroying an `Engine` does not
 unload the shared object underneath an in-flight task.
 
 The optional GTK4 shell follows the same Rust lifecycle as the macOS/Windows
-clients and exposes `point`, `regional` and `nowcast` modes. It is still a
-compact native shell: its completeness check, preparation, and forecast
-actions are currently separate controls rather than the modal preflight sheet
-used by the macOS baseline. The Rust session/confirmation contract is the
-same, but this UI presentation remains a Linux acceptance task.
-
-1. Connect and validate `hello` through the FFI.
-2. Run `check` for the selected point, 0.25-degree custom region, or nowcast
-   payload and display the completeness report.
-3. Run `prepare` only after the user chooses to fill missing inputs.
-4. Run `forecast` only after the report is ready and send
-   `confirmed: true`.
+clients and exposes `point`, `regional` and `nowcast` modes behind one
+unified entry: pressing 预测 opens a modal preflight sheet that runs
+`check` for the selected point, 0.25-degree custom region, or nowcast
+payload, renders the completeness report (missing / updatable / unverified
+inputs listed separately), and offers 下载缺失数据/更新数据 with prepare
+progress before 确定预测 sends `confirmed: true` (plus an explicit
+`cycle_age_confirmed` acknowledgment when the data cycle is unverified or
+stale, mirroring the macOS sheet). Confirming closes the sheet and the
+token is consumed by the forecast; cancelling the sheet dismisses the
+session token. A result model selector (gfs/ec) reflects the selected
+model after a forecast or restored result.
 
 The GTK shell also exposes the shared native contracts used by the macOS
 baseline:
@@ -43,6 +42,12 @@ baseline:
   `save_retention_settings`;
 - immutable frozen-result `profile_query` requests, including source identity,
   model, coordinates and valid UTC time;
+- a persistent task history view (task_history limit=100 with the same
+  envelope/record validation as macOS, event replay via task_events with
+  sequence and truncation checks, 删除任务记录 confirmation that refuses
+  running tasks, 恢复参数并重新检查数据 re-running the unified preflight from
+  the stored payload, and 恢复已发布结果 via result_restore with
+  model_results validation and gfs/ec selection fallback);
 - a separate regional city-ranking contract view after a regional forecast.
 
 These controls call the Rust FFI asynchronously and do not start a Python

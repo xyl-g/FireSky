@@ -136,6 +136,21 @@ int main(int argc, char** argv) {
                 FIRESKY_FFI_RUNTIME_ERROR, "")) {
             return EXIT_FAILURE;
         }
+        // task_forget on a missing record is a soft no-op (forgotten=false);
+        // result_restore on a missing record must fail closed.
+        const auto forgotten = engine.call(
+            "task_forget",
+            "{\"task_id\":\"0000000000000000000000000000000000000000000000000000000000000000\"}");
+        if (!require_success("task forget unknown id", forgotten,
+                             "\"forgotten\":false")) {
+            return EXIT_FAILURE;
+        }
+        if (!require_error(
+                engine, "result restore", "result_restore",
+                "{\"task_id\":\"0000000000000000000000000000000000000000000000000000000000000000\"}",
+                FIRESKY_FFI_RUNTIME_ERROR, "")) {
+            return EXIT_FAILURE;
+        }
 
         if (!check_preflight(
                 engine, "point",

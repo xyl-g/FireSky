@@ -251,7 +251,7 @@ GUI Swift 层点击与真实下载路径仍未验收，不能写成通过。完�
 后续 Docker 待办的具体证据：Dockerfile COPY 到 `/app/frontend/build`，而 workspace
 `/app` 下 Rust 默认读取 `/app/apps/shared-web/dist`；Dockerfile、Compose 和 entrypoint
 未设置 `FIRESKY_WEB_ROOT`。应在部署阶段统一 COPY/静态根配置，并验证首页和 JS/CSS，
-health 成功不能证明 SPA 可用。此项为源码核对发现，本次未改代码或运行镜像。
+health 成功不能证明 SPA 可用。此项已于 2026-11-14 在 `feat/win-linux-docker-parity` 修复并经本地 compose 冒烟验证（首页、JS/CSS、桌面任务生命周期、令牌与任务历史持久化）。
 
 ## 4. 继续保留的范围决定
 

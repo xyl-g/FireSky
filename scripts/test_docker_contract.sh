@@ -29,6 +29,7 @@ for stage in \
     "COPY resources/app-data /app/resources/app-data" \
     "FIRESKY_REQUIRE_APP_RESOURCES=1" \
     "FIRESKY_HTTP_ALLOW_REMOTE=1" \
+    "FIRESKY_WEB_ROOT=/app/frontend/build" \
     'ENTRYPOINT ["firesky-entrypoint"]' \
     "COPY docker/entrypoint.sh /usr/local/bin/firesky-entrypoint" \
     "FIRESKY_ECCODES_LIBRARY=libeccodes.so.0" \

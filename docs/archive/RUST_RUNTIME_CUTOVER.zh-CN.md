@@ -114,7 +114,7 @@ HTTP 请求单模式时投影为对应点/区域报告。点/区域计算前须�
 | `GET /data/status` | 本地数据清单；不把文件数量伪装成某请求 ready，也不声称上游周期已探测。 |
 | `POST /data/requirements`、`/data/fetch`；`GET /data/fetch/status` | 原生事件计划、GFS/EC/CAMS 下载任务和状态。范围为 1–7 天、dawn/dusk、非跨日界线 bbox；显式 CAMS run pin 尚不支持。 |
 | `POST /data/prune` | 仅允许配置的缓存目录，移动可重建缓存到 `.trash`，不 unlink；数据库、锁、符号链接和已有回收区不处理。`freed_mb` 表示移出活动缓存量，`reclaimed_disk_mb` 为 0。 |
-| SPA | 默认托管 `apps/shared-web/dist`，可用 `FIRESKY_WEB_ROOT` 覆盖；Makefile 与 Docker 构建 shared-web。Docker COPY 到 `/app/frontend/build` 且无覆盖变量，与默认根不一致，列入后续部署修复及首页/资源验收。Web UI 后续按 macOS 基准对齐，旧 `frontend/` 能力逐页核对。 |
+| SPA | 默认托管 `apps/shared-web/dist`，可用 `FIRESKY_WEB_ROOT` 覆盖；Makefile 与 Docker 构建 shared-web。Docker COPY 到 `/app/frontend/build` 且无覆盖变量的问题已于 2026-11-14 在 `feat/win-linux-docker-parity` 修复：镜像与 Compose 均设 `FIRESKY_WEB_ROOT=/app/frontend/build`，`test_docker_contract.sh` 加断言防回归，本地 compose 冒烟已验证首页与 JS/CSS 资产。Web UI 后续按 macOS 基准对齐，旧 `frontend/` 能力逐页核对。 |
 
 四个传输 worker；每个 Runtime 同时只允许一个重计算/准备操作，忙时拒绝，
 不能把四 worker 写成四个大范围预测的并行吞吐。任务注册上限 32、
