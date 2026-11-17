@@ -20,9 +20,7 @@
   let message = $state("");
   let failed = $state(false);
   let cams = $state<CamsConfiguration | null>(null);
-  let camsDraft = $state("");
   let camsLoading = $state(false);
-  let camsSaving = $state(false);
   let camsMessage = $state("");
   let camsFailed = $state(false);
   type RetentionValue = number | null;
@@ -45,9 +43,6 @@
   let retentionFailed = $state(false);
   let revision = 0;
   let alive = true;
-  // 共享 Web 浏览器端：无桌面宿主能力（CAMS Key 写入与本地引擎均属原生 UI）。
-  const native = false;
-  const canSaveCams = $derived(native && online && cams?.canSave === true && !camsLoading && !camsSaving);
   const canSaveRetention = $derived(online && !retentionLoading && !retentionSaving);
 
   function applyKeys() {
@@ -63,7 +58,7 @@
   }
 
   async function refreshCams() {
-    if (!online || camsSaving) return;
+    if (!online) return;
     const current = ++revision;
     camsLoading = true;
     camsMessage = "";
@@ -79,30 +74,6 @@
       }
     } finally {
       if (alive && current === revision) camsLoading = false;
-    }
-  }
-
-  async function saveCams() {
-    if (!canSaveCams || !camsDraft.trim()) return;
-    const current = ++revision;
-    const key = camsDraft.trim();
-    camsDraft = "";
-    camsSaving = true;
-    camsFailed = false;
-    camsMessage = "";
-    try {
-      const result = await rpcRequest("save_cams_key", { key });
-      if (alive && current === revision) {
-        cams = camsConfiguration(result);
-        camsMessage = "CAMS Key 已保存到本机配置；有效性与数据集授权在实际下载时验证。";
-      }
-    } catch {
-      if (alive && current === revision) {
-        camsFailed = true;
-        camsMessage = "无法安全保存 CAMS 配置，请检查文件格式、位置和写入权限后重试。";
-      }
-    } finally {
-      if (alive && current === revision) camsSaving = false;
     }
   }
 
@@ -160,17 +131,15 @@
     void connection;
     ++revision;
     cams = null;
-    camsDraft = "";
     camsMessage = "";
     camsLoading = false;
-    camsSaving = false;
     retention = emptyRetention();
     retentionMessage = "";
     retentionFailed = false;
     if (connected) untrack(() => { void refreshCams(); });
     if (connected) untrack(() => { void refreshRetention(); });
   });
-  onDestroy(() => { alive = false; ++revision; camsDraft = ""; });
+  onDestroy(() => { alive = false; ++revision; });
 </script>
 
 <div class="settings-view">
@@ -245,19 +214,9 @@
     <div class="configuration-status">
       {#if cams?.configured}<CircleCheck size={17} class="success" />{:else}<KeyRound size={17} />{/if}
       <p role="status">{camsLoading ? "正在检查本地 CAMS 配置…" : camsDescription(cams)}</p>
-      <button class="icon-button" type="button" title="重新检查 CAMS 配置" aria-label="重新检查 CAMS 配置" disabled={!online || camsLoading || camsSaving} onclick={refreshCams}><RefreshCw size={16} class={camsLoading ? "spinning" : ""} /></button>
+      <button class="icon-button" type="button" title="重新检查 CAMS 配置" aria-label="重新检查 CAMS 配置" disabled={!online || camsLoading} onclick={refreshCams}><RefreshCw size={16} class={camsLoading ? "spinning" : ""} /></button>
     </div>
-    {#if native}<form onsubmit={(event) => { event.preventDefault(); void saveCams(); }}>
-      <div class="cams-input">
-        <label for="cams-key" class="visually-hidden">ADS Personal Access Token</label>
-        <input id="cams-key" type="password" bind:value={camsDraft} placeholder="粘贴 ADS Personal Access Token" autocomplete="off" spellcheck={false} maxlength="16384" disabled={!canSaveCams} />
-        <button type="submit" disabled={!canSaveCams || !camsDraft.trim()}><KeyRound size={15} />{camsSaving ? "保存中…" : "保存 Key"}</button>
-      </div>
-    </form>
-    <p class="muted">仅以明文保存在本机配置文件，文件权限 0600；不会写入工程或显示已有 Key。</p>
-    {#if cams?.path}<p class="config-path muted">{cams.path}</p>{/if}
-    {#if cams && !cams.canSave}<p class="notice">环境变量正在覆盖配置。修改 CDSAPI_KEY / CDSAPI_URL 后需重新启动应用。</p>{/if}
-    {:else}<p class="notice">CAMS 凭据由服务端配置，浏览器不提供凭据写入。修改服务端配置后需重新启动 Rust 服务。</p>{/if}
+    <p class="notice">CAMS 凭据由服务端配置，浏览器不提供凭据写入。修改服务端配置后需重新启动 Rust 服务。</p>
     {#if camsMessage}<p class:error={camsFailed} role="status">{camsMessage}</p>{/if}
     <details class="tutorial">
       <summary>配置教程</summary>
@@ -265,14 +224,13 @@
         <li><strong>注册并登录 ADS</strong><span>使用 ECMWF 账号登录 Atmosphere Data Store。</span><a href="https://ads.atmosphere.copernicus.eu/" target="_blank" rel="noreferrer">打开 ADS</a></li>
         <li><strong>复制 Personal Access Token</strong><span>在官方 API 配置页复制 Token，不要粘贴 url 或整段配置。</span><a href="https://ads.atmosphere.copernicus.eu/how-to-api" target="_blank" rel="noreferrer">获取 Token</a></li>
         <li><strong>接受 CAMS 数据集条款</strong><span>在数据集 Download 页接受 Terms of Use，完成网页端授权。</span><a href="https://ads.atmosphere.copernicus.eu/datasets/cams-global-atmospheric-composition-forecasts?tab=download" target="_blank" rel="noreferrer">打开数据集</a></li>
-        <li><strong>{native ? "返回 FireSky 保存 Key" : "配置 Rust 服务的 CAMS 凭据"}</strong><span>配置检查不代表 Token 已通过实际下载验证。</span></li>
+        <li><strong>配置 Rust 服务的 CAMS 凭据</strong><span>配置检查不代表 Token 已通过实际下载验证。</span></li>
       </ol>
     </details>
   </section>
   <section aria-labelledby="engine-settings">
-    <h2 id="engine-settings"><Cpu size={17} />{native ? "本地引擎" : "Rust 服务"}</h2>
-    <div class="engine-row"><span>{native ? "工程目录" : "服务工作区"}</span><code>{engineWorkspace || "未连接"}</code></div>
-    {#if native}<div class="engine-row"><span>Rust 引擎</span><code>{engineBinary || "未连接"}</code></div>{/if}
+    <h2 id="engine-settings"><Cpu size={17} />Rust 服务</h2>
+    <div class="engine-row"><span>服务工作区</span><code>{engineWorkspace || "未连接"}</code></div>
     <div class="actions engine-actions"><span class="engine-state"><span class:connected={online} class="status-dot"></span>{online ? "引擎已连接" : "引擎未连接"}</span><button type="button" onclick={onReconnect} disabled={reconnecting}><RefreshCw size={15} />{reconnecting ? "重连中…" : "重新连接"}</button></div>
   </section>
 </div>
@@ -305,13 +263,9 @@
   .configuration-status > :global(svg.success) { color: var(--fs-teal); }
   .configuration-status p { flex: 1; min-width: 0; }
   .icon-button { padding: 8px; flex: 0 0 34px; justify-content: center; }
-  .cams-input { display: flex; gap: 10px; align-items: center; margin-top: 8px; }
-  .cams-input input { flex: 1; width: 100%; }
-  .cams-input button { flex-shrink: 0; }
   .retention-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 12px; }
   .retention-grid label { display: flex; flex-direction: column; gap: 6px; color: var(--fs-ink2); font-size: 11px; }
   .retention-grid input { width: 100%; }
-  .config-path { font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 10px; }
   .tutorial { margin-top: 14px; font-size: 11px; }
   .tutorial summary { cursor: pointer; }
   ol { margin: 14px 0 0; padding-left: 22px; }
@@ -326,7 +280,6 @@
   .engine-state { display: inline-flex; align-items: center; gap: 7px; color: var(--fs-ink2); font-size: 11px; }
   .status-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--fs-ink2); }
   .status-dot.connected { background: var(--fs-teal); }
-  .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
   .settings-view :global(.spinning) { animation: spin 1s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   @media (prefers-reduced-motion: reduce) { .settings-view :global(.spinning) { animation: none; } }
@@ -334,8 +287,6 @@
     .settings-view { padding: 2px 14px 24px; }
     select { max-width: 65%; }
     .setting-row { gap: 10px; }
-    .cams-input { align-items: stretch; flex-wrap: wrap; }
-    .cams-input input { flex-basis: 100%; }
     .engine-row { grid-template-columns: 64px minmax(0, 1fr); gap: 10px; }
     button, select, input { min-height: 38px; }
     .retention-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }

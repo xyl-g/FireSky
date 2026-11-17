@@ -3,22 +3,18 @@
   import { Database, Download, HardDrive, RefreshCw, Network, Square, CircleCheck, CircleAlert, SearchCheck } from "@lucide/svelte";
   import { onEngineProgress, rpcRequest, rpcStart, RpcError, type ProgressEvent, type RpcRequestHandle } from "../ipc";
   import { DataSessionController } from "../data-session";
-  import TaskHistoryView from "./TaskHistoryView.svelte";
-  import type { RetryRequest } from "../task-history";
   import {
     cycleCoverage, formatMB, initialProbes, localDate, probeLabel, sourceTitle,
     type InventoryDataset, type ProbeRow,
   } from "../data-display";
 
-  let { online, generation, regions = [], visible = true, ecSource = $bindable("ecmwf"), onBusy = () => {}, retryDisabled = false, onRestore = async () => false }: {
+  let { online, generation, regions = [], visible = true, ecSource = $bindable("ecmwf"), onBusy = () => {} }: {
     online: boolean;
     generation: number;
     regions?: Array<Record<string, unknown>>;
     visible?: boolean;
     ecSource?: string;
     onBusy?: (busy: boolean) => void;
-    retryDisabled?: boolean;
-    onRestore?: (request: RetryRequest) => Promise<boolean>;
   } = $props();
   const controller = new DataSessionController({ start: rpcStart, request: rpcRequest }, (next) => { session = next; });
   let session = $state(controller.state);
@@ -46,7 +42,6 @@
   let previouslyOnline = false;
   let previousECSource: string | undefined;
   let alive = false;
-  let historyView = $state<TaskHistoryView>();
 
   const busy = $derived(["checking", "preparing", "cancelling"].includes(session.phase));
   const percent = $derived(Math.min(100, Math.max(0, session.progress?.percent ?? 0)));
@@ -171,7 +166,7 @@
     await Promise.all([controller.cancel(), cancelProbe()]);
     if (probeResult) await probeResult.catch(() => undefined);
   }
-  export function refresh() { void refreshInventory(); historyView?.refresh(); }
+  export function refresh() { void refreshInventory(); }
   $effect(() => { onBusy(busy || probeBusy); });
 
   $effect(() => {
@@ -193,13 +188,11 @@
 
   function keydown(event: KeyboardEvent) {
     if (!visible) return;
+    // F5 刷新由 App 层统一处理（desktopAction → refresh），这里只负责 Escape 取消。
     if (event.key === "Escape") {
       if (confirmOpen) confirmOpen = false;
       else if (busy) void controller.cancel();
       else if (probeBusy) void cancelProbe();
-    } else if (event.key === "F5") {
-      event.preventDefault();
-      void refreshInventory();
     }
   }
 
@@ -282,7 +275,7 @@
         </div>
       {/each}
     </div>
-    <p class="muted probe-footer">{probeBusy ? probeCancelling ? "正在停止探测" : "正在验证真实数据下载" : probeTime ? `核验时间：${probeTime} · ${probeRows.filter((row) => row.state === "passed").length}/3 项下载验证通过` : "尚无本次网络的下载验证结果"}</p>
+    <p class="muted probe-footer">{probeBusy ? probeCancelling ? "正在停止探测" : "正在验证真实数据下载" : probeTime ? `核验时间：${probeTime} · ${probeRows.filter((row) => row.state === "passed").length}/${probeRows.length} 项下载验证通过` : "尚无本次网络的下载验证结果"}</p>
     {#if probeError}<p class="error" role="alert">{probeError}</p>{/if}
   </section>
 
@@ -363,7 +356,6 @@
       </div>
     </div>
   </section>
-  <TaskHistoryView bind:this={historyView} {online} {generation} {visible} retryDisabled={retryDisabled || busy || probeBusy} {onRestore} />
 </div>
 
 <dialog bind:this={confirmationDialog} class="confirm-dialog" aria-labelledby="download-confirm" oncancel={(event) => { event.preventDefault(); confirmOpen = false; }} onclose={() => { confirmOpen = false; }}>

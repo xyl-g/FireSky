@@ -87,6 +87,7 @@ export class TaskHistoryController {
   private listRevision = 0;
   private eventRevision = 0;
   private loadedEventsSeq = 0;
+  private refreshing = false;
   private disposed = false;
   constructor(private readonly transport: Transport, private readonly notify: (state: HistoryState) => void) {}
 
@@ -101,15 +102,19 @@ export class TaskHistoryController {
     ++this.listRevision;
     ++this.eventRevision;
     this.loadedEventsSeq = 0;
+    this.refreshing = false; // 作废旧代请求后不得阻塞下一代读取。
     this.update(initial());
   }
 
-  async refresh() {
-    if (this.disposed || this.state.loading || this.state.forgetting) return;
+  /** Background polls keep `loading` untouched so the spinner only tracks user-visible reads. */
+  async refresh(options: { background?: boolean } = {}) {
+    const background = options.background === true;
+    if (this.disposed || this.state.loading || this.state.forgetting || this.refreshing) return;
     const revision = this.revision;
     const listing = ++this.listRevision;
     const current = () => !this.disposed && revision === this.revision && listing === this.listRevision;
-    this.update({ loading: true, error: "" });
+    this.refreshing = true;
+    this.update(background ? { error: "" } : { loading: true, error: "" });
     try {
       const response = row(await this.transport.request("task_history", { limit: 100 }));
       if (!current()) return;
@@ -119,7 +124,7 @@ export class TaskHistoryController {
         || !Array.isArray(response.issues)) throw new Error("任务历史协议不匹配，请重新连接引擎。");
       const tasks = response.tasks.map(task);
       if (new Set(tasks.map((item) => item.task_id)).size !== tasks.length) throw new Error("任务历史包含重复记录。");
-      this.update({ tasks, total: Number(response.total), issues: response.issues.length, loaded: true });
+      this.update({ tasks, total: Number(response.total), issues: response.issues.length, loaded: true, error: "" });
       if (this.state.selectedId) {
         const selected = tasks.find((item) => item.task_id === this.state.selectedId);
         if (!selected) this.closeEvents();
@@ -128,7 +133,8 @@ export class TaskHistoryController {
     } catch (error) {
       if (current()) this.update({ error: errorText(error) });
     } finally {
-      if (current()) this.update({ loading: false });
+      this.refreshing = false;
+      if (current() && !background) this.update({ loading: false });
     }
   }
 
@@ -180,6 +186,7 @@ export class TaskHistoryController {
     const revision = this.revision;
     const current = () => !this.disposed && revision === this.revision;
     ++this.listRevision;
+    this.refreshing = false; // 清单已被作废，放行下一次刷新。
     this.update({ forgetting: taskId, loading: false, error: "" });
     try {
       const response = row(await this.transport.request("task_forget", { task_id: taskId }));

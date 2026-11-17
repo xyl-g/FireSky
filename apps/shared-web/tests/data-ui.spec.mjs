@@ -225,6 +225,8 @@ test("changing EC source does not mislabel an in-flight probe or retain the old 
 
 test("task history exposes interrupted work, replays terminal events, and restores without restarting", async ({ page }, testInfo) => {
   await fixture(page);
+  await page.getByRole("button", { name: "任务历史", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "任务历史", exact: true })).toBeVisible();
   await expect(page.getByText("未自动重跑", { exact: true })).toBeVisible();
   const row = page.locator(".task-row").filter({ hasText: "历史地点" });
   await row.getByRole("button", { name: "查看预测计算事件", exact: true }).click();

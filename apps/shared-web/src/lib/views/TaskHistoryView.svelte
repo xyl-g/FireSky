@@ -73,7 +73,8 @@
   $effect(() => {
     if (!alive || !online || !visible) return;
     void controller.refresh();
-    const timer = setInterval(() => { void controller.refresh(); }, 5000);
+    // 5 秒后台轮询不翻转 loading，避免刷新图标与「正在读取」反复闪烁。
+    const timer = setInterval(() => { void controller.refresh({ background: true }); }, 5000);
     return () => clearInterval(timer);
   });
   $effect(() => {
@@ -88,7 +89,7 @@
 
 <section class="history-section" aria-labelledby="history-title">
   <header>
-    <h2 id="history-title"><History size={17} />任务历史</h2>
+    <h2 id="history-title"><History size={17} />最近任务</h2>
     <button class="icon-button" aria-label="刷新任务历史" title="刷新任务历史" disabled={!online || historyState.loading || !!historyState.forgetting} onclick={() => controller.refresh()}><RefreshCw size={16} class={historyState.loading ? "spinning" : ""} /></button>
   </header>
   <p class="summary muted" aria-live="polite">{!online ? "引擎未连接，暂时无法读取历史。" : historyState.loaded ? `显示最近 ${historyState.tasks.length} 项，共 ${historyState.total} 项` : historyState.loading ? "正在读取任务记录…" : "尚未读取任务记录"}</p>
@@ -139,10 +140,10 @@
 </dialog>
 
 <style>
-  .history-section { padding: 20px 0; border-top: 1px solid var(--fs-border); }
+  .history-section { padding: 20px; max-width: 1440px; margin: 0 auto; }
   header, h2, .task-heading, .task-meta, .actions, button, footer { display: flex; align-items: center; gap: 8px; }
   header { justify-content: space-between; gap: 16px; }
-  h2 { font-size: 15px; margin: 0; font-weight: 600; }
+  h2 { font-size: 20px; margin: 0; font-weight: 600; }
   h3 { margin: 0; font-size: 13px; }
   p { line-height: 1.7; overflow-wrap: anywhere; margin: 4px 0; }
   .muted { color: var(--fs-ink2); }

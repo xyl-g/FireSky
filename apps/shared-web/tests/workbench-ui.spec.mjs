@@ -283,7 +283,7 @@ test("Swift workbench is the first screen with four business pages, a 292px rail
   await page.setViewportSize({ width: 1440, height: 900 });
   await fixture(page);
   const navigation = page.getByRole("navigation", { name: "主要导航" });
-  await expect(navigation.getByRole("button")).toHaveText(["单点预测", "区域预测", "实况观测", "数据与下载", "设置"]);
+  await expect(navigation.getByRole("button")).toHaveText(["单点预测", "区域预测", "实况观测", "数据与下载", "任务历史", "设置"]);
   await expect(navigation.getByRole("button", { name: "地图选点", exact: true })).toHaveCount(0);
   await expect(page.locator(".model-summary")).toHaveCount(2);
   await expect(page.locator(".metric")).toHaveCount(9);
@@ -299,6 +299,9 @@ test("Swift workbench is the first screen with four business pages, a 292px rail
   await page.getByRole("button", { name: "收藏当前点", exact: true }).click();
   await page.getByRole("group", { name: "地点视图", exact: true }).getByRole("button", { name: "收藏", exact: true }).click();
   await expect(page.locator(".favorites").getByRole("button", { name: "杭州", exact: true })).toBeVisible();
+  await page.locator(".favorites").getByRole("button", { name: "删除收藏 杭州", exact: true }).click();
+  await expect(page.locator(".favorites")).toContainText("暂无收藏地点");
+  await expect(page.locator(".favorites").getByRole("button", { name: "杭州", exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => window.__workFixture.requests.filter((item) => ["check", "publications", "prepare", "forecast", "network_probe"].includes(item.method)))).toEqual([]);
 });
 

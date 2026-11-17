@@ -158,7 +158,7 @@ export function onEngineStatus(handler: (status: EngineStatus) => void): Promise
   return Promise.resolve(browserClient().onStatus(handler));
 }
 
-export type DesktopAction = "point" | "regional" | "nowcast" | "data" | "settings" | "refresh" | "cancel" | "search" | "quit";
+export type DesktopAction = "point" | "regional" | "nowcast" | "data" | "history" | "settings" | "refresh" | "cancel" | "search" | "quit";
 export type CacheSource = "gfs" | "ecmwf" | "cams" | "satellite" | "map" | "point" | "regional";
 
 /** 浏览器没有宿主菜单事件源；保留 no-op 订阅兼容既有调用方。 */

@@ -1,0 +1,57 @@
+# FireSky Rust 依赖审计策略（cargo-deny 0.20）。
+# 覆盖 native/ 与 engine/ 两个 manifest；本文件放仓库根，CI 与本地命令用
+# --config deny.toml 指向它。见 docs/OPEN_SOURCE_ADOPTION_PLAN.zh-CN.md P0-1。
+[graph]
+# 构建脚本/特性开关产生的额外依赖也纳入检查
+all-features = false
+
+[advisories]
+version = 2
+# 安全公告：已修复版本可用时 CI 直接失败；仅被 yanked 时先警告
+db-urls = ["https://github.com/rustsec/advisory-db"]
+yanked = "warn"
+# zip 0.6.6（npyz 0.9.1 锁定 ^0.6，修复需 zip >=9.0.0，上游无升级路径）。
+# 五条公告的提权路径均为 ZipArchive::extract/stream-extract 落盘写权限位/软链；
+# 引擎仅经 npyz::npz::NpzArchive 在内存中读取 HSD 卫星数据，不走 extract。
+# npyz 发布 zip2 兼容版本后移除豁免并升级。复核日期：2026-11-14。
+ignore = [
+  { id = "RUSTSEC-2026-0367", reason = "zip extract() SUID/SGID；NpzArchive 内存读取不受影响" },
+  { id = "RUSTSEC-2026-0368", reason = "zip extract() 软链逃逸；NpzArchive 内存读取不受影响" },
+  { id = "RUSTSEC-2026-0369", reason = "zip extract() 权限穿透；NpzArchive 内存读取不受影响" },
+  { id = "RUSTSEC-2026-0403", reason = "zip 系列公告；NpzArchive 内存读取不受影响" },
+  { id = "RUSTSEC-2026-0429", reason = "zip 系列公告；NpzArchive 内存读取不受影响" },
+]
+
+[licenses]
+version = 2
+# 本项目 GPL-3.0-only；第三方依赖允许常见宽松许可 + 兼容 GPL 的强 copyleft。
+# ecCodes（Apache-2.0）是原生库不走 cargo 图，不在此列。
+allow = [
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Zlib",
+  "Unicode-3.0",
+  "Unicode-DFS-2016",
+  "MPL-2.0",
+  "CC0-1.0",
+  "CDLA-Permissive-2.0",
+  "OpenSSL",
+  "GPL-3.0-only",
+]
+confidence-threshold = 0.8
+
+[bans]
+# 同一 crate 多版本先警告（axum/tower 生态常见），清单稳定后再收紧为 deny
+multiple-versions = "warn"
+deny = []
+skip = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

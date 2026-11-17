@@ -38,6 +38,19 @@ jobs:
       - name: Build and test native runtime
         run: cargo test --manifest-path engine/Cargo.toml --locked
 
+  cargo-deny:
+    # 依赖供应链审计：RustSec 公告 / 重复与封禁 crate / 许可 / 来源。
+    # 策略与豁免理由见仓库根 deny.toml 与 docs/OPEN_SOURCE_ADOPTION_PLAN.zh-CN.md P0-1。
+    name: cargo deny（Rust 依赖审计）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: cargo deny check（engine）
+        run: cargo deny --manifest-path engine/Cargo.toml --config deny.toml check advisories bans licenses sources
+
   frontend:
     # 2026-11-13：产品共享 Web 统一为 apps/shared-web（Docker/Rust HTTP 同源）。
     # 旧 frontend/（SvelteKit）待合并，其契约测试保留为独立轻量 job。

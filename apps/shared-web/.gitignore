@@ -8,3 +8,4 @@ vite.config.ts.timestamp*
 .vite/
 test-results/
 playwright-report/
+bundle-stats.html

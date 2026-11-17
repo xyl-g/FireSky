@@ -25,7 +25,7 @@
 | `docker/Dockerfile`、`docker-compose.yaml` | 运行时设 `FIRESKY_WEB_ROOT=/app/frontend/build`（修复已登记的 SPA 404 缺陷，见第 3.1 节） |
 | `scripts/test_docker_contract.sh` | 加 `FIRESKY_WEB_ROOT` 断言防回归 |
 | `scripts/test_windows_ffi_contract.sh` | 加窗口层 `task_forget`/`result_restore` 存在性断言 |
-| `apps/linux/README.md`、`apps/README.md`、`docs/DEPLOY.md`、`docs/MACOS_UI_BASELINE.zh-CN.md`、`docs/RUST_RUNTIME_CUTOVER.zh-CN.md`、`docs/NEXT_AGENT_PLAN_2026-11-13.zh-CN.md` | 状态行更新为"分支已接续，目标机验收分列" |
+| `apps/linux/README.md`、`apps/README.md`、`docs/DEPLOY.md`、`docs/MACOS_UI_BASELINE.zh-CN.md`、`docs/archive/RUST_RUNTIME_CUTOVER.zh-CN.md`、`docs/archive/NEXT_AGENT_PLAN_2026-11-13.zh-CN.md` | 状态行更新为"分支已接续，目标机验收分列" |
 
 ## 3. 验证证据（2026-11-14，本机）
 
