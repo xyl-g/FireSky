@@ -91,12 +91,16 @@ test("Web physical trends preserve gaps, zero readings and selectable series and
   expect(errors).toEqual([]);
 });
 
-test("Web physical trend content fits small and wide windows in both themes", async ({ page }, testInfo) => {
+test("Web physical trend content fits small and wide windows in both themes", async ({ page }) => {
   const trends = await fixture(page);
   for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: 820 });
     for (const theme of ["light", "dark"]) {
-      await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      await page.evaluate(async (value) => {
+        document.documentElement.dataset.theme = value;
+        await document.fonts.ready;
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      }, theme);
       await trends.scrollIntoViewIfNeeded();
       await expect(trends).toBeVisible();
       expect(await trends.evaluate((root) => root.scrollWidth <= root.clientWidth + 1)).toBe(true);
@@ -104,7 +108,10 @@ test("Web physical trend content fits small and wide windows in both themes", as
         const rect = chart.getBoundingClientRect();
         return rect.width > 100 && rect.height >= 200 && rect.left >= 0 && rect.right <= innerWidth + 1;
       }))).toBe(true);
-      await trends.screenshot({ path: testInfo.outputPath(`web-trends-${width}-${theme}.png`) });
+      // 视觉基线（uPlot 试点前置）：替换前 SVG 渲染留档，见 __screenshots__。
+      await expect(trends).toHaveScreenshot(`web-trends-${width}-${theme}.png`, {
+        animations: "disabled", caret: "hide", maxDiffPixelRatio: 0.02,
+      });
     }
   }
 });
