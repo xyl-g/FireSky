@@ -315,7 +315,14 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             camsConfiguration = hello["cams_credentials"] as? JSONObject
             if !didCheckStartupCredentials, let camsConfiguration {
                 didCheckStartupCredentials = true
-                showCAMSReminder = camsConfiguration["configured"] as? Bool != true
+                // Snapshot smoke renders the cold-start workbench; the modal
+                // CAMS onboarding alert can hang the main thread on runner
+                // images with broken IconServices (Intel macOS 26.6.x nib
+                // icon loading), starving the snapshot task of main-actor time.
+                let snapshotSmoke =
+                    ProcessInfo.processInfo.environment["FIRESKY_NATIVE_SNAPSHOT"] != nil
+                showCAMSReminder =
+                    !snapshotSmoke && camsConfiguration["configured"] as? Bool != true
             }
             await loadRetentionSettings()
             await loadDataSyncSettings()
