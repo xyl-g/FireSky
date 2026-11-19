@@ -23,7 +23,7 @@
 | --- | --- | --- | --- |
 | P0-1 | [cargo-deny 0.20](https://github.com/EmbarkStudios/cargo-deny) | Rust 依赖审计（RustSec/许可/来源） | **已落地**（deny.toml + CI job） |
 | P0-2 | [rollup-plugin-visualizer](https://github.com/btd/rollup-plugin-visualizer) | shared-web 构建体积分析 | **已落地**（devDep + `build:analyze`） |
-| P1-1 | [uPlot](https://github.com/leeoniya/uplot)（MIT） | 时间序列图表（canvas，~50 KB min） | 建议试点，见 §4.1 |
+| P1-1 | [uPlot](https://github.com/leeoniya/uplot)（MIT） | 时间序列图表（canvas，~50 KB min） | **已落地**（WebTrendChart，见 §4.1） |
 | P1-2 | [TanStack Virtual](https://tanstack.com/virtual)（MIT，`@tanstack/svelte-virtual` 已支持 Svelte 5 runes） | 区域排行列表虚拟化 | 建议试点，见 §4.2 |
 | P1-3 | Playwright `toHaveScreenshot`（内置，零新依赖） | 关键布局视觉回归基线 | **已落地**（12 基线，见 §4.3） |
 | P2-1 | [UniFFI](https://github.com/mozilla/uniffi-rs) | 移动双原生 Rust→Swift/Kotlin 绑定 | 移动分支落地，见 §5.1 |
@@ -94,6 +94,25 @@ cd apps/shared-web && npm i uplot
 3. 验收标准：图例/缺测断线表现与现 SVG 一致；`bundle-stats.html` 确认增量
    ≤ 20 KB gzip；existing 51 条 UI 用例全绿。
 4. 回滚：试点组件独立，删除即回滚；不并行改旧组件。
+
+**落地结果**（2026-11-20，uplot 1.6.32 MIT）：
+
+- `UPlotChart.svelte` 薄封装：`$effect` 重建实例（数据/尺寸/主题变化）、
+  MutationObserver 监听 `data-theme` 重建、canvas 颜色经 getComputedStyle
+  沿 host 继承链解析 `var(--trend-*)`；选中时刻走 draw 钩子虚线不重建实例，
+  canvas 点击映射最近时点回传 onSelect。host div 承担 `role="img"` 命名，
+  内部 canvas `role="presentation"`（避免重复 img 语义）。
+- WebTrendChart 两个 SVG（云况占比 + AOD550）换成 UPlotChart；fieldset
+  图例、时间轴滑条、readings、空态保持不动。缺测断线 = 对齐后置 null
+  （spanGaps 关），断线/点数经 host `data-segments`/`data-points` 供用例断言
+  （canvas 无法以 DOM 结构计数）。
+- 验收：视觉基线（84ee361 SVG 留档 vs canvas 重生成）几乎逐像素一致，
+  双主题均过；51 条 UI 用例 + svelte-check + node tests 全绿。
+- **体积实测超预估**：index chunk gzip 433.1 KB → 457.6 KB（+23.9 KB），
+  超 ≤20 KB 预估约 4 KB。判断可接受（完整交互式图表库、占主 chunk ~5.5%），
+  不做 chunk 拆分；后续若引入第二处图表（ProfileChart），增量会进一步摊薄。
+- 已知边界：悬停数值提示（旧 SVG `<title>`）暂缺，uPlot legend 关闭；如需
+  可开 uPlot legend 或自绘 tooltip，作为后续迭代。
 
 ### 4.2 TanStack Virtual：区域排行列表虚拟化
 
@@ -177,6 +196,7 @@ engine 已是 `cdylib + staticlib`，接入成本主要在类型映射（区域/
 ## 8. 节奏建议
 
 1. 本分支合入 P0（已就绪，随 `feat/web-ui-ux-polish` 一起评审）。
-2. 下一个迭代窗口做 P1-1 uPlot 试点（一处图表）；P1-3 视觉快照已落地；P1-2 视大区域实测卡顿决定。
+2. P1-1 uPlot 与 P1-3 视觉快照已落地；下一步：ProfileChart 是否跟进 uPlot、
+   P1-2 视大区域实测卡顿决定。
 3. spike 类（P2-2）安排在无发布压力的窗口；P2-1 严格留给移动分支。
 4. 本文作为唯一登记处：任何新候选先补进 §2 总表再动手。
