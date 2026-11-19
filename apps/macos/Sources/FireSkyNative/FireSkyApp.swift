@@ -39,6 +39,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var scheduled = false
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.activate(ignoringOtherApps: true)
+        // Intel CI cold start: SwiftUI .onAppear can fail to fire on older
+        // macOS runner images; schedule here too (idempotent via `scheduled`).
+        scheduleSnapshot()
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ notification: Notification) { store?.shutdown() }
@@ -58,7 +61,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 store?.beginCheck()
                 try? await Task.sleep(for: .seconds(4))
             }
-            guard let base = NSApp.windows.first(where: { $0.isVisible }) else {
+            var base = NSApp.windows.first(where: { $0.isVisible })
+            if base == nil {
+                // Cold-start fallback: order the first window front and recheck.
+                NSApp.windows.first?.makeKeyAndOrderFront(nil)
+                try? await Task.sleep(for: .seconds(2))
+                base = NSApp.windows.first(where: { $0.isVisible })
+            }
+            guard let base else {
                 NSApp.terminate(nil)
                 return
             }

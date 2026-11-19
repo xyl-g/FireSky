@@ -123,15 +123,22 @@ if [ "${FIRESKY_APP_SMOKE:-0}" = "1" ]; then
     FIRESKY_WORKSPACE="$SMOKE_WORKSPACE" \
       "$APP/Contents/MacOS/FireSky" >"$SMOKE_DIR/app.stdout" 2>"$SMOKE_DIR/app.stderr" &
     APP_PID=$!
-    for _ in $(seq 1 45); do
+    for _ in $(seq 1 90); do
         if [ -s "$SNAPSHOT" ]; then break; fi
         if ! kill -0 "$APP_PID" 2>/dev/null; then break; fi
         sleep 1
     done
     if [ ! -s "$SNAPSHOT" ]; then
+        # Diagnostics before teardown: cold-start failures on Intel runners
+        # need the app's own output and a live thread sample to be actionable.
+        echo "--- app.stdout ---" >&2
+        cat "$SMOKE_DIR/app.stdout" >&2 || true
+        echo "--- app.stderr ---" >&2
+        cat "$SMOKE_DIR/app.stderr" >&2 || true
+        ps -o pid,stat,%cpu,etime -p "$APP_PID" >&2 || true
+        sample "$APP_PID" 1 100 >&2 || true
         kill "$APP_PID" 2>/dev/null || true
         wait "$APP_PID" 2>/dev/null || true
-        cat "$SMOKE_DIR/app.stderr" >&2 || true
         echo "macOS application cold-start smoke did not produce a snapshot" >&2
         exit 1
     fi
