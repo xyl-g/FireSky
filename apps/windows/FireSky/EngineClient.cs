@@ -285,7 +285,7 @@ public sealed class EngineClient : IDisposable
                 if (abiVersion() != AbiVersion)
                     throw new InvalidOperationException("Rust FFI ABI 版本不匹配。");
 
-                using var workspaceText = Utf8(workspace);
+                using var workspaceText = new Utf8(workspace);
                 var code = open(workspaceText.Pointer, out runtime, out var error);
                 var message = TakeAndFree(error);
                 if (code != FfiOk || runtime == IntPtr.Zero)
@@ -339,8 +339,8 @@ public sealed class EngineClient : IDisposable
                     EnsureRuntime();
                     if (stopping) throw new InvalidOperationException("Rust FFI 运行时正在关闭。");
                     request.Handle = GCHandle.Alloc(request);
-                    using var methodText = Utf8(method);
-                    using var paramsText = Utf8(payload);
+                    using var methodText = new Utf8(method);
+                    using var paramsText = new Utf8(payload);
                     var code = start(runtime, methodText.Pointer, paramsText.Pointer,
                         ProgressCallback, GCHandle.ToIntPtr(request.Handle), out var task, out var error);
                     var message = TakeAndFree(error);
@@ -548,7 +548,8 @@ public sealed class EngineClient : IDisposable
                 if (cancelRequested) Owner.RequestCancel(this);
             }
 
-            internal void StartJoin() => _ = Task.Run(() => Owner.JoinRequest(this));
+            // 字段 Task（原生任务句柄）遮蔽了 System.Threading.Tasks.Task。
+            internal void StartJoin() => _ = System.Threading.Tasks.Task.Run(() => Owner.JoinRequest(this));
 
             internal void ReleaseHandle()
             {

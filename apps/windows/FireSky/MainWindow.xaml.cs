@@ -156,7 +156,7 @@ public sealed partial class MainWindow : Window
     private void SetBusy(bool value)
     {
         busy = value;
-        Inputs.IsEnabled = !value;
+        SetPanelEnabled(Inputs, !value);
         Navigation.IsEnabled = !value;
         Navigation.IsPaneToggleButtonVisible = !value;
         PredictButton.IsEnabled = !value && online;
@@ -164,6 +164,17 @@ public sealed partial class MainWindow : Window
         BusyRing.IsActive = value;
         CancelButton.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
         UpdateTaskHistoryControls();
+    }
+
+    // WinUI 的 Panel（StackPanel 等）没有 IsEnabled；递归禁用子级输入控件，
+    // 标签类 TextBlock 与地图保持可见。
+    private static void SetPanelEnabled(Panel panel, bool enabled)
+    {
+        foreach (var child in panel.Children)
+        {
+            if (child is Control control) control.IsEnabled = enabled;
+            if (child is Panel nested) SetPanelEnabled(nested, enabled);
+        }
     }
 
     private void Fail(Exception error)
@@ -1543,6 +1554,7 @@ public sealed partial class MainWindow : Window
         internal required string TaskId { get; init; }
         internal required string Method { get; init; }
         internal required string Status { get; init; }
+        internal required string CreatedAtUtc { get; init; }
         internal required bool CancelRequested { get; init; }
         internal required long EventSeq { get; init; }
         internal required string RetryKind { get; init; }
@@ -1575,6 +1587,7 @@ public sealed partial class MainWindow : Window
             return new TaskHistoryItem
             {
                 TaskId = taskId, Method = method, Status = status,
+                CreatedAtUtc = createdAt,
                 CancelRequested = BoolValue(value, "cancel_requested") == true,
                 EventSeq = eventSeq, RetryKind = retryKind, RetryPayload = retryPayload,
                 ResultRef = value["result_ref"] as JsonObject,
