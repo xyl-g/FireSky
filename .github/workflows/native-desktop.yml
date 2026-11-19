@@ -114,7 +114,9 @@ jobs:
         with:
           name: FireSky-macos-${{ matrix.arch }}
           if-no-files-found: error
-          path: dist/native-macos/*.app
+          path: |
+            dist/native-macos/*.app
+            dist/native-macos/*.dmg
 
   windows-native:
     # Windows follows the macOS ABI baseline. This builds the actual WinUI

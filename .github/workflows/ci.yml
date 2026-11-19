@@ -35,7 +35,18 @@ jobs:
         with:
           workspaces: |
             engine
+      # GRIB 解码单测（cams_cache / desktop_context 地形 / ecmwf 日界线 /
+      # desktop_preflight）需要真实的 ecCodes 库与定义表；ubuntu runner 默认
+      # 不带，缺库时这些测试会 panic。definitions 在独立的 libeccodes-data 包。
+      - name: Install ecCodes (library + definitions for decode unit tests)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libeccodes-dev libeccodes-data
       - name: Build and test native runtime
+        env:
+          FIRESKY_ECCODES_LIBRARY: libeccodes.so.0
+          ECCODES_DEFINITION_PATH: /usr/share/eccodes/definitions
+          ECCODES_SAMPLES_PATH: /usr/share/eccodes/samples
         run: cargo test --manifest-path engine/Cargo.toml --locked
 
   cargo-deny:
@@ -118,6 +129,7 @@ jobs:
           name: FireSky-macos-native
           path: |
             dist/native-macos/*.app
+            dist/native-macos/*.dmg
 
   docker:
     name: docker build（三阶段镜像）

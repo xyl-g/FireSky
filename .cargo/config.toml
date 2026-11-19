@@ -4,25 +4,14 @@
 # iOS 链接需 Xcode 工具链（MM0 坑 11；真机 SDK 的 ___chkstk_darwin 需显式补
 # libclang_rt.ios.a，坑 6）。仅影响移动目标；host 构建不受影响。
 
-# MM0 坑 8：本机 /opt/homebrew/bin 在 PATH 中先于 ~/.cargo/bin，默认 `cargo`
-# 会解析到无 cross std 的 Homebrew rustc（E0463）。此处强制 rustup rustc，
-# 使任意 cwd 在仓库内的 cargo 调用（含门禁脚本）不再依赖 PATH 顺序。
-# rustdoc 必须显式对齐：cargo test 的 Doc-tests 阶段单独解析 rustdoc，
-# 缺省仍命中 Homebrew rustdoc，读取 rustup rustc 编译的 rlib 时报 E0514。
-[build]
-rustc = "/Users/xiaoyang/.cargo/bin/rustc"
-rustdoc = "/Users/xiaoyang/.cargo/bin/rustdoc"
-
-# MM0 坑 4/8 配套：移动目标的 C 依赖（ring/zstd-sys/bzip2-sys）工具链注入。
-# 变量名均为 target 专属（cc crate 仅在对应 target 下读取）或 host 不读取
-# （ANDROID_NDK_ROOT），桌面 host 构建不受影响；[env] 默认不覆盖已存在的
-# 进程环境变量，外部显式注入仍优先生效。
+# 可移植性约定：机器本地的 rustc/rustdoc 钉扎（MM0 坑 8）与 DEVELOPER_DIR /
+# ANDROID_NDK_ROOT（MM0 坑 11）放在全局 ~/.cargo/config.toml，不入库。仓库
+# 配置不得在 [build] 或全局 [env] 里写 /Users/xiaoyang 等绝对路径，否则 CI
+# runner（ubuntu/macos/windows）会因 rustc 路径不存在而直接失败。
+#
+# 下面只是移动目标专属的 C 工具链注入（cc-rs 仅在对应 target 下读取这些
+# 变量），host 构建不受影响；[env] 默认不覆盖已存在的进程环境变量。
 [env]
-# MM0 坑 11：本机 xcode-select 仍指 CommandLineTools，cc-rs 对 ios 目标会执行
-# `xcrun --show-sdk-path --sdk iphoneos`（无 DEVELOPER_DIR 时失败）。全局设置
-# 仅影响 xcrun/xcodebuild 的开发者目录解析，host C 构建不受破坏。
-DEVELOPER_DIR = "/Applications/Xcode.app/Contents/Developer"
-ANDROID_NDK_ROOT = "/opt/homebrew/share/android-ndk"
 CC_aarch64_linux_android = "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/aarch64-linux-android26-clang"
 AR_aarch64_linux_android = "/opt/homebrew/share/android-ndk/toolchains/llvm/prebuilt/darwin-x86_64/bin/llvm-ar"
 CC_aarch64_apple_ios = "/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"

@@ -127,6 +127,18 @@ fi
 sign_app "$APP"
 codesign --verify --deep --strict "$APP"
 
+# Package a distributable DMG around the signed app. The release simulation
+# previously did this by hand; folding it into the bundle script means both
+# local builds and CI produce the DMG artifact. Set FIRESKY_BUILD_DMG=0 to skip.
+if [ "${FIRESKY_BUILD_DMG:-1}" = "1" ]; then
+    VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
+    DMG="$OUT/FireSky-$VERSION-macos-$MACOS_ARCH.dmg"
+    rm -f "$DMG"
+    hdiutil create -volname "FireSky $VERSION" -srcfolder "$APP" -ov -format UDZO "$DMG"
+    hdiutil verify "$DMG"
+    printf '%s\n' "$DMG"
+fi
+
 # Repeated builds leave superseded crate artifacts (same crate name, older
 # metadata hash) and incremental sessions behind. Move that residue to the
 # Trash after a successful bundle so the shared target dir stays bounded.
