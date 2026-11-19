@@ -184,6 +184,10 @@
                                 </StackPanel>
                                 <StackPanel x:Name="RegionFields" Spacing="12" Visibility="Collapsed">
                                     <TextBlock Text="0.25° × 0.25°" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                                    <ComboBox x:Name="RegionalModel" Header="模式" SelectedIndex="0" HorizontalAlignment="Stretch">
+                                        <ComboBoxItem Content="GFS" Tag="gfs"/>
+                                        <ComboBoxItem Content="EC" Tag="ec"/>
+                                    </ComboBox>
                                     <NumberBox x:Name="West" Header="西界" Value="119.5" Minimum="-180" Maximum="180" SmallChange="0.25" ValueChanged="OnBoundsChanged"/>
                                     <NumberBox x:Name="East" Header="东界" Value="120.5" Minimum="-180" Maximum="180" SmallChange="0.25" ValueChanged="OnBoundsChanged"/>
                                     <NumberBox x:Name="South" Header="南界" Value="29.75" Minimum="-90" Maximum="90" SmallChange="0.25" ValueChanged="OnBoundsChanged"/>

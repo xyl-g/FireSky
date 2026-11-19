@@ -164,7 +164,7 @@ int main(int argc, char** argv) {
                 "{\"name\":\"Hangzhou region\",\"lat\":30.2741,\"lon\":120.1551,"
                 "\"elevation_m\":8,\"timezone_name\":\"Asia/Shanghai\","
                 "\"target_date\":\"2026-11-12\",\"phenomenon\":\"dusk\","
-                "\"model_source\":\"both\",\"forecast_mode\":\"model\","
+                "\"model_source\":\"ec\",\"forecast_mode\":\"model\","
                 "\"satellite_source\":\"off\",\"regions\":[\"custom\"],"
                 "\"custom_bounds\":{\"west\":120.0,\"east\":120.5,"
                 "\"south\":30.0,\"north\":30.5},"
@@ -188,6 +188,24 @@ int main(int argc, char** argv) {
                 "\"forecast_mode\":\"nowcast\",\"model_source\":\"satellite\","
                 "\"satellite_source\":\"auto\",\"radius_km\":250,"
                 "\"reference_time_utc\":\"2026-11-12T08:00:00Z\"}")) {
+            return EXIT_FAILURE;
+        }
+
+        // 区域预测一次只跑一个模式（macOS Store.regionalModel 基准）；
+        // 双模式请求必须 fail closed，而不是静默串行跑两个模式。
+        if (!require_error(
+                engine, "regional dual model", "check",
+                "{\"kind\":\"regional\",\"payload\":"
+                "{\"name\":\"Dual model region\",\"lat\":30.0,\"lon\":120.0,"
+                "\"elevation_m\":0,\"timezone_name\":\"Asia/Shanghai\","
+                "\"target_date\":\"2026-11-12\",\"phenomenon\":\"dusk\","
+                "\"model_source\":\"both\",\"forecast_mode\":\"model\","
+                "\"satellite_source\":\"off\",\"regions\":[\"custom\"],"
+                "\"custom_bounds\":{\"west\":120.0,\"east\":120.5,"
+                "\"south\":30.0,\"north\":30.5},"
+                "\"custom_timezone_name\":\"Asia/Shanghai\","
+                "\"spacing_deg\":0.25,\"ecmwf_source\":\"ecmwf\"}}",
+                FIRESKY_FFI_RUNTIME_ERROR, "one model per request")) {
             return EXIT_FAILURE;
         }
 

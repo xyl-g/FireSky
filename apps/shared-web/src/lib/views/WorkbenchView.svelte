@@ -25,6 +25,7 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
   let calendarClock = $state(Date.now());
   let targetDate = $state(localDate());
   let phenomenon = $state("dusk");
+  let regionalModel = $state("gfs");
   let editCoordinates = $state(false);
   let locationBusy = $state(false);
   let locating = $state(false);
@@ -51,7 +52,7 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
     name: spot.name, lat: spot.lat, lon: spot.lon, elevation_m: spot.elevation_m, timezone_name: spot.timezone_name,
     target_date: targetDate, phenomenon, model_source: "both", workers: 1, forecast_mode: "model",
     satellite_source: "off", ecmwf_source: ecSource,
-    ...(kind === "regional" ? { regions: [...selectedRegions].sort().concat(customRegion ? ["custom"] : []), custom_bounds: { west, east, south, north }, custom_timezone_name: spot.timezone_name, spacing_deg: .25 } : {}),
+    ...(kind === "regional" ? { model_source: regionalModel, regions: [...selectedRegions].sort().concat(customRegion ? ["custom"] : []), custom_bounds: { west, east, south, north }, custom_timezone_name: spot.timezone_name, spacing_deg: .25 } : {}),
   });
   const published = $derived(session.published[kind] ?? null);
   const cycleAgeConfirmationRequired = $derived(requiresCycleAgeConfirmation(session.report));
@@ -213,6 +214,7 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
     spot = restored.spot;
     if (nextKind === "regional") {
       selectedRegions = restored.regions; customRegion = restored.customRegion;
+      regionalModel = restored.regionalModel;
       if (restored.bounds) {
         ({ west, east, south, north } = restored.bounds);
         showBounds = true;
@@ -283,6 +285,9 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
       <button class="icon-button" title="编辑区域坐标" aria-label="编辑区域坐标" aria-expanded={showBounds} onclick={() => { showBounds = !showBounds; }}><SlidersHorizontal size={14} /></button>
       <label class="regional-date"><CalendarDays size={14} /><input aria-label="区域目标日期" type="date" bind:value={targetDate} onchange={() => { dateTab = "自定义"; }} required /></label>
       {@render eventControls()}
+      <div class="segments" role="group" aria-label="区域模式">
+        {#each [["gfs", "GFS"], ["ec", "EC"]] as [value, title]}<button class:active={regionalModel === value} aria-pressed={regionalModel === value} onclick={() => { regionalModel = value; }}>{title}</button>{/each}
+      </div>
       <span class="spacing-label">0.25° × 0.25°</span>
       <button class="primary" disabled={!online || busy} onclick={beginCheck}>开始预测</button>
     </fieldset>

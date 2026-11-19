@@ -31,9 +31,28 @@ export function bundleVcpkgEccodes({ installed, ports, triplet, output }) {
   const prefix = join(installed, triplet);
   const packages = installedPackages(readFileSync(join(installed, "vcpkg/status"), "utf8"), triplet);
   if (!packages.some((item) => item.name === "eccodes")) throw new Error("ecCodes is not installed for the requested vcpkg triplet");
+  // classic 模式 vcpkg 会把 host 构建依赖（ecbuild、python3、vcpkg-cmake*）
+  // 装进同一棵 installed 树；它们不属于运行时，ecbuild 的 license 甚至是 null。
+  // 只允许 eccodes 的非 host 依赖闭包进入原生包（WinUI 契约禁止 Python 运行时）。
+  const installedNames = new Set(packages.map((item) => item.name));
+  const runtime = new Set();
+  const queue = ["eccodes"];
+  while (queue.length) {
+    const name = queue.shift();
+    if (runtime.has(name) || !installedNames.has(name)) continue;
+    runtime.add(name);
+    const manifest = JSON.parse(readFileSync(join(ports, name, "vcpkg.json"), "utf8"));
+    const deps = [...(manifest.dependencies ?? []),
+      ...Object.values(manifest.features ?? {}).flatMap((feature) => feature.dependencies ?? [])];
+    for (const dep of deps) {
+      if (typeof dep === "string") queue.push(dep);
+      else if (dep && typeof dep.name === "string" && dep.host !== true) queue.push(dep.name);
+    }
+  }
   const lists = readdirSync(join(installed, "vcpkg/info"));
   const metadata = [];
   for (const item of packages) {
+    if (!runtime.has(item.name)) continue;
     const manifest = JSON.parse(readFileSync(join(ports, item.name, "vcpkg.json"), "utf8"));
     if (typeof manifest.license !== "string" || !manifest.license.trim()) throw new Error(`vcpkg license declaration missing: ${item.name}`);
     const sourceVersion = manifest.version ?? manifest["version-semver"] ?? manifest["version-date"] ?? manifest["version-string"];

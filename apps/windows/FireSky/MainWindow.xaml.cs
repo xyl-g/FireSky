@@ -523,6 +523,8 @@ public sealed partial class MainWindow : Window
         }
         if (page == "regional")
         {
+            // 区域单模型（macOS Store.regionalModel 基准）：默认 GFS，可显式选 EC。
+            payload["model_source"] = (RegionalModel.SelectedItem as ComboBoxItem)?.Tag?.ToString() ?? "gfs";
             payload["regions"] = new JsonArray("custom");
             payload["custom_bounds"] = new JsonObject
             {

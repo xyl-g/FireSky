@@ -49,3 +49,9 @@ test("regional restoration keeps requested regions and validates exact custom bo
   assert.equal(unconfirmed.spot.elevation_m, -1);
   assert.equal(unconfirmed.spot.metadataReady, false);
 });
+test("regional restoration keeps the single-model selection and defaults legacy both to gfs", () => {
+  const input = { ...payload, regions: ["east-asia"], model_source: "ec" };
+  assert.equal(restoredRequest("regional", "regional", input).regionalModel, "ec");
+  assert.equal(restoredRequest("regional", "regional", { ...input, model_source: "both" }).regionalModel, "gfs");
+  assert.equal(restoredRequest("regional", "regional", { ...payload, regions: ["east-asia"] }).regionalModel, "gfs");
+});

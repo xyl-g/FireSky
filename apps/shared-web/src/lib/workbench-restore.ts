@@ -5,6 +5,7 @@ export interface RestoredRequest {
   spot: ObservationSpot;
   targetDate: string;
   phenomenon: "dawn" | "dusk";
+  regionalModel: "gfs" | "ec";
   regions: string[];
   customRegion: boolean;
   bounds: { west: number; east: number; south: number; north: number } | null;
@@ -25,7 +26,10 @@ export function parseRestoredRequest(nextKind: ForecastKind, payload: Record<str
     || typeof payload.timezone_name !== "string") return null;
   try { new Intl.DateTimeFormat("en", { timeZone: payload.timezone_name }); } catch { return null; }
   let regions: string[] = [], bounds: RestoredRequest["bounds"] = null;
+  let regionalModel: RestoredRequest["regionalModel"] = "gfs";
   if (nextKind === "regional") {
+    // 区域单模型（macOS 基准）；旧快照的 "both" 回落到默认 GFS。
+    if (payload.model_source === "ec") regionalModel = "ec";
     if (!Array.isArray(payload.regions) || !payload.regions.length || payload.regions.some((value) => typeof value !== "string" || !value)) return null;
     regions = [...new Set(payload.regions as string[])];
     if (regions.includes("custom")) {
@@ -43,6 +47,7 @@ export function parseRestoredRequest(nextKind: ForecastKind, payload: Record<str
   return {
     spot: { name: payload.name, lat: payload.lat, lon: payload.lon, elevation_m: payload.elevation_m, timezone_name: payload.timezone_name, metadataReady: payload.elevation_m !== -1 },
     targetDate: payload.target_date, phenomenon: payload.phenomenon as "dawn" | "dusk",
+    regionalModel,
     regions: regions.filter((code) => code !== "custom"), customRegion: regions.includes("custom"), bounds,
   };
 }

@@ -745,6 +745,7 @@ struct GtkApp {
     GtkWidget* phenomenon_entry = nullptr;
     GtkWidget* mode_dropdown = nullptr;
     GtkWidget* regional_grid = nullptr;
+    GtkWidget* regional_model_dropdown = nullptr;
     GtkWidget* connect_button = nullptr;
     GtkWidget* forecast_button = nullptr;
     GtkWidget* cancel_button = nullptr;
@@ -953,6 +954,16 @@ void select_mode(GtkApp* app, const std::string& kind) {
     }
 }
 
+// 区域单模型选择（macOS Store.regionalModel 基准）：默认 GFS，可显式选 EC。
+std::string selected_regional_model(GtkApp* app) {
+    gpointer selected =
+        gtk_drop_down_get_selected_item(GTK_DROP_DOWN(app->regional_model_dropdown));
+    if (selected == nullptr) {
+        return "gfs";
+    }
+    return gtk_string_object_get_string(GTK_STRING_OBJECT(selected));
+}
+
 std::string selected_result_model(GtkApp* app) {
     gpointer selected =
         gtk_drop_down_get_selected_item(GTK_DROP_DOWN(app->result_model_dropdown));
@@ -1016,7 +1027,9 @@ std::optional<std::string> build_payload(GtkApp* app, const std::string& mode,
             << "\",\"target_date\":\"" << json_escape(date)
             << "\",\"phenomenon\":\"" << json_escape(phenomenon)
             << "\",\"model_source\":\""
-            << (mode == "nowcast" ? "satellite" : "both")
+            << (mode == "nowcast" ? "satellite"
+                                  : (mode == "regional" ? selected_regional_model(app)
+                                                        : "both"))
             << "\",\"workers\":1"
             << ",\"forecast_mode\":\""
             << (mode == "nowcast" ? "nowcast" : "model")
@@ -2603,6 +2616,13 @@ void history_restore_parameters(GtkApp* app, std::size_t index) {
             set_entry_number(app->north_entry, *value);
         }
     }
+    if (app->regional_model_dropdown != nullptr) {
+        if (const auto model = json_string_field(payload, "model_source");
+            model && (*model == "gfs" || *model == "ec")) {
+            gtk_drop_down_set_selected(GTK_DROP_DOWN(app->regional_model_dropdown),
+                                       *model == "gfs" ? 0U : 1U);
+        }
+    }
     select_mode(app, item.retry_kind);
     preflight_open_dialog(app);
 }
@@ -2962,6 +2982,13 @@ void on_activate(GtkApplication* application, gpointer) {
     attach_row(app->regional_grid, 1, "East", app->east_entry);
     attach_row(app->regional_grid, 2, "South", app->south_entry);
     attach_row(app->regional_grid, 3, "North", app->north_entry);
+    const char* regional_models[] = {"gfs", "ec", nullptr};
+    GtkStringList* regional_model_list = gtk_string_list_new(regional_models);
+    app->regional_model_dropdown =
+        gtk_drop_down_new(G_LIST_MODEL(regional_model_list), nullptr);
+    g_object_unref(regional_model_list);
+    gtk_drop_down_set_selected(GTK_DROP_DOWN(app->regional_model_dropdown), 0);
+    attach_row(app->regional_grid, 4, "Model", app->regional_model_dropdown);
     gtk_grid_attach(GTK_GRID(grid), app->regional_grid, 0, 9, 2, 1);
     gtk_widget_set_visible(app->regional_grid, FALSE);
 
