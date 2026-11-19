@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		06F2CF4383E10BFCEE76E992 /* RealEngineChainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11D285FCB6AEC372191450BD /* RealEngineChainTests.swift */; };
 		0FEF9C69BB160C56A5839D53 /* MapZoom.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4058C36876785CBDCC9A297 /* MapZoom.swift */; };
 		146251A5F7BE8C96EFC89EEE /* WorkbenchKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1CFF6D650BEE78B45DDC04D /* WorkbenchKit.swift */; };
 		1F6B4BDE8156F49B412B9F64 /* EngineTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6847846E81761D5EF31E3F31 /* EngineTransport.swift */; };
@@ -50,6 +51,7 @@
 /* Begin PBXFileReference section */
 		034A534DBF30F40E15147FF3 /* MockTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockTransport.swift; sourceTree = "<group>"; };
 		060010B0B36632D961BDF447 /* MapViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapViews.swift; sourceTree = "<group>"; };
+		11D285FCB6AEC372191450BD /* RealEngineChainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealEngineChainTests.swift; sourceTree = "<group>"; };
 		223402F56DD1B680AD7CAF38 /* fsmobile.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = fsmobile.h; sourceTree = "<group>"; };
 		25AB1BD1383B8739239E4CCF /* ForecastComparison.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForecastComparison.swift; sourceTree = "<group>"; };
 		4BFAC022A1535AAFBC1A38BE /* module.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = module.modulemap; sourceTree = "<group>"; };
@@ -152,6 +154,7 @@
 				C2775939457FE147D075B662 /* FSMobileTransportTests.swift */,
 				7F90A3FF247DFD5A1D68F2CC /* MockTransportTests.swift */,
 				8F0ED6EC0BDA8AE6F7AFBEA6 /* ObservationDateTests.swift */,
+				11D285FCB6AEC372191450BD /* RealEngineChainTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -254,7 +257,7 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = YES;
-				LastUpgradeCheck = 1430;
+				LastUpgradeCheck = 1600;
 				TargetAttributes = {
 					24C44D58AC623699AD315F48 = {
 						ProvisioningStyle = Automatic;
@@ -305,6 +308,7 @@
 				CE1A6299A166D78FE031F039 /* FSMobileTransportTests.swift in Sources */,
 				EA9341D475843067510602CF /* MockTransportTests.swift in Sources */,
 				C607372C3E64F18478A4D384 /* ObservationDateTests.swift in Sources */,
+				06F2CF4383E10BFCEE76E992 /* RealEngineChainTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -470,8 +474,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios/release/libengine_mobile.a";
-				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = "$(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios-sim/release/libengine_mobile.a";
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios/release/libengine_mobile.a -lc++";
+				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = "$(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios-sim/release/libengine_mobile.a -lc++";
 				PRODUCT_BUNDLE_IDENTIFIER = cn.firesky.mobile;
 				SDKROOT = iphoneos;
 				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Native";
@@ -507,8 +511,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios/release/libengine_mobile.a";
-				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = "$(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios-sim/release/libengine_mobile.a";
+				"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios/release/libengine_mobile.a -lc++";
+				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = "$(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios-sim/release/libengine_mobile.a -lc++";
 				PRODUCT_BUNDLE_IDENTIFIER = cn.firesky.mobile;
 				SDKROOT = iphoneos;
 				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Native";

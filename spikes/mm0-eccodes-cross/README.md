@@ -20,6 +20,7 @@
 2. **ecbuild OS 白名单**：Android 报 "untested for this operating system" → `-DDISABLE_OS_CHECK=ON`。
 3. **tools 子目录**：`ENABLE_TOOLS=OFF` 无效，守卫变量是 ecbuild 特性的 `HAVE_BUILD_TOOLS`/`ENABLE_BUILD_TOOLS`；且 iOS 下 tools 变 MACOSX_BUNDLE 导致 install() 报错 → `-DENABLE_BUILD_TOOLS=OFF -DCMAKE_MACOSX_BUNDLE=OFF`。
 4. **AEC 依赖**：无 libaec 时配置直接拒绝 → `-DENABLE_AEC=OFF`。⚠️ 真实数据若用 AEC/PNG/JPEG2000 压缩的 GRIB，需额外交叉编译 libaec/libpng/openjpeg——**移动端构建的特性开关必须与桌面 brew 版做一次对齐审计**。
+   **P-3 落地（2026-11-19）**：AEC 确属必需（EC GRIB2 CCSDS；MN1 模拟器 forecast 报 ecCodes -67 "Functionality not enabled"）→ `scripts/build_libaec.sh` 交叉 libaec 1.1.8（iOS device/sim + Android 静态，装到 build-*/aec 并拷 libaec.a 至 build-*/lib），ecCodes 脚本改 `ENABLE_AEC=ON` + `ENABLE_USE_SHARED_LIB_AEC=OFF` + 显式 `libaec_DIR`（交叉编译 find_package 默认只搜 sysroot，CMAKE_PREFIX_PATH 不够）；engine/engine-mobile build.rs 补 `static=aec`。PNG/JPEG2000：桌面 brew 版链 openjpeg/libpng，当前数据路径未用（MN1 全链路解码证据），缓办。
 5. **Android：C++ 段链接**：libeccodes.a 含 C++（ExceptionHandler/std::exception）→ NDK clang 驱动默认不带 libc++，需 `-lc++_static -lc++abi`。
 6. **iOS device：`___chkstk_darwin` 未定义**：新 SDK clang 默认栈探测插桩，rustc `-nodefaultlibs` 关闭了 compiler-rt 自动链接 → 显式补链 `libclang_rt.ios.a`（sim 侧无此问题）。
 7. **`c_char` 差异**：`c_char` 在 aarch64-apple-darwin/ios = `i8`，aarch64-linux-android = `u8`——extern 声明一律用 `core::ffi::c_char`，禁止裸 `i8`。
@@ -30,6 +31,7 @@
 12. **host 注入测试假阳性**：烘焙路径有效时，环境变量对不对都能通过——definitions 注入必须在烘焙路径失效的环境（模拟器/真机）里验证才算数。
 13. **`simctl spawn` 不透传宿主环境**：需 `SIMCTL_CHILD_<VAR>` 前缀注入。
 14. **部署目标错位（仅警告）**：rust aarch64-apple-ios 默认 min iOS 10.0 vs SDK 27.2——MM1 由 Tauri 项目统一 deployment target 后消除。
+15. **ECC-1088 兜底路径追加 vs 严格指纹**：2.50.0 的 `grib_context.cc`（ECC-1088 段）在环境变量路径之后**无条件追加编译期烘焙的 definitions/samples 目录**作为兜底搜索段（无 CMake 开关）。交叉库烘焙的是构建机前缀（本尖峰 `/usr/local/...`），在 ARM host（brew 前缀 `/opt/homebrew`）或真机上该段不存在；`codes_definition_path()` 返回的是「env 段 + 烘焙段」拼接串。引擎 `grib.rs::cache_identity` 逐段 canonicalize 哈希时会在缺失段上报 "cannot fingerprint decoder resource"。**解法**：指纹跳过不存在的搜索段（缺失段对解码贡献为零；桌面各段均存在，哈希不变、缓存不失效）。MN1 模拟器全链路 forecast 首跑实测复现并修复。
 
 ## 复现命令
 

@@ -2,8 +2,9 @@
  * FireSky engine-mobile C ABI（固定契约）。
  *
  * 取代此前 apps/ 骨架占位用的 handle 型 fsmobile_* 草案（2026-11-12 裁定）：
- * 服务为单实例（一个 App 一个引擎，桌面 desktop_rpc.serve 同语义），不透传句柄。
- * 桌面 JSON-lines 服务进程内化：帧协议与桌面 stdio 服务逐帧一致
+ * 服务为单实例（一个 App 一个引擎），不透传句柄。
+ * 桌面 JSON-lines 服务进程内化：服务即桌面 desktop 子命令本身
+ * （desktop_runtime::serve，内存 duplex 承载），帧协议与桌面 stdio 服务逐帧一致
  * （request / result / error / progress / cancel），帧为 UTF-8 单行 JSON、
  * 上限 1 MiB。stdio 契约中的换行分隔符在进程内省略：回调收到 NUL 结尾的
  * 单行 JSON（不含换行），fsm_send 接受不含换行的单行 JSON（容忍一个结尾换行）。
@@ -34,7 +35,9 @@ typedef void (*fsm_frame_cb)(const char *frame, void *userdata);
  * definitions_path  UTF-8 路径，ecCodes definitions 资源目录；NULL/空则不注入。
  *                   非空时先注入单数 ECCODES_DEFINITION_PATH 环境变量再初始化
  *                   引擎（MM0 坑 10）。
- * cache_root        UTF-8 路径，gfs/ecmwf/cams 缓存根；NULL/空则用引擎默认。
+ * cache_root        UTF-8 路径，gfs/ecmwf/cams 缓存根；非空时注入
+ *                   FIRESKY_{GFS,ECMWF,CAMS}_CACHE_DIR；NULL/空则用引擎默认
+ *                   （<workspace>/.cache/{gfs,ecmwf,cams}）。
  * callback          帧回调，不得为 NULL。
  * userdata          透传给回调。
  *

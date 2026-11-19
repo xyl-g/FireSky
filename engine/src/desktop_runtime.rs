@@ -1906,7 +1906,9 @@ pub fn serve(input: impl BufRead, output: impl Write + Send, workspace: &Path) -
     )
 }
 
-fn serve_runtime(
+/// Serve an already-constructed runtime; in-process hosts (engine-mobile)
+/// validate `Runtime::new` before handing the service to a background thread.
+pub fn serve_runtime(
     mut input: impl BufRead,
     output: impl Write + Send,
     runtime: Runtime,

@@ -2,6 +2,7 @@
 
 use crate::native::gfs::{self, GfsGrid};
 use chrono::{DateTime, Datelike, Timelike, Utc};
+#[cfg(not(mobile_decoder))]
 use libloading::Library;
 use serde::Serialize;
 use std::ffi::{CStr, CString};
@@ -19,6 +20,43 @@ type GetDoubles =
     unsafe extern "C" fn(*const c_void, *const c_char, *mut c_double, *mut usize) -> c_int;
 type ErrorMessage = unsafe extern "C" fn(c_int) -> *const c_char;
 type GetMessage = unsafe extern "C" fn(*const c_void, *mut *const c_void, *mut usize) -> c_int;
+
+// MN1 static diversion (MM0 spike): iOS/Android link libeccodes.a into the
+// app binary / cdylib via engine/build.rs + engine-mobile/build.rs, so the C
+// API is bound directly instead of through libloading. Signatures mirror the
+// desktop fn-pointer types above; c_char stays platform-correct (MM0 pitfall 7).
+#[cfg(mobile_decoder)]
+extern "C" {
+    fn codes_grib_handle_new_from_file(
+        context: *mut c_void,
+        file: *mut libc::FILE,
+        error: *mut c_int,
+    ) -> *mut c_void;
+    fn codes_handle_delete(handle: *mut c_void) -> c_int;
+    fn codes_get_long(handle: *const c_void, key: *const c_char, value: *mut c_long) -> c_int;
+    fn codes_get_size(handle: *const c_void, key: *const c_char, size: *mut usize) -> c_int;
+    fn codes_get_length(handle: *const c_void, key: *const c_char, length: *mut usize) -> c_int;
+    fn codes_get_string(
+        handle: *const c_void,
+        key: *const c_char,
+        buffer: *mut c_char,
+        length: *mut usize,
+    ) -> c_int;
+    fn codes_get_double_array(
+        handle: *const c_void,
+        key: *const c_char,
+        values: *mut c_double,
+        length: *mut usize,
+    ) -> c_int;
+    fn codes_get_error_message(error: c_int) -> *const c_char;
+    fn codes_get_message(
+        handle: *const c_void,
+        message: *mut *const c_void,
+        length: *mut usize,
+    ) -> c_int;
+    fn codes_definition_path(context: *const c_void) -> *const c_char;
+    fn codes_samples_path(context: *const c_void) -> *const c_char;
+}
 
 /// Cumulative decoded-value budget for a full (non-subset) GFS frame. Kept
 /// at the historical bound: callers that need whole wide domains use the
@@ -123,6 +161,7 @@ pub struct EcCodes {
     error_message: ErrorMessage,
     get_message: GetMessage,
     // Must outlive all function pointers and message handles.
+    #[cfg(not(mobile_decoder))]
     _library: Library,
 }
 
@@ -138,6 +177,7 @@ impl EcCodes {
         hash.update(serde_json::to_vec(&identity).map_err(|e| e.to_string())?);
         let mut modules = std::collections::BTreeMap::new();
         modules.insert(library_path.clone(), identity);
+        #[cfg(not(mobile_decoder))]
         type ResourcePath = unsafe extern "C" fn(*const c_void) -> *const c_char;
         let mut total = 0u64;
         let mut seen = std::collections::BTreeSet::new();
@@ -195,9 +235,20 @@ impl EcCodes {
             b"codes_definition_path\0".as_slice(),
             b"codes_samples_path\0".as_slice(),
         ] {
-            let function =
-                unsafe { self._library.get::<ResourcePath>(symbol) }.map_err(|e| e.to_string())?;
-            let pointer = unsafe { function(ptr::null()) };
+            #[cfg(not(mobile_decoder))]
+            let pointer = {
+                let function =
+                    unsafe { self._library.get::<ResourcePath>(symbol) }.map_err(|e| e.to_string())?;
+                unsafe { function(ptr::null()) }
+            };
+            #[cfg(mobile_decoder)]
+            let pointer = unsafe {
+                if symbol == b"codes_definition_path\0" {
+                    codes_definition_path(ptr::null())
+                } else {
+                    codes_samples_path(ptr::null())
+                }
+            };
             if pointer.is_null() {
                 return Err("missing decoder resource path".into());
             }
@@ -207,6 +258,13 @@ impl EcCodes {
             hash.update(symbol);
             for path in std::env::split_paths(paths) {
                 if matches!(path.to_str(), Some("/MEMFS/definitions" | "/MEMFS/samples")) {
+                    #[cfg(mobile_decoder)]
+                    return Err(
+                        "mobile decoder requires file-based definitions (ECCODES_DEFINITION_PATH); /MEMFS is unsupported"
+                            .into(),
+                    );
+                    #[cfg(not(mobile_decoder))]
+                    {
                     type MemfsExists = unsafe extern "C" fn(*const c_char) -> c_int;
                     // ecCodes generates all embedded resources into eccodes_memfs.
                     // Fingerprint that actual module, not a version or virtual name.
@@ -253,6 +311,17 @@ impl EcCodes {
                     if !path.exists() {
                         continue;
                     }
+                    }
+                }
+                // ecCodes (ECC-1088) appends the compile-time default
+                // definitions/samples directory to the env search path as a
+                // fallback entry. Cross-built mobile decoders carry a
+                // build-host prefix that need not exist at runtime; a missing
+                // search entry contributes no resources to decoding, so it
+                // contributes nothing to the fingerprint. Existing entries
+                // remain strictly hashed (desktop identities are unchanged).
+                if !path.exists() {
+                    continue;
                 }
                 tree(
                     &path.canonicalize().map_err(|e| {
@@ -324,6 +393,24 @@ impl EcCodes {
     }
 
     pub fn load() -> Result<Self, String> {
+        #[cfg(mobile_decoder)]
+        {
+            // Static embed: the symbols live in the app binary / cdylib itself,
+            // so there is no library to load or keep alive.
+            return Ok(Self {
+                new_handle: codes_grib_handle_new_from_file,
+                delete_handle: codes_handle_delete,
+                get_long: codes_get_long,
+                get_size: codes_get_size,
+                get_length: codes_get_length,
+                get_string: codes_get_string,
+                get_doubles: codes_get_double_array,
+                error_message: codes_get_error_message,
+                get_message: codes_get_message,
+            });
+        }
+        #[cfg(not(mobile_decoder))]
+        {
         let candidates = if let Some(path) = std::env::var_os("FIRESKY_ECCODES_LIBRARY") {
             vec![path]
         } else {
@@ -352,8 +439,10 @@ impl EcCodes {
             "ecCodes unavailable; set FIRESKY_ECCODES_LIBRARY to its shared library. {}",
             errors.join("; ")
         ))
+        }
     }
 
+    #[cfg(not(mobile_decoder))]
     unsafe fn from_library(library: Library) -> Result<Self, String> {
         unsafe fn symbol<T: Copy>(library: &Library, name: &[u8]) -> Result<T, String> {
             library

@@ -4,7 +4,7 @@
 //! Two levels: the C ABI singleton (fsmobile.h contract) and the plain Rust
 //! service over the in-memory duplex pipe.
 
-use engine_mobile::{channel, start, EngineArmBackend, FrameSink, MobileConfig};
+use engine_mobile::{start, FrameSink};
 use serde_json::Value;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
@@ -101,23 +101,16 @@ fn fsm_start_send_hello_yields_protocol_one() {
 }
 
 #[test]
-fn service_hello_over_in_memory_duplex_returns_protocol_one() {
-    let (writer, _reader) = channel();
+fn desktop_service_over_in_memory_duplex_returns_protocol_one() {
+    let workspace = std::env::temp_dir().join("fsmobile-smoke-duplex");
+    std::fs::create_dir_all(&workspace).unwrap();
     let (sender, receiver) = mpsc::channel::<String>();
     let sink: FrameSink = Arc::new(move |frame: &str| {
         sender.send(frame.to_string()).expect("smoke receiver alive");
     });
-    let mut started = start(
-        MobileConfig {
-            workspace_root: std::env::temp_dir().join("fsmobile-smoke-duplex"),
-            ..Default::default()
-        },
-        Arc::new(EngineArmBackend::new(MobileConfig::default())),
-        sink,
-    );
+    let mut started = start(&workspace, sink).expect("desktop runtime must start");
     started
-        .writer
-        .push(b"{\"id\":\"hello\",\"method\":\"hello\"}\n")
+        .send(b"{\"id\":\"hello\",\"method\":\"hello\"}\n")
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(30);
     let response = loop {
@@ -137,6 +130,5 @@ fn service_hello_over_in_memory_duplex_returns_protocol_one() {
         .try_iter()
         .collect();
     assert!(raw.iter().all(|frame| !frame.contains('\n')));
-    let _ = writer; // writer closes on drop, unblocking the wire thread
     started.stop();
 }

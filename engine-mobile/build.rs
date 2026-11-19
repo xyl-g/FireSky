@@ -2,12 +2,12 @@
 //!
 //! host (macOS/Linux/Windows): engine/src/grib.rs resolves ecCodes at runtime
 //! via libloading (desktop parity) — nothing is linked at build time.
-//! android/ios: when `MM0_ECCODES_ANDROID_LIB` / `MM0_ECCODES_IOS_LIB` /
-//! `MM0_ECCODES_IOSSIM_LIB` points at the static lib built by the spike
-//! scripts, embed `libeccodes.a` so the symbols are available for the MN1
-//! static-link diversion (pitfall: runtime libloading is unavailable on
-//! mobile). Without the variable the build stays green; on-device decode
-//! requires the diversion planned for MN1.
+//! android/ios: MN1 landed — engine/src/grib.rs binds the ecCodes C API
+//! directly (cfg mobile_decoder), so the static lib built by the spike
+//! scripts is REQUIRED: `MM0_ECCODES_ANDROID_LIB` / `MM0_ECCODES_IOS_LIB` /
+//! `MM0_ECCODES_IOSSIM_LIB` must point at its directory. engine/build.rs
+//! emits the same wiring for the engine's own cdylib/staticlib link; the
+//! duplicate native static lib deduplicates at the final artifact link.
 
 fn main() {
     for key in [
@@ -39,6 +39,8 @@ fn main() {
     let Some(dir) = dir else { return };
     println!("cargo:rustc-link-search=native={}", dir.to_string_lossy());
     println!("cargo:rustc-link-lib=static=eccodes");
+    // ENABLE_AEC=ON ecCodes needs libaec.a from the same directory.
+    println!("cargo:rustc-link-lib=static=aec");
     if os == "android" {
         println!("cargo:rustc-link-lib=dylib=m");
     }

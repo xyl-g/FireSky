@@ -11,6 +11,12 @@
 #    -lengine_mobile 搜索动态库优先 → 实际动态链接（dylib 未打包进 App）。
 #    project.yml 因此按 SDK 显式链接 .a 文件路径，不走 -l 搜索。
 set -euo pipefail
+# MM0 坑 11：xcode-select 可能仍指 CommandLineTools（无 iOS SDK），脚本内的
+# xcrun ranlib 会失败。cargo 侧由 ~/.cargo/config.toml 注入 DEVELOPER_DIR，
+# 这里为脚本自身的 xcrun 调用做同样兜底。
+if ! xcrun -sdk iphoneos --show-sdk-path >/dev/null 2>&1; then
+    export DEVELOPER_DIR="/Applications/Xcode.app/Contents/Developer"
+fi
 cd "$(dirname "$0")/../../../engine-mobile"
 echo "==> cargo build --release --target aarch64-apple-ios（真机切片）"
 cargo build --release --target aarch64-apple-ios

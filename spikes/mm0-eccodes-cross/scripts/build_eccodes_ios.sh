@@ -9,7 +9,8 @@ XC="$DEV/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
 DEV_SDK="$DEV/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
 SIM_SDK="$DEV/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk"
 COMMON=(-DDISABLE_OS_CHECK=ON -DIEEE_LE=1 -DIEEE_BE=0
-        -DENABLE_BUILD_TOOLS=OFF -DCMAKE_MACOSX_BUNDLE=OFF -DENABLE_AEC=OFF
+        -DENABLE_BUILD_TOOLS=OFF -DCMAKE_MACOSX_BUNDLE=OFF -DENABLE_AEC=ON
+        -DENABLE_USE_SHARED_LIB_AEC=OFF
         -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64
         -DCMAKE_C_COMPILER="$XC" -DCMAKE_CXX_COMPILER="$XC++"
         -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
@@ -18,7 +19,12 @@ COMMON=(-DDISABLE_OS_CHECK=ON -DIEEE_LE=1 -DIEEE_BE=0
 
 for N in device sim; do
   if [ "$N" = device ]; then S="$DEV_SDK"; else S="$SIM_SDK"; fi
-  cmake -S "$SRC" -B "build-ios-$N" "${COMMON[@]}" -DCMAKE_OSX_SYSROOT="$S"
+  # libaec package config from build_libaec.sh (P-3: EC GRIB2 needs AEC).
+  # 交叉编译 find_package 默认只搜 sysroot（FIND_ROOT_PATH_MODE_PACKAGE=ONLY），
+  # 必须显式 libaec_DIR 指向宿主侧安装目录。
+  cmake -S "$SRC" -B "build-ios-$N" "${COMMON[@]}" -DCMAKE_OSX_SYSROOT="$S" \
+    -DCMAKE_PREFIX_PATH="$PWD/build-ios-$N/aec" \
+    -Dlibaec_DIR="$PWD/build-ios-$N/aec/lib/cmake/libaec"
   cmake --build "build-ios-$N" -j "$(sysctl -n hw.ncpu)"
   echo "libeccodes.a -> build-ios-$N/lib/"
 done

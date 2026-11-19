@@ -17,6 +17,62 @@ fn collect(path: &Path, files: &mut Vec<std::path::PathBuf>) {
 }
 
 fn main() {
+    // MN1 mobile static diversion: iOS/Android embed ecCodes statically
+    // (engine-mobile/build.rs links libeccodes.a); grib.rs then binds the C
+    // symbols directly because runtime libloading is unavailable on mobile.
+    println!("cargo:rustc-check-cfg=cfg(mobile_decoder)");
+    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
+    let mobile = matches!(target_os.as_str(), "ios" | "android");
+    if mobile {
+        println!("cargo:rustc-cfg=mobile_decoder");
+    }
+    // The engine itself ships cdylib/staticlib crate types, so its own link
+    // step must resolve the static ecCodes symbols on mobile (P-2 full engine
+    // build). engine-mobile/build.rs repeats the wiring for the final app
+    // artifact; native static libraries deduplicate at the final link.
+    for key in [
+        "MM0_ECCODES_ANDROID_LIB",
+        "MM0_ECCODES_IOS_LIB",
+        "MM0_ECCODES_IOSSIM_LIB",
+        "MM0_IOS_SIM",
+    ] {
+        println!("cargo:rerun-if-env-changed={key}");
+    }
+    if mobile {
+        let dir = match target_os.as_str() {
+            "android" => env::var_os("MM0_ECCODES_ANDROID_LIB"),
+            "ios" => {
+                let sim = env::var("CARGO_CFG_TARGET_ABI")
+                    .map(|abi| abi == "sim")
+                    .unwrap_or(false)
+                    || env::var("MM0_IOS_SIM").map(|v| v == "1").unwrap_or(false);
+                let key = if sim {
+                    "MM0_ECCODES_IOSSIM_LIB"
+                } else {
+                    "MM0_ECCODES_IOS_LIB"
+                };
+                env::var_os(key)
+            }
+            _ => None,
+        };
+        match dir {
+            Some(dir) => {
+                println!("cargo:rustc-link-search=native={}", dir.to_string_lossy());
+                println!("cargo:rustc-link-lib=static=eccodes");
+                // ecCodes is built with ENABLE_AEC=ON (ECMWF GRIB2 CCSDS);
+                // libaec.a ships next to libeccodes.a (build_libaec.sh).
+                println!("cargo:rustc-link-lib=static=aec");
+                if target_os == "android" {
+                    println!("cargo:rustc-link-lib=dylib=m");
+                }
+            }
+            None => panic!(
+                "engine: mobile target {target_os} requires the MM0 static ecCodes library; \
+                 set MM0_ECCODES_ANDROID_LIB / MM0_ECCODES_IOS_LIB / MM0_ECCODES_IOSSIM_LIB \
+                 (spikes/mm0-eccodes-cross/scripts)"
+            ),
+        }
+    }
     let mut files = Vec::new();
     for path in ["src", "build.rs", "Cargo.toml", "Cargo.lock"] {
         collect(Path::new(path), &mut files);

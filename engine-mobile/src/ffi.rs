@@ -5,10 +5,9 @@
 //! lock, matching desktop_rpc.py's `write_lock`). `fsm_stop` mirrors desktop
 //! EOF semantics: cancel everything in flight, wait for workers, return.
 
-use crate::backend::EngineArmBackend;
-use crate::service::{self, FrameSink, MobileConfig};
+use crate::service::{self, FrameSink};
 use std::ffi::{c_char, c_void, CStr, CString};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::ptr;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -121,14 +120,17 @@ pub extern "C" fn fsm_start(
         Ok(value) => value,
         Err(message) => return fail(&message),
     };
-    let config = MobileConfig {
-        workspace_root: PathBuf::from(&workspace),
-        definitions_path: (!definitions.is_empty()).then(|| PathBuf::from(&definitions)),
-        cache_root: (!cache.is_empty()).then(|| PathBuf::from(&cache)),
-    };
-    if let Some(path) = &config.definitions_path {
+    if !definitions.is_empty() {
         // MM0 坑 10：单数变量名，且必须先于引擎初始化（此处线程尚未启动）。
-        std::env::set_var("ECCODES_DEFINITION_PATH", path);
+        std::env::set_var("ECCODES_DEFINITION_PATH", &definitions);
+    }
+    if !cache.is_empty() {
+        // 桌面 Runtime 的库存目录契约（FIRESKY_*_CACHE_DIR）；NULL/空则
+        // 保留引擎默认 <workspace>/.cache/{gfs,ecmwf,cams}。
+        let root = PathBuf::from(&cache);
+        std::env::set_var("FIRESKY_GFS_CACHE_DIR", root.join("gfs"));
+        std::env::set_var("FIRESKY_ECMWF_CACHE_DIR", root.join("ecmwf"));
+        std::env::set_var("FIRESKY_CAMS_CACHE_DIR", root.join("cams"));
     }
     let sink: FrameSink = {
         let state = Arc::new(CallbackSink {
@@ -138,8 +140,10 @@ pub extern "C" fn fsm_start(
         });
         Arc::new(move |frame: &str| state.deliver(frame))
     };
-    let mut started =
-        service::start(config.clone(), Arc::new(EngineArmBackend::new(config)), sink);
+    let mut started = match service::start(Path::new(&workspace), sink) {
+        Ok(started) => started,
+        Err(message) => return fail(&message),
+    };
     let mut slot = instance_slot().lock().unwrap();
     if slot.is_some() {
         drop(slot);
@@ -173,7 +177,7 @@ pub extern "C" fn fsm_send(line: *const c_char) -> i32 {
     let mut frame = text.as_bytes().to_vec();
     frame.push(b'\n');
     let outcome = with_instance("engine-mobile service is not running", |started| {
-        started.writer.push(&frame)
+        started.send(&frame)
     });
     match outcome {
         Ok(Ok(())) => 0,

@@ -32,8 +32,10 @@ targets:
         # libengine_mobile.dylib（crate-type 含 cdylib），ld 的 -l 搜索动态库优先，
         # 会静默改成动态链接（dylib 未打进 App，运行即崩）。产物由
         # scripts/build-engine.sh 构建（含 Apple ranlib 重建符号索引的必做步骤）。
-        OTHER_LDFLAGS[sdk=iphoneos*]: $(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios/release/libengine_mobile.a
-        OTHER_LDFLAGS[sdk=iphonesimulator*]: $(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios-sim/release/libengine_mobile.a
+        # -lc++：libeccodes.a 含 C++ 段（MM0 坑 5）。cargo 的 -lc++ rustflags 只作用
+        # 于 rustc 自身链接；App 最终链接走 Xcode ld，必须在此显式补 C++ 运行时。
+        OTHER_LDFLAGS[sdk=iphoneos*]: $(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios/release/libengine_mobile.a -lc++
+        OTHER_LDFLAGS[sdk=iphonesimulator*]: $(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios-sim/release/libengine_mobile.a -lc++
     info:
       path: FireSkyMobile/Info.plist
       properties:

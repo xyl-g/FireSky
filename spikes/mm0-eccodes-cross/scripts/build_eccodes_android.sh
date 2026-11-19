@@ -9,7 +9,10 @@ NDK="${ANDROID_NDK_HOME:-/opt/homebrew/share/android-ndk}"
 cmake -S "$SRC" -B "$OUT" \
   -DDISABLE_OS_CHECK=ON \
   -DIEEE_LE=1 -DIEEE_BE=0 \
-  -DENABLE_AEC=OFF \
+  -DENABLE_AEC=ON \
+  -DENABLE_USE_SHARED_LIB_AEC=OFF \
+  -DCMAKE_PREFIX_PATH="$OUT/aec" \
+  -Dlibaec_DIR="$OUT/aec/lib/cmake/libaec" \
   -DCMAKE_SYSTEM_NAME=Android -DCMAKE_SYSTEM_VERSION=26 \
   -DCMAKE_ANDROID_ARCH_ABI=arm64-v8a \
   -DCMAKE_ANDROID_NDK="$NDK" \

@@ -72,11 +72,19 @@ iOS：SwiftUI（基底 apps/macos）              Android：Kotlin + Jetpack Com
 ### 前置任务
 - **P-1**：`apps/` 在主仓库仍是未跟踪目录——等 Codex 提交进 main 后 merge，把 `apps/macos` 作为 UI 基底；或经用户授权后按当日快照只读拷入本分支（记录快照 commit 等价点）。
 - **P-2**：`engine/` 全量对 `aarch64-apple-ios` / `aarch64-linux-android` 构建通过（MM0 只验了尖峰 crate；对照 14 条坑清单）。
-- **P-3**：移动构建特性对齐审计——桌面 brew 版 ecCodes 启用的 AEC/PNG/JPEG2000 若真实数据用到，补交叉编译 libaec/libpng/openjpeg（尖峰 README 坑 4）。
+- **P-3**：移动构建特性对齐审计——**AEC 已落地（2026-11-19）**：EC GRIB2 用 CCSDS 压缩，尖峰 ENABLE_AEC=OFF 使 forecast 报 ecCodes -67；现 `scripts/build_libaec.sh` 交叉 libaec 1.1.8（iOS device/sim + Android 静态），ecCodes 脚本改 `ENABLE_AEC=ON` + 静态链接（交叉 find_package 只搜 sysroot，须显式 `libaec_DIR`；`ENABLE_USE_SHARED_LIB_AEC=OFF`）。桌面 brew 版另链 openjpeg/libpng：当前生产数据路径（GFS simple/complex packing、EC/CAMS AEC）经 MN1 模拟器全链路解码验证未用 PNG/JPEG2000，**缓办**；未来数据源若用该两类 packing 再补 libpng/openjpeg 交叉。
 
 ### MN1 — engine-mobile + iOS 模拟器骨架
 engine `desktop` 主循环 Read/Write 参数化；`engine-mobile` crate（UniFFI）+ 内存 duplex；SwiftUI 工程落地（先快照基底或最小骨架）；模拟器内 hello→check→prepare→forecast（`allow_download:false` + 预置缓存样本）全链路。
 **验收**：iOS 模拟器跑通全链路且响应与桌面 JSON-lines 帧级一致；杀 App 重启状态恢复；桌面 `desktop` 子命令回归不受影响。
+
+**状态（2026-11-19：后端接线 + 全链路 + parity 通过）**：
+- 架构收敛到 §1.1 同源设计：engine-mobile 直接承载 `desktop_runtime::serve_runtime`（桌面 `desktop` 子命令本身），内存 duplex + 换行→回调帧适配 + 同步取消镜像（fsm_cancel 经 wire cancel 帧复用桌面取消/任务历史路径）；过渡期 `desktop_rpc.py` 编排移植层（service/backend ~2000 行）删除。C ABI 契约（fsmobile.h）不变；`serve_runtime` 公开化供进程内宿主 fail-fast 构造 Runtime。
+- 模拟器全链路 hello→check→prepare→forecast 通过（RealEngineChainTests + FSMobileTransportTests 4/4 绿，GFS+EC 双模型真实解码）。预置缓存 = 桌面 live 缓存 `.cache/{gfs,ecmwf,cams}` 日期子树 {D, D-1}（APFS clonefile 零拷贝种子；原生 ready 契约要求 CAMS 同样就绪，D 取 gfs∩ecmwf 最新交集且 CAMS 在 D/D-1 有真实 GRIB）；prepare/forecast 零网络请求。
+- 帧级 parity：模拟器 vs 桌面 stdio 同 payload forecast 结果，归一化易变元数据（workspace 路径/时间戳/派生内容寻址 ID/报告哈希）后**深度相等**，输入文件 basename 逐一一致（证据 output/mn1-parity-20261119/）。
+- 静态切片：iOS device/sim `libengine_mobile.a`（Apple ranlib，Xcode ld 符号索引坑）+ Android `libengine_mobile.so`（NEEDED 仅 libm/libdl/libc，fsm_* 五符号齐全）。
+- 新坑与修复：MM0 #15（ECC-1088 兜底路径追加 vs 严格指纹 → engine 指纹跳过缺失搜索段，桌面哈希不变）；P-3 AEC（见上）。
+- 剩余：definitions 尚未随 App 打包（测试经宿主环境注入，真机资源落地归 MN3）；杀 App 重启的**应用层**状态恢复待 result_restore UI 接线（引擎侧任务历史已随桌面同源落地）；D1 地图裁决未动。
 
 ### MN2 — Android 骨架 parity
 Compose 工程 + `EngineClient.kt` + UniFFI Kotlin 绑定；definitions assets 解压与缓存根落地；模拟器/真机冒烟。
@@ -107,7 +115,7 @@ iOS TestFlight（Apple Developer 账号，D5）/ AdHoc；Android APK 签名侧�
 ## 6. openQuestions
 
 - **D1 地图**：MapKit + 天地图/OSM 自定义 tile overlay（原生集成最好）vs 复用 `map.html`（WKWebView，最大保真）——MN1 需定。
-- **D2 绑定**：UniFFI（默认）vs 手工 C ABI；以 MN1 实测回调体验为准。
+- **D2 绑定**：**已裁定——手工 C ABI**（include/fsmobile.h 五原语固定契约，2026-11-12 定、2026-11-19 MN1 全链路复验）；UniFFI 不采用，回调体验满足（帧回调 + write_lock 串行）。
 - **D3 最低版本**：Android minSdk 26 / iOS deployment target 16——按目标设备定。
 - **D4 iPad**：是否按通用 App（iPhone+iPad）直接出？
 - **D5 Apple Developer 账号**（$99/年，TestFlight 前提）。
