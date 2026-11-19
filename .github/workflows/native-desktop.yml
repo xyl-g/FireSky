@@ -37,6 +37,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      # 契约脚本（test_docker_contract.sh / test_windows_ffi_contract.sh）用 rg；
+      # ubuntu-24.04 镜像未预装 ripgrep。
+      - name: Install ripgrep for contract scripts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep
       - name: Verify immutable application resources
         run: python3 scripts/build_app_resources.py --root resources/app-data --check
       - name: Verify Docker runtime contract
@@ -104,7 +110,8 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - name: Install ecCodes
-        run: brew install eccodes
+        # ripgrep: test_macos_native.sh 的契约 grep 依赖 rg；macos-26 镜像未预装。
+        run: brew install eccodes ripgrep
       - name: Build native app
         run: bash scripts/build_macos_native.sh
       - name: FFI bundle smoke
@@ -142,7 +149,6 @@ jobs:
     runs-on: ${{ matrix.runner }}
     env:
       FIRESKY_RUST_TARGET: ${{ matrix.target }}
-      FIRESKY_ECCODES_ROOT: ${{ runner.temp }}\eccodes-bundle
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -175,6 +181,10 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "ecCodes bundle failed" }
       - name: Build WinUI native app
         shell: pwsh
+        env:
+          # runner context is only valid at step level; a job-level env with
+          # runner.temp makes GitHub reject the whole workflow at startup.
+          FIRESKY_ECCODES_ROOT: ${{ runner.temp }}\eccodes-bundle
         run: |
           dotnet build apps/windows/FireSky/FireSky.csproj `
             -c Release `

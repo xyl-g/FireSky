@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync, chmodSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync, chmodSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { inspectBinary } from "./native-target.mjs";
+import { copyTreeDereferenced, inspectBinary } from "./native-target.mjs";
 export const METADATA_NAME = "BUNDLE-METADATA.json";
 
 function command(name, args) {
@@ -73,7 +73,7 @@ export function bundleMacosEccodes(resources, { env = process.env, execute = com
   for (const name of ["definitions", "samples"]) {
     const source = join(prefix, "share/eccodes", name);
     if (!existsSync(source)) throw new Error(`ecCodes ${name} missing: ${source}`);
-    cpSync(source, join(resources, "eccodes", name), { recursive: true, dereference: true });
+    copyTreeDereferenced(source, join(resources, "eccodes", name));
   }
   if (env.FIRESKY_NATIVE_DEPENDENCIES_MANIFEST) {
     const metadata = JSON.parse(readFileSync(resolve(env.FIRESKY_NATIVE_DEPENDENCIES_MANIFEST), "utf8"));

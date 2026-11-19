@@ -124,6 +124,13 @@ PLIST="$APP/Contents/Info.plist"
 if [ -n "${FIRESKY_NATIVE_WORKSPACE:-}" ]; then
     /usr/libexec/PlistBuddy -c "Add :FireSkyWorkspace string $FIRESKY_NATIVE_WORKSPACE" "$PLIST"
 fi
+# codesign --deep --strict rejects bundles containing symlinks with invalid
+# destinations; surface the offending paths instead of a cryptic codesign error.
+BUNDLE_LINKS="$(find "$APP" -type l)"
+if [ -n "$BUNDLE_LINKS" ]; then
+    printf 'bundle contains symbolic links (codesign --strict will reject):\n%s\n' "$BUNDLE_LINKS" >&2
+    exit 1
+fi
 sign_app "$APP"
 codesign --verify --deep --strict "$APP"
 

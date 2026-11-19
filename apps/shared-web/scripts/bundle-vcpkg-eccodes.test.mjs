@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { bundleVcpkgEccodes, installedPackages } from "./bundle-vcpkg-eccodes.mjs";
@@ -31,11 +31,19 @@ for (const triplet of ["x64-windows", "arm64-windows"]) {
       put(join(installed, triplet, "bin/eccodes.dll"), "release fixture, not executable");
       put(join(installed, triplet, "debug/bin/eccodes.dll"), "debug must not ship");
       put(join(installed, triplet, "share/eccodes/definitions/boot.def"), "fixture definitions");
+      // ecCodes definition trees ship relative symlinks (e.g. wmo/10 -> 13);
+      // the bundle must materialize them because Node 22/24 cpSync dereference
+      // is broken and signed bundles reject stray symlinks.
+      mkdirSync(join(installed, triplet, "share/eccodes/definitions/tables/13"), { recursive: true });
+      put(join(installed, triplet, "share/eccodes/definitions/tables/13/base.def"), "fixture table");
+      symlinkSync("13", join(installed, triplet, "share/eccodes/definitions/tables/10"));
       put(join(installed, triplet, "share/eccodes/samples/GRIB2.tmpl"), "fixture samples");
       const metadata = bundleVcpkgEccodes({ installed, ports, triplet, output });
       assert.equal(metadata.packages.length, 2);
       assert.equal(metadata.packages[0].version, "installed-1");
       assert.equal(readFileSync(join(output, "bin/eccodes.dll"), "utf8"), "release fixture, not executable");
+      assert.equal(readFileSync(join(output, "share/eccodes/definitions/tables/10/base.def"), "utf8"), "fixture table");
+      assert.ok(!lstatSync(join(output, "share/eccodes/definitions/tables/10")).isSymbolicLink());
       assert.throws(() => readFileSync(join(output, "debug/bin/eccodes.dll")), /ENOENT/);
       assert.ok(metadata.packages.every((item) => item.license_files.length === 1));
       put(join(ports, "eccodes/vcpkg.json"), JSON.stringify({ version: "newer-than-installed", license: "Apache-2.0" }));

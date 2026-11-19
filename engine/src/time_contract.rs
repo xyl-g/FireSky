@@ -1,4 +1,6 @@
-use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, TimeZone, Timelike, Utc};
+use chrono::{
+    DateTime, Datelike, Duration, DurationRound, FixedOffset, NaiveDate, TimeZone, Timelike, Utc,
+};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -109,6 +111,14 @@ pub fn iso<T: TimeZone>(date: DateTime<T>) -> String
 where
     T::Offset: std::fmt::Display,
 {
+    // Python isoformat() only carries microseconds and parse_zoned accepts at
+    // most 6 fractional digits. Linux clocks expose nanoseconds (macOS only
+    // microseconds), so truncate before formatting; otherwise iso() output
+    // from SystemTime::now() fails its own round-trip on Linux CI.
+    let date = date
+        .clone()
+        .duration_trunc(Duration::microseconds(1))
+        .unwrap_or(date);
     date.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, false)
 }
 
@@ -225,5 +235,31 @@ mod tests {
         }
         assert!(parse_zoned("2026-01-01T00:00:00-00:00").is_ok());
         assert!(parse_utc("2026-01-01T00:00:00-00:00").is_err());
+    }
+
+    #[test]
+    fn iso_round_trips_nanosecond_clocks() {
+        // Linux SystemTime::now() has nanosecond resolution while macOS only
+        // exposes microseconds. iso() must stay within the 6 fractional digits
+        // parse_zoned accepts (Python isoformat parity) on every platform, so
+        // its own output always round-trips. Construct the nanosecond value
+        // explicitly to exercise the Linux path on any host.
+        let t = Utc
+            .with_ymd_and_hms(2026, 11, 9, 11, 6, 52)
+            .unwrap()
+            .with_nanosecond(498_361_234)
+            .unwrap();
+        let text = iso(t);
+        assert_eq!(text, "2026-11-09T11:06:52.498361+00:00");
+        assert_eq!(
+            parse_utc(&text).unwrap(),
+            t.with_nanosecond(498_361_000).unwrap()
+        );
+        // AutoSi keeps trailing-zero trimming for microsecond values.
+        let t = t.with_nanosecond(498_000_000).unwrap();
+        assert_eq!(iso(t), "2026-11-09T11:06:52.498+00:00");
+        let t = t.with_nanosecond(0).unwrap();
+        assert_eq!(iso(t), "2026-11-09T11:06:52+00:00");
+        assert!(parse_utc(&iso(t)).is_ok());
     }
 }

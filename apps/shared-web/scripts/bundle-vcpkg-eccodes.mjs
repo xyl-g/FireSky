@@ -1,6 +1,7 @@
-import { copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { copyTreeDereferenced } from "./native-target.mjs";
 export const METADATA_NAME = "BUNDLE-METADATA.json";
 
 export function installedPackages(text, triplet) {
@@ -61,7 +62,7 @@ export function bundleVcpkgEccodes({ installed, ports, triplet, output }) {
       for (const name of ["definitions", "samples"]) {
         const path = join(prefix, "share/eccodes", name);
         if (!existsSync(path)) throw new Error(`Installed vcpkg ecCodes ${name} missing`);
-        cpSync(path, join(output, "share/eccodes", name), { recursive: true, dereference: true });
+        copyTreeDereferenced(path, join(output, "share/eccodes", name));
         files.push(`eccodes/share/eccodes/${name}`);
       }
     }

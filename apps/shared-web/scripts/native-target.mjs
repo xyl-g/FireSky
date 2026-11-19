@@ -1,6 +1,26 @@
-import { readFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { resolve, join } from "node:path";
+import { dirname, resolve, join } from "node:path";
+
+/**
+ * Recursive copy that materializes every symbolic link as its target.
+ * fs.cpSync({ dereference: true }) still copies symlinks verbatim on
+ * Node 22/24 (fixed in Node 26); codesign --deep --strict rejects app
+ * bundles containing such links, so ecCodes definitions/samples must be
+ * symlink-free on every supported Node version, not just the newest.
+ */
+export function copyTreeDereferenced(source, destination) {
+  const stat = statSync(source); // follows symlinks; dangling links throw loudly
+  if (stat.isDirectory()) {
+    mkdirSync(destination, { recursive: true });
+    for (const entry of readdirSync(source)) {
+      copyTreeDereferenced(join(source, entry), join(destination, entry));
+    }
+  } else {
+    mkdirSync(dirname(destination), { recursive: true });
+    copyFileSync(source, destination);
+  }
+}
 
 export const NATIVE_TARGETS = Object.freeze({
   "aarch64-apple-darwin": { platform: "darwin", arch: "arm64", format: "mach-o", machine: 0x100000c },
