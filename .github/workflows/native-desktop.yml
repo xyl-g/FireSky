@@ -195,9 +195,14 @@ jobs:
       - name: Verify FFI payload
         shell: pwsh
         run: |
-          $root = "apps/windows/FireSky/bin/Release"
-          $exe = Get-ChildItem $root -Recurse -Filter "FireSky.exe" | Select-Object -First 1
-          if ($null -eq $exe) { throw "FireSky.exe was not produced" }
+          # -p:Platform=x64/ARM64 时 .NET SDK 输出在 bin\<Platform>\Release\，
+          # WinUI 再叠加 net8.0-…\win10-<arch>\ 层级；不会落在 bin\Release。
+          $root = "apps/windows/FireSky/bin"
+          if (!(Test-Path $root)) { throw "build output root was not produced: $root" }
+          $exe = Get-ChildItem $root -Recurse -Filter "FireSky.exe" |
+            Where-Object { Test-Path (Join-Path $_.Directory.FullName "Resources\firesky_engine.dll") } |
+            Select-Object -First 1
+          if ($null -eq $exe) { throw "FireSky.exe with packaged firesky_engine.dll was not produced" }
           $dll = Join-Path $exe.Directory.FullName "Resources\firesky_engine.dll"
           if (!(Test-Path $dll)) { throw "firesky_engine.dll was not packaged" }
           $manifest = Join-Path $exe.Directory.FullName "Resources\app-data\RESOURCE-MANIFEST.json"
@@ -210,7 +215,7 @@ jobs:
         with:
           name: FireSky-windows-${{ matrix.arch }}
           if-no-files-found: error
-          path: apps/windows/FireSky/bin/Release/**
+          path: apps/windows/FireSky/bin/**
 
   linux-ffi:
     # Linux currently verifies the shared native FFI foundation. The full
