@@ -25,7 +25,7 @@
 | P0-2 | [rollup-plugin-visualizer](https://github.com/btd/rollup-plugin-visualizer) | shared-web 构建体积分析 | **已落地**（devDep + `build:analyze`） |
 | P1-1 | [uPlot](https://github.com/leeoniya/uplot)（MIT） | 时间序列图表（canvas，~50 KB min） | 建议试点，见 §4.1 |
 | P1-2 | [TanStack Virtual](https://tanstack.com/virtual)（MIT，`@tanstack/svelte-virtual` 已支持 Svelte 5 runes） | 区域排行列表虚拟化 | 建议试点，见 §4.2 |
-| P1-3 | Playwright `toHaveScreenshot`（内置，零新依赖） | 关键布局视觉回归基线 | 建议引入，见 §4.3 |
+| P1-3 | Playwright `toHaveScreenshot`（内置，零新依赖） | 关键布局视觉回归基线 | **已落地**（12 基线，见 §4.3） |
 | P2-1 | [UniFFI](https://github.com/mozilla/uniffi-rs) | 移动双原生 Rust→Swift/Kotlin 绑定 | 移动分支落地，见 §5.1 |
 | P2-2 | [grib / grib-core](https://crates.io/crates/grib)（纯 Rust GRIB2） | 替换 ecCodes 原生依赖 | 仅 spike 评估，见 §5.2 |
 | P3 | vitest + @testing-library/svelte、tracing | 测试 DX / 结构化日志 | 观察，见 §6 |
@@ -107,15 +107,28 @@ issue #866 已解决）。备选 svelte-virtual-list（virtuallist.svelte.page�
 虚拟化影响（联动基于 cells 数据而非 DOM 存在性，理论上安全，需用例覆盖 2000+ 行场景）。
 验收：2000 行滚动 60fps（现有交互用例全绿 + 手动大区域用例）；地图网格渲染不在此列。
 
-### 4.3 Playwright 视觉快照（零新依赖）
+### 4.3 Playwright 视觉快照（零新依赖）—— **已落地**
 
 **问题**：现有用例已有截图输出（`testInfo.outputPath`）但只人工查看，无基线断言；
 布局回归（如本次历史区迁移）靠既有 DOM 断言兜底，视觉走查仍是人工。
 
-**引入步骤**：挑 3–4 个稳定页面状态（workbench 1440/390 × 双主题、数据页、历史页），
-把现有截图调用改为 `await expect(page).toHaveScreenshot(...)`；
-基线在 CI（ubuntu）生成并提交，本地跑用 `--update-snapshots` 注意平台差异，
-或对字体敏感区域设 `maxDiffPixelRatio: 0.02`。验收：一次真实布局回归演练中能抓住差异。
+**落地方式**（2026-11-20）：
+
+- `data-ui.spec.mjs` 既有截图调用改为 `toHaveScreenshot` 基线断言：数据页
+  全页 4 视口（390/768/1024/1440）× 双主题 8 张 + 任务历史区 2 视口 × 双主题
+  4 张，共 12 张基线，存 `tests/__screenshots__/`（快照名带 `-darwin` 平台
+  后缀，未来 linux CI 基线互不覆盖）。
+- `playwright.config.ts` 新增确定性钉扎：`timezoneId: "Asia/Shanghai"`、
+  `locale: "zh-CN"`（历史时间戳渲染不含机器时区漂移）、
+  `snapshotPathTemplate` 集中到 `tests/__screenshots__/`；字体敏感区域
+  `maxDiffPixelRatio: 0.02`。
+- 验收已过：双次运行逐字节稳定；回归演练（`history-section` padding
+  20→28px）被基线当场抓住，还原后复绿；全量 51 条 UI 用例 +
+  svelte-check + node tests 全绿。
+- 维护协议：改 UI 需同步 `PLAYWRIGHT_CHANNEL=chrome npx playwright test
+  data-ui --update-snapshots` 重新生成基线，并在提交说明里注明视觉变化；
+  若将来 Playwright 进 CI（ubuntu），先在 CI 生成 `-linux` 基线再提交，
+  不要把 darwin 基线当通用基线。
 
 ## 5. P2 架构级评估项（先评估后决定）
 
@@ -164,6 +177,6 @@ engine 已是 `cdylib + staticlib`，接入成本主要在类型映射（区域/
 ## 8. 节奏建议
 
 1. 本分支合入 P0（已就绪，随 `feat/web-ui-ux-polish` 一起评审）。
-2. 下一个迭代窗口做 P1-1 uPlot 试点（一处图表）与 P1-3 视觉快照；P1-2 视大区域实测卡顿决定。
+2. 下一个迭代窗口做 P1-1 uPlot 试点（一处图表）；P1-3 视觉快照已落地；P1-2 视大区域实测卡顿决定。
 3. spike 类（P2-2）安排在无发布压力的窗口；P2-1 严格留给移动分支。
 4. 本文作为唯一登记处：任何新候选先补进 §2 总表再动手。
