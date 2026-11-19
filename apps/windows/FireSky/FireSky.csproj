@@ -25,13 +25,15 @@
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" Version="1.8.260921001" />
-    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.1742" />
+    <!-- WindowsAppSDK.Base 1.8.251216001 要求 BuildTools >= 10.0.26100.4654；
+         钉低版本会触发 NU1605 包降级（warning as error）。 -->
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
     <Content Include="..\..\shared\map.html" Link="Assets\Map\map.html"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\..\..\desktop\assets\leaflet\**\*"
+    <Content Include="..\..\shared\leaflet\**\*"
              Link="Assets\Map\leaflet\%(RecursiveDir)%(Filename)%(Extension)"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
-    <Content Include="..\..\..\desktop\assets\firesky.png" Link="Assets\firesky.png"
+    <Content Include="..\..\shared\firesky.png" Link="Assets\firesky.png"
              CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(FireSkyEngineBinary)" Link="Resources\firesky-engine.exe" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
     <Content Include="$(FireSkyFfiBinary)" Link="Resources\firesky_engine.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
