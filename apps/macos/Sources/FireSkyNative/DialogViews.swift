@@ -238,13 +238,21 @@ struct TerrainPanelView: View {
                     Button("取消", systemImage: "stop.fill") { store.cancelTerrainDownload() }
                         .disabled(store.terrainCancelling)
                 } else {
-                    Button("下载全球地形数据", systemImage: "globe") {
+                    // 区域预设（用户口径：按区域下载；全球为其中一个预设）。
+                    Picker("", selection: $store.terrainRegion) {
+                        ForEach(TerrainRegion.allCases) { region in
+                            Text(region.rawValue).tag(region)
+                        }
+                    }.pickerStyle(.menu).frame(width: 104)
+                        .disabled(!store.online || store.busy)
+                        .accessibilityLabel("下载区域")
+                    Button("下载区域地形", systemImage: "globe") {
                         store.loadTerrainEstimate()
                     }
                     .disabled(!store.online || store.busy)
-                    .help("确认估算后下载全球 SRTM 瓦片（跳过已有；海洋瓦片自动缺失；可随时取消续传）")
+                    .help("确认估算后下载所选区域的 SRTM 瓦片（跳过已有；可随时取消续传）")
                     Button("仅当前地点", systemImage: "arrow.down.to.line") {
-                        store.downloadTerrain(global: false)
+                        store.downloadTerrainPoint()
                     }
                     .buttonStyle(.borderless)
                     .disabled(!store.online || store.busy || coverageMissing)
@@ -255,7 +263,7 @@ struct TerrainPanelView: View {
                     .disabled(!store.online || store.terrainDownloading)
             }
             if store.terrainDownloading {
-                if isGlobalRun {
+                if isBulkRun {
                     globalProgress
                 } else {
                     pointProgress
@@ -270,19 +278,25 @@ struct TerrainPanelView: View {
         }.padding(18)
             .background(Color(nsColor: .controlBackgroundColor).opacity(0.72),
                         in: RoundedRectangle(cornerRadius: 10))
-            .confirmationDialog("下载全球地形数据？", isPresented: Binding(
+            .confirmationDialog(downloadConfirmTitle, isPresented: Binding(
                 get: { store.showGlobalTerrainConfirm },
                 set: { if !$0 { store.showGlobalTerrainConfirm = false } }
             )) {
-                Button("开始下载", role: .destructive) { store.downloadTerrain(global: true) }
+                Button("开始下载", role: .destructive) {
+                    store.downloadTerrain(region: store.terrainRegion)
+                }
                 Button("取消", role: .cancel) { store.showGlobalTerrainConfirm = false }
             } message: {
                 Text(globalConfirmText)
             }
     }
 
-    private var isGlobalRun: Bool {
+    private var isBulkRun: Bool {
         store.terrainProgress["candidates"] != nil
+    }
+
+    private var downloadConfirmTitle: String {
+        store.terrainRegion == .global ? "下载全球地形数据？" : "下载\(store.terrainRegion.rawValue)地形数据？"
     }
 
     private var coverageMissing: Bool {
@@ -363,12 +377,12 @@ struct TerrainPanelView: View {
         return "目标 \(store.name)（\(location)）· 瓦片 \(name) · \(exists ? "已有本地瓦片" : "未下载")"
     }
 
-    /// 确认文案：候选数 + 抽样估算体积 + 已有数量 + 续传说明。
+    /// 确认文案：所选区域候选数 + 抽样估算体积 + 已有数量 + 续传说明。
     private var globalConfirmText: String {
         let global = store.terrainEstimate?["global"] as? JSONObject ?? [:]
         let candidates = (global["candidates"] as? NSNumber)?.intValue ?? 0
         let existing = (global["existing"] as? NSNumber)?.intValue ?? 0
-        var text = "将下载全球 SRTM 瓦片：候选 \(candidates) 块，本地已有 \(existing) 块会自动跳过（海洋上的瓦片是很小的空值瓦片，同样会下载）。下载耗时较长且占用大量磁盘，可随时取消，重新开始会跳过已下载瓦片。"
+        var text = "将下载\(store.terrainRegion.rawValue)的 SRTM 瓦片：候选 \(candidates) 块，本地已有 \(existing) 块会自动跳过（海洋上的瓦片是很小的空值瓦片，同样会下载）。下载耗时较长且占用磁盘，可随时取消，重新开始会跳过已下载瓦片。"
         if let gb = (global["estimated_gb"] as? NSNumber)?.doubleValue {
             text += String(format: "按抽样估算体积约 %.0f GB（抽样混合了海洋小瓦片与陆地大瓦片，实际体积以运行时用量为准）。", gb)
         } else {

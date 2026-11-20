@@ -36,6 +36,38 @@ enum Page: String, CaseIterable, Identifiable {
     }
 }
 
+/// 地形下载区域预设（用户口径：按区域下载而非单点；全球是其中一个预设）。
+/// bounds 为 1° 网格含边界的覆盖矩形，直接传给引擎 bulk 契约。
+enum TerrainRegion: String, CaseIterable, Identifiable {
+    case china = "中国"
+    case eastAsia = "东亚"
+    case southeastAsia = "东南亚"
+    case asia = "亚洲"
+    case europe = "欧洲"
+    case northAmerica = "北美"
+    case southAmerica = "南美"
+    case africa = "非洲"
+    case oceania = "大洋洲"
+    case global = "全球"
+
+    var id: String { rawValue }
+
+    var bounds: JSONObject? {
+        switch self {
+        case .china: ["south": 18, "north": 54, "west": 73, "east": 135]
+        case .eastAsia: ["south": 20, "north": 54, "west": 100, "east": 146]
+        case .southeastAsia: ["south": -11, "north": 28, "west": 92, "east": 141]
+        case .asia: ["south": -11, "north": 59, "west": 26, "east": 179]
+        case .europe: ["south": 35, "north": 59, "west": -11, "east": 40]
+        case .northAmerica: ["south": 15, "north": 59, "west": -170, "east": -52]
+        case .southAmerica: ["south": -56, "north": 13, "west": -82, "east": -34]
+        case .africa: ["south": -35, "north": 37, "west": -18, "east": 52]
+        case .oceania: ["south": -47, "north": 0, "west": 110, "east": 179]
+        case .global: nil
+        }
+    }
+}
+
 @MainActor
 final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
     let engine = EngineClient()
@@ -272,10 +304,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var terrainMessage = ""
     @Published var terrainMessageFailed = false
     @Published var terrainProgress: JSONObject = [:]
-    /// 全球下载确认所需的估算（候选数/已有/体积抽样估算）。
+    /// 全球/区域下载确认所需的估算（候选数/已有/体积抽样估算）。
     @Published var terrainEstimate: JSONObject?
     @Published var terrainEstimateLoading = false
     @Published var showGlobalTerrainConfirm = false
+    /// 当前选择的下载区域预设（默认中国）。
+    @Published var terrainRegion: TerrainRegion = .china
     @Published var taskHistoryTotal = 0
     @Published var taskHistoryIssues = 0
     @Published var taskHistoryLoaded = false
@@ -884,16 +918,19 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         }
     }
 
-    /// 请求全球下载估算（HEAD 抽样，几秒）；完成后弹确认框。
+    /// 请求区域/全球下载估算（HEAD 抽样，几秒）；完成后弹确认框。
     func loadTerrainEstimate() {
         guard online, !terrainDownloading, !terrainEstimateLoading else { return }
         terrainEstimateLoading = true
+        var params: JSONObject = ["estimate_global": true, "lat": lat, "lon": lon]
+        if let bounds = terrainRegion.bounds {
+            params["bounds"] = bounds
+        }
         Task { [weak self] in
             guard let self else { return }
             defer { terrainEstimateLoading = false }
             do {
-                terrainEstimate = try await engine.call("terrain_inventory",
-                                                        ["lat": lat, "lon": lon, "estimate_global": true])
+                terrainEstimate = try await engine.call("terrain_inventory", params)
                 showGlobalTerrainConfirm = terrainEstimate != nil
             } catch {
                 terrainEstimate = nil
@@ -903,21 +940,18 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         }
     }
 
-    /// 地形下载任务：global=全球批量（默认动作），point=仅当前地点瓦片。
-    /// 真实阶段进度、可取消；不触发预测也不回填地点。
-    func downloadTerrain(global: Bool) {
+    /// 地形下载任务：按区域预设（含全球）批量下载，跳过已有、可取消续传；
+    /// 点级下载保留为次级入口。不触发预测也不回填地点。
+    func downloadTerrain(region: TerrainRegion) {
         guard online, !busy, !terrainDownloading, !probingDownloads else { return }
         terrainDownloading = true
         terrainCancelling = false
         terrainMessage = ""
         terrainProgress = [:]
         showGlobalTerrainConfirm = false
-        var params: JSONObject = ["timeout_seconds": global ? 120.0 : 600.0]
-        if global {
-            params["mode"] = "global"
-        } else {
-            params["lat"] = lat
-            params["lon"] = lon
+        var params: JSONObject = ["mode": "global", "timeout_seconds": 300.0]
+        if let bounds = region.bounds {
+            params["bounds"] = bounds
         }
         terrainDownloadTask = Task { [weak self] in
             guard let self else { return }
@@ -933,8 +967,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                     self.terrainProgress = terrain
                 })
                 try Task.checkCancellation()
-                terrainMessage = terrainResultMessage(result, global: global)
-                terrainMessageFailed = terrainMessageFailedFlag(result, global: global)
+                terrainMessage = terrainResultMessage(result, region: region)
+                terrainMessageFailed = terrainMessageFailedFlag(result)
             } catch {
                 terrainMessage = Task.isCancelled
                     ? "已停止下载；已完成的瓦片保留，重新开始会跳过它们。"
@@ -945,9 +979,43 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         }
     }
 
-    private func terrainResultMessage(_ result: JSONObject, global: Bool) -> String {
+    /// 点级下载（仅当前地点瓦片），保持独立入口。
+    func downloadTerrainPoint() {
+        guard online, !busy, !terrainDownloading, !probingDownloads else { return }
+        terrainDownloading = true
+        terrainCancelling = false
+        terrainMessage = ""
+        terrainProgress = [:]
+        terrainDownloadTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                terrainDownloading = false
+                terrainCancelling = false
+                terrainDownloadTask = nil
+            }
+            do {
+                let result = try await engine.call("terrain_download",
+                                                   ["lat": lat, "lon": lon, "timeout_seconds": 600.0],
+                                                   progress: { [weak self] event in
+                    guard let self, let terrain = event["terrain"] as? JSONObject else { return }
+                    self.terrainProgress = terrain
+                })
+                try Task.checkCancellation()
+                terrainMessage = terrainResultMessage(result, region: nil)
+                terrainMessageFailed = terrainMessageFailedFlag(result)
+            } catch {
+                terrainMessage = Task.isCancelled
+                    ? "已停止下载；未写入半成品瓦片。"
+                    : friendlyEngineMessage(error.localizedDescription)
+                terrainMessageFailed = !Task.isCancelled
+            }
+            loadTerrain()
+        }
+    }
+
+    private func terrainResultMessage(_ result: JSONObject, region: TerrainRegion?) -> String {
         let status = result["status"] as? String ?? ""
-        if global {
+        if let region {
             let downloaded = (result["downloaded"] as? NSNumber)?.intValue ?? 0
             let absent = (result["absent"] as? NSNumber)?.intValue ?? 0
             let failed = (result["failed"] as? NSNumber)?.intValue ?? 0
@@ -956,14 +1024,14 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             switch status {
             case "cancelled":
                 if result["stopped_reason"] as? String == "disk_space" {
-                    return "磁盘空间不足已停止：\(summary)重新开始会跳过已有瓦片。"
+                    return "\(region.rawValue)下载因磁盘空间不足停止：\(summary)重新开始会跳过已有瓦片。"
                 }
-                return "已停止下载：\(summary)重新开始会跳过已有瓦片。"
+                return "\(region.rawValue)下载已停止：\(summary)重新开始会跳过已有瓦片。"
             default:
                 if failed > 0 {
-                    return "全球下载完成（部分失败）：\(summary)再次运行可重试失败瓦片。"
+                    return "\(region.rawValue)下载完成（部分失败）：\(summary)再次运行可重试失败瓦片。"
                 }
-                return "全球下载完成：\(summary)"
+                return "\(region.rawValue)下载完成：\(summary)"
             }
         }
         switch status {
@@ -974,9 +1042,9 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         }
     }
 
-    private func terrainMessageFailedFlag(_ result: JSONObject, global: Bool) -> Bool {
+    private func terrainMessageFailedFlag(_ result: JSONObject) -> Bool {
         let status = result["status"] as? String ?? ""
-        if global {
+        if status == "cancelled" || status == "done" {
             return ((result["failed"] as? NSNumber)?.intValue ?? 0) > 0
                 || result["stopped_reason"] as? String == "disk_space"
         }

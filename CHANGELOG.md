@@ -8,6 +8,43 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v1.4.0 (2026-11-21)
+
+DMG 安装引导（拖拽 + 自助移动）+ 地形区域下载预设。
+DMG install guidance (drag-to-Applications plus self-install prompt) and
+region presets for terrain download.
+
+**macOS 安装体验 / macOS install experience**
+
+- DMG 现在内置 `/Applications` 符号链接：Finder 打开即是经典的拖拽安装
+  窗口；打包冒烟新增挂载校验（应用可访问 + 符号链接指向正确）。
+  The DMG now ships an `/Applications` symlink next to the app, so Finder
+  opens the classic drag-to-install window; bundle smoke verifies the
+  layout by mounting the image.
+- 从挂载的磁盘映像双击启动时，应用主动提供安装引导：「应用程序」已有
+  相同或更新版本时提供打开已装版本；否则拷贝安装（旧版本先移入废纸篓）
+  并重新打开；无写权限时提示手动拖拽。快照/夹具与常规路径不受影响。
+  Launching from a mounted image now offers self-install: open the
+  already-installed copy when it is same-or-newer, otherwise copy-install
+  (older install goes to Trash first) and relaunch; a permission failure
+  explains manual drag-install instead of failing silently.
+
+**区域地形下载 / Region terrain download**
+
+- 下载范围从"全球"细化为区域预设（用户口径）：中国、东亚、东南亚、亚洲、
+  欧洲、北美、南美、非洲、大洋洲、全球，均为覆盖矩形直接映射引擎
+  `bounds`；确认框按所选区域展示候选数/已有/抽样估算体积。全球保留为
+  预设之一。
+  Download scope gains region presets (China, East Asia, Southeast Asia,
+  Asia, Europe, North America, South America, Africa, Oceania, Global);
+  each maps to an engine `bounds` rectangle and the confirmation dialog
+  shows per-region candidate counts, existing tiles and the sampled size
+  estimate. Global remains one of the presets.
+- `terrain_inventory` 估算接口支持 `bounds`（区域预设复用同一抽样路径），
+  焦点瓦片改为可选（估算请求不必带坐标）。
+  The `terrain_inventory` estimate honors `bounds`, and the focused tile
+  became optional (estimate requests need no coordinates).
+
 ## v1.3.0 (2026-11-21)
 
 数据管理手动删除 + 全球 SRTM 地形下载（引擎契约 + macOS 接入）。

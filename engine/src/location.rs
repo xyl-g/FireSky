@@ -821,32 +821,35 @@ impl Config {
             "tiles_truncated": tile_count > tiles.len(),
             "srtm_cache_dir": self.srtm_cache_dir.display().to_string(),
         });
-        let (lat, lon) = match (params.get("lat"), params.get("lon")) {
-            (Some(lat), Some(lon)) => match (number(lat), number(lon)) {
-                (Ok(lat), Ok(lon)) => (lat, lon),
-                _ => return Ok(result),
-            },
-            _ => return Ok(result),
-        };
-        coordinates(lat, lon)?;
-        let coverage_ok = (-56.0..60.0).contains(&lat);
-        result["coverage_ok"] = json!(coverage_ok);
-        if coverage_ok {
-            let name = tile(lat, lon)?;
-            let target = self.srtm_cache_dir.join(format!("{name}.hgt"));
-            let exists = regular(&target)?;
-            result["tile"] = json!({
-                "name": name,
-                "exists": exists,
-                "bytes": if exists {
-                    fs::metadata(&target).map(|meta| meta.len()).unwrap_or(0)
-                } else { 0 },
-                "lat_range": [lat.floor(), lat.floor() + 1.0],
-                "lon_range": [lon.floor(), lon.floor() + 1.0],
-            });
+        // 焦点瓦片可选：估算请求（仅 bounds）不必带坐标。
+        if let (Some(lat), Some(lon)) = (params.get("lat"), params.get("lon")) {
+            if let (Ok(lat), Ok(lon)) = (number(lat), number(lon)) {
+                coordinates(lat, lon)?;
+                let coverage_ok = (-56.0..60.0).contains(&lat);
+                result["coverage_ok"] = json!(coverage_ok);
+                if coverage_ok {
+                    let name = tile(lat, lon)?;
+                    let target = self.srtm_cache_dir.join(format!("{name}.hgt"));
+                    let exists = regular(&target)?;
+                    result["tile"] = json!({
+                        "name": name,
+                        "exists": exists,
+                        "bytes": if exists {
+                            fs::metadata(&target).map(|meta| meta.len()).unwrap_or(0)
+                        } else { 0 },
+                        "lat_range": [lat.floor(), lat.floor() + 1.0],
+                        "lon_range": [lon.floor(), lon.floor() + 1.0],
+                    });
+                }
+            }
         }
         if params["estimate_global"] == json!(true) {
-            let candidates = bulk_candidates(-56, 59, -180, 179)?;
+            // 可选 bounds：区域预设（中国/亚洲等）复用同一估算路径；缺省为全球。
+            let south = params["bounds"]["south"].as_i64().unwrap_or(-56);
+            let north = params["bounds"]["north"].as_i64().unwrap_or(59);
+            let west = params["bounds"]["west"].as_i64().unwrap_or(-180);
+            let east = params["bounds"]["east"].as_i64().unwrap_or(179);
+            let candidates = bulk_candidates(south, north, west, east)?;
             let existing = candidates
                 .iter()
                 .filter(|name| {
@@ -861,6 +864,7 @@ impl Config {
                 "existing": existing,
                 "estimated_bytes": estimated_bytes,
                 "estimated_gb": estimated_bytes.map(|bytes| bytes as f64 / 1e9),
+                "bounds": {"south": south, "north": north, "west": west, "east": east},
             });
         }
         Ok(result)
@@ -874,7 +878,11 @@ impl Config {
         if candidates.len() < 12 {
             return None;
         }
-        let indices = [0, 7, 23, 61, 127, 251, 503, 1021, 2053, 4177, 8389, candidates.len() - 1];
+        // 12 spread positions proportional to the candidate length — the
+        // sample must fit region presets (a few thousand tiles) as well as
+        // the global set, so fixed global indices would go out of bounds.
+        let len = candidates.len();
+        let indices: Vec<usize> = (0..12).map(|k| len * k / 12).collect();
         let mut sampled = 0usize;
         let mut total = 0u64;
         for index in indices {
@@ -2018,5 +2026,39 @@ mod tests {
         ] {
             assert!(config.terrain_download(&bad, &|_| Ok(())).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn terrain_inventory_estimate_honours_bounds() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = offline_config(dir.path());
+        // offline_config 的 S3 地址不可达：估算为 None 但候选数/边界照常返回。
+        let value = config
+            .terrain_inventory(&json!({
+                "estimate_global": true,
+                "bounds": {"south": 18, "north": 20, "west": 110, "east": 112},
+            }))
+            .unwrap();
+        assert_eq!(value["global"]["candidates"], 9);
+        assert_eq!(value["global"]["bounds"]["north"], 20);
+        assert_eq!(value["global"]["existing"], 0);
+        // 缺省 bounds 仍是全球候选集。
+        let value = config.terrain_inventory(&json!({"estimate_global": true})).unwrap();
+        assert_eq!(value["global"]["candidates"], 41760);
+        // 非法 bounds 报错。
+        assert!(config
+            .terrain_inventory(&json!({
+                "estimate_global": true,
+                "bounds": {"south": 90, "north": 95, "west": 0, "east": 1},
+            }))
+            .is_err());
+        // 采样位置按候选集长度取比例，小区域集（这里恰好 12 块）不越界。
+        let value = config
+            .terrain_inventory(&json!({
+                "estimate_global": true,
+                "bounds": {"south": 30, "north": 32, "west": 100, "east": 105},
+            }))
+            .unwrap();
+        assert_eq!(value["global"]["candidates"], 18);
     }
 }
