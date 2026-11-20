@@ -5,9 +5,11 @@ import SwiftUI
 struct FireSkyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var store = Store()
+    @StateObject private var updater = Updater()
     var body: some Scene {
         WindowGroup("FireSky") {
             WorkbenchRootView().environmentObject(store)
+                .environmentObject(updater)
                 .environment(\.locale, Locale(identifier: "zh_CN"))
                 .onAppear {
                     delegate.store = store
@@ -64,7 +66,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let destination = appsDirectory.appendingPathComponent("FireSky.app")
         let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
         let installedVersion = Bundle(url: destination)?.infoDictionary?["CFBundleShortVersionString"] as? String
-        if let installed = installedVersion, Self.compareVersions(installed, currentVersion) != .orderedAscending {
+        if let installed = installedVersion,
+               Updater.compareVersions(installed, currentVersion) != .orderedAscending {
             let alert = NSAlert()
             alert.messageText = "从磁盘映像启动了 FireSky"
             alert.informativeText = "「应用程序」中已安装相同或更新版本（\(installed)）。打开已安装版本并退出这份磁盘映像副本？"
@@ -98,18 +101,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// 语义化版本比较（"1.3.0" → 逐段数值），缺失段按 0 处理。
-    static func compareVersions(_ left: String, _ right: String) -> ComparisonResult {
-        var leftParts = left.split(separator: ".").map { Int($0) ?? 0 }
-        var rightParts = right.split(separator: ".").map { Int($0) ?? 0 }
-        while leftParts.count < rightParts.count { leftParts.append(0) }
-        while rightParts.count < leftParts.count { rightParts.append(0) }
-        for (l, r) in zip(leftParts, rightParts) {
-            if l < r { return .orderedAscending }
-            if l > r { return .orderedDescending }
-        }
-        return .orderedSame
-    }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     /// UX #12：仍有任务在运行时退出需要显式确认；快照/夹具运行直接放行。
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

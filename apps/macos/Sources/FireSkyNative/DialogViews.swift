@@ -417,6 +417,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @EnvironmentObject private var store: Store
+    @EnvironmentObject private var updater: Updater
     /// 分类与卸载确认状态都在 store：跨分区动作（CAMS 提醒跳转、助手卸载）可直接落位。
     private var category: Binding<SettingsCategory> {
         Binding(get: { store.settingsCategory }, set: { store.settingsCategory = $0 })
@@ -482,6 +483,72 @@ struct SettingsView: View {
                     .onChange(of: store.appearance) { _, _ in store.saveAppearance() }
                     .accessibilityLabel("主题")
             }
+            Divider()
+            updaterBlock
+        }
+    }
+
+    /// 软件更新块：当前版本、检查/下载/安装状态与自动检查开关。
+    @ViewBuilder
+    private var updaterBlock: some View {
+        let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        VStack(alignment: .leading, spacing: 10) {
+            Text("软件更新").font(.callout.weight(.medium))
+            HStack {
+                Text("当前版本 \(currentVersion)").font(.caption).foregroundStyle(.secondary)
+                if updater.phase == .checking { ProgressView().controlSize(.small) }
+                Spacer()
+                Button("检查更新") { updater.checkForUpdates(interactive: true) }
+                    .disabled(updater.phase == .checking || updater.phase == .downloading
+                              || updater.phase == .installing)
+            }
+            switch updater.phase {
+            case .current:
+                Text(updater.message).font(.caption).foregroundStyle(.secondary)
+            case .idle, .checking:
+                EmptyView()
+            case .available:
+                if let info = updater.info {
+                    Text("发现新版本 \(info.version)，可在下载后自动安装。")
+                        .font(.callout.weight(.medium)).foregroundStyle(Color.green)
+                    if !info.notes.isEmpty {
+                        DisclosureGroup("发布说明") {
+                            Text(info.notes)
+                                .font(.caption).foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    Button("下载并安装", systemImage: "arrow.down.circle.fill") {
+                        updater.downloadAndInstall()
+                    }
+                    .help("下载 DMG、校验 SHA256 后自动安装到「应用程序」并重启")
+                }
+            case .downloading:
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressView(value: max(Double(updater.receivedBytes), 1),
+                                 total: max(Double(updater.totalBytes), 1))
+                    HStack {
+                        Text("已下载 \(ByteCountFormatter.string(fromByteCount: updater.receivedBytes, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: updater.totalBytes, countStyle: .file))")
+                            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        Spacer()
+                        Button("取消") { updater.cancelDownload() }
+                    }
+                }
+            case .installing:
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在安装，完成后应用将自动重启。").font(.caption).foregroundStyle(.secondary)
+                }
+            case .failed:
+                Text(updater.message).font(.caption).foregroundStyle(.red)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("重试") { updater.checkForUpdates(interactive: true) }
+            }
+            Toggle("启动时自动检查更新", isOn: $updater.autoCheck)
+                .font(.caption)
+                .disabled(updater.phase == .downloading || updater.phase == .installing)
         }
     }
 

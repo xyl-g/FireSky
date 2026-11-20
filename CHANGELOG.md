@@ -8,6 +8,39 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v1.5.0 (2026-11-21)
+
+应用内更新逻辑（GitHub Releases 检查 → 下载 → 校验 → 自动安装）。
+In-app software update flow (check GitHub Releases, download, verify,
+install automatically).
+
+**软件更新 / Software update**
+
+- 新增设置 → 通用「软件更新」：检查更新、发现新版本时显示版本号与发布
+  说明（折叠）、下载进度与取消；启动后自动静默检查（默认开，可关），
+  发现新版本时侧栏「设置」入口显示绿色徽标。
+  Settings → General gains a "Software update" block: check for updates,
+  release notes (collapsed) and download progress with cancellation; a
+  silent check runs after launch (on by default, toggleable) and a green
+  badge appears on the sidebar Settings entry when a new version exists.
+- 下载完成后自动执行 SHA256SUMS.txt 完整性校验，随后挂载 DMG 拷贝安装
+  到「应用程序」（旧版本先入废纸篓）并自动重启；校验失败或无写权限时
+  给出明确提示与手动安装指引。下载/检查走 URLSession（系统代理；源码
+  运行时遵循环境代理变量）。
+  After download the SHA256SUMS.txt checksum is verified, then the DMG is
+  mounted, copied into /Applications (previous install trashed) and the
+  app relaunches automatically; checksum or permission failures explain
+  manual installation. Checking and downloading use URLSession (system
+  proxy settings; environment proxy variables honored for dev runs).
+- 版本比较/资产名匹配/架构探测/release 解析/校验和行解析为纯函数，进
+  入 Swift fixture 门禁（UpdaterChecks）。
+  Version comparison, asset matching, architecture detection, release
+  parsing and checksum-row parsing are pure functions covered by the
+  new UpdaterChecks Swift fixture gate.
+- JSONObject typealias 抽到共享 JSONTypes.swift（主 target 与 fixture
+  共用）。
+  The JSONObject typealias moved to shared JSONTypes.swift.
+
 ## v1.4.0 (2026-11-21)
 
 DMG 安装引导（拖拽 + 自助移动）+ 地形区域下载预设。

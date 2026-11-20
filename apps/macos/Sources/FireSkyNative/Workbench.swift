@@ -29,6 +29,7 @@ private let transmissionColor = Color(nsColor: NSColor(name: nil) { appearance i
 
 struct WorkbenchRootView: View {
     @EnvironmentObject private var store: Store
+    @EnvironmentObject private var updater: Updater
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
@@ -78,6 +79,15 @@ struct WorkbenchRootView: View {
             Text("\(store.camsConfigurationDescription)\n已有本地数据仍可使用。")
         }
         .task { await store.connect() }
+        .task {
+            // 启动静默检查更新（默认开，可在设置 → 通用关闭）；失败不打扰。
+            if updater.autoCheck {
+                try? await Task.sleep(for: .seconds(8))
+                if !Task.isCancelled, updater.autoCheck {
+                    updater.checkForUpdates(interactive: false)
+                }
+            }
+        }
         .onChange(of: store.page) { _, page in
             if page == .data {
                 Task {
@@ -121,6 +131,13 @@ struct WorkbenchRootView: View {
             Button("设置", systemImage: "gearshape") {
                 store.page = .settings
             }.buttonStyle(.plain).frame(maxWidth: .infinity).padding(.vertical, 18)
+                .overlay(alignment: .topTrailing) {
+                    // 发现新版本时在设置入口显示绿色徽标（更新入口在设置 → 通用）。
+                    if updater.phase == .available {
+                        Circle().fill(Color.green).frame(width: 8, height: 8)
+                            .help("发现新版本 \(updater.info?.version ?? "")")
+                    }
+                }
         }
         .padding(.horizontal, 15).padding(.top, 24).padding(.bottom, 16)
         .frame(width: 196)
