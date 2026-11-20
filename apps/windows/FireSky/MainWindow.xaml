@@ -257,6 +257,12 @@
                                     <StackPanel x:Name="RegionFields" Spacing="12" Visibility="Collapsed">
                                         <TextBlock Text="预设区域与自定义范围（0.25° 格点）" Opacity=".8"/>
                                         <StackPanel x:Name="RegionPresetsHost" Spacing="4"/>
+                                        <StackPanel Orientation="Horizontal" Spacing="16">
+                                            <CheckBox x:Name="ShowGridToggle" Content="网格线" IsChecked="True"
+                                                      Checked="OnMapOverlayToggled" Unchecked="OnMapOverlayToggled"/>
+                                            <CheckBox x:Name="ShowSamplesToggle" Content="采样点" IsChecked="True"
+                                                      Checked="OnMapOverlayToggled" Unchecked="OnMapOverlayToggled"/>
+                                        </StackPanel>
                                         <CheckBox x:Name="CustomRegionToggle" Content="自定义范围"
                                                   Checked="OnCustomRegionToggled" Unchecked="OnCustomRegionToggled"/>
                                         <StackPanel x:Name="CustomBoundsFields" Spacing="12" Visibility="Collapsed">

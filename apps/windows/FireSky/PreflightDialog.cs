@@ -81,9 +81,20 @@ public sealed class PreflightDialog : ContentDialog
         refresh.Click += async (_, _) => await Check();
         PrimaryButtonClick += async (_, e) =>
         {
-            if (mode == "cycleage") return; // cycleage 模式下主按钮单独处理
+            if (mode == "cycleage")
+            {
+                // 周期龄确认「继续预测」：提交会话并带 cycle_age_confirmed。
+                ConfirmedSession = session;
+                CycleAgeConfirmed = true;
+                return;
+            }
             if (working || session == null) { e.Cancel = true; return; }
-            if (ready) { ConfirmSession(); return; }
+            if (ready)
+            {
+                if (NeedsCycleAgeConfirmation) { e.Cancel = true; ShowCycleAgeConfirm(); return; }
+                ConfirmedSession = session;
+                return;
+            }
             e.Cancel = true;
             var deferral = e.GetDeferral();
             try { await Prepare(); }
@@ -98,6 +109,12 @@ public sealed class PreflightDialog : ContentDialog
             var deferral = e.GetDeferral();
             try { await Prepare(); }
             finally { deferral.Complete(); }
+        };
+        CloseButtonClick += (_, e) =>
+        {
+            // 周期龄确认的「返回更新数据」回到预检界面（对齐 macOS 确认弹层取消），
+            // 会话保留，用户可继续「更新数据」或「取消」。
+            if (mode == "cycleage") { e.Cancel = true; RestorePreflightMode(); }
         };
         Closed += (_, _) =>
         {
@@ -123,14 +140,8 @@ public sealed class PreflightDialog : ContentDialog
         }
     }
 
-    /// <summary>周期龄确认通过后真正提交会话；macOS confirmCycleAgeAndForecast。</summary>
-    private void ConfirmSession()
-    {
-        ConfirmedSession = session;
-        CycleAgeConfirmed = NeedsCycleAgeConfirmation;
-        Hide();
-    }
-
+    /// <summary>周期龄确认弹层：主按钮「继续预测」经 PrimaryButtonClick 提交，
+    /// 「返回更新数据」经 CloseButtonClick 回到预检（macOS confirmationDialog 口径）。</summary>
     private void ShowCycleAgeConfirm()
     {
         mode = "cycleage";

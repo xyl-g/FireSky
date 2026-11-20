@@ -712,6 +712,8 @@ public sealed partial class MainWindow : Window
             ["lat"] = Latitude.Value, ["lon"] = Longitude.Value, ["regional"] = page == "regional",
             ["west"] = West.Value, ["east"] = East.Value, ["south"] = South.Value, ["north"] = North.Value,
             ["points"] = resultKind == page ? report?["points"]?.DeepClone() : null,
+            ["show_grid"] = showRegionalGrid,
+            ["show_samples"] = showRegionalSamples,
             ["samples"] = page == "regional" && resultKind == page && showRegionalSamples
                 ? report?["points"]?.DeepClone() : null,
             ["selected_time"] = page == "point" && pointSelectedTime.Length > 0 ? pointSelectedTime : null,
@@ -720,7 +722,8 @@ public sealed partial class MainWindow : Window
         catch (Exception error) { Fail(error); }
     }
 
-    internal bool showRegionalSamples;
+    internal bool showRegionalGrid = true;
+    internal bool showRegionalSamples = true;
 
     // ---------- 位置搜索 / 定位（UX #5：轻量任务不占全局 busy） ----------
 
@@ -986,6 +989,15 @@ public sealed partial class MainWindow : Window
     private void SessionAndRender()
     {
         result = null; RenderResult(); ScheduleSessionSave(); _ = UpdateMap();
+    }
+
+    /// <summary>区域地图叠加开关：网格线与采样点标注（对齐 macOS regional-6）。</summary>
+    private void OnMapOverlayToggled(object sender, RoutedEventArgs args)
+    {
+        if (!initialized || ShowGridToggle == null) return;
+        showRegionalGrid = ShowGridToggle.IsChecked == true;
+        showRegionalSamples = ShowSamplesToggle.IsChecked == true;
+        _ = UpdateMap();
     }
 
     private void RebuildSyncAnchorPicker()

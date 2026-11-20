@@ -158,7 +158,8 @@ public sealed partial class MainWindow
 
     private void OnRegionalInspectorModeChanged(object sender, SelectionChangedEventArgs args)
     {
-        if (RegionalInspectorMode == null) return;
+        if (RegionalInspectorMode == null || RegionalGridRows == null
+            || CityRankingRows == null) return;
         var mode = TagOf(RegionalInspectorMode.SelectedItem);
         RegionalGridRows.Visibility = mode == "grid" ? Visibility.Visible : Visibility.Collapsed;
         CityRankingRows.Visibility = mode == "cities" ? Visibility.Visible : Visibility.Collapsed;
