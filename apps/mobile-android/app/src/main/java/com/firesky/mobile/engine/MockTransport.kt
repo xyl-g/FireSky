@@ -130,6 +130,14 @@ class MockTransport : EngineTransport {
         "forecast" -> forecast(requestId)
         "dismiss" -> dismiss()
         "inventory" -> inventory()
+        "task_history" -> taskHistory()
+        "task_events" -> taskEvents()
+        "task_forget" -> JSONObject().put("forgotten", true)
+        "result_restore" -> resultRestore()
+        "data_delete_preview" -> dataDeletePreview()
+        "data_delete_execute" -> dataDeleteExecute()
+        "terrain_inventory" -> terrainInventory()
+        "terrain_download" -> terrainDownload(requestId)
         "cams_credentials" -> camsCredentials()
         "save_cams_key" -> saveCamsKey(params)
         "cancel" -> JSONObject()
@@ -146,6 +154,8 @@ class MockTransport : EngineTransport {
                 listOf(
                     "score_window", "check_desktop_data", "desktop_inventory",
                     "desktop_publications", "desktop_prepare", "desktop_session", "location",
+                    "task_history", "task_events", "task_forget", "result_restore",
+                    "data_delete", "terrain_inventory", "terrain_download",
                 ),
             ),
         )
@@ -216,6 +226,108 @@ class MockTransport : EngineTransport {
     private fun dismiss(): JSONObject {
         sessionToken = null
         return JSONObject()
+    }
+
+    private fun taskHistory(): JSONObject {
+        val payload = JSONObject()
+            .put("kind", "point")
+            .put("payload", JSONObject()
+                .put("name", "杭州").put("lat", 30.2741).put("lon", 120.1551)
+                .put("target_date", "2026-11-09").put("phenomenon", "dusk"))
+        val running = JSONObject()
+            .put("task_id", "b".repeat(64)).put("method", "prepare").put("status", "running")
+            .put("created_at_utc", "2026-11-21T09:00:00.000Z")
+            .put("updated_at_utc", "2026-11-21T09:01:00.000Z")
+            .put("cancel_requested", false)
+            .put("event_seq", 2).put("progress", JSONObject().put("percent", 40.0))
+            .put("retry_request", payload)
+        val done = JSONObject()
+            .put("task_id", "a".repeat(64)).put("method", "forecast").put("status", "done")
+            .put("created_at_utc", "2026-11-20T12:27:33.706Z")
+            .put("updated_at_utc", "2026-11-20T12:27:42.600Z")
+            .put("cancel_requested", false)
+            .put("event_seq", 5).put("retry_request", payload)
+            .put("result_ref", JSONObject().put("snapshot", JSONObject()
+                .put("contract", "firesky-result-snapshot-v1").put("sha256", "c".repeat(64))))
+        val sync = JSONObject()
+            .put("task_id", "d".repeat(64)).put("method", "data_sync").put("status", "done")
+            .put("created_at_utc", "2026-11-20T04:00:00.000Z")
+            .put("updated_at_utc", "2026-11-20T04:01:00.000Z")
+            .put("cancel_requested", false).put("event_seq", 1)
+        return JSONObject()
+            .put("schema", "firesky-task-history-v1")
+            .put("automatic_restart", false)
+            .put("total", 3)
+            .put("issues", JSONArray())
+            .put("tasks", JSONArray().put(running).put(done).put(sync))
+    }
+
+    private fun taskEvents(): JSONObject {
+        fun event(seq: Int, name: String, percent: Double?, stage: String, message: String): JSONObject {
+            val data = JSONObject()
+            if (stage.isNotEmpty()) data.put("stage", stage)
+            if (message.isNotEmpty()) data.put("message", message)
+            percent?.let { data.put("percent", it) }
+            return JSONObject()
+                .put("seq", seq).put("at_utc", "2026-11-20T12:27:3$seq.000Z")
+                .put("event", name).put("data", data)
+        }
+        return JSONObject()
+            .put("task_id", "a".repeat(64))
+            .put("events", JSONArray()
+                .put(event(1, "running", null, "", "预测计算已开始"))
+                .put(event(2, "progress", 30.0, "prepare", "正在准备 GFS 与 CAMS 数据"))
+                .put(event(3, "progress", 70.0, "prepare", "GFS 数据已就绪"))
+                .put(event(4, "progress", 90.0, "forecast", "预测计算进行中"))
+                .put(event(5, "done", null, "", "预测完成")))
+            .put("next_seq", 6).put("truncated", false)
+    }
+
+    private fun resultRestore(): JSONObject = JSONObject()
+        .put("model_results", JSONObject().put("gfs", JSONObject().put("score", 0.8)))
+
+    private fun dataDeletePreview(): JSONObject = JSONObject()
+        .put("contract", "rust-data-delete-preview-v1")
+        .put("preview_id", "mock0preview000001")
+        .put("file_count", 42)
+        .put("total_mb", 512.5)
+        .put("protected", JSONArray())
+
+    private fun dataDeleteExecute(): JSONObject = JSONObject()
+        .put("contract", "rust-data-delete-execute-v1")
+        .put("deleted", 42).put("skipped", JSONArray()).put("failed", JSONArray())
+        .put("freed_mb", 512.5)
+
+    private fun terrainInventory(): JSONObject = JSONObject()
+        .put("contract", "rust-terrain-inventory-v1")
+        .put("tile_count", 3)
+        .put("tiles", JSONArray()
+            .put(JSONObject().put("name", "N30E119").put("bytes", 25_934_402))
+            .put(JSONObject().put("name", "N30E120").put("bytes", 25_934_402))
+            .put(JSONObject().put("name", "N31E120").put("bytes", 25_934_402)))
+        .put("coverage_ok", true)
+        .put("tile", JSONObject().put("name", "N30E120").put("exists", true).put("bytes", 25_934_402)
+            .put("lat_range", JSONArray(listOf(30.0, 31.0))).put("lon_range", JSONArray(listOf(120.0, 121.0))))
+
+    /** mock 批量下载：模拟 4 块瓦片进度后完成（真下载走 JniTransport 真引擎）。 */
+    private fun terrainDownload(requestId: String): JSONObject {
+        val total = 4
+        for (index in 1..total) {
+            if (index > 1) Thread.sleep(400)
+            emitFrame(JSONObject().put("id", requestId).put("type", "progress").put("event",
+                JSONObject().put("terrain", JSONObject()
+                    .put("stage", "global").put("candidates", total)
+                    .put("downloaded", index).put("absent", 0).put("failed", 0)
+                    .put("existing", 0).put("received_bytes", index * 10_000_000L)
+                    .put("percent", index * 100.0 / total)
+                    .put("current_tile", "N30E11$index"))))
+        }
+        return JSONObject()
+            .put("contract", "rust-terrain-download-v1")
+            .put("status", "done").put("mode", "global").put("candidates", total)
+            .put("existing", 0).put("downloaded", total).put("absent", 0).put("failed", 0)
+            .put("received_bytes", total * 10_000_000L).put("received_gb", total * 0.01)
+            .put("stopped_reason", JSONObject.NULL)
     }
 
     private fun inventory(): JSONObject {

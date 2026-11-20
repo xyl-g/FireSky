@@ -23,6 +23,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.History
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Refresh
@@ -66,7 +68,7 @@ import org.json.JSONObject
 import java.time.Instant
 import java.time.ZoneOffset
 
-/** 应用壳：底部导航（工作台 / 设置）+ 准备面板（preflight bottom sheet）。 */
+/** 应用壳：底部导航（工作台 / 数据管理 / 任务历史 / 设置）+ 准备面板（preflight bottom sheet）。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WorkbenchApp(store: WorkbenchStore) {
@@ -79,6 +81,12 @@ fun WorkbenchApp(store: WorkbenchStore) {
                     NavigationItem("workbench", "工作台", Icons.Filled.Place, state.page) {
                         store.setPage("workbench")
                     }
+                    NavigationItem("data", "数据管理", Icons.Filled.Storage, state.page) {
+                        store.setPage("data")
+                    }
+                    NavigationItem("history", "任务历史", Icons.Filled.History, state.page) {
+                        store.setPage("history")
+                    }
                     NavigationItem("settings", "设置", Icons.Filled.Settings, state.page) {
                         store.setPage("settings")
                     }
@@ -86,10 +94,11 @@ fun WorkbenchApp(store: WorkbenchStore) {
             },
         ) { padding ->
             Box(Modifier.fillMaxSize().padding(padding)) {
-                if (state.page == "settings") {
-                    SettingsScreen(store, state)
-                } else {
-                    WorkbenchScreen(store, state)
+                when (state.page) {
+                    "settings" -> SettingsScreen(store, state)
+                    "data" -> DataScreen(store, state)
+                    "history" -> HistoryScreen(store, state)
+                    else -> WorkbenchScreen(store, state)
                 }
                 if (state.showPreflight) {
                     ModalBottomSheet(

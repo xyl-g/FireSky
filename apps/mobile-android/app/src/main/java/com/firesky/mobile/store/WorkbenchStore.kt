@@ -60,6 +60,162 @@ data class LocationState(
     val metadataReady: Boolean = true,
 )
 
+/** 任务历史行（同构 NativeTaskHistoryItem；v1.6.0 历史页）。 */
+data class TaskHistoryItem(
+    val taskId: String,
+    val method: String,
+    val status: String,
+    val createdAt: String,
+    val cancelRequested: Boolean,
+    val percent: Double?,
+    val retryPayload: JSONObject?,
+    val canRestoreResult: Boolean,
+) {
+    val isBackgroundSync: Boolean get() = method == "data_sync"
+    val methodTitle: String get() = when (method) {
+        "check" -> "数据检查"
+        "prepare" -> "数据准备"
+        "forecast" -> "预测计算"
+        "publications" -> "发布核验"
+        "network_probe" -> "下载探测"
+        "data_sync" -> "后台同步"
+        "terrain_download" -> "地形下载"
+        else -> "任务"
+    }
+    val kindTitle: String get() = when (retryPayload?.optString("kind")) {
+        "point" -> "单点"
+        "regional" -> "区域"
+        "nowcast" -> "实况"
+        else -> methodTitle
+    }
+    val rowTitle: String get() = if (kindTitle == methodTitle) methodTitle else "$kindTitle · $methodTitle"
+    val statusTitle: String get() = when (status) {
+        "running" -> if (cancelRequested) "取消中" else "运行中"
+        "done" -> "已完成"
+        "failed" -> "失败"
+        "cancelled" -> "已取消"
+        "interrupted" -> "已中断"
+        else -> status
+    }
+    val contextTitle: String get() {
+        val payload = retryPayload ?: return if (isBackgroundSync) "后台数据同步轮次" else ""
+        val name = payload.optString("name", "").ifEmpty {
+            val regions = payload.optJSONArray("regions") ?: JSONArray()
+            (0 until regions.length()).map { regions.optString(it) }.joinToString("、")
+        }
+        val date = payload.optString("target_date", "")
+        val phenomenon = when (payload.optString("phenomenon")) {
+            "dawn" -> "朝霞"
+            "dusk" -> "晚霞"
+            else -> ""
+        }
+        val text = listOf(name, date, phenomenon).filter { it.isNotEmpty() }.joinToString(" · ")
+        return if (text.isEmpty() && isBackgroundSync) "后台数据同步轮次" else text
+    }
+    /** 本地时区短时间（UTC ISO8601 → MM-dd HH:mm）。 */
+    val localTime: String get() = runCatching {
+        val instant = java.time.Instant.parse(createdAt)
+        val formatter = java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm")
+        formatter.withZone(java.time.ZoneId.systemDefault()).format(instant)
+    }.getOrDefault(createdAt)
+
+    /** 行尾摘要：运行中带百分比，中断标注不自动重跑（同 macOS 行内说明）。 */
+    val rowTimeLine: String
+        get() {
+            var text = localTime
+            if (status == "running" && percent != null) {
+                text += " · %.0f%%".format(percent)
+            }
+            if (status == "interrupted") {
+                text += " · 不会自动重跑"
+            }
+            return text
+        }
+
+    companion object {
+        /** 解析与校验同构 NativeTaskHistoryItem.init?：非法记录返回 null。 */
+        fun parse(value: JSONObject): TaskHistoryItem? {
+            val taskId = value.optString("task_id")
+            if (taskId.length != 64 || taskId.any { !it.isDigit() && it !in 'a'..'f' }) return null
+            val method = value.optString("method")
+            val status = value.optString("status")
+            if (status !in listOf("running", "done", "failed", "cancelled", "interrupted")) return null
+            val createdAt = value.optString("created_at_utc")
+            if (createdAt.isEmpty()) return null
+            val retry = value.optJSONObject("retry_request")
+            val payload = retry?.optJSONObject("payload")?.takeIf {
+                it.optString("kind") in listOf("point", "regional", "nowcast")
+            }
+            val reference = value.optJSONObject("result_ref")?.optJSONObject("snapshot")
+            val canRestore = reference?.optString("contract") == "firesky-result-snapshot-v1" &&
+                reference.has("sha256")
+            return TaskHistoryItem(
+                taskId = taskId,
+                method = method,
+                status = status,
+                createdAt = createdAt,
+                cancelRequested = value.optBoolean("cancel_requested", false),
+                percent = value.optJSONObject("progress")?.optDouble("percent")?.takeUnless { it.isNaN() },
+                retryPayload = payload,
+                canRestoreResult = canRestore,
+            )
+        }
+    }
+}
+
+/** 任务事件行（同构 NativeTaskEvent）。 */
+data class TaskEventRow(
+    val seq: Int,
+    val at: String,
+    val event: String,
+    val stage: String,
+    val message: String,
+    val percent: Double?,
+) {
+    val title: String get() = when (event) {
+        "running" -> "开始"
+        "progress" -> "进度"
+        "cancel_requested" -> "请求取消"
+        "done" -> "完成"
+        "failed" -> "失败"
+        "cancelled" -> "已取消"
+        "interrupted" -> "已中断"
+        else -> "状态更新"
+    }
+    val detail: String get() {
+        val parts = buildList {
+            if (stage.isNotEmpty()) add(stage.take(128))
+            if (message.isNotEmpty()) add(message.take(128))
+            percent?.let { add("%.0f%%".format(it)) }
+        }
+        return parts.joinToString(" · ")
+    }
+    val localTime: String get() = runCatching {
+        val instant = java.time.Instant.parse(at)
+        val formatter = java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm:ss")
+        formatter.withZone(java.time.ZoneId.systemDefault()).format(instant)
+    }.getOrDefault(at)
+}
+
+/** 地形下载区域预设（v1.4.0 macOS TerrainRegion 同构；全球走引擎缺省全域）。 */
+enum class TerrainRegion(val label: String, val bounds: JSONObject?) {
+    CHINA("中国", JSONObject().put("south", 18).put("north", 54).put("west", 73).put("east", 135)),
+    EAST_ASIA("东亚", JSONObject().put("south", 20).put("north", 54).put("west", 100).put("east", 146)),
+    SOUTHEAST_ASIA("东南亚", JSONObject().put("south", -11).put("north", 28).put("west", 92).put("east", 141)),
+    ASIA("亚洲", JSONObject().put("south", -11).put("north", 59).put("west", 26).put("east", 179)),
+    EUROPE("欧洲", JSONObject().put("south", 35).put("north", 59).put("west", -11).put("east", 40)),
+    NORTH_AMERICA("北美", JSONObject().put("south", 15).put("north", 59).put("west", -170).put("east", -52)),
+    SOUTH_AMERICA("南美", JSONObject().put("south", -56).put("north", 13).put("west", -82).put("east", -34)),
+    AFRICA("非洲", JSONObject().put("south", -35).put("north", 37).put("west", -18).put("east", 52)),
+    OCEANIA("大洋洲", JSONObject().put("south", -47).put("north", 0).put("west", 110).put("east", 179)),
+    GLOBAL("全球", null);
+
+    companion object {
+        fun fromLabel(label: String): TerrainRegion? = entries.firstOrNull { it.label == label }
+        val labels: List<String> get() = entries.map { it.label }
+    }
+}
+
 /**
  * 单点工作台状态（v1 范围：无区域/实况，MOBILE_NATIVE_PLAN.md §3）。
  * 状态语义以 iOS Store.swift 为参照源；地图选点延后（openQuestions D1）。
@@ -102,6 +258,40 @@ data class WorkbenchState(
     val camsMessage: String = "",
     val camsSaveFailed: Boolean = false,
     val showCAMSTutorial: Boolean = false,
+    // 任务历史（v1.6.0 与 macOS 任务历史页对齐）
+    val taskHistory: List<TaskHistoryItem> = emptyList(),
+    val taskHistoryTotal: Int = 0,
+    val taskHistoryLoaded: Boolean = false,
+    val taskHistoryLoading: Boolean = false,
+    val taskHistoryError: String = "",
+    val selectedTaskId: String? = null,
+    val taskEvents: List<TaskEventRow> = emptyList(),
+    val taskEventsLoading: Boolean = false,
+    val taskEventsError: String = "",
+    val pendingForgetTaskId: String? = null,
+    val restoringTaskId: String? = null,
+    // 数据管理（库存 / 手动删除 / 地形区域下载）
+    val pendingDataDelete: JSONObject? = null,
+    val dataDeletePreview: JSONObject? = null,
+    val dataDeletePreviewing: Boolean = false,
+    val dataDeleteRunning: Boolean = false,
+    val dataDeleteMessage: String = "",
+    val dataDeleteFailed: Boolean = false,
+    val terrain: JSONObject? = null,
+    val terrainLoading: Boolean = false,
+    val terrainDownloading: Boolean = false,
+    val terrainCancelling: Boolean = false,
+    val terrainMessage: String = "",
+    val terrainMessageFailed: Boolean = false,
+    val terrainProgress: JSONObject = JSONObject(),
+    val terrainRegion: String = "中国",
+    val terrainEstimate: JSONObject? = null,
+    val terrainEstimateLoading: Boolean = false,
+    val showTerrainConfirm: Boolean = false,
+    // 本地数据清单（库存）
+    val inventory: JSONArray = JSONArray(),
+    // 设置分类（通用/数据/位置与海拔/高级）
+    val settingsCategory: String = "通用",
 )
 
 /**
@@ -755,7 +945,23 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
     // ---------------------------------------------------------------- 设置
 
     fun setPage(page: String) {
+        val previous = _state.value.page
         _state.update { it.copy(page = page) }
+        if (page == previous) return
+        when (page) {
+            "data" -> {
+                loadInventory()
+                loadTerrain()
+            }
+            "history" -> loadTaskHistory()
+        }
+    }
+
+    /** 设置分类；CAMS 提醒等外部跳转可直接落位（macOS settingsCategory 同构）。 */
+    fun setSettingsCategory(value: String) {
+        if (value in listOf("通用", "数据", "位置与海拔", "高级")) {
+            _state.update { it.copy(settingsCategory = value) }
+        }
     }
 
     fun setAppearance(value: String) {
@@ -846,6 +1052,455 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
             }
         }
     }
+
+    // ---------------------------------------------------------------- 任务历史（v1.6.0）
+
+    fun loadTaskHistory() {
+        val current = _state.value
+        if (!current.online || current.taskHistoryLoading) return
+        viewModelScope.launch {
+            _state.update { it.copy(taskHistoryLoading = true, taskHistoryError = "") }
+            try {
+                val response = engine.call("task_history", JSONObject().put("limit", 100))
+                if (response.optString("schema") != "firesky-task-history-v1") {
+                    throw EngineError("任务历史协议不匹配，请重新连接引擎。")
+                }
+                val tasks = (response.optJSONArray("tasks") ?: JSONArray()).let { array ->
+                    (0 until array.length()).mapNotNull { index ->
+                        array.optJSONObject(index)?.let { TaskHistoryItem.parse(it) }
+                    }
+                }
+                val total = response.optInt("total", tasks.size)
+                _state.update {
+                    it.copy(
+                        taskHistory = tasks,
+                        taskHistoryTotal = total,
+                        taskHistoryLoaded = true,
+                        taskHistoryError = "",
+                    )
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _state.update { it.copy(taskHistoryError = error.message ?: "任务历史读取失败") }
+            } finally {
+                _state.update { it.copy(taskHistoryLoading = false) }
+            }
+        }
+    }
+
+    fun selectTask(taskId: String) {
+        if (_state.value.selectedTaskId == taskId) {
+            _state.update {
+                it.copy(selectedTaskId = null, taskEvents = emptyList(), taskEventsError = "")
+            }
+            return
+        }
+        if (_state.value.taskHistory.none { it.taskId == taskId }) return
+        _state.update {
+            it.copy(
+                selectedTaskId = taskId,
+                taskEvents = emptyList(),
+                taskEventsError = "",
+                taskEventsLoading = true,
+            )
+        }
+        viewModelScope.launch {
+            try {
+                val response = engine.call(
+                    "task_events",
+                    JSONObject().put("task_id", taskId).put("after_seq", 0),
+                )
+                val events = (response.optJSONArray("events") ?: JSONArray()).let { array ->
+                    (0 until array.length()).mapNotNull { index ->
+                        val item = array.optJSONObject(index) ?: return@mapNotNull null
+                        TaskEventRow(
+                            seq = item.optInt("seq", 0),
+                            at = item.optString("at_utc"),
+                            event = item.optString("event"),
+                            stage = item.optJSONObject("data")?.optString("stage").orEmpty(),
+                            message = item.optJSONObject("data")?.optString("message").orEmpty(),
+                            percent = item.optJSONObject("data")?.optDouble("percent")?.takeUnless { it.isNaN() },
+                        )
+                    }
+                }
+                _state.update { it.copy(taskEvents = events, taskEventsLoading = false) }
+            } catch (error: Exception) {
+                _state.update {
+                    it.copy(taskEventsError = error.message ?: "事件读取失败", taskEventsLoading = false)
+                }
+            }
+        }
+    }
+
+    /** 「删除记录」语义同 macOS：只删除状态与事件，不删除报告与数据。 */
+    fun setPendingForgetTask(taskId: String?) {
+        _state.update { it.copy(pendingForgetTaskId = taskId) }
+    }
+
+    fun forgetPendingTask() {
+        val taskId = _state.value.pendingForgetTaskId ?: return
+        _state.update { it.copy(pendingForgetTaskId = null) }
+        val current = _state.value
+        if (!current.online || current.busy) return
+        if (current.taskHistory.firstOrNull { it.taskId == taskId }?.status == "running") return
+        viewModelScope.launch {
+            try {
+                engine.call("task_forget", JSONObject().put("task_id", taskId))
+                if (_state.value.selectedTaskId == taskId) {
+                    _state.update { it.copy(selectedTaskId = null, taskEvents = emptyList()) }
+                }
+                loadTaskHistory()
+            } catch (error: Exception) {
+                _state.update { it.copy(taskHistoryError = error.message ?: "记录删除失败") }
+            }
+        }
+    }
+
+    /** 恢复已发布结果（同构 macOS restoreTaskResult：回填原始参数 + adoptResult）。 */
+    fun restoreTaskResult(item: TaskHistoryItem) {
+        val current = _state.value
+        if (current.busy || current.restoringTaskId != null || !item.canRestoreResult) return
+        _state.update { it.copy(restoringTaskId = item.taskId) }
+        viewModelScope.launch {
+            try {
+                val response = engine.call("result_restore", JSONObject().put("task_id", item.taskId))
+                applyRestored(response, item)
+            } catch (error: Exception) {
+                _state.update {
+                    it.copy(taskHistoryError = error.message ?: "结果恢复失败", restoringTaskId = null)
+                }
+            }
+        }
+    }
+
+    /** 恢复参数并重新检查（同构 macOS restoreTaskParameters）。 */
+    fun restoreTaskParameters(item: TaskHistoryItem) {
+        val current = _state.value
+        val payload = item.retryPayload ?: return
+        if (current.busy || current.restoringTaskId != null || current.online.not()) return
+        applyHistoryPayload(payload)
+        beginCheck()
+    }
+
+    private suspend fun applyRestored(response: JSONObject, item: TaskHistoryItem) {
+        val models = response.optJSONObject("model_results") ?: throw EngineError("已发布结果格式无效。")
+        val payload = item.retryPayload ?: JSONObject()
+        val modelSource = payload.optString("model_source")
+        val selected = when {
+            modelSource == "gfs" || modelSource == "ec" -> modelSource
+            models.has("gfs") -> "gfs"
+            else -> "ec"
+        }
+        applyHistoryPayload(payload)
+        _state.update {
+            it.copy(
+                result = response,
+                selectedModel = selected,
+                restoringTaskId = null,
+                status = "已恢复历史结果",
+                error = "",
+            )
+        }
+    }
+
+    /** 历史 payload → 表单（name/lat/lon/elevation_m/timezone_name/target_date/phenomenon）。 */
+    private fun applyHistoryPayload(payload: JSONObject) {
+        val current = _state.value
+        val loc = current.location
+        val lat = payload.optDouble("lat").takeUnless { it.isNaN() } ?: loc.lat
+        val lon = payload.optDouble("lon").takeUnless { it.isNaN() } ?: loc.lon
+        val elevation = payload.optDouble("elevation_m").takeUnless { it.isNaN() } ?: loc.elevation
+        val timezone = payload.optString("timezone_name", "").ifEmpty { loc.timezone }
+        val restoredDate = runCatching { LocalDate.parse(payload.optString("target_date")) }.getOrNull()
+        _state.update {
+            it.copy(
+                location = loc.copy(
+                    name = payload.optString("name", "").ifEmpty { loc.name },
+                    lat = lat,
+                    lon = lon,
+                    elevation = elevation,
+                    timezone = timezone,
+                    metadataReady = true,
+                ),
+                targetDate = restoredDate ?: current.targetDate,
+                dateTab = if (restoredDate != null) "自定义" else current.dateTab,
+                phenomenon = payload.optString("phenomenon", "").ifEmpty { current.phenomenon },
+                result = null,
+            )
+        }
+    }
+
+    // ---------------------------------------------------------------- 数据管理（v1.6.0）
+
+    fun loadInventory() {
+        val current = _state.value
+        if (!current.online) return
+        viewModelScope.launch {
+            try {
+                val response = engine.call("inventory")
+                val datasets = response.optJSONArray("datasets") ?: JSONArray()
+                _state.update { it.copy(inventory = datasets, error = "") }
+            } catch (_: Exception) {
+                // 库存读取失败保留上一次内容；错误行显示全局 error。
+            }
+        }
+    }
+
+    /** 选择范围并请求引擎预览；范围始终是库存周期键，不传磁盘路径。 */
+    fun beginDataDelete(source: String, cycle: String?) {
+        val current = _state.value
+        if (!current.online || current.busy || current.dataDeleteRunning || current.dataDeletePreviewing) return
+        val scope = JSONObject().put("source", source)
+        if (cycle != null) scope.put("cycle", cycle)
+        _state.update {
+            it.copy(
+                pendingDataDelete = scope,
+                dataDeletePreview = null,
+                dataDeleteMessage = "",
+                dataDeleteFailed = false,
+                dataDeletePreviewing = true,
+            )
+        }
+        viewModelScope.launch {
+            try {
+                val preview = engine.call("data_delete_preview", JSONObject().put("scope", scope))
+                _state.update { it.copy(dataDeletePreview = preview, dataDeletePreviewing = false) }
+            } catch (error: Exception) {
+                _state.update {
+                    it.copy(
+                        pendingDataDelete = null,
+                        dataDeletePreviewing = false,
+                        dataDeleteMessage = error.message ?: "预览失败",
+                        dataDeleteFailed = true,
+                    )
+                }
+            }
+        }
+    }
+
+    fun cancelDataDelete() {
+        _state.update { it.copy(pendingDataDelete = null, dataDeletePreview = null) }
+    }
+
+    /** 确认后执行；预览过期保留范围并提示重新确认，不静默扩大。 */
+    fun executeDataDelete() {
+        val current = _state.value
+        val scope = current.pendingDataDelete ?: return
+        val preview = current.dataDeletePreview ?: return
+        val previewId = preview.optString("preview_id")
+        if (!current.online || current.dataDeleteRunning || previewId.isEmpty()) return
+        _state.update { it.copy(dataDeleteRunning = true) }
+        viewModelScope.launch {
+            try {
+                val result = engine.call(
+                    "data_delete_execute",
+                    JSONObject().put("scope", scope).put("preview_id", previewId).put("confirm", true),
+                )
+                val deleted = result.optInt("deleted", 0)
+                val skipped = result.optJSONArray("skipped")?.length() ?: 0
+                val failed = result.optJSONArray("failed")?.length() ?: 0
+                val mb = result.optDouble("freed_mb").takeUnless { it.isNaN() } ?: 0.0
+                _state.update {
+                    it.copy(
+                        pendingDataDelete = null,
+                        dataDeletePreview = null,
+                        dataDeleteRunning = false,
+                        dataDeleteMessage = "已删除 $deleted 个文件，释放 %.1f MB".format(mb) +
+                            (if (skipped > 0) "；占用中跳过 $skipped 个" else "") +
+                            (if (failed > 0) "；失败 $failed 个" else ""),
+                        dataDeleteFailed = failed > 0,
+                    )
+                }
+                loadInventory()
+            } catch (error: Exception) {
+                _state.update {
+                    it.copy(
+                        dataDeletePreview = null,
+                        dataDeleteRunning = false,
+                        dataDeleteMessage = error.message ?: "删除失败",
+                        dataDeleteFailed = true,
+                    )
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------- 地形区域下载（v1.6.0）
+
+    fun loadTerrain() {
+        val current = _state.value
+        if (!current.online || current.terrainLoading || current.terrainDownloading) return
+        viewModelScope.launch {
+            _state.update { it.copy(terrainLoading = true) }
+            try {
+                val response = engine.call(
+                    "terrain_inventory",
+                    JSONObject().put("lat", current.location.lat).put("lon", current.location.lon),
+                )
+                _state.update { it.copy(terrain = response, terrainMessage = "", terrainMessageFailed = false) }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _state.update {
+                    it.copy(
+                        terrain = null,
+                        terrainMessage = error.message ?: "地形状态读取失败",
+                        terrainMessageFailed = true,
+                    )
+                }
+            } finally {
+                _state.update { it.copy(terrainLoading = false) }
+            }
+        }
+    }
+
+    fun setTerrainRegion(value: String) {
+        _state.update { it.copy(terrainRegion = value) }
+    }
+
+    /** 请求所选区域估算（HEAD 抽样）；完成后弹确认。 */
+    fun loadTerrainEstimate() {
+        val current = _state.value
+        if (!current.online || current.terrainDownloading || current.terrainEstimateLoading) return
+        _state.update { it.copy(terrainEstimateLoading = true) }
+        val params = JSONObject()
+            .put("estimate_global", true)
+            .put("lat", current.location.lat)
+            .put("lon", current.location.lon)
+        TerrainRegion.fromLabel(current.terrainRegion)?.bounds?.let { params.put("bounds", it) }
+        viewModelScope.launch {
+            try {
+                val response = engine.call("terrain_inventory", params)
+                _state.update { it.copy(terrainEstimate = response, showTerrainConfirm = true) }
+            } catch (error: Exception) {
+                _state.update {
+                    it.copy(
+                        terrainEstimate = null,
+                        terrainMessage = error.message ?: "估算失败",
+                        terrainMessageFailed = true,
+                    )
+                }
+            } finally {
+                _state.update { it.copy(terrainEstimateLoading = false) }
+            }
+        }
+    }
+
+    fun dismissTerrainConfirm() {
+        _state.update { it.copy(showTerrainConfirm = false) }
+    }
+
+    /** 批量（区域/全球）下载：跳过已有、可取消续传；进度经 terrain 事件回填。 */
+    fun downloadTerrainRegion() {
+        val current = _state.value
+        if (!current.online || current.busy || current.terrainDownloading) return
+        _state.update {
+            it.copy(
+                terrainDownloading = true,
+                terrainCancelling = false,
+                terrainMessage = "",
+                terrainProgress = JSONObject(),
+                showTerrainConfirm = false,
+            )
+        }
+        val params = JSONObject().put("mode", "global").put("timeout_seconds", 300)
+        TerrainRegion.fromLabel(current.terrainRegion)?.bounds?.let { params.put("bounds", it) }
+        viewModelScope.launch {
+            try {
+                val result = engine.call("terrain_download", params) { event ->
+                    val terrain = event.optJSONObject("terrain") ?: return@call
+                    _state.update { it.copy(terrainProgress = terrain) }
+                }
+                _state.update { state ->
+                    state.copy(
+                        terrainMessage = terrainResultMessage(result, state.terrainRegion),
+                        terrainMessageFailed = terrainFailed(result),
+                    )
+                }
+            } catch (error: CancellationException) {
+                _state.update {
+                    it.copy(
+                        terrainMessage = "已停止下载；已完成的瓦片保留，重新开始会跳过它们。",
+                        terrainMessageFailed = false,
+                    )
+                }
+            } catch (error: Exception) {
+                _state.update {
+                    it.copy(terrainMessage = error.message ?: "下载失败", terrainMessageFailed = true)
+                }
+            } finally {
+                _state.update { it.copy(terrainDownloading = false, terrainCancelling = false) }
+                loadTerrain()
+            }
+        }
+    }
+
+    /** 点级下载（次级入口）：仅当前地点对应瓦片。 */
+    fun downloadTerrainPoint() {
+        val current = _state.value
+        if (!current.online || current.busy || current.terrainDownloading) return
+        _state.update {
+            it.copy(
+                terrainDownloading = true,
+                terrainCancelling = false,
+                terrainMessage = "",
+                terrainProgress = JSONObject(),
+            )
+        }
+        val params = JSONObject()
+            .put("lat", current.location.lat)
+            .put("lon", current.location.lon)
+            .put("timeout_seconds", 600)
+        viewModelScope.launch {
+            try {
+                val result = engine.call("terrain_download", params)
+                _state.update { state ->
+                    val status = result.optString("status")
+                    state.copy(
+                        terrainMessage = when (status) {
+                            "exists" -> "地形瓦片已存在，直接复用本地数据。"
+                            "downloaded" -> "已下载地形瓦片 ${result.optString("tile")}。"
+                            "out_of_coverage" -> result.optString("message", "该位置不在 SRTM 覆盖范围内。")
+                            else -> "下载未完成。"
+                        },
+                        terrainMessageFailed = status == "out_of_coverage" || status == "failed",
+                    )
+                }
+            } catch (error: CancellationException) {
+                _state.update { it.copy(terrainMessage = "已停止下载。", terrainMessageFailed = false) }
+            } catch (error: Exception) {
+                _state.update { it.copy(terrainMessage = error.message ?: "下载失败", terrainMessageFailed = true) }
+            } finally {
+                _state.update { it.copy(terrainDownloading = false, terrainCancelling = false) }
+                loadTerrain()
+            }
+        }
+    }
+
+    fun cancelTerrainDownload() {
+        if (!_state.value.terrainDownloading) return
+        _state.update { it.copy(terrainCancelling = true) }
+    }
+
+    private fun terrainResultMessage(result: JSONObject, region: String): String {
+        val downloaded = result.optInt("downloaded", 0)
+        val absent = result.optInt("absent", 0)
+        val failed = result.optInt("failed", 0)
+        val gb = result.optDouble("received_gb").takeUnless { it.isNaN() } ?: 0.0
+        val summary = "新增 $downloaded 块、缺失 $absent 块、失败 $failed 块，占用 %.1f GB。".format(gb)
+        return when (result.optString("status")) {
+            "cancelled" -> if (result.optString("stopped_reason") == "disk_space") {
+                "$region 下载因磁盘空间不足停止：$summary"
+            } else {
+                "$region 下载已停止：$summary"
+            }
+            else -> if (failed > 0) "$region 下载完成（部分失败）：$summary" else "$region 下载完成：$summary"
+        }
+    }
+
+    private fun terrainFailed(result: JSONObject): Boolean =
+        result.optInt("failed", 0) > 0 || result.optString("stopped_reason") == "disk_space"
 
     // ---------------------------------------------------------------- 生命周期
 

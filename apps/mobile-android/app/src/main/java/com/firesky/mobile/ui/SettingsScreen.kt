@@ -40,7 +40,11 @@ import androidx.compose.ui.unit.sp
 import com.firesky.mobile.store.WorkbenchState
 import com.firesky.mobile.store.WorkbenchStore
 
-/** 设置页（DialogViews.swift SettingsView 同构：外观 / 数据源 / CAMS / 本地引擎）。 */
+/** 设置分类（macOS SettingsCategory 同构）：通用 / 数据 / 位置与海拔 / 高级。 */
+private val SettingsCategories = listOf("通用", "数据", "位置与海拔", "高级")
+
+/** 设置页（DialogViews.swift SettingsView 同构，v1.6.0 拆分类）：切换分类保留
+ *  各表单草稿（全部常驻 store）；数据相关（下载源 / CAMS）统一归「数据」。 */
 @Composable
 fun SettingsScreen(store: WorkbenchStore, state: WorkbenchState) {
     Column(
@@ -51,11 +55,20 @@ fun SettingsScreen(store: WorkbenchStore, state: WorkbenchState) {
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("设置", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        AppearanceSection(store, state)
-        DataSourceSection(store, state)
-        ElevationSourceSection(store, state)
-        CamsSection(store, state)
-        EngineSection(store, state)
+        Segmented(
+            options = SettingsCategories,
+            selection = state.settingsCategory,
+            onSelect = { store.setSettingsCategory(it) },
+        )
+        when (state.settingsCategory) {
+            "数据" -> {
+                DataSourceSection(store, state)
+                CamsSection(store, state)
+            }
+            "位置与海拔" -> ElevationSourceSection(store, state)
+            "高级" -> EngineSection(store, state)
+            else -> AppearanceSection(store, state)
+        }
         if (state.error.isNotEmpty()) {
             Text(state.error, fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
         }

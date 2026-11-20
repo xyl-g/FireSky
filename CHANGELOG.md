@@ -8,6 +8,66 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v1.6.0 (2026-11-21)
+
+Android / iOS 与 macOS 功能对齐（2026-11-20 方案阶段 A/C/D 移动端落地）。
+Android and iOS parity with macOS (mobile slice of the 2026-11-20 redesign,
+phases A/C/D).
+
+**任务历史 / Task history**
+
+- 双端新增独立「任务历史」页：列表 + 详情（事件时间线，点击行展开）、
+  行内恢复已发布结果 / 恢复参数并重新检查 / 删除记录三个动作；删除沿用
+  macOS 口径——只删状态与事件，不删报告与数据；协议校验（task_id 长度/
+  16 进制、状态枚举、事件 seq 单调）与桌面一致。
+  Both mobile apps gain a standalone Task History page: list plus detail
+  (event timeline via row tap), inline restore-result / restore-params /
+  delete-record actions; deletion only removes status and events. Protocol
+  validation mirrors the desktop.
+- Android 底部导航扩为 4 项（工作台/数据管理/任务历史/设置）；iOS 底部
+  标签扩为 4 项并移除数据页红点徽标（与 macOS 中性化口径一致）。
+  Android bottom navigation and iOS tab bar both expand to four entries;
+  the iOS data-tab badge is removed, matching the macOS neutral probe
+  presentation.
+
+**数据管理 / Data management**
+
+- Android 新增数据管理页；iOS 数据页按 macOS 口径改造：库存（周期展开）
+  + 按周期/整源手动删除（`data_delete_preview`/`execute`：确认框展示
+  候选数/预计释放/占用跳过说明，预览过期不静默扩大）+ 地形区域下载卡
+  （区域预设选择 → 估算确认 → 批量进度/取消续传）。
+  Android gains a Data Management screen; the iOS data page is reworked
+  to macOS parity: inventory with per-cycle/whole-source manual deletion
+  (preview/execute contracts with stale-preview rejection) and a terrain
+  region-download card (presets, sampled estimate confirmation, aggregate
+  progress with cancellation and resume).
+
+**设置分类 / Settings categories**
+
+- 双端设置拆分类（macOS SettingsCategory 同构）：通用（主题）/ 数据
+  （下载源 + CAMS + 下载连通性）/ 位置与海拔（海拔来源）/ 高级（引擎
+  通道 + 沙箱路径）；切换分类保留表单草稿。
+  Settings are split into General / Data (source + CAMS + probe) /
+  Location & Elevation / Advanced on both platforms, with drafts
+  preserved across category switches.
+
+**夹具 / Fixtures**
+
+- 移动端截图夹具：Android 沿用 `FIRESKY_NATIVE_PAGE`；iOS 新增
+  `SIMCTL_CHILD_FIRESKY_PAGE`（初始页）与 `SIMCTL_CHILD_FIRESKY_TRANSPORT`
+  （强制 mock 通道），便于无 UI 点按的模拟器验收。
+  Mobile screenshot fixtures: iOS gains `SIMCTL_CHILD_FIRESKY_PAGE` and
+  `SIMCTL_CHILD_FIRESKY_TRANSPORT` env injection (Android already had
+  `FIRESKY_NATIVE_PAGE`).
+- iOS `ObservationDate` 新增 ISO8601 时间戳解析（兼容小数秒），修复任务
+  时间戳解析。
+  iOS `ObservationDate` gains ISO8601 timestamp parsing (fractional-second
+  tolerant).
+- Mock 通道（双端）补齐 task_history / task_events / task_forget /
+  result_restore / data_delete / terrain 契约，无引擎库环境可驱动新页面
+  全链路。
+  Both mock transports now cover the history/delete/terrain contracts.
+
 ## v1.5.0 (2026-11-21)
 
 应用内更新逻辑（GitHub Releases 检查 → 下载 → 校验 → 自动安装）。

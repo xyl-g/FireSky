@@ -37,14 +37,17 @@ struct RootView: View {
                 .tabItem { Label("单点预测", systemImage: "location.circle") }
                 .tag(Page.point)
             InventoryView()
-                .tabItem { Label("数据与下载", systemImage: "arrow.down.circle") }
-                .badge(store.downloadProbeDate == nil ? Text("!") : nil)
+                .tabItem { Label("数据管理", systemImage: "externaldrive") }
                 .tag(Page.data)
+            HistoryView()
+                .tabItem { Label("任务历史", systemImage: "clock.arrow.circlepath") }
+                .tag(Page.history)
             SettingsView()
                 .tabItem { Label("设置", systemImage: "gearshape") }
                 .tag(Page.settings)
         }
         .environment(\.timeZone, TimeZone(identifier: store.timezone) ?? .current)
+        .onAppear { tab = store.page }
         .onChange(of: tab) { newTab in
             // 对应桌面侧栏「if !store.busy { store.page = page }」：
             // 任务进行中保持当前页。
@@ -52,7 +55,13 @@ struct RootView: View {
                 tab = store.page
             } else {
                 store.page = newTab
-                if newTab == .data { Task { await store.loadInventory() } }
+                if newTab == .data {
+                    Task {
+                        await store.loadInventory()
+                        store.loadTerrain()
+                    }
+                }
+                if newTab == .history { store.loadTaskHistory() }
                 if newTab == .settings { Task { await store.refreshCAMSConfiguration() } }
             }
         }
