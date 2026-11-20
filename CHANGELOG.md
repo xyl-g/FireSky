@@ -8,6 +8,68 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## Unreleased（feat/windows-release）
+
+Windows 成正式发布目标：UI 全面对齐 v1.2.0 macOS 基准 + 发布能力（zip +
+安装器 + CI 直发）。
+Windows becomes an official release target: full UI alignment with the
+v1.2.0 macOS baseline plus release capability (self-contained zip,
+installer, CI publishing).
+
+**Windows UI 对齐 / Windows UI alignment**
+
+- 信息架构对齐 v1.2.0：任务历史独立页（列表 + 详情双栏、全部/主动任务/
+  后台同步筛选、本地时区显示、事件时间线）、设置四分类（通用/数据/
+  位置与海拔/高级，切类保留草稿）、数据管理瘦身（探测与同步迁入设置 → 数据）。
+  The Windows client matches the v1.2.0 information architecture:
+  standalone Task History with list/detail split and filters, four-category
+  Settings with per-category drafts, and the slimmed Data Management page.
+- 点预测深度：GFS/EC 双摘要卡、分组指标卡（双模式并列）、AOD 环境读数
+  来源摘要、评分组成面板、对比曲线（缺测断线 + 悬停读数 + 最佳标记）、
+  15 列逐时台账、太阳方向剖面图层、点冻结剖面查询、诊断分组。
+  Point forecasting gains dual-model hero cards, grouped metric cards,
+  AOD provenance, the read-only score-composition panel, comparison curves
+  with gaps and hover readouts, the 15-column ledger, solar-path cross
+  sections, frozen-profile queries and grouped diagnostics.
+- 实况：卫星帧 hero、15 项指标卡、卫星后验概率剖面热图（unknown 琥珀）、
+  冻结卫星剖面查询、不可用原因透传。
+  Nowcast gains the satellite-frame hero, metric cards, the posterior
+  probability profile heatmap with amber unknown cells, frozen satellite
+  profile queries and explicit unavailability reasons.
+- 区域：hello 预设区域多选 + 自定义范围、地图拖拽绘制（跨 180° 短弧）、
+  固定 0–2.5 色带与缺测图例、采样点标注、网格/城市详情与「在单点模式打开」。
+  Regional forecasting adds preset regions, drag-drawn bounds with
+  antimeridian short-arc semantics, the fixed palette with missing legend,
+  sample annotations, cell details and open-in-point.
+- 契约与 UX：`metadata`/`payload` 透传 `elevation_source` + `ecmwf_source`、
+  周期龄确认（`cycle_age_confirmed`）、任务运行不锁导航、搜索/定位轻量化、
+  结果-参数 stale 徽标 + 恢复回填原始参数、错误中文映射与可复制、
+  CAMS 凭据 / EC 端点 / 下载连通性探测 / 后台同步（data_sync_* + 60s 心跳）、
+  快捷键 Ctrl+1-5 / Ctrl+,、收藏、今天/明天日期、会话持久化、退出确认。
+  Contracts and UX: elevation/EC source passthrough, cycle-age confirmation,
+  non-blocking navigation during tasks, stale-parameter banner with restore
+  backfill, Chinese error mapping, CAMS credentials, EC endpoint and probe
+  settings, background sync with a 60-second heartbeat, shortcuts,
+  favorites, date tabs, session persistence and exit confirmation.
+
+**Windows 发布能力 / Windows release capability**
+
+- `scripts/build_windows_native.ps1`：单一路径完成引擎/WinUI 构建、载荷校验、
+  干净暂存与版本化 zip + SHA256；`FireSkyInstaller.iss` +
+  `scripts/build_windows_installer.ps1` 提供 Inno Setup 安装器（卸载保留用户
+  数据，WebView2 检测提示）。
+  One packaging path builds, verifies, stages and zips the release; an
+  Inno Setup installer adds shortcuts and an uninstaller while keeping user
+  data.
+- CI 恢复 `windows-native`（x64 + ARM64 原生 runner）并在 `v*` tag 时把
+  Windows zip / setup 与 macOS DMG 一起直发 GitHub Release（含 SHA256SUMS）。
+  CI restores the windows-native matrix and publishes Windows assets on
+  version tags alongside the macOS DMGs.
+- map.html（Windows 地图文档）：固定色带、缺测灰与图例、区域拖拽绘制、
+  采样点标注与网格/采样开关。
+  The shared map document gains the fixed palette, missing-data legend,
+  drag-drawn bounds and sample annotations.
+
 ## v1.2.0 (2026-11-20)
 
 macOS 信息架构重构：任务历史独立页面 + 设置分类拆分 + 数据管理瘦身。

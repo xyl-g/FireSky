@@ -7,12 +7,13 @@ native desktop clients**. The physics follows the methodology of the
 
 > 中文文档：[README.md](README.md)
 
-> Current release **v1.1.1**: macOS / Android / iOS / Docker are officially
+> Current release **v1.2.0**: macOS / Android / iOS / Docker are officially
 > released (see [Download & install](#download--install-releases)).
-> This release adds a three-mode elevation source setting (auto / online
-> only / local SRTM only, consistent across all four clients) and fixes the
-> macOS sync-helper uninstall leaving in-flight sync rounds alive, plus a
-> batch of UX issues (see [CHANGELOG](CHANGELOG.md)).
+> Windows release capability is ready on `feat/windows-release` — the WinUI
+> client matches the v1.2.0 baseline, ships as a self-contained zip plus an
+> Inno Setup installer, and CI attaches both to GitHub Releases on `v*` tags;
+> the first official Windows package follows with the next release (see the
+> [Windows release doc](docs/RELEASE_WINDOWS.zh-CN.md)).
 > The UI reference is the [macOS product & UI baseline](docs/MACOS_UI_BASELINE.zh-CN.md);
 > mobile blueprint and acceptance status:
 > [mobile native plan](docs/MOBILE_NATIVE_PLAN.md).
@@ -26,6 +27,7 @@ native desktop clients**. The physics follows the methodology of the
   - [Features](#features)
   - [Download \& install (Releases)](#download--install-releases)
     - [macOS](#macos)
+    - [Windows](#windows)
     - [Android](#android)
     - [iOS](#ios)
     - [Docker (self-hosting)](#docker-self-hosting)
@@ -57,11 +59,13 @@ native desktop clients**. The physics follows the methodology of the
   radar convective correction.
 - **Backend service**: Rust/Axum jobs + SSE + gzip + checked input caches.
 - **Minimal frontend**: `/forecast`, `/now`, `/outlook`, `/admin`.
-- **Native desktop**: macOS SwiftUI/AppKit + Rust FFI is the primary desktop
-  line; Windows WinUI 3 sources and CI build/artifact verification are aligned
-  (the official installer will be built on a Windows machine later), and the
-  Linux native UI code is kept but no longer a release target (see
-  [Platform strategy](#platform-strategy)). See
+- **Native desktop**: macOS SwiftUI/AppKit + Rust FFI is the product & UI
+  baseline; the Windows WinUI 3 client now matches the v1.2.0 information
+  architecture (standalone history page, categorized settings, dual-model
+  summaries, cross-section layers) and was build/run validated on a real
+  Windows machine, shipping as a self-contained zip plus an Inno Setup
+  installer. The Linux native UI code is kept but no longer a release target
+  (see [Platform strategy](#platform-strategy)). See
   [build instructions and migration status](apps/README.md). The old PySide6 app was retired (2026-11-13); user data (~/.firesky-desktop favorites and current spot) imports automatically into the native app.
 - **Mobile apps**: dual-native iOS SwiftUI + Android Kotlin/Compose with the
   prediction engine embedded in-process (`engine-mobile`, same source as the
@@ -113,6 +117,28 @@ Drag the app from the DMG into Applications. Releases are **ad-hoc signed
 
 Download only from the official Releases page and check SHA256 first. Full
 release runbook and gates: [macOS release doc](docs/RELEASE_MACOS.zh-CN.md).
+
+### Windows
+
+An official release target since `feat/windows-release`, shipping as a
+**self-contained zip plus an installer** (the first official Windows package
+follows with the next release):
+
+- **Portable zip**: unzip anywhere and run `FireSky\FireSky.exe`; no install
+  step required.
+- **Installer (setup.exe)**: guided install with a Start Menu shortcut and
+  an uninstaller; uninstalling removes application files only and keeps user
+  data (`%LOCALAPPDATA%\FireSky` and the chosen data directory).
+- Requirements: Windows 10 19041+ / 11 and the **WebView2 Runtime**
+  (preinstalled on Win11; [install on Win10](https://developer.microsoft.com/microsoft-edge/webview2/) —
+  the installer checks and warns).
+- Packages are **unsigned**: SmartScreen shows "More info → Run anyway" on
+  first launch; download only from the official Releases page and verify
+  SHA256 first (`SHA256SUMS.txt` covers zips and setups).
+- The engine DLL, ecCodes and all application resources ship inside the
+  package's `Resources\`; GRIB decoding needs no extra dependencies.
+
+Full runbook and acceptance criteria: [Windows release doc](docs/RELEASE_WINDOWS.zh-CN.md).
 
 ### Android
 
@@ -171,10 +197,12 @@ docker exec firesky cat /data/state/http-token
 
 ### Platform strategy
 
-- **macOS / Android / iOS / Docker**: official release targets of v1.1.1.
-- **Windows**: sources and CI build/artifact verification are aligned; the
-  official installer will be built and released on a Windows machine later.
-  v1.1.1 ships no Windows asset.
+- **macOS / Android / iOS / Docker**: official release targets of v1.2.0.
+- **Windows**: an official release target since `feat/windows-release`
+  (2026-11-21) — UI aligned to the v1.2.0 baseline, build/run validated on a
+  real Windows machine; CI builds x64/ARM64 zip + installer on `v*` tags and
+  attaches them to Releases. The first official Windows package follows with
+  the next release.
 - **Linux**: **no longer a release target since 2026-11-20** (user decision);
   the GTK4 client and FFI code are kept and can be built from source. For
   servers, use Docker.

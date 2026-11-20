@@ -6,7 +6,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::VecDeque;
-use std::fs::{self, File, Metadata};
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::{self, Metadata};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};

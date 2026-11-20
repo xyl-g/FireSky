@@ -7,9 +7,10 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 
 > English documentation: [README.en.md](README.en.md)
 
-> 当前版本 **v1.1.1**：macOS / Android / iOS / Docker 正式发布（见[下载安装](#下载安装releases)）。
-> 本版新增海拔来源三档设置（自动 / 仅在线 / 仅本地 SRTM，四端一致），并修复
-> macOS 后台助手卸载后在途同步残留与一批体验问题（详见 [CHANGELOG](CHANGELOG.md)）。
+> 当前版本 **v1.2.0**：macOS / Android / iOS / Docker 正式发布（见[下载安装](#下载安装releases)）；
+> Windows 发布能力已在 `feat/windows-release` 就绪（自包含 zip + 安装器 +
+> CI `v*` tag 直发，UI 对齐 v1.2.0 基准），首个 Windows 正式包随下一版本发布
+> （详见 [Windows 发布文档](docs/RELEASE_WINDOWS.zh-CN.md)）。
 > UI 以 [macOS 产品与 UI 基准](docs/MACOS_UI_BASELINE.zh-CN.md)为参照，移动端蓝图与验收状态见
 > [移动端双原生计划](docs/MOBILE_NATIVE_PLAN.md)。
 
@@ -22,6 +23,7 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
   - [功能](#功能)
   - [下载安装（Releases）](#下载安装releases)
     - [macOS](#macos)
+    - [Windows](#windows)
     - [Android](#android)
     - [iOS](#ios)
     - [Docker 自托管](#docker-自托管)
@@ -50,9 +52,11 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 - **实况 nowcast**：向日葵 9 号卫星（HSD 分段）云柱反演 + 天气雷达对流修正
 - **后端服务**：Rust/Axum 异步 job + SSE + gzip + 严格输入身份缓存
 - **最小前端**：`/forecast`（点/区域预测）、`/now`（实况）、`/outlook`（形势图）、`/admin`（管理控制台）
-- **原生桌面**：macOS SwiftUI/AppKit + Rust FFI 为正式桌面主线；Windows WinUI 3
-  源码与 CI 验证已对齐（正式包后续在 Windows 机器构建），Linux 原生 UI 代码保留
-  （不再作为发布目标，见[平台策略](#平台策略)）；[构建与迁移状态](apps/README.md)。
+- **原生桌面**：macOS SwiftUI/AppKit + Rust FFI 为产品与 UI 基准；Windows WinUI 3
+  已对齐 v1.2.0 信息架构（历史独立页/设置四分类/双摘要/剖面图层等）并在真实
+  Windows 机器完成构建与运行验收，发布形态为自包含 zip + Inno Setup 安装器；
+  Linux 原生 UI 代码保留（不再作为发布目标，见[平台策略](#平台策略)）；
+  [构建与迁移状态](apps/README.md)。
 - **移动应用**：iOS SwiftUI + Android Kotlin/Compose 双原生，预测引擎内嵌进程内
   （`engine-mobile`，与桌面同源）；v1 单点预测，见[移动应用（v1 范围）](#移动应用v1-范围)。
 
@@ -97,6 +101,25 @@ Gatekeeper 默认拦截首次打开：
 
 仅从官方 Release 页下载并先核对 SHA256。完整发布流程与门禁见
 [macOS 发布文档](docs/RELEASE_MACOS.zh-CN.md)。
+
+### Windows
+
+自 **feat/windows-release** 起为正式发布目标，发布形态为**自包含 zip + 安装器**
+（首个 Windows 正式包随下一版本发布，见[平台策略](#平台策略)）：
+
+- **绿色 zip**：解压到任意目录，运行 `FireSky\FireSky.exe` 即用；适合免安装
+  与便携使用。
+- **安装器（setup.exe）**：向导安装、开始菜单快捷方式与卸载器；卸载只移除
+  应用文件，用户数据（`%LOCALAPPDATA%\FireSky` 与所选数据目录）保留。
+- 系统要求：Windows 10 19041+ / 11；**WebView2 Runtime**（Win11 预装，Win10
+  需[自行安装](https://developer.microsoft.com/microsoft-edge/webview2/)，
+  安装器会在安装时检测提示）。
+- 发布包**无代码签名**：SmartScreen 首次运行提示「更多信息 → 仍要运行」；
+  仅从官方 Release 页下载并先核对 SHA256（`SHA256SUMS.txt` 含 zip 与 setup）。
+- 安装器安装目录下的 `Resources\` 内置 Rust 引擎 DLL、ecCodes 与全部应用
+  资源；GRIB 解码在包内完成，无需额外依赖。
+
+完整发布流程与验收口径见 [Windows 发布文档](docs/RELEASE_WINDOWS.zh-CN.md)。
 
 ### Android
 
@@ -144,9 +167,10 @@ docker exec firesky cat /data/state/http-token
 
 ### 平台策略
 
-- **macOS / Android / iOS / Docker**：v1.1.1 正式发布目标。
-- **Windows**：源码与 CI 构建/产物验证已对齐；正式安装包后续在 Windows 机器上
-  构建发布，v1.1.1 不含 Windows 资产。
+- **macOS / Android / iOS / Docker**：v1.2.0 正式发布目标。
+- **Windows**：自 `feat/windows-release`（2026-11-21）起为正式发布目标——UI 对齐
+  v1.2.0 基准、真实机器构建/运行验收通过，CI `v*` tag 自动构建 x64/ARM64
+  zip + 安装器并直发 Release；首个 Windows 正式包随下一版本发布。
 - **Linux**：自 2026-11-20 起**不再作为发布目标**（用户裁定）；GTK4 客户端与
   FFI 代码保留，可自行源码构建；服务器部署推荐 Docker。
 

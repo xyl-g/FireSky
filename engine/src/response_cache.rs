@@ -12,11 +12,14 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet},
-    fs::{self, File, OpenOptions},
+    fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
     time::Instant,
 };
+// 目录 fsync 是 POSIX 语义；Windows 侧只做 no-op，因此 File 仅 unix 引入。
+#[cfg(unix)]
+use std::fs::File;
 
 const CONTRACT: &str = "rust-ecmwf-response-cache-v1";
 const MAX_JSON: u64 = 16 * 1024 * 1024;

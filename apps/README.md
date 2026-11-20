@@ -121,28 +121,38 @@ the existing production ADS downloader.
 
 ## Windows
 
-Build on Windows 11 with Visual Studio 2022's WinUI/C# tooling, .NET 8 SDK,
-Windows SDK and WebView2 Runtime installed:
+Windows is an official release target as of `feat/windows-release`
+(2026-11-21): the WinUI client is aligned to the v1.2.0 macOS information
+architecture (standalone Task History page, categorized Settings, slim Data
+Management, dual-model point summaries, comparison curves, score breakdown,
+15-column ledger, solar-path cross sections, nowcast metric cards and
+satellite profile heatmap, regional presets with drag-drawn bounds and cell
+details), and release capability ships as a self-contained zip plus an
+Inno Setup installer. Build on Windows 10 19041+/11 with Visual Studio 2022
+(WinUI/C# + MSVC), .NET 8 SDK, WebView2 Runtime, Rust, Node and a vcpkg-built
+ecCodes bundle:
 
 ```powershell
-dotnet restore apps/windows/FireSky/FireSky.csproj
-dotnet build apps/windows/FireSky/FireSky.csproj -c Release -p:Platform=x64 -r win-x64
-dotnet build apps/windows/FireSky/FireSky.csproj -c Release -p:Platform=ARM64 -r win-arm64
+powershell -ExecutionPolicy Bypass -File scripts/build_windows_native.ps1 `
+  -Arch x64 -EccodesRoot "$env:TEMP\eccodes-bundle"
+powershell -ExecutionPolicy Bypass -File scripts/build_windows_installer.ps1 -Arch x64
 ```
 
-Run the resulting unpackaged `FireSky.exe`. The project copies
-`firesky_engine.dll` beside the native resources and loads the same versioned
-C ABI as macOS; `FIRESKY_RUST_ENGINE_BIN` is retained only for explicit JSONL
-development diagnostics. Configure a writable data workspace with
-`FIRESKY_WORKSPACE`.
-GRIB decoding requires an ecCodes DLL with its definitions/samples;
-`FIRESKY_ECCODES_ROOT` can include these resources during packaging. No Python
-interpreter is launched.
+The packaging script builds the Rust engine DLL/exe, the WinUI app
+(`WindowsPackageType=None`, self-contained), verifies the payload
+(`firesky_engine.dll`, `firesky-engine.exe`, app-data manifest, ecCodes
+DLL + definitions, map assets, no Python runtime), stages a clean tree and
+writes `FireSky-<version>-windows-<arch>.zip` + SHA256. See
+[Windows 发布文档](../docs/RELEASE_WINDOWS.zh-CN.md) for the full release
+process, CI wiring and acceptance checklist. CI builds both x64 and ARM64
+packages on native runners and attaches them to GitHub Releases on `v*` tags.
 
-The Windows FFI adapter is wired but has not been built or interaction-tested
-on this Mac. Windows engine parity, GRIB native dependencies, Rust DLL
-packaging, system location permission, Mica fallback, DPI and WebView2 must be
-validated on a Windows machine before claiming a working Windows release.
+The FFI adapter, engine parity, GRIB decoding with the bundled ecCodes, Mica
+backdrop, DPI and WebView2 were validated on a real Windows machine
+(2026-11-21 build/run smoke). Background sync runs on an in-app 60-second
+heartbeat (the macOS launchd helper has no Windows equivalent yet); data
+redesign stages B/C/D (directory migration, manual deletion, SRTM download)
+are unimplemented on every platform and are not built ahead of macOS here.
 The host-independent adapter contract can be checked with
 `bash scripts/test_windows_ffi_contract.sh`; this does not replace either
 Windows architecture build or runtime acceptance.
