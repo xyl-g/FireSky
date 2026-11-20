@@ -1067,7 +1067,6 @@ impl InputTensor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
     /// Regression for the dateline-crossing regional EC proxy grid: the
     /// multi-region envelope wraps across +/-180, so the normalized longitude
     /// axis carries one circular seam. native_grid must accept that seam and
