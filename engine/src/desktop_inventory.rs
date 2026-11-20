@@ -176,14 +176,26 @@ fn resolved(path: &Path) -> Result<PathBuf, String> {
             Component::CurDir => {}
             _ => {
                 resolved.push(part);
-                match resolved.canonicalize() {
-                    Ok(canonical) => resolved = canonical,
-                    Err(error)
-                        if matches!(
-                            error.kind(),
-                            std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-                        ) => {}
-                    Err(error) => return Err(error.to_string()),
+                // 只对已挂到真实层级的路径做 canonicalize：Windows 上对裸
+                // 盘根（"C:" 或 verbatim "\\?\C:"）调用会得到
+                // ERROR_INVALID_FUNCTION（os error 1），而盘根本身不需要
+                // 归一化。缺失层级保持原样（NotFound/NotADirectory）。
+                let has_real_level = resolved.components().any(|component| {
+                    !matches!(
+                        component,
+                        Component::Prefix(_) | Component::RootDir | Component::CurDir
+                    )
+                });
+                if has_real_level {
+                    match resolved.canonicalize() {
+                        Ok(canonical) => resolved = canonical,
+                        Err(error)
+                            if matches!(
+                                error.kind(),
+                                std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
+                            ) || error.raw_os_error() == Some(1) => {}
+                        Err(error) => return Err(error.to_string()),
+                    }
                 }
             }
         }
@@ -603,6 +615,39 @@ pub(crate) fn execute(config: &Config, cancel: Arc<AtomicBool>) -> Result<Value,
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn windows_inventory_probe() {
+        // Windows 回归：Runtime 用 canonicalize 后的 verbatim 工作区（\\?\ 前缀）
+        // 拼接缓存根；首次安装时 .cache 尚不存在，inventory/check 不得报
+        // os error 1（裸 verbatim 盘根的 canonicalize 会得到
+        // ERROR_INVALID_FUNCTION），应返回空清单。
+        let root = tempfile::tempdir().unwrap();
+        let missing = PathBuf::from(format!(
+            r"\\?\{}",
+            root.path().join(".cache").join("gfs").display()
+        ));
+        assert!(fs::read_dir(&missing).is_err());
+        let config = Config {
+            gfs_cache_dir: missing.clone(),
+            ecmwf_cache_dir: root.path().join(".cache").join("ecmwf"),
+            cams_cache_dir: root.path().join(".cache").join("cams"),
+        };
+        let value = execute(&config, Arc::new(AtomicBool::new(false))).unwrap();
+        let datasets = value["datasets"].as_array().unwrap();
+        assert!(datasets.iter().all(|dataset| dataset["file_count"] == 0));
+        assert!(datasets
+            .iter()
+            .all(|dataset| dataset["path"].as_str().unwrap().contains(".cache")));
+    }
+
+    #[test]
+    fn resolved_missing_components_stay_literal() {
+        // 缺失层级不被 canonicalize 改写，保持字面路径（各平台一致）。
+        let base = tempfile::tempdir().unwrap();
+        let joined = base.path().join("missing").join("deeper");
+        let out = resolved(&joined).unwrap();
+        assert!(out.ends_with("deeper"), "unexpected: {out:?}");
+    }
     #[test]
     fn entry_bound_fails_before_growing_inventory() {
         let root = tempfile::tempdir().unwrap();

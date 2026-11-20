@@ -119,7 +119,7 @@ if (-not $SkipZip) {
     if (Test-Path $Zip) { Remove-Item $Zip -Force }
     Compress-Archive -Path (Join-Path $Stage "*") -DestinationPath $Zip -CompressionLevel Optimal
     $Hash = (Get-FileHash $Zip -Algorithm SHA256).Hash.ToLowerInvariant()
-    Set-Content -Path "$Zip.sha256" -Value "$Hash  FireSky-$Version-windows-$Arch.zip" -Encoding ascii
+    [System.IO.File]::WriteAllText("$Zip.sha256", "$Hash  FireSky-$Version-windows-$Arch.zip`n", [System.Text.UTF8Encoding]::new($false))
     Write-Host "package: $Zip"
     Write-Host "sha256:  $Hash"
 }

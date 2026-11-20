@@ -1526,6 +1526,8 @@ mod tests {
         }
     }
 
+    // unix::fs::symlink 仅 POSIX；Windows 测试环境无符号链接语义。
+    #[cfg(unix)]
     #[test]
     fn settings_symlink_is_rejected() {
         let workspace = tempfile::tempdir().unwrap();

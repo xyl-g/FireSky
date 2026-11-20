@@ -50,7 +50,7 @@ try {
     if (-not (Test-Path -LiteralPath $Built)) { throw "installer output missing: $Built" }
     Move-Item -LiteralPath $Built -Destination $Setup -Force
     $Hash = (Get-FileHash -LiteralPath $Setup -Algorithm SHA256).Hash.ToLowerInvariant()
-    Set-Content -LiteralPath "$Setup.sha256" -Value "$Hash  FireSky-$Version-windows-$Arch-setup.exe" -Encoding ascii
+    [System.IO.File]::WriteAllText("$Setup.sha256", "$Hash  FireSky-$Version-windows-$Arch-setup.exe`n", [System.Text.UTF8Encoding]::new($false))
 } catch {
     Write-Host $_.InvocationInfo.PositionMessage
     throw
