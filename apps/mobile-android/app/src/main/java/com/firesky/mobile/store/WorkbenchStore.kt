@@ -94,7 +94,7 @@ data class WorkbenchState(
     // 设置
     val appearance: String = "system",
     val ecmwfSource: String = "ecmwf",
-    val transportMode: String = "mock", // mock / ffi
+    val transportMode: String = "ffi", // mock / ffi（MN2 起默认真引擎；设置页可切回 mock）
     val camsConfiguration: JSONObject? = null,
     val camsKeyDraft: String = "",
     val savingCAMS: Boolean = false,
@@ -125,7 +125,7 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
     init {
         val appearance = prefs.getString(PREF_APPEARANCE, null) ?: "system"
         val ecmwfSource = prefs.getString(PREF_ECMWF_SOURCE, null) ?: "ecmwf"
-        val transportMode = prefs.getString(PREF_TRANSPORT, null) ?: "mock"
+        val transportMode = prefs.getString(PREF_TRANSPORT, null) ?: "ffi"
         val favorites = runCatching {
             val array = JSONArray(prefs.getString(PREF_FAVORITES, "[]") ?: "[]")
             (0 until array.length()).mapNotNull { index -> array.optJSONObject(index) }
@@ -173,6 +173,9 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
                 engine.start(engineConfig())
                 val hello = engine.call("hello")
                 if (hello.optInt("protocol") != 1) throw EngineError("引擎协议版本不匹配。")
+                val capabilities = (hello.optJSONArray("capabilities") ?: JSONArray()).let { array ->
+                    (0 until array.length()).map { index -> array.optString(index) }.toSet()
+                }
                 _state.update {
                     it.copy(
                         online = true,
@@ -181,6 +184,11 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
                         camsConfiguration = hello.optJSONObject("cams_credentials"),
                     )
                 }
+                // MN2 会话恢复（协议参照 macOS Store.connect/loadTaskHistory/restoreTaskResult）：
+                // hello 后拉任务历史，自动恢复最近一次可恢复的单点 forecast 结果。
+                if ("task_history" in capabilities && "result_restore" in capabilities) {
+                    restoreLatestResult()
+                }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
@@ -188,6 +196,80 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
                     it.copy(online = false, status = "引擎未连接", error = error.message ?: "引擎未连接")
                 }
             }
+        }
+    }
+
+    /**
+     * kill-restart 恢复链（同构 macOS Store.restoreTaskResult，§3.4）：
+     * task_history(limit=20) → 最近 status=done 且 result_ref.snapshot 契约有效的
+     * point forecast → result_restore(task_id) → 应用 result/selectedModel 与
+     * location/date/phenomenon。守 busy/generation：不得覆盖进行中会话；恢复失败
+     * 静默（不影响「引擎已连接」状态，同 macOS taskHistoryError 不阻断工作台）。
+     */
+    private suspend fun restoreLatestResult() {
+        val snapshot = _state.value
+        if (snapshot.busy || snapshot.result != null) return
+        val revision = generation
+        try {
+            val history = engine.call("task_history", JSONObject().put("limit", 20))
+            if (history.optString("schema") != "firesky-task-history-v1") return
+            val tasks = history.optJSONArray("tasks") ?: return
+            for (index in 0 until tasks.length()) {
+                val item = tasks.optJSONObject(index) ?: continue
+                if (item.optString("method") != "forecast" || item.optString("status") != "done") continue
+                val reference = item.optJSONObject("result_ref")?.optJSONObject("snapshot") ?: continue
+                if (reference.optString("contract") != "firesky-result-snapshot-v1") continue
+                if (!reference.has("sha256")) continue
+                val retry = item.optJSONObject("retry_request") ?: continue
+                if (retry.optString("kind") != "point") continue
+                val taskId = item.optString("task_id")
+                if (taskId.isEmpty()) continue
+                val response = engine.call("result_restore", JSONObject().put("task_id", taskId))
+                val current = _state.value
+                if (current.busy || current.result != null || generation != revision) return
+                val models = response.optJSONObject("model_results") ?: return
+                val payload = retry.optJSONObject("payload") ?: JSONObject()
+                // selectedModel：retry payload 显式单模型优先，否则 gfs 缺失回退 ec
+                // （同 macOS restoreTaskResult 与 confirm 的缺省逻辑）。
+                val modelSource = payload.optString("model_source")
+                val selected = when {
+                    modelSource == "gfs" || modelSource == "ec" -> modelSource
+                    models.has("gfs") -> "gfs"
+                    else -> "ec"
+                }
+                val restoredDate = runCatching {
+                    LocalDate.parse(payload.optString("target_date"))
+                }.getOrNull()
+                _state.update { state ->
+                    val loc = state.location
+                    val lat = payload.optDouble("lat").takeUnless { it.isNaN() } ?: loc.lat
+                    val lon = payload.optDouble("lon").takeUnless { it.isNaN() } ?: loc.lon
+                    val elevation = payload.optDouble("elevation_m").takeUnless { it.isNaN() } ?: loc.elevation
+                    val timezone = payload.optString("timezone_name", "").ifEmpty { loc.timezone }
+                    state.copy(
+                        location = loc.copy(
+                            name = payload.optString("name", "").ifEmpty { loc.name },
+                            lat = lat,
+                            lon = lon,
+                            elevation = elevation,
+                            timezone = timezone,
+                            metadataReady = true,
+                        ),
+                        targetDate = restoredDate ?: state.targetDate,
+                        dateTab = if (restoredDate != null) "自定义" else state.dateTab,
+                        phenomenon = payload.optString("phenomenon", "").ifEmpty { state.phenomenon },
+                        result = response,
+                        selectedModel = selected,
+                        status = "已恢复历史结果",
+                        error = "",
+                    )
+                }
+                return
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // 历史损坏/恢复失败不阻断连接；用户仍可正常发起新预测。
         }
     }
 

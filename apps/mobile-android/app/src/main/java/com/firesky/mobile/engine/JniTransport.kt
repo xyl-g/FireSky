@@ -141,16 +141,24 @@ private const val ASSET_DEFINITIONS = "eccodes/definitions"
 /**
  * 解包 assets/eccodes/definitions/ 下的资源到 targetDir（filesDir 内），返回解压目录；
  * assets 未打包该目录时返回 null（契约：fsm_start 收到 NULL 则不注入）。
- * 已解压过则跳过（APK 资源随版本更新需清 app 数据或升 versionCode 重建目录）。
+ * 以完成标记判定完整性：解包中途被强杀/崩溃会留下半棵树，非空即跳过会把残缺
+ * definitions 交给引擎（kill-restart 场景）；无标记则清掉残留重新解包。
+ * APK 资源随版本更新需清 app 数据或升 versionCode 重建目录。
  */
 fun unpackDefinitions(assets: AssetManager, targetDir: File): File? {
     val entries = runCatching { assets.list(ASSET_DEFINITIONS) }.getOrNull() ?: return null
     if (entries.isEmpty()) return null
-    if (!targetDir.isDirectory || targetDir.listFiles().isNullOrEmpty()) {
+    val marker = File(targetDir, UNPACK_MARKER)
+    if (!marker.isFile) {
+        if (targetDir.exists()) targetDir.deleteRecursively()
         copyAssets(assets, ASSET_DEFINITIONS, targetDir)
+        marker.writeText("firesky-definitions-v1\n")
     }
     return targetDir
 }
+
+/** 解包完成标记（eccodes 忽略 definitions 树内的无关点文件）。 */
+private const val UNPACK_MARKER = ".firesky-unpack-complete"
 
 private fun copyAssets(assets: AssetManager, from: String, to: File) {
     val entries = assets.list(from).orEmpty()
