@@ -8,7 +8,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="48"/>
             <RowDefinition Height="*"/>
-            <RowDefinition Height="32"/>
+            <RowDefinition Height="34"/>
         </Grid.RowDefinitions>
         <Grid x:Name="TitleBar" Padding="20,0,140,0" Background="Transparent">
             <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
@@ -29,278 +29,622 @@
                 <NavigationViewItem Content="实况观测" Tag="nowcast">
                     <NavigationViewItem.Icon><SymbolIcon Symbol="Globe"/></NavigationViewItem.Icon>
                 </NavigationViewItem>
-                <NavigationViewItemSeparator/>
-                <NavigationViewItem Content="数据与下载" Tag="data">
-                    <NavigationViewItem.Icon><SymbolIcon Symbol="Download"/></NavigationViewItem.Icon>
+                <NavigationViewItem Content="数据管理" Tag="data">
+                    <NavigationViewItem.Icon><SymbolIcon Symbol="Library"/></NavigationViewItem.Icon>
+                </NavigationViewItem>
+                <NavigationViewItem Content="任务历史" Tag="history">
+                    <NavigationViewItem.Icon><SymbolIcon Symbol="Clock"/></NavigationViewItem.Icon>
                 </NavigationViewItem>
             </NavigationView.MenuItems>
             <Grid>
+                <!-- ============ 预测页（单点 / 区域 / 实况共用骨架） ============ -->
                 <Grid x:Name="ForecastPage">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="292"/>
-                        <ColumnDefinition Width="*"/>
-                    </Grid.ColumnDefinitions>
-                    <Grid Grid.Column="1" Margin="16,14,20,18" RowSpacing="12">
-                        <Grid.RowDefinitions>
-                            <RowDefinition Height="Auto"/>
-                            <RowDefinition Height="*"/>
-                        </Grid.RowDefinitions>
-                        <StackPanel x:Name="ResultPanel" Padding="18" Spacing="14"
-                                    Background="{ThemeResource LayerFillColorDefaultBrush}" CornerRadius="8"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-                            <Grid>
-                                <TextBlock x:Name="ResultContext" Text="等待预测" FontSize="11" Opacity=".65"/>
-                                <ComboBox x:Name="ResultModel" HorizontalAlignment="Right"
-                                          SelectionChanged="OnResultModelChanged" SelectedIndex="0" Width="120">
-                                    <ComboBoxItem Content="GFS" Tag="gfs"/>
-                                    <ComboBoxItem Content="EC" Tag="ec"/>
-                                </ComboBox>
-                            </Grid>
-                            <Grid ColumnSpacing="24">
-                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                <StackPanel Spacing="8">
-                                    <StackPanel Orientation="Horizontal" Spacing="12">
-                                        <TextBlock x:Name="ResultScore" Text="--" FontSize="44" FontWeight="SemiBold"/>
-                                        <TextBlock Text="/ 2.5" FontSize="12" Opacity=".6" VerticalAlignment="Center"/>
-                                        <TextBlock x:Name="ResultLevel" Text="等待预测" FontSize="11" VerticalAlignment="Center"/>
-                                    </StackPanel>
-                                    <TextBlock x:Name="ResultSummary" Text="峰值质量指数" FontSize="10" Opacity=".65"
-                                               TextWrapping="Wrap" MaxHeight="60" IsTextSelectionEnabled="True"/>
-                                </StackPanel>
-                                <StackPanel Grid.Column="1" Spacing="8">
-                                    <TextBlock Text="最佳观赏时刻" FontSize="11" Opacity=".65"/>
-                                    <TextBlock x:Name="BestTime" Text="--" FontSize="32" FontWeight="SemiBold"/>
-                                    <TextBlock x:Name="BestWindow" Text="推荐窗口 --" FontSize="11" Opacity=".65"/>
-                                </StackPanel>
-                            </Grid>
-                        </StackPanel>
-                        <Grid Grid.Row="1" x:Name="ResultBody">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <StackPanel x:Name="PageHeader" Margin="20,12,20,4" Spacing="2">
+                        <TextBlock x:Name="PageTitle" Text="观测点" FontSize="22" FontWeight="Bold"/>
+                        <TextBlock x:Name="PageSubtitle" Text="" FontSize="11" Opacity=".65"
+                                   TextTrimming="CharacterEllipsis" MaxLines="1"/>
+                    </StackPanel>
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="298"/>
+                            <ColumnDefinition Width="*"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid Grid.Column="1" Margin="16,10,20,18" RowSpacing="10">
                             <Grid.RowDefinitions>
-                                <RowDefinition Height="360"/>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
-                            <Border x:Name="RegionalMapHost" Grid.Row="0" Visibility="Collapsed"
-                                    CornerRadius="8"/>
-                            <Border x:Name="RegionalInspector" Grid.Row="1" Margin="0,12,0,0"
-                                    Visibility="Collapsed" Padding="16"
-                                    Background="{ThemeResource LayerFillColorDefaultBrush}"
-                                    CornerRadius="8"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                    BorderThickness="1">
-                                <ScrollViewer>
-                                    <StackPanel Spacing="10">
-                                        <Grid ColumnSpacing="8">
-                                            <Grid.ColumnDefinitions>
-                                                <ColumnDefinition Width="*"/>
-                                                <ColumnDefinition Width="Auto"/>
-                                            </Grid.ColumnDefinitions>
-                                            <TextBlock Text="区域结果" FontSize="13" FontWeight="SemiBold"/>
-                                            <ComboBox x:Name="RegionalInspectorMode"
-                                                      Grid.Column="1"
-                                                      HorizontalAlignment="Right" Width="118"
-                                                      SelectedIndex="0"
-                                                      SelectionChanged="OnRegionalInspectorModeChanged">
-                                                <ComboBoxItem Content="网格排行" Tag="grid"/>
-                                                <ComboBoxItem Content="城市排名" Tag="cities"/>
-                                            </ComboBox>
-                                        </Grid>
-                                        <TextBlock x:Name="RegionalGridSummary" Text="等待预测"
-                                                   FontSize="11" Opacity=".7"
-                                                   TextWrapping="Wrap"/>
-                                        <ListView x:Name="RegionalGridRows" SelectionMode="None"
-                                                  MaxHeight="220"/>
-                                        <ListView x:Name="CityRankingRows" SelectionMode="None"
-                                                  MaxHeight="220" Visibility="Collapsed"/>
-                                        <Border Padding="10" CornerRadius="6"
-                                                Background="{ThemeResource CardStrokeColorDefaultBrush}">
-                                            <StackPanel Spacing="6">
-                                                <TextBlock x:Name="RegionalProfileSelection"
-                                                           Text="选择网格后读取冻结剖面"
-                                                           FontWeight="SemiBold"/>
-                                                <TextBlock x:Name="RegionalProfileStatus"
-                                                           Text="未选择网格" TextWrapping="Wrap"/>
-                                                <ListView x:Name="RegionalProfileRows"
-                                                          SelectionMode="None" MaxHeight="180"/>
-                                            </StackPanel>
-                                        </Border>
+                            <InfoBar x:Name="StaleBanner" IsOpen="False" Severity="Warning" IsClosable="False"
+                                     Title="参数已变更" Message="当前结果基于修改前的参数；表单改动不会自动重算。">
+                                <InfoBar.Content>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button x:Name="StaleRecalculateButton" Content="用当前参数重算"
+                                                Click="OnRecalculate" Padding="10,3"/>
                                     </StackPanel>
-                                </ScrollViewer>
+                                </InfoBar.Content>
+                            </InfoBar>
+                            <Border x:Name="ResultPanel" Grid.Row="1" Padding="18"
+                                    Background="{ThemeResource LayerFillColorDefaultBrush}" CornerRadius="8"
+                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                                <StackPanel Spacing="12">
+                                    <Grid>
+                                        <TextBlock x:Name="ResultContext" Text="等待预测" FontSize="11" Opacity=".65"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                        <ComboBox x:Name="ResultModel" HorizontalAlignment="Right"
+                                                  SelectionChanged="OnResultModelChanged" SelectedIndex="0" Width="120">
+                                            <ComboBoxItem Content="GFS" Tag="gfs"/>
+                                            <ComboBoxItem Content="EC" Tag="ec"/>
+                                        </ComboBox>
+                                    </Grid>
+                                    <StackPanel x:Name="HeroHost" Spacing="10"/>
+                                </StackPanel>
                             </Border>
-                            <Pivot x:Name="ResultTabs" Grid.RowSpan="2">
-                                <PivotItem Header="概览">
+                            <Grid Grid.Row="2" x:Name="ResultBody">
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto"/>
+                                    <RowDefinition Height="*"/>
+                                </Grid.RowDefinitions>
+                                <Border x:Name="RegionalMapHost" Grid.Row="0" Height="420" Visibility="Collapsed"
+                                        CornerRadius="8"/>
+                                <Border x:Name="RegionalInspector" Grid.Row="1" Margin="0,12,0,0"
+                                        Visibility="Collapsed" Padding="16"
+                                        Background="{ThemeResource LayerFillColorDefaultBrush}"
+                                        CornerRadius="8"
+                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                        BorderThickness="1">
                                     <ScrollViewer>
-                                        <StackPanel Spacing="12">
-                                            <Grid x:Name="MetricGrid" ColumnSpacing="10" RowSpacing="10">
-                                                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                                                <Grid.RowDefinitions><RowDefinition Height="104"/><RowDefinition Height="104"/><RowDefinition Height="104"/></Grid.RowDefinitions>
+                                        <StackPanel Spacing="10">
+                                            <Grid ColumnSpacing="8">
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*"/>
+                                                    <ColumnDefinition Width="Auto"/>
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="区域结果" FontSize="13" FontWeight="SemiBold"/>
+                                                <ComboBox x:Name="RegionalInspectorMode"
+                                                          Grid.Column="1"
+                                                          HorizontalAlignment="Right" Width="118"
+                                                          SelectedIndex="0"
+                                                          SelectionChanged="OnRegionalInspectorModeChanged">
+                                                    <ComboBoxItem Content="网格排行" Tag="grid"/>
+                                                    <ComboBoxItem Content="城市排名" Tag="cities"/>
+                                                </ComboBox>
                                             </Grid>
-                                            <Border Padding="16" CornerRadius="8" Background="{ThemeResource LayerFillColorDefaultBrush}"
-                                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
-                                                <StackPanel Spacing="12">
-                                                    <TextBlock Text="霞光质量变化" FontSize="13" FontWeight="SemiBold"/>
-                                                    <Grid Height="164" SizeChanged="OnChartSizeChanged">
-                                                        <Canvas x:Name="QualityChart"/>
-                                                        <TextBlock x:Name="ChartEmpty" Text="运行预测后显示质量曲线" FontSize="10"
-                                                                   Opacity=".55" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                            <TextBlock x:Name="RegionalGridSummary" Text="等待预测"
+                                                       FontSize="11" Opacity=".7"
+                                                       TextWrapping="Wrap"/>
+                                            <ListView x:Name="RegionalGridRows" SelectionMode="None"
+                                                      MaxHeight="220"/>
+                                            <ListView x:Name="CityRankingRows" SelectionMode="None"
+                                                      MaxHeight="220" Visibility="Collapsed"/>
+                                            <Border Padding="10" CornerRadius="6"
+                                                    Background="{ThemeResource CardStrokeColorDefaultBrush}">
+                                                <StackPanel Spacing="6">
+                                                    <Grid>
+                                                        <StackPanel Spacing="2">
+                                                            <TextBlock x:Name="RegionalProfileSelection"
+                                                                       Text="选择网格后读取冻结剖面"
+                                                                       FontWeight="SemiBold"/>
+                                                            <TextBlock x:Name="RegionalProfileStatus"
+                                                                       Text="未选择网格" TextWrapping="Wrap" FontSize="11" Opacity=".8"/>
+                                                        </StackPanel>
+                                                        <Button x:Name="RegionalCrossSectionExpand"
+                                                                Content="展开剖面图层" Padding="8,4"
+                                                                HorizontalAlignment="Right"
+                                                                VerticalAlignment="Top"
+                                                                Visibility="Collapsed"
+                                                                Click="OnToggleRegionalCrossSection"/>
                                                     </Grid>
+                                                    <Canvas x:Name="RegionalCrossSection" Height="230"
+                                                            Visibility="Collapsed"
+                                                            Background="{ThemeResource LayerFillColorDefaultBrush}"/>
+                                                    <ListView x:Name="RegionalProfileRows"
+                                                              SelectionMode="None" MaxHeight="180"/>
                                                 </StackPanel>
                                             </Border>
                                         </StackPanel>
                                     </ScrollViewer>
-                                </PivotItem>
-                                <PivotItem Header="大气剖面">
-                                    <StackPanel Padding="18" Spacing="12">
-                                        <TextBlock Text="太阳方向大气剖面" FontWeight="SemiBold"/>
-                                        <TextBlock x:Name="ProfileStatus" Text="等待预测" TextWrapping="Wrap"/>
-                                    </StackPanel>
-                                </PivotItem>
-                                <PivotItem Header="诊断与时间窗">
-                                    <TextBlock x:Name="DiagnosticText" Text="等待预测" Margin="18" TextWrapping="Wrap" IsTextSelectionEnabled="True"/>
-                                </PivotItem>
-                                <PivotItem Header="逐时台账">
-                                    <ListView x:Name="LedgerRows"/>
-                                </PivotItem>
-                            </Pivot>
-                        </Grid>
-                    </Grid>
-                    <Grid Padding="0" Margin="18,14,0,18">
-                        <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                        <ScrollViewer VerticalScrollBarVisibility="Auto">
-                            <StackPanel x:Name="Inputs" Spacing="16">
-                                <TextBlock x:Name="PageTitle" Text="观测点" FontSize="13" FontWeight="SemiBold"/>
-                                <AutoSuggestBox x:Name="SearchBox" PlaceholderText="搜索城市或地点"
-                                                QueryIcon="Find" QuerySubmitted="OnSearch"/>
-                                <Button Content="当前位置" Click="OnLocate"/>
-                                <Border x:Name="MiniMapHost" Height="152" CornerRadius="6">
-                                    <controls:WebView2 x:Name="Map"/>
                                 </Border>
-                                <StackPanel x:Name="PointFields" Spacing="12">
-                                    <TextBox x:Name="LocationName" Header="名称" Text="杭州"/>
-                                    <NumberBox x:Name="Latitude" Header="纬度" Value="30.25" Minimum="-90" Maximum="90" ValueChanged="OnCoordinatesChanged"/>
-                                    <NumberBox x:Name="Longitude" Header="经度" Value="120.25" Minimum="-180" Maximum="180" ValueChanged="OnCoordinatesChanged"/>
-                                    <NumberBox x:Name="Elevation" Header="海拔（m）" Value="20" Minimum="-500" Maximum="9000"/>
-                                    <Button Content="获取海拔与时区" Click="OnMetadata"/>
-                                    <CheckBox x:Name="MetadataReady" Content="已确认位置数据"/>
-                                </StackPanel>
-                                <StackPanel x:Name="RegionFields" Spacing="12" Visibility="Collapsed">
-                                    <TextBlock Text="0.25° × 0.25°" Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                                    <ComboBox x:Name="RegionalModel" Header="模式" SelectedIndex="0" HorizontalAlignment="Stretch">
-                                        <ComboBoxItem Content="GFS" Tag="gfs"/>
-                                        <ComboBoxItem Content="EC" Tag="ec"/>
+                                <Pivot x:Name="ResultTabs" Grid.RowSpan="2">
+                                    <PivotItem Header="概览">
+                                        <ScrollViewer>
+                                            <StackPanel Spacing="12">
+                                                <StackPanel x:Name="MetricHost" Spacing="10"/>
+                                                <Border Padding="16" CornerRadius="8" Background="{ThemeResource LayerFillColorDefaultBrush}"
+                                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1">
+                                                    <StackPanel Spacing="12">
+                                                        <Grid>
+                                                            <TextBlock Text="霞光质量变化" FontSize="13" FontWeight="SemiBold"/>
+                                                            <TextBlock x:Name="ChartLegend" HorizontalAlignment="Right"
+                                                                       FontSize="10" Opacity=".7"/>
+                                                        </Grid>
+                                                        <Grid Height="200" SizeChanged="OnChartSizeChanged"
+                                                              PointerMoved="OnChartPointerMoved"
+                                                              PointerExited="OnChartPointerExited">
+                                                            <Canvas x:Name="QualityChart"/>
+                                                            <TextBlock x:Name="ChartEmpty" Text="运行预测后显示质量曲线" FontSize="10"
+                                                                       Opacity=".55" HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                                                            <Border x:Name="ChartToolTip" Visibility="Collapsed"
+                                                                    Padding="8,5" CornerRadius="6"
+                                                                    Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
+                                                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                                                                    BorderThickness="1" HorizontalAlignment="Left"
+                                                                    VerticalAlignment="Top" IsHitTestVisible="False">
+                                                                <TextBlock x:Name="ChartToolTipText" FontSize="10" IsTextSelectionEnabled="True"/>
+                                                            </Border>
+                                                        </Grid>
+                                                    </StackPanel>
+                                                </Border>
+                                                <Border x:Name="BreakdownCard" Padding="16" CornerRadius="8"
+                                                        Background="{ThemeResource LayerFillColorDefaultBrush}"
+                                                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}" BorderThickness="1"
+                                                        Visibility="Collapsed">
+                                                    <StackPanel Spacing="10">
+                                                        <TextBlock Text="评分组成（只读后端分量）" FontSize="13" FontWeight="SemiBold"/>
+                                                        <StackPanel x:Name="BreakdownHost" Spacing="8"/>
+                                                    </StackPanel>
+                                                </Border>
+                                            </StackPanel>
+                                        </ScrollViewer>
+                                    </PivotItem>
+                                    <PivotItem Header="大气剖面">
+                                        <ScrollViewer>
+                                            <StackPanel Padding="18" Spacing="12">
+                                                <Grid>
+                                                    <StackPanel Spacing="4">
+                                                        <TextBlock Text="太阳方向大气剖面" FontWeight="SemiBold"/>
+                                                        <TextBlock x:Name="ProfileStatus" Text="等待预测" TextWrapping="Wrap"
+                                                                   FontSize="11" Opacity=".8"/>
+                                                    </StackPanel>
+                                                    <Button x:Name="FrozenProfileButton" Content="读取冻结剖面"
+                                                            Padding="10,4" HorizontalAlignment="Right"
+                                                            VerticalAlignment="Top" Visibility="Collapsed"
+                                                            Click="OnQueryPointProfile"/>
+                                                </Grid>
+                                                <Canvas x:Name="PointCrossSection" Height="330" Visibility="Collapsed"
+                                                        Background="{ThemeResource LayerFillColorDefaultBrush}"/>
+                                                <TextBlock x:Name="PointProfileNote" FontSize="11" Opacity=".6"
+                                                           TextWrapping="Wrap" IsTextSelectionEnabled="True"/>
+                                            </StackPanel>
+                                        </ScrollViewer>
+                                    </PivotItem>
+                                    <PivotItem Header="诊断与时间窗">
+                                        <ScrollViewer>
+                                            <StackPanel x:Name="DiagnosticPanel" Margin="18" Spacing="14"/>
+                                        </ScrollViewer>
+                                    </PivotItem>
+                                    <PivotItem Header="逐时台账">
+                                        <ScrollViewer>
+                                            <StackPanel x:Name="LedgerHost" Margin="18" Spacing="0"/>
+                                        </ScrollViewer>
+                                    </PivotItem>
+                                </Pivot>
+                            </Grid>
+                        </Grid>
+                        <Grid Padding="0" Margin="18,10,0,18">
+                            <Grid.RowDefinitions><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                                <StackPanel x:Name="Inputs" Spacing="14">
+                                    <AutoSuggestBox x:Name="SearchBox" PlaceholderText="搜索城市或地点"
+                                                    QueryIcon="Find" QuerySubmitted="OnSearch"/>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button x:Name="LocateButton" Content="当前位置" Click="OnLocate" Padding="10,5"/>
+                                        <Button x:Name="StarButton" Content="★ 收藏地点" Click="OnStarLocation" Padding="10,5"/>
+                                    </StackPanel>
+                                    <Border x:Name="MiniMapHost" Height="152" CornerRadius="6">
+                                        <controls:WebView2 x:Name="Map"/>
+                                    </Border>
+                                    <Expander x:Name="FavoritesExpander" Header="收藏地点"
+                                              HorizontalAlignment="Stretch" Visibility="Collapsed">
+                                        <StackPanel x:Name="FavoritesHost" Spacing="4"/>
+                                    </Expander>
+                                    <StackPanel x:Name="PointFields" Spacing="12">
+                                        <TextBox x:Name="LocationName" Header="名称" Text="杭州"/>
+                                        <NumberBox x:Name="Latitude" Header="纬度" Value="30.25" Minimum="-90" Maximum="90" ValueChanged="OnCoordinatesChanged"/>
+                                        <NumberBox x:Name="Longitude" Header="经度" Value="120.25" Minimum="-180" Maximum="180" ValueChanged="OnCoordinatesChanged"/>
+                                        <NumberBox x:Name="Elevation" Header="海拔（m）" Value="20" Minimum="-500" Maximum="9000"/>
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Button Content="获取海拔与时区" Click="OnMetadata" Padding="10,5"/>
+                                            <CheckBox x:Name="MetadataReady" Content="已确认位置数据" MinWidth="0"/>
+                                        </StackPanel>
+                                        <TextBlock x:Name="ElevationSourceNote" FontSize="10" Opacity=".6"
+                                                   TextWrapping="Wrap"/>
+                                    </StackPanel>
+                                    <StackPanel x:Name="RegionFields" Spacing="12" Visibility="Collapsed">
+                                        <TextBlock Text="预设区域与自定义范围（0.25° 格点）" Opacity=".8"/>
+                                        <StackPanel x:Name="RegionPresetsHost" Spacing="4"/>
+                                        <CheckBox x:Name="CustomRegionToggle" Content="自定义范围"
+                                                  Checked="OnCustomRegionToggled" Unchecked="OnCustomRegionToggled"/>
+                                        <StackPanel x:Name="CustomBoundsFields" Spacing="12" Visibility="Collapsed">
+                                            <TextBlock Text="可拖拽地图绘制范围；跨 180° 经线取短弧。" FontSize="10" Opacity=".6"
+                                                       TextWrapping="Wrap"/>
+                                            <ComboBox x:Name="RegionalModel" Header="模式" SelectedIndex="0" HorizontalAlignment="Stretch">
+                                                <ComboBoxItem Content="GFS" Tag="gfs"/>
+                                                <ComboBoxItem Content="EC" Tag="ec"/>
+                                            </ComboBox>
+                                            <NumberBox x:Name="West" Header="西界" Value="119.5" Minimum="-180" Maximum="180" SmallChange="0.25" ValueChanged="OnBoundsChanged"/>
+                                            <NumberBox x:Name="East" Header="东界" Value="120.5" Minimum="-180" Maximum="180" SmallChange="0.25" ValueChanged="OnBoundsChanged"/>
+                                            <NumberBox x:Name="South" Header="南界" Value="29.75" Minimum="-90" Maximum="90" SmallChange="0.25" ValueChanged="OnBoundsChanged"/>
+                                            <NumberBox x:Name="North" Header="北界" Value="30.75" Minimum="-90" Maximum="90" SmallChange="0.25" ValueChanged="OnBoundsChanged"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                    <TextBox x:Name="Timezone" Header="时区" Text="Asia/Shanghai"/>
+                                    <TextBlock Text="观测参数" FontSize="13" FontWeight="SemiBold"/>
+                                    <StackPanel Spacing="8">
+                                        <RadioButtons x:Name="DateTabs" MaxColumns="3" SelectedIndex="0"
+                                                      SelectionChanged="OnDateTabChanged">
+                                            <RadioButton Content="今天"/>
+                                            <RadioButton Content="明天"/>
+                                            <RadioButton Content="自定义"/>
+                                        </RadioButtons>
+                                        <CalendarDatePicker x:Name="TargetDate" Header="日期" Visibility="Collapsed"
+                                                            DateChanged="OnCustomDateChanged"/>
+                                    </StackPanel>
+                                    <ComboBox x:Name="Phenomenon" Header="时段" SelectedIndex="1" HorizontalAlignment="Stretch">
+                                        <ComboBoxItem Content="朝霞" Tag="dawn"/>
+                                        <ComboBoxItem Content="晚霞" Tag="dusk"/>
                                     </ComboBox>
-                                    <NumberBox x:Name="West" Header="西界" Value="119.5" Minimum="-180" Maximum="180" SmallChange="0.25" ValueChanged="OnBoundsChanged"/>
-                                    <NumberBox x:Name="East" Header="东界" Value="120.5" Minimum="-180" Maximum="180" SmallChange="0.25" ValueChanged="OnBoundsChanged"/>
-                                    <NumberBox x:Name="South" Header="南界" Value="29.75" Minimum="-90" Maximum="90" SmallChange="0.25" ValueChanged="OnBoundsChanged"/>
-                                    <NumberBox x:Name="North" Header="北界" Value="30.75" Minimum="-90" Maximum="90" SmallChange="0.25" ValueChanged="OnBoundsChanged"/>
+                                    <InfoBar x:Name="ErrorBar" IsOpen="False" Severity="Error" IsClosable="True"/>
                                 </StackPanel>
-                                <TextBox x:Name="Timezone" Header="时区" Text="Asia/Shanghai"/>
-                                <TextBlock Text="观测参数" FontSize="13" FontWeight="SemiBold"/>
-                                <CalendarDatePicker x:Name="TargetDate" Header="日期"/>
-                                <ComboBox x:Name="Phenomenon" Header="时段" SelectedIndex="1" HorizontalAlignment="Stretch">
-                                    <ComboBoxItem Content="朝霞" Tag="dawn"/>
-                                    <ComboBoxItem Content="晚霞" Tag="dusk"/>
-                                </ComboBox>
-                                <InfoBar x:Name="ErrorBar" IsOpen="False" Severity="Error" IsClosable="True"/>
+                            </ScrollViewer>
+                            <StackPanel Grid.Row="1" Spacing="10" Padding="0,18,0,0">
+                                <Button x:Name="PredictButton" Content="开始预测"
+                                        Style="{ThemeResource AccentButtonStyle}" HorizontalAlignment="Stretch"
+                                        Click="OnPredict"/>
+                                <TextBlock x:Name="SourcesLabel" Text="GFS + EC" HorizontalAlignment="Center"
+                                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
                             </StackPanel>
-                        </ScrollViewer>
-                        <StackPanel Grid.Row="1" Spacing="10" Padding="0,18,0,0">
-                            <Button x:Name="PredictButton" Content="开始预测"
-                                    Style="{ThemeResource AccentButtonStyle}" HorizontalAlignment="Stretch"
-                                    Click="OnPredict"/>
-                            <TextBlock x:Name="SourcesLabel" Text="GFS + EC" HorizontalAlignment="Center"
-                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
-                        </StackPanel>
+                        </Grid>
                     </Grid>
                 </Grid>
+                <!-- ============ 数据管理页（v1.2.0 瘦身：探测与同步在设置 → 数据） ============ -->
                 <ScrollViewer x:Name="DataPage" Visibility="Collapsed">
-                    <StackPanel Padding="32" Spacing="24">
-                        <Grid>
-                            <TextBlock Text="本地数据" Style="{ThemeResource TitleTextBlockStyle}"/>
-                            <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
-                                <Button Content="刷新" Click="OnRefreshInventory"/>
-                                <Button Content="按本次位置下载" Click="OnDownloadForLocation"/>
-                            </StackPanel>
-                        </Grid>
-                        <StackPanel x:Name="InventoryRows" Spacing="16"/>
-                        <StackPanel Spacing="14">
-                            <Grid>
-                                <StackPanel Spacing="4">
-                                    <TextBlock Text="任务历史" FontSize="20" FontWeight="SemiBold"/>
-                                    <TextBlock x:Name="TaskHistoryCaption" FontSize="11" Opacity=".65"
-                                               Text="记录数据检查、准备、预测和下载探测任务"/>
+                    <StackPanel Padding="32,26,32,32" Spacing="18" MaxWidth="980" HorizontalAlignment="Left">
+                        <StackPanel Spacing="4">
+                            <TextBlock Text="数据管理" Style="{ThemeResource TitleTextBlockStyle}"/>
+                            <TextBlock x:Name="DataWorkspaceText" FontSize="11" Opacity=".65"
+                                       TextTrimming="CharacterEllipsis" MaxLines="1"/>
+                            <TextBlock Text="仅统计模式数据（GFS / EC / CAMS）；地形、卫星等类别以目录为准。是否满足某次预测以预检为准。"
+                                       FontSize="11" Opacity=".6" TextWrapping="Wrap"/>
+                        </StackPanel>
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <Button x:Name="SyncSettingsJump" Click="OnOpenSyncSettings" Padding="10,5">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon Glyph="&#xE895;" FontSize="14"/>
+                                    <TextBlock Text="同步设置"/>
                                 </StackPanel>
-                                <Button x:Name="TaskHistoryRefresh" IsEnabled="False"
-                                        HorizontalAlignment="Right" VerticalAlignment="Center"
-                                        Padding="8,4" Click="OnRefreshTaskHistory">
-                                    <SymbolIcon Symbol="Refresh"/>
-                                </Button>
-                            </Grid>
-                            <TextBlock x:Name="TaskHistoryError" Foreground="Red" Visibility="Collapsed"
-                                       IsTextSelectionEnabled="True" TextWrapping="Wrap"/>
-                            <StackPanel x:Name="TaskHistoryLoadingPanel" Visibility="Collapsed"
-                                        Spacing="10" Padding="0,20">
+                            </Button>
+                            <Button Content="刷新" Click="OnRefreshInventory" Padding="10,5"/>
+                            <Button x:Name="OpenDataFolderButton" Content="打开数据目录" Click="OnOpenDataFolder" Padding="10,5"/>
+                        </StackPanel>
+                        <StackPanel x:Name="InventoryRows" Spacing="16"/>
+                        <TextBlock x:Name="InventoryError" Foreground="Red" Visibility="Collapsed"
+                                   IsTextSelectionEnabled="True" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </ScrollViewer>
+                <!-- ============ 任务历史页（v1.2.0 独立页：列表 + 详情双栏） ============ -->
+                <Grid x:Name="HistoryPage" Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+                    <Grid Margin="20,14,20,4" ColumnSpacing="10">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Orientation="Horizontal" Spacing="10" VerticalAlignment="Center">
+                            <TextBlock x:Name="HistoryCaption" FontSize="11" Opacity=".65" VerticalAlignment="Center"
+                                       Text="记录数据检查、准备、预测和下载探测任务"/>
+                            <TextBlock x:Name="HistoryIssues" FontSize="11" Foreground="Orange"
+                                       Visibility="Collapsed" VerticalAlignment="Center"/>
+                        </StackPanel>
+                        <RadioButtons x:Name="HistoryFilter" Grid.Column="1" MaxColumns="3" SelectedIndex="0"
+                                      SelectionChanged="OnHistoryFilterChanged" VerticalAlignment="Center">
+                            <RadioButton Content="全部"/>
+                            <RadioButton Content="主动任务"/>
+                            <RadioButton Content="后台同步"/>
+                        </RadioButtons>
+                        <Button x:Name="HistoryRefresh" Grid.Column="2" IsEnabled="False"
+                                Padding="8,4" Click="OnRefreshTaskHistory" VerticalAlignment="Center">
+                            <SymbolIcon Symbol="Refresh"/>
+                        </Button>
+                    </Grid>
+                    <Grid Grid.Row="1">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+                        <Grid>
+                            <ScrollViewer x:Name="HistoryListScroll" Padding="20,6,20,16"
+                                          VerticalScrollBarVisibility="Auto">
+                                <StackPanel x:Name="HistoryListHost" Spacing="0"/>
+                            </ScrollViewer>
+                            <StackPanel x:Name="HistoryLoadingPanel" Visibility="Collapsed"
+                                        Spacing="10" Padding="20,26" HorizontalAlignment="Center">
                                 <ProgressRing Width="24" Height="24" IsActive="True"/>
                                 <TextBlock Text="正在读取任务记录…" Opacity=".7"/>
                             </StackPanel>
-                            <StackPanel x:Name="TaskHistoryEmpty" Visibility="Collapsed"
-                                        Spacing="4" Padding="0,20">
+                            <StackPanel x:Name="HistoryEmpty" Visibility="Collapsed"
+                                        Spacing="4" Padding="20,26" HorizontalAlignment="Center">
                                 <TextBlock Text="暂无任务记录" FontWeight="SemiBold"/>
-                                <TextBlock x:Name="TaskHistoryEmptyText" Opacity=".65"/>
+                                <TextBlock x:Name="HistoryEmptyText" Opacity=".65"/>
                             </StackPanel>
-                            <StackPanel x:Name="TaskHistoryRows" Spacing="0"/>
-                            <TextBlock x:Name="TaskHistoryIssuesNotice" Foreground="Orange" FontSize="11"
-                                       Visibility="Collapsed" TextWrapping="Wrap"/>
-                            <StackPanel x:Name="TaskEventsPanel" Visibility="Collapsed" Spacing="8"/>
-                        </StackPanel>
-                    </StackPanel>
-                </ScrollViewer>
-                <ScrollViewer x:Name="SettingsPage" Visibility="Collapsed">
-                    <StackPanel Padding="32" Spacing="24" MaxWidth="760" HorizontalAlignment="Left">
-                        <TextBlock Text="设置" Style="{ThemeResource TitleTextBlockStyle}"/>
-                        <ComboBox x:Name="Appearance" Header="外观" SelectedIndex="0" SelectionChanged="OnAppearanceChanged">
-                            <ComboBoxItem Content="跟随系统" Tag="system"/>
-                            <ComboBoxItem Content="浅色" Tag="light"/>
-                            <ComboBoxItem Content="深色" Tag="dark"/>
-                        </ComboBox>
-                        <TextBox x:Name="WorkspacePath" Header="FireSky 数据目录" MinWidth="580"/>
-                        <TextBox x:Name="EnginePath" Header="Rust 引擎（留空使用内置）" MinWidth="580"/>
-                        <Button Content="连接引擎" Click="OnReconnect" Style="{ThemeResource AccentButtonStyle}"/>
-                        <Border Padding="16" CornerRadius="8"
-                                Background="{ThemeResource LayerFillColorDefaultBrush}"
+                        </Grid>
+                        <Border x:Name="HistoryDetail" Grid.Column="1" Width="380" Visibility="Collapsed"
+                                BorderThickness="1,0,0,0"
                                 BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                BorderThickness="1">
-                            <StackPanel Spacing="10">
-                                <TextBlock Text="缓存与报告保留" FontSize="13" FontWeight="SemiBold"/>
-                                <TextBlock Text="留空表示不自动清理；周期按数据源保留，卫星、报告和地图按天滚动保留。新数据校验成功后才会清理旧文件。"
-                                           FontSize="11" Opacity=".7" TextWrapping="Wrap"/>
-                                <Grid ColumnSpacing="10" RowSpacing="8">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/>
-                                    </Grid.ColumnDefinitions>
-                                    <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
-                                    <TextBox x:Name="RetentionGfs" Header="GFS 周期（个）" PlaceholderText="不限制"/>
-                                    <TextBox x:Name="RetentionEcmwf" Grid.Column="1" Header="EC 周期（个）" PlaceholderText="不限制"/>
-                                    <TextBox x:Name="RetentionCams" Grid.Column="2" Header="CAMS 周期（个）" PlaceholderText="不限制"/>
-                                    <TextBox x:Name="RetentionSatelliteDays" Grid.Row="1" Header="卫星数据（天）" PlaceholderText="不限制"/>
-                                    <TextBox x:Name="RetentionReportDays" Grid.Row="1" Grid.Column="1" Header="历史报告（天）" PlaceholderText="不限制"/>
-                                    <TextBox x:Name="RetentionMapDays" Grid.Row="1" Grid.Column="2" Header="报告地图（天）" PlaceholderText="不限制"/>
-                                </Grid>
-                                <Grid ColumnSpacing="8">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock x:Name="RetentionStatus" TextWrapping="Wrap" FontSize="11"/>
-                                    <Button x:Name="SaveRetentionButton" Content="保存保留设置"
-                                            Grid.Column="1"
-                                            HorizontalAlignment="Right" Click="OnSaveRetention"
-                                            Style="{ThemeResource AccentButtonStyle}"/>
-                                </Grid>
-                            </StackPanel>
+                                Background="{ThemeResource LayerFillColorDefaultBrush}">
+                            <ScrollViewer Padding="16,14,16,16">
+                                <StackPanel Spacing="10">
+                                    <Grid>
+                                        <StackPanel Spacing="3">
+                                            <TextBlock x:Name="HistoryDetailTitle" FontSize="15" FontWeight="SemiBold"
+                                                       TextWrapping="Wrap"/>
+                                            <TextBlock x:Name="HistoryDetailContext" FontSize="11" Opacity=".7"
+                                                       TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                        <Button x:Name="HistoryDetailClose" Padding="4" Background="Transparent"
+                                                BorderThickness="0" HorizontalAlignment="Right"
+                                                VerticalAlignment="Top" Click="OnCloseHistoryDetail">
+                                            <SymbolIcon Symbol="Clear"/>
+                                        </Button>
+                                    </Grid>
+                                    <Border Padding="12" CornerRadius="8"
+                                            Background="{ThemeResource CardStrokeColorDefaultBrush}">
+                                        <StackPanel x:Name="HistorySummaryPanel" Spacing="6"/>
+                                    </Border>
+                                    <TextBlock Text="事件" FontSize="11" FontWeight="SemiBold" Opacity=".7"/>
+                                    <TextBlock x:Name="HistoryEventsTruncated" Text="较早事件已超出保留上限。"
+                                               FontSize="10" Opacity=".65" Visibility="Collapsed"/>
+                                    <StackPanel x:Name="HistoryEventsPanel" Spacing="2"/>
+                                </StackPanel>
+                            </ScrollViewer>
                         </Border>
-                        <TextBlock x:Name="SettingsStatus" TextWrapping="Wrap" IsTextSelectionEnabled="True"/>
-                    </StackPanel>
-                </ScrollViewer>
+                    </Grid>
+                </Grid>
+                <!-- ============ 设置页（v1.2.0 四分类：通用 / 数据 / 位置与海拔 / 高级） ============ -->
+                <Grid x:Name="SettingsPage" Visibility="Collapsed">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="176"/>
+                        <ColumnDefinition Width="*"/>
+                    </Grid.ColumnDefinitions>
+                    <RadioButtons x:Name="SettingsCategories" Margin="14,20,0,0"
+                                  SelectionChanged="OnSettingsCategoryChanged">
+                        <RadioButton Content="通用" Tag="general"/>
+                        <RadioButton Content="数据" Tag="data"/>
+                        <RadioButton Content="位置与海拔" Tag="location"/>
+                        <RadioButton Content="高级" Tag="advanced"/>
+                    </RadioButtons>
+                    <ScrollViewer Grid.Column="1" VerticalScrollBarVisibility="Auto">
+                        <Grid Margin="8,20,28,28" MaxWidth="860" HorizontalAlignment="Left">
+                            <StackPanel x:Name="GeneralSettings" Spacing="16">
+                                <TextBlock Text="通用" Style="{ThemeResource TitleTextBlockStyle}"/>
+                                <StackPanel Spacing="8">
+                                    <TextBlock Text="主题" FontWeight="Medium"/>
+                                    <RadioButtons x:Name="Appearance" MaxColumns="3" SelectedIndex="0"
+                                                  SelectionChanged="OnAppearanceChanged">
+                                        <RadioButton Content="跟随系统" Tag="system"/>
+                                        <RadioButton Content="浅色" Tag="light"/>
+                                        <RadioButton Content="深色" Tag="dark"/>
+                                    </RadioButtons>
+                                </StackPanel>
+                            </StackPanel>
+                            <StackPanel x:Name="DataSettings" Spacing="20" Visibility="Collapsed">
+                                <TextBlock Text="数据" Style="{ThemeResource TitleTextBlockStyle}"/>
+                                <StackPanel Spacing="8">
+                                    <TextBlock Text="下载源" FontSize="14" FontWeight="SemiBold"/>
+                                    <RadioButtons x:Name="EcmwfSourcePicker" SelectedIndex="0"
+                                                  SelectionChanged="OnEcmwfSourceChanged">
+                                        <RadioButton Content="ECMWF 官方" Tag="ecmwf"/>
+                                        <RadioButton Content="AWS 欧洲镜像" Tag="aws"/>
+                                        <RadioButton Content="Google Cloud 镜像" Tag="google"/>
+                                    </RadioButtons>
+                                    <TextBlock Text="EC 下载源同时用于下载探测、数据准备和预测。GFS 使用 NOAA NOMADS，CAMS 使用 Copernicus ADS。"
+                                               FontSize="11" Opacity=".65" TextWrapping="Wrap"/>
+                                </StackPanel>
+                                <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                                <StackPanel Spacing="8">
+                                    <TextBlock Text="CAMS · Copernicus ADS" FontSize="14" FontWeight="SemiBold"/>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <FontIcon x:Name="CamStatusIcon" Glyph="&#xE192;" FontSize="15"/>
+                                        <TextBlock x:Name="CamConfigText" TextWrapping="Wrap"
+                                                   VerticalAlignment="Center" MaxWidth="520"/>
+                                        <Button x:Name="CamRefreshButton" Padding="4" Background="Transparent"
+                                                BorderThickness="0" VerticalAlignment="Center" Click="OnRefreshCams">
+                                            <SymbolIcon Symbol="Refresh"/>
+                                        </Button>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <PasswordBox x:Name="CamKeyBox" PlaceholderText="粘贴 ADS Personal Access Token"
+                                                     Width="340"/>
+                                        <Button x:Name="SaveCamKeyButton" Content="保存 Key" Click="OnSaveCamsKey" Padding="10,5"/>
+                                        <ProgressRing x:Name="CamSavingRing" Width="16" Height="16" IsActive="False"/>
+                                    </StackPanel>
+                                    <TextBlock Text="仅以明文保存在本机配置文件，文件权限受限；不会写入工程或显示已有 Key。"
+                                               FontSize="11" Opacity=".65" TextWrapping="Wrap"/>
+                                    <TextBlock x:Name="CamOverrideHint" FontSize="11" Opacity=".65"
+                                               TextWrapping="Wrap" Visibility="Collapsed"
+                                               Text="环境变量正在覆盖配置。修改 CDSAPI_KEY / CDSAPI_URL 后需重新启动应用。"/>
+                                    <TextBlock x:Name="CamMessageText" FontSize="11" TextWrapping="Wrap"
+                                               IsTextSelectionEnabled="True"/>
+                                    <Expander x:Name="CamTutorial" Header="配置教程" HorizontalAlignment="Stretch">
+                                        <StackPanel Spacing="12" Padding="0,4">
+                                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                                <TextBlock Text="1" FontWeight="SemiBold" Opacity=".7"/>
+                                                <StackPanel Spacing="3">
+                                                    <TextBlock Text="注册并登录 ADS" FontWeight="Medium"/>
+                                                    <TextBlock Text="使用 ECMWF 账号登录 Atmosphere Data Store。" FontSize="11" Opacity=".65" TextWrapping="Wrap"/>
+                                                    <HyperlinkButton Content="打开 ADS" NavigateUri="https://ads.atmosphere.copernicus.eu/" Padding="0" Margin="0,-4"/>
+                                                </StackPanel>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                                <TextBlock Text="2" FontWeight="SemiBold" Opacity=".7"/>
+                                                <StackPanel Spacing="3">
+                                                    <TextBlock Text="复制 Personal Access Token" FontWeight="Medium"/>
+                                                    <TextBlock Text="在官方 API 配置页复制 key 后面的 Token，不要复制 url 或整段配置。" FontSize="11" Opacity=".65" TextWrapping="Wrap"/>
+                                                    <HyperlinkButton Content="获取 Token" NavigateUri="https://ads.atmosphere.copernicus.eu/how-to-api" Padding="0" Margin="0,-4"/>
+                                                </StackPanel>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                                <TextBlock Text="3" FontWeight="SemiBold" Opacity=".7"/>
+                                                <StackPanel Spacing="3">
+                                                    <TextBlock Text="接受 CAMS 数据集条款" FontWeight="Medium"/>
+                                                    <TextBlock Text="在数据集 Download 页底部接受 Terms of Use，完成网页端授权。" FontSize="11" Opacity=".65" TextWrapping="Wrap"/>
+                                                    <HyperlinkButton Content="打开数据集" NavigateUri="https://ads.atmosphere.copernicus.eu/datasets/cams-global-atmospheric-composition-forecasts?tab=download" Padding="0" Margin="0,-4"/>
+                                                </StackPanel>
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Spacing="12">
+                                                <TextBlock Text="4" FontWeight="SemiBold" Opacity=".7"/>
+                                                <StackPanel Spacing="3">
+                                                    <TextBlock Text="返回 FireSky 保存 Key" FontWeight="Medium"/>
+                                                    <TextBlock Text="粘贴到上方输入框并保存，再到预测准备窗口下载数据。" FontSize="11" Opacity=".65" TextWrapping="Wrap"/>
+                                                </StackPanel>
+                                            </StackPanel>
+                                            <TextBlock Text="这里只检查本地配置是否完整；Token 是否有效、数据集是否已授权，在实际下载时验证。"
+                                                       FontSize="11" Opacity=".65" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                    </Expander>
+                                </StackPanel>
+                                <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                                <StackPanel Spacing="8">
+                                    <Grid>
+                                        <StackPanel Spacing="3">
+                                            <TextBlock Text="下载连通性" FontSize="14" FontWeight="SemiBold"/>
+                                            <TextBlock Text="先验证这台电脑能否真正收到 GFS、EC、CAMS 数据，再开始预测。"
+                                                       FontSize="11" Opacity=".65" TextWrapping="Wrap"/>
+                                        </StackPanel>
+                                        <StackPanel Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right"
+                                                    VerticalAlignment="Top">
+                                            <Button x:Name="ProbeCancelButton" Content="取消" Visibility="Collapsed"
+                                                    Click="OnCancelProbe" Padding="10,5"/>
+                                            <Button x:Name="ProbeStartButton" Content="探测下载" Click="OnProbeDownloads" Padding="10,5"/>
+                                        </StackPanel>
+                                    </Grid>
+                                    <TextBlock x:Name="ProbeEcNote" FontSize="11" Opacity=".65" TextWrapping="Wrap"
+                                               Text="当前使用 EC ECMWF 官方。GFS 与 CAMS 使用各自官方入口。"/>
+                                    <StackPanel x:Name="ProbeRowsHost" Spacing="8"/>
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="ProbeFooter" FontSize="11" Opacity=".65"
+                                                   TextWrapping="Wrap" VerticalAlignment="Center"
+                                                   Text="尚无本次网络的下载验证结果"/>
+                                        <Button x:Name="ProbeCopyButton" Padding="4" Background="Transparent"
+                                                BorderThickness="0" Grid.Column="1" Visibility="Collapsed"
+                                                Click="OnCopyProbeReport" VerticalAlignment="Center">
+                                            <SymbolIcon Symbol="Copy"/>
+                                        </Button>
+                                    </Grid>
+                                    <TextBlock x:Name="ProbeErrorText" FontSize="11" Foreground="Red"
+                                               TextWrapping="Wrap" IsTextSelectionEnabled="True"
+                                               Visibility="Collapsed"/>
+                                </StackPanel>
+                                <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                                <StackPanel Spacing="8">
+                                    <TextBlock Text="后台同步" FontSize="14" FontWeight="SemiBold"/>
+                                    <ToggleSwitch x:Name="SyncEnabledToggle" OnContent="" OffContent=""
+                                                  Header="启用后台同步" Toggled="OnSyncToggled"/>
+                                    <InfoBar x:Name="SyncRetentionWarning" IsOpen="False" Severity="Warning" IsClosable="False"
+                                             Title="未配置缓存保留策略" Message="缓存将随同步增长；可在下方「存储与保留」中设置。"/>
+                                    <StackPanel Orientation="Horizontal" Spacing="18">
+                                        <CheckBox x:Name="SyncCamsToggle" Content="CAMS" Checked="OnSyncSourceToggled" Unchecked="OnSyncSourceToggled"/>
+                                        <CheckBox x:Name="SyncGfsToggle" Content="GFS" Checked="OnSyncSourceToggled" Unchecked="OnSyncSourceToggled"/>
+                                        <CheckBox x:Name="SyncEcToggle" Content="EC" Checked="OnSyncSourceToggled" Unchecked="OnSyncSourceToggled"/>
+                                    </StackPanel>
+                                    <StackPanel Orientation="Horizontal" Spacing="16">
+                                        <TextBox x:Name="SyncIntervalBox" Header="同步间隔（分钟）" Width="180" PlaceholderText="未设置"/>
+                                        <TextBox x:Name="SyncLeadBox" Header="GFS/EC 时效上限（小时）" Width="200" PlaceholderText="未设置"/>
+                                    </StackPanel>
+                                    <ComboBox x:Name="SyncAnchorPicker" Header="锚定区域" Width="260"
+                                              SelectionChanged="OnSyncAnchorChanged"/>
+                                    <TextBlock Text="间隔 30–1440 分钟；时效上限仅 GFS/EC 需要（3–240 小时、3 的倍数），CAMS 自动拉齐全部时效；锚定区域决定 CAMS 洲包络与 GFS/EC 下载范围。"
+                                               FontSize="11" Opacity=".65" TextWrapping="Wrap"/>
+                                    <StackPanel Orientation="Horizontal" Spacing="8" VerticalAlignment="Center">
+                                        <ProgressRing x:Name="SyncSavingRing" Width="16" Height="16" IsActive="False"/>
+                                        <TextBlock x:Name="SyncMessageText" FontSize="11" Opacity=".8"
+                                                   TextWrapping="Wrap" MaxWidth="520"
+                                                   VerticalAlignment="Center"/>
+                                        <Button x:Name="SyncRunNowButton" Content="立即同步" Click="OnRunDataSyncNow" Padding="10,5"/>
+                                        <Button x:Name="SyncSaveButton" Content="保存同步设置" Click="OnSaveDataSync" Padding="10,5"
+                                                Style="{ThemeResource AccentButtonStyle}"/>
+                                    </StackPanel>
+                                    <StackPanel x:Name="SyncStatusRows" Spacing="8" Margin="0,4,0,0"/>
+                                </StackPanel>
+                                <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                                <StackPanel Spacing="8">
+                                    <TextBlock Text="存储与保留" FontSize="14" FontWeight="SemiBold"/>
+                                    <TextBlock Text="自动清理按周期、扫描或生成时间滚动保留；新数据校验成功后才会清理旧文件。留空表示不自动清理。"
+                                               FontSize="11" Opacity=".65" TextWrapping="Wrap"/>
+                                    <Grid ColumnSpacing="10" RowSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/>
+                                        </Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+                                        <TextBox x:Name="RetentionGfs" Header="GFS 周期（个）" PlaceholderText="不限制"/>
+                                        <TextBox x:Name="RetentionEcmwf" Grid.Column="1" Header="EC 周期（个）" PlaceholderText="不限制"/>
+                                        <TextBox x:Name="RetentionCams" Grid.Column="2" Header="CAMS 周期（个）" PlaceholderText="不限制"/>
+                                        <TextBox x:Name="RetentionSatelliteDays" Grid.Row="1" Header="卫星数据（天）" PlaceholderText="不限制"/>
+                                        <TextBox x:Name="RetentionReportDays" Grid.Row="1" Grid.Column="1" Header="历史报告（天）" PlaceholderText="不限制"/>
+                                        <TextBox x:Name="RetentionMapDays" Grid.Row="1" Grid.Column="2" Header="报告地图（天）" PlaceholderText="不限制"/>
+                                    </Grid>
+                                    <Grid ColumnSpacing="8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="RetentionStatus" TextWrapping="Wrap" FontSize="11"
+                                                   VerticalAlignment="Center" IsTextSelectionEnabled="True"/>
+                                        <Button x:Name="SaveRetentionButton" Content="保存保留设置"
+                                                Grid.Column="1"
+                                                HorizontalAlignment="Right" Click="OnSaveRetention"
+                                                Style="{ThemeResource AccentButtonStyle}"/>
+                                    </Grid>
+                                </StackPanel>
+                                <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                                <StackPanel Spacing="8">
+                                    <TextBlock Text="数据目录" FontSize="14" FontWeight="SemiBold"/>
+                                    <TextBox x:Name="WorkspacePath" Header="FireSky 数据目录" MinWidth="560"/>
+                                    <StackPanel Orientation="Horizontal" Spacing="8">
+                                        <Button x:Name="ChooseDirectoryButton" Content="选择目录" Click="OnChooseDirectory" Padding="10,5"/>
+                                        <Button x:Name="ReconnectButton" Content="重新连接" Click="OnReconnect" Padding="10,5"
+                                                Style="{ThemeResource AccentButtonStyle}"/>
+                                    </StackPanel>
+                                </StackPanel>
+                            </StackPanel>
+                            <StackPanel x:Name="LocationSettings" Spacing="16" Visibility="Collapsed">
+                                <TextBlock Text="位置与海拔" Style="{ThemeResource TitleTextBlockStyle}"/>
+                                <StackPanel Spacing="8">
+                                    <TextBlock Text="海拔来源" FontWeight="Medium"/>
+                                    <RadioButtons x:Name="ElevationSourcePicker" SelectedIndex="0"
+                                                  SelectionChanged="OnElevationSourceChanged">
+                                        <RadioButton Content="自动（HTTP 优先，SRTM 兜底）" Tag="auto"/>
+                                        <RadioButton Content="仅 HTTP（open-meteo）" Tag="http"/>
+                                        <RadioButton Content="SRTM 下载（本地时区 + 瓦片）" Tag="srtm"/>
+                                    </RadioButtons>
+                                    <TextBlock Text="「自动」先尝试 open-meteo 海拔接口，失败时回退本地时区 + SRTM 瓦片；「仅 HTTP」不下载瓦片；「SRTM 下载」首次使用会按需下载地形瓦片（每块约数 MB）。设置对之后的海拔获取与预测生效。"
+                                               FontSize="11" Opacity=".65" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </StackPanel>
+                            <StackPanel x:Name="AdvancedSettings" Spacing="12" Visibility="Collapsed">
+                                <TextBlock Text="高级" Style="{ThemeResource TitleTextBlockStyle}"/>
+                                <StackPanel Spacing="8">
+                                    <TextBlock Text="Rust 引擎" FontWeight="Medium"/>
+                                    <TextBox x:Name="EnginePath" Header="Rust 引擎（留空使用内置）" MinWidth="560"/>
+                                    <TextBlock Text="自定义引擎路径仅供开发调试；日常使用保持留空即可。"
+                                               FontSize="11" Opacity=".65" TextWrapping="Wrap"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Grid>
+                    </ScrollViewer>
+                </Grid>
             </Grid>
         </NavigationView>
         <Grid Grid.Row="2" Padding="20,0">
