@@ -27,3 +27,7 @@ apps/windows/**/obj/
 .gradle/
 build/
 local.properties
+# Android 生成物（cargo+NDK 链接产物 / brew definitions 拷贝）
+apps/mobile-android/app/src/main/jniLibs/
+apps/mobile-android/app/src/main/assets/eccodes/
+.kotlin/

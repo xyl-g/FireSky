@@ -108,12 +108,15 @@ swiftc -swift-version 5 -target "$HOST_SWIFT_TARGET" \
 "$ICON_TMP/render-icon" "$ICON_TMP/FireSky.iconset"
 iconutil -c icns "$ICON_TMP/FireSky.iconset" -o "$APP/Contents/Resources/FireSky.icns"
 PLIST="$APP/Contents/Info.plist"
+# Single source of truth for the release version: engine/Cargo.toml.
+ENGINE_VERSION="$(sed -n 's/^version = "\([^"]*\)"/\1/p' "$ROOT/engine/Cargo.toml" | head -1)"
+test -n "$ENGINE_VERSION" || { echo "cannot read version from engine/Cargo.toml" >&2; exit 1; }
 /usr/libexec/PlistBuddy -c "Clear dict" "$PLIST" 2>/dev/null || true
 /usr/libexec/PlistBuddy -c "Add :CFBundleExecutable string FireSky" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string app.firesky.native" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :CFBundleName string FireSky" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :CFBundlePackageType string APPL" "$PLIST"
-/usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string 1.0.0" "$PLIST"
+/usr/libexec/PlistBuddy -c "Add :CFBundleShortVersionString string $ENGINE_VERSION" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :CFBundleVersion string 1" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string FireSky.icns" "$PLIST"
 /usr/libexec/PlistBuddy -c "Add :LSMinimumSystemVersion string 14.0" "$PLIST"
