@@ -26,6 +26,28 @@ enum ObservationDate {
         formatter.dateFormat = pattern
         return formatter.string(from: date)
     }
+
+    /// Tolerates both plain and fractional-second ISO8601 stamps: engine task
+    /// events carry `.300Z` while some receipts use whole seconds.
+    static func parseISO(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions = [.withInternetDateTime]
+        return formatter.date(from: value)
+    }
+}
+
+/// UX #4：历史/同步时间戳统一本地化展示（本机时区，"MM-dd HH:mm"）。
+/// 解析失败时原样返回，不吞掉信息；原始 UTC 串由调用方放进 help 提示。
+func historyTimeText(_ iso: String, timeZone: TimeZone = .current) -> String {
+    guard let date = ObservationDate.parseISO(iso) else { return iso }
+    let formatter = DateFormatter()
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.locale = Locale(identifier: "zh_CN")
+    formatter.timeZone = timeZone
+    formatter.dateFormat = "MM-dd HH:mm"
+    return formatter.string(from: date)
 }
 
 struct ObservationMonth {

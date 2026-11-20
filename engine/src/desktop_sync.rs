@@ -1125,7 +1125,24 @@ pub fn run(
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let _round_lock = crate::cache_lock::Lock::acquire(&lock_path, 0.0)
-        .map_err(|_| "another data sync round is active in another process".to_string())?;
+        .map_err(|_| {
+            // Name the holder when known: the lock file carries the owning PID
+            // so a yielding round (and the UI) can tell which process is syncing
+            // instead of guessing "the background helper".
+            let holder = std::fs::read_to_string(&lock_path)
+                .ok()
+                .and_then(|text| text.trim().parse::<u32>().ok())
+                .filter(|pid| *pid > 0);
+            match holder {
+                Some(pid) => {
+                    format!("another data sync round is active in another process (pid {pid})")
+                }
+                None => "another data sync round is active in another process".to_string(),
+            }
+        })?;
+    // Record this round's PID for contenders; the flock stays on the open fd
+    // held by `_round_lock`, so rewriting the content does not release it.
+    let _ = std::fs::write(&lock_path, std::process::id().to_string());
 
     // The publication probe runs before ANY state write: a failed probe
     // consumes neither the interval gate nor the breaker budget, and the
@@ -1567,6 +1584,37 @@ mod tests {
         .unwrap_err();
         assert!(
             err.contains("another data sync round is active in another process"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn round_lock_busy_error_names_the_holder_pid() {
+        let workspace = tempfile::tempdir().unwrap();
+        save(workspace.path(), json!({"settings": settings_enabled()})).unwrap();
+        let lock_path = state_path(workspace.path()).with_file_name("sync.lock");
+        fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
+        let _held = crate::cache_lock::Lock::acquire(&lock_path, 0.0).unwrap();
+        // A live holder writes its PID into the lock file; the yielding round
+        // must surface it so the UI can attribute the busy state correctly.
+        fs::write(&lock_path, "4242").unwrap();
+        let context = RunContext {
+            workspace: workspace.path(),
+            cams_cache_dir: workspace.path().join("cams"),
+            gfs_cache_dir: workspace.path().join("gfs"),
+            ecmwf_cache_dir: workspace.path().join("ec"),
+        };
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let err = run(
+            &context,
+            json!({"sources": ["cams"]}),
+            None,
+            &cancel,
+            &|_| Ok(()),
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("another data sync round is active in another process (pid 4242)"),
             "{err}"
         );
     }

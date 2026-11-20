@@ -94,6 +94,7 @@ data class WorkbenchState(
     // 设置
     val appearance: String = "system",
     val ecmwfSource: String = "ecmwf",
+    val elevationSource: String = "auto", // auto / http / srtm（v1.1.1 §1）
     val transportMode: String = "ffi", // mock / ffi（MN2 起默认真引擎；设置页可切回 mock）
     val camsConfiguration: JSONObject? = null,
     val camsKeyDraft: String = "",
@@ -125,6 +126,7 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
     init {
         val appearance = prefs.getString(PREF_APPEARANCE, null) ?: "system"
         val ecmwfSource = prefs.getString(PREF_ECMWF_SOURCE, null) ?: "ecmwf"
+        val elevationSource = ElevationSourceSetting.load(prefs)
         val transportMode = prefs.getString(PREF_TRANSPORT, null) ?: "ffi"
         val favorites = runCatching {
             val array = JSONArray(prefs.getString(PREF_FAVORITES, "[]") ?: "[]")
@@ -133,6 +135,7 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
         _state.value = _state.value.copy(
             appearance = appearance,
             ecmwfSource = ecmwfSource,
+            elevationSource = elevationSource,
             transportMode = transportMode,
             favorites = favorites,
         )
@@ -281,7 +284,10 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(busy = true, status = "正在查找位置") }
         viewModelScope.launch {
             try {
-                val point = engine.call("search", JSONObject().put("query", text))
+                val point = engine.call(
+                    "search",
+                    ElevationSourceSetting.searchParams(text, _state.value.elevationSource),
+                )
                 applyLocation(point)
                 _state.update { it.copy(query = "") }
             } catch (error: CancellationException) {
@@ -347,7 +353,10 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
         _state.update { it.copy(location = it.location.copy(metadataReady = false), status = "正在获取海拔与时区") }
         viewModelScope.launch {
             try {
-                val point = engine.call("metadata", JSONObject().put("lat", lat).put("lon", lon))
+                val point = engine.call(
+                    "metadata",
+                    ElevationSourceSetting.metadataParams(lat, lon, _state.value.elevationSource),
+                )
                 if (metadataGeneration != revision) return@launch
                 val elevation = point.optDouble("elevation_m").takeUnless { it.isNaN() } ?: 0.0
                 val timezone = point.optString("timezone_name", "").ifEmpty { _state.value.location.timezone }
@@ -757,6 +766,12 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
     fun setEcmwfSource(value: String) {
         prefs.edit().putString(PREF_ECMWF_SOURCE, value).apply()
         _state.update { it.copy(ecmwfSource = value, result = null) }
+    }
+
+    /** 海拔来源三档（v1.1.1 §1）：持久化后对下一次 search/metadata 生效。 */
+    fun setElevationSource(value: String) {
+        val normalized = ElevationSourceSetting.save(prefs, value)
+        _state.update { it.copy(elevationSource = normalized) }
     }
 
     fun setTransportMode(value: String) {

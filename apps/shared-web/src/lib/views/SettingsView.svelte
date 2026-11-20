@@ -3,16 +3,16 @@
   import { KeyRound, Map, Check, Palette, Database, RefreshCw, CircleCheck, Cpu, HardDrive, Save } from "@lucide/svelte";
   import type { BaseId, SourceId } from "../map-grid";
   import { rpcRequest } from "../ipc";
-  import { camsConfiguration, camsDescription, type CamsConfiguration } from "../settings-state";
+  import { camsConfiguration, camsDescription, elevationSourceDescription, type CamsConfiguration, type ElevationSource } from "../settings-state";
 
   let {
     provider = $bindable("tianditu"), tdtKey = $bindable(""), base = $bindable("imagery"),
-    appearance = $bindable("system"), ecSource = $bindable("ecmwf"),
+    appearance = $bindable("system"), ecSource = $bindable("ecmwf"), elevationSource = $bindable("auto"),
     online = false, engineWorkspace = "", engineBinary = "", onReconnect = () => {},
     reconnecting = false, generation = 0,
   }: {
     provider?: SourceId; tdtKey?: string; base?: BaseId;
-    appearance?: "system" | "light" | "dark"; ecSource?: string;
+    appearance?: "system" | "light" | "dark"; ecSource?: string; elevationSource?: ElevationSource;
     online?: boolean; engineWorkspace?: string; engineBinary?: string;
     onReconnect?: () => void; reconnecting?: boolean; generation?: number;
   } = $props();
@@ -160,6 +160,14 @@
         <option value="ecmwf">ECMWF 官方</option><option value="aws">AWS 欧洲镜像</option><option value="google">Google Cloud 镜像</option>
       </select>
     </div>
+    <div class="setting-row">
+      <label for="elevation-source">海拔来源</label>
+      <select id="elevation-source" bind:value={elevationSource}>
+        <option value="auto">自动（在线优先）</option><option value="http">HTTP 在线查询</option><option value="srtm">SRTM 本地地形</option>
+      </select>
+    </div>
+    <p class="muted">{elevationSourceDescription(elevationSource)}</p>
+    <p class="muted">海拔来源作用于「获取海拔与时区」和地名搜索；获取成功后观测点信息会显示实际来源。</p>
     <p class="muted">GFS · NOAA NOMADS；CAMS · Copernicus ADS</p>
   </section>
   <section aria-labelledby="retention-settings">

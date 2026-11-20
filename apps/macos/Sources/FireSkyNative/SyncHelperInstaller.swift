@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 // SyncHelperInstaller — installs/removes the background data-sync LaunchAgent.
 //
@@ -63,6 +64,9 @@ enum SyncHelperInstaller {
         let directory = plistURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         try data.write(to: plistURL, options: .atomic)
+        // Self-heal: an orphaned engine round from a previous install/uninstall
+        // would otherwise keep holding sync.lock and make every new round yield.
+        terminateHelperRounds(workspace: workspace)
         // Reload cleanly: bootout any previous instance (ignore "not loaded"),
         // then bootstrap the freshly written plist into the user GUI domain.
         _ = launchctl(["bootout", "gui/\(getuid())/\(label)"])
@@ -72,16 +76,59 @@ enum SyncHelperInstaller {
         }
     }
 
-    static func uninstall() throws {
+    static func uninstall(workspace: String) throws {
         _ = launchctl(["bootout", "gui/\(getuid())/\(label)"])
         if FileManager.default.fileExists(atPath: plistURL.path) {
             try FileManager.default.removeItem(at: plistURL)
         }
+        // bootout ends the helper main process, but its engine child can survive
+        // as an orphan and keep syncing while holding sync.lock. End those rounds
+        // so uninstall actually stops background sync.
+        terminateHelperRounds(workspace: workspace)
+    }
+
+    /// PIDs of the helper's engine rounds parsed from `ps -axo pid=,command=`.
+    /// The app itself never invokes `data_sync_tick`, so matching the helper's
+    /// `desktop-call --workspace <ws> data_sync_tick` argv identifies only helper
+    /// rounds (including orphans left behind by an earlier uninstall).
+    static func roundProcessIDs(psOutput: String, workspace: String) -> [pid_t] {
+        guard !workspace.isEmpty else { return [] }
+        let needle = "--workspace \(workspace) data_sync_tick"
+        var pids: [pid_t] = []
+        for line in psOutput.split(separator: "\n") {
+            let text = String(line)
+            guard text.contains("firesky-engine"), text.contains("desktop-call"),
+                  text.contains(needle) else { continue }
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            guard let token = trimmed.split(separator: " ").first,
+                  let pid = pid_t(token), pid > 1 else { continue }
+            pids.append(pid)
+        }
+        return pids
+    }
+
+    /// Stop in-flight helper rounds for this workspace: SIGTERM, then SIGKILL
+    /// after a short grace for any survivor. Best-effort; a no-op when none run.
+    static func terminateHelperRounds(workspace: String) {
+        let listing = run("/bin/ps", ["-axo", "pid=,command="])
+        guard listing.status == 0 else { return }
+        let pids = roundProcessIDs(psOutput: listing.output, workspace: workspace)
+        guard !pids.isEmpty else { return }
+        for pid in pids { kill(pid, SIGTERM) }
+        for _ in 0..<20 {
+            if !pids.contains(where: { kill($0, 0) == 0 }) { return }
+            usleep(100_000)
+        }
+        for pid in pids where kill(pid, 0) == 0 { kill(pid, SIGKILL) }
     }
 
     private static func launchctl(_ arguments: [String]) -> (status: Int32, output: String) {
+        run("/bin/launchctl", arguments)
+    }
+
+    private static func run(_ executable: String, _ arguments: [String]) -> (status: Int32, output: String) {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        process.executableURL = URL(fileURLWithPath: executable)
         process.arguments = arguments
         let pipe = Pipe()
         process.standardOutput = pipe

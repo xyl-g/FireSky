@@ -1,3 +1,41 @@
+/** 海拔来源三档（v1.1.1 引擎契约：metadata 可选参数 elevation_source，缺省 auto）。 */
+export type ElevationSource = "auto" | "http" | "srtm";
+export const ELEVATION_SOURCE_CHOICES: readonly ElevationSource[] = ["auto", "http", "srtm"];
+export const ELEVATION_SOURCE_STORAGE_KEY = "firesky.elevationSource";
+
+/** 非法/缺省值一律回落 auto，与引擎缺省语义一致。 */
+export function parseElevationSource(value: unknown): ElevationSource {
+  return ELEVATION_SOURCE_CHOICES.includes(value as ElevationSource) ? value as ElevationSource : "auto";
+}
+
+export function loadElevationSource(storage: Pick<Storage, "getItem">): ElevationSource {
+  try { return parseElevationSource(storage.getItem(ELEVATION_SOURCE_STORAGE_KEY)); }
+  catch { return "auto"; }
+}
+
+export function saveElevationSource(storage: Pick<Storage, "setItem">, value: ElevationSource): boolean {
+  try { storage.setItem(ELEVATION_SOURCE_STORAGE_KEY, parseElevationSource(value)); return true; }
+  catch { return false; }
+}
+
+/** metadata / search（search 内部同样触发 point metadata）请求统一透传海拔来源。 */
+export function withElevationSource(params: Record<string, unknown>, source: ElevationSource): Record<string, unknown> {
+  return { ...params, elevation_source: parseElevationSource(source) };
+}
+
+export function elevationSourceDescription(source: ElevationSource): string {
+  if (source === "http") return "HTTP：仅通过 open-meteo 在线查询海拔与时区；查询失败直接报错，不回退本地地形。";
+  if (source === "srtm") return "SRTM：下载地形瓦片在本地计算海拔（时区用本地数据）；瓦片缓存后离线可用，缺瓦片时需要允许下载。";
+  return "自动：优先 open-meteo 在线查询，失败时自动回退本地时区 + SRTM 地形瓦片。";
+}
+
+/** 按引擎响应 source 字段展示海拔来源；未知取值不展示。 */
+export function metadataSourceTitle(source: unknown): string {
+  if (source === "open-meteo-point-metadata") return "海拔来源：open-meteo 在线";
+  if (source === "local-timezone+srtm") return "海拔来源：本地时区 + SRTM";
+  return "";
+}
+
 export interface CamsConfiguration {
   configured: boolean;
   state: "missing" | "configured" | "wrong_endpoint" | "tls_disabled" | "unreadable";

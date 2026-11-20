@@ -34,7 +34,7 @@ swiftc -parse-as-library -swift-version 5 -target "$TARGET" \
     -o "$FIXTURE_DIR/preparation-checks"
 
 for check in \
-    missing ready blocked copy date calendar diagnostic-values \
+    missing ready blocked copy date calendar diagnostic-values history-time \
     comparison-empty comparison-pair comparison-partial comparison-curve comparison-invalid \
     aod-shared aod-range aod-partial aod-source \
     nowcast-curve nowcast-metrics nowcast-profile \
@@ -43,6 +43,14 @@ for check in \
     regional-layers regional-web-palette; do
     "$FIXTURE_DIR/preparation-checks" "$check" >/dev/null
 done
+
+swiftc -parse-as-library -swift-version 5 -target "$TARGET" \
+    "$ROOT/apps/macos/Sources/FireSkyNative/EngineClient.swift" \
+    "$ROOT/apps/macos/Sources/FireSkyNative/FFIEngineClient.swift" \
+    "$ROOT/apps/macos/Sources/FireSkyNative/SyncHelperInstaller.swift" \
+    "$ROOT/apps/macos/Tests/SyncHelperChecks.swift" \
+    -o "$FIXTURE_DIR/sync-helper-checks"
+"$FIXTURE_DIR/sync-helper-checks" >/dev/null
 
 swiftc -parse-as-library -swift-version 5 -target "$TARGET" \
     "$ROOT/apps/macos/Sources/FireSkyNative/EngineClient.swift" \

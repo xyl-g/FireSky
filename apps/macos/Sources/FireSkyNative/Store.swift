@@ -29,21 +29,26 @@ enum Page: String, CaseIterable, Identifiable {
 @MainActor
 final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
     let engine = EngineClient()
-    @Published var page: Page = .point
-    @Published var name = "杭州"
+    @Published var page: Page = .point { didSet { sessionChanged() } }
+    // UX #3（v1.1.1）：参数变更不再清空已有结果；旧结果保留并标注其原始参数
+    // （resultParams + resultParametersStale），新预测成功后才替换。
+    // 失败/取消不覆盖上一份有效结果的基线约束不变。
+    @Published var name = "杭州" { didSet { sessionChanged() } }
     @Published var query = ""
-    @Published var lat = 30.2741 { didSet { metadataReady = false; result = nil } }
-    @Published var lon = 120.1551 { didSet { metadataReady = false; result = nil } }
-    @Published var elevation = 8.0 { didSet { result = nil } }
-    @Published var timezone = "Asia/Shanghai" { didSet { result = nil } }
-    @Published var metadataReady = true
-    @Published var date = Date() { didSet { result = nil } }
-    @Published var phenomenon = "dusk" { didSet { result = nil } }
-    @Published var west = 119.5 { didSet { result = nil } }
-    @Published var east = 120.5 { didSet { result = nil } }
-    @Published var south = 29.75 { didSet { result = nil } }
-    @Published var north = 30.75 { didSet { result = nil } }
+    @Published var lat = 30.2741 { didSet { metadataReady = false; sessionChanged() } }
+    @Published var lon = 120.1551 { didSet { metadataReady = false; sessionChanged() } }
+    @Published var elevation = 8.0 { didSet { sessionChanged() } }
+    @Published var timezone = "Asia/Shanghai" { didSet { sessionChanged() } }
+    @Published var metadataReady = true { didSet { sessionChanged() } }
+    @Published var date = Date() { didSet { sessionChanged() } }
+    @Published var phenomenon = "dusk" { didSet { sessionChanged() } }
+    @Published var west = 119.5 { didSet { sessionChanged() } }
+    @Published var east = 120.5 { didSet { sessionChanged() } }
+    @Published var south = 29.75 { didSet { sessionChanged() } }
+    @Published var north = 30.75 { didSet { sessionChanged() } }
     @Published var busy = false
+    /// UX #5：地名搜索是轻量任务，使用独立状态，不占用全局 busy。
+    @Published var searching = false
     @Published var locating = false
     @Published var status = "正在连接引擎"
     @Published var error = ""
@@ -59,6 +64,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var inventory: [JSONObject] = []
     @Published var result: JSONObject? {
         didSet {
+            if result == nil { resultParams = nil }
             resultVersion += 1
             regionalCache = RegionalForecast(result: result)
             selectedRegionalCoordinate = nil
@@ -87,6 +93,9 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     private(set) var resultVersion = 0
     private var regionalCache = RegionalForecast(result: nil)
     @Published var resultKind: Page = .point
+    /// UX #1/#3：当前结果对应的原始请求参数（预测成功或历史恢复时写入）。
+    /// 标题与「参数已变更」徽标都以它为准，而不是当前表单。
+    @Published private(set) var resultParams: JSONObject?
     @Published var selectedModel = "gfs"
     @Published var satelliteMap = false
     @Published var expandedInventory: Set<String> = []
@@ -145,10 +154,39 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var ecmwfSource = "ecmwf" {
         didSet {
             UserDefaults.standard.set(ecmwfSource, forKey: "ecmwfSource")
-            result = nil
             downloadProbeDate = nil
             downloadProbeRows = DownloadProbeRow.initial
             downloadProbeError = ""
+        }
+    }
+    /// 海拔来源三档（v1.1.1 引擎契约）：auto = HTTP 优先、SRTM 兜底；
+    /// http = 仅 open-meteo；srtm = 本地时区 + SRTM 瓦片。所有 metadata
+    /// 调用与预测 payload 透传；响应 source 字段用于展示实际来源。
+    @Published var elevationSource = "auto" {
+        didSet {
+            guard ["auto", "http", "srtm"].contains(elevationSource) else {
+                elevationSource = "auto"
+                return
+            }
+            guard sessionPersistenceEnabled else { return }
+            UserDefaults.standard.set(elevationSource, forKey: "elevationSource")
+        }
+    }
+    /// 最近一次 metadata 响应里的实际来源（open-meteo-point-metadata / local-timezone+srtm）。
+    @Published var elevationSourceActual = ""
+    var elevationSourceLabel: String {
+        switch elevationSource {
+        case "http": return "仅 HTTP（open-meteo）"
+        case "srtm": return "SRTM 下载（本地时区 + 瓦片）"
+        default: return "自动（HTTP 优先，SRTM 兜底）"
+        }
+    }
+    var elevationSourceActualLabel: String {
+        switch elevationSourceActual {
+        case "open-meteo-point-metadata": return "open-meteo（HTTP）"
+        case "local-timezone+srtm": return "本地时区 + SRTM"
+        case "": return "未获取"
+        default: return elevationSourceActual
         }
     }
     var ecmwfSourceLabel: String {
@@ -160,8 +198,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     }
     @Published var favorites: [JSONObject] = []
     @Published var regionDefinitions: [JSONObject] = []
-    @Published var selectedRegions: Set<String> = ["east-asia"] { didSet { result = nil } }
-    @Published var customRegion = false { didSet { result = nil } }
+    @Published var selectedRegions: Set<String> = ["east-asia"] { didSet { sessionChanged() } }
+    @Published var customRegion = false { didSet { sessionChanged() } }
     @Published var workspace: String
     @Published var engineBinary: String
     @Published var appearance: String
@@ -220,6 +258,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     private var engineConnection: AnyCancellable?
     private let location = CLLocationManager()
     private var operation: Task<Void, Never>?
+    private var searchTask: Task<Void, Never>?
     private var publicationTask: Task<Void, Never>?
     private var regionalProfileTask: Task<Void, Never>?
     private var frozenProfileTask: Task<Void, Never>?
@@ -234,6 +273,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     private(set) var requestKind: Page = .point
     private var requestPayload: JSONObject = [:]
     private var didCheckStartupCredentials = false
+    /// UX #7：会话持久化（上次地点/日期/模式）。快照/截图夹具运行不写用户默认值。
+    private var sessionSaveTask: Task<Void, Never>?
+    private var restoringSession = false
+    var sessionPersistenceEnabled = ProcessInfo.processInfo.environment["FIRESKY_NATIVE_SNAPSHOT"] == nil
+    /// 快照/截图夹具运行：退出确认等交互护栏在此模式下自动放行。
+    let isSnapshotRun = ProcessInfo.processInfo.environment["FIRESKY_NATIVE_SNAPSHOT"] != nil
 
     override init() {
         let env = ProcessInfo.processInfo.environment
@@ -271,6 +316,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         engineBinary = env["FIRESKY_RUST_ENGINE_BIN"] ?? defaults.string(forKey: "engineBinary") ?? ""
         appearance = env["FIRESKY_NATIVE_APPEARANCE"] ?? defaults.string(forKey: "appearance") ?? "system"
         ecmwfSource = defaults.string(forKey: "ecmwfSource") ?? "ecmwf"
+        let savedElevationSource = defaults.string(forKey: "elevationSource") ?? "auto"
+        elevationSource = ["auto", "http", "srtm"].contains(savedElevationSource) ? savedElevationSource : "auto"
         super.init()
         engineConnection = engine.$connected.sink { [weak self] value in self?.online = value }
         favorites = defaults.array(forKey: "favorites") as? [JSONObject] ?? []
@@ -286,6 +333,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             applyLocation(point)
             metadataReady = (point["elevation_m"] as? Double ?? -1) != -1
         }
+        restoreSession()
         location.delegate = self
         location.desiredAccuracy = kCLLocationAccuracyHundredMeters
         if let page = env["FIRESKY_NATIVE_PAGE"].flatMap(Page.init(rawValue:)) {
@@ -340,11 +388,13 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
 
     func search() {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !busy else { return }
-        busy = true
-        status = "正在查找位置"
-        operation = Task {
-            defer { busy = false }
+        guard !text.isEmpty, !searching else { return }
+        // UX #5：搜索不占用全局 busy，不锁死切页与表单；独立任务句柄，
+        // 避免覆盖预测任务的取消句柄。
+        searching = true
+        if !busy { status = "正在查找位置" }
+        searchTask = Task {
+            defer { searching = false }
             do {
                 let point = try await engine.call("search", ["query": text])
                 try Task.checkCancellation()
@@ -355,12 +405,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     }
 
     func selectPoint(lat: Double, lon: Double) {
-        guard !busy else { return }
+        // UX #5：预测进行中仍可编辑位置表单；运行中的预测使用启动时的参数快照。
         self.lat = lat
         self.lon = lon
-        self.name = "地图选点"
+        // UX #6：带坐标命名，多个地图选点收藏可区分。
+        self.name = String(format: "地图选点 %.2f, %.2f", lat, lon)
         metadataReady = false
-        result = nil
         lookupMetadata()
     }
 
@@ -368,20 +418,25 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         let revision = UUID()
         metadataGeneration = revision
         let a = lat, b = lon
+        let source = elevationSource
         metadataReady = false
-        status = "正在获取海拔与时区"
+        if !busy { status = "正在获取海拔与时区" }
         Task {
             do {
-                let point = try await engine.call("metadata", ["lat": a, "lon": b])
-                guard metadataGeneration == revision, a == lat, b == lon else { return }
+                let point = try await engine.call("metadata", [
+                    "lat": a, "lon": b, "elevation_source": source,
+                ])
+                guard metadataGeneration == revision, a == lat, b == lon,
+                      source == elevationSource else { return }
                 elevation = (point["elevation_m"] as? NSNumber)?.doubleValue ?? 0
                 timezone = point["timezone_name"] as? String ?? timezone
+                elevationSourceActual = point["source"] as? String ?? ""
                 metadataReady = true
-                status = "位置已就绪"
+                if !busy { status = "位置已就绪" }
             } catch {
                 guard metadataGeneration == revision else { return }
-                self.error = error.localizedDescription
-                status = "海拔未获取，可手动填写"
+                self.error = friendlyEngineMessage(error.localizedDescription)
+                if !busy { status = "海拔未获取，可手动填写" }
             }
         }
     }
@@ -392,15 +447,16 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         name = point["name"] as? String ?? "当前位置"
         timezone = point["timezone_name"] as? String ?? timezone
         elevation = (point["elevation_m"] as? NSNumber)?.doubleValue ?? elevation
+        elevationSourceActual = point["source"] as? String ?? elevationSourceActual
         metadataReady = true
-        result = nil
-        status = "位置已就绪"
+        if !busy { status = "位置已就绪" }
     }
 
     func locate() {
-        guard !locating, !busy else { return }
+        // UX #5：定位是轻量任务，不占用也不受全局 busy 限制。
+        guard !locating else { return }
         locating = true
-        status = "正在获取当前位置"
+        if !busy { status = "正在获取当前位置" }
         locationTimeout?.cancel()
         locationTimeout = Task {
             try? await Task.sleep(for: .seconds(20))
@@ -445,7 +501,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         locating = false
         locationTimeout?.cancel()
-        self.error = error.localizedDescription
+        self.error = friendlyEngineMessage(error.localizedDescription)
     }
 
     var targetDateLabel: String { ObservationDate.label(date, timezone: timezone) }
@@ -457,6 +513,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             "phenomenon": phenomenon, "model_source": "both", "workers": 1,
             "forecast_mode": "model", "satellite_source": "off",
             "ecmwf_source": ecmwfSource,
+            "elevation_source": elevationSource,
         ]
         if page == .nowcast {
             value["model_source"] = "satellite"
@@ -630,8 +687,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 let response = try await engine.call("forecast", params, progress: updateProgress)
                 try Task.checkCancellation()
                 guard generation == revision else { return }
-                result = response
-                resultKind = kind
+                adoptResult(response, kind: kind, params: requestPayload)
                 selectedModel = (response["model_results"] as? JSONObject)?["gfs"] == nil ? "ec" : "gfs"
                 if kind == .regional, regionalDisplay != "compare" { regionalDisplay = selectedModel }
                 self.session = nil
@@ -856,8 +912,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                         throw EngineError(message: "已发布结果格式无效。")
                     }
                 }
-                result = response
-                resultKind = kind
+                // UX #1：恢复结果时先回填结果的原始参数（与重试路径一致），
+                // 标题/表单与结果本体不再错位。
+                if let retry = item.retryRequest {
+                    applyRetryPayload(retry.payload, kind: kind)
+                }
+                adoptResult(response, kind: kind, params: item.retryRequest?.payload)
                 page = kind
                 if kind != .nowcast {
                     if let model = item.retryRequest?.payload["model_source"] as? String,
@@ -907,6 +967,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             }
         }
         metadataReady = true
+        syncDateTab()
     }
 
     func fail(_ error: Error) {
@@ -944,10 +1005,10 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     }
 
     /// 区域→单点点诊断入口（regional-5，方案 :32-33 保留的用户发起模式切换，
-    /// 非图-表联动）。沿用 selectPoint 的坐标预填语义：坐标变化会按既有规则
-    /// 作废当前结果，单点页显示「等待预测」，不会拿区域数据拼接填充。
+    /// 非图-表联动）。沿用 selectPoint 的坐标预填语义；UX #3/#5 起坐标变化
+    /// 不再作废已有结果：旧结果保留并标注原始参数，单点页显示「等待预测」，
+    /// 不会拿区域数据拼接填充。
     func openRegionalCellInPointForecast(_ cell: RegionalCell, model: String) {
-        guard !busy else { return }
         selectPoint(lat: cell.coordinate.lat, lon: cell.coordinate.lon)
         name = cell.label
         selectedModel = model
@@ -1466,17 +1527,18 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         guard !helperBusy else { return }
         helperBusy = true
         helperMessage = ""
+        let ws = workspace
         Task {
             defer { helperBusy = false }
             let outcome: Result<Void, Error> = await Task.detached {
                 do {
-                    try SyncHelperInstaller.uninstall()
+                    try SyncHelperInstaller.uninstall(workspace: ws)
                     return .success(())
                 } catch { return .failure(error) }
             }.value
             switch outcome {
             case .success:
-                helperMessage = "后台助手已卸载。"
+                helperMessage = "后台助手已卸载，在途同步已停止。"
                 helperMessageFailed = false
             case .failure(let error):
                 helperMessage = error.localizedDescription
@@ -1491,11 +1553,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         savingCAMS = true
         camsMessage = ""
         let key = camsKeyDraft
-        camsKeyDraft = ""
+        // UX #8：草稿只在保存成功后清空；失败时保留，避免用户重新粘贴。
         Task {
             defer { savingCAMS = false }
             do {
                 camsConfiguration = try await engine.call("save_cams_key", ["key": key])
+                if camsKeyDraft == key { camsKeyDraft = "" }
                 if let index = downloadProbeRows.firstIndex(where: { $0.source == "cams" }) {
                     downloadProbeRows[index] = DownloadProbeRow.initial[index]
                 }
@@ -1503,7 +1566,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 camsMessage = "已保存到本机配置文件。"
                 camsSaveFailed = false
             } catch {
-                camsMessage = error.localizedDescription
+                camsMessage = friendlyEngineMessage(error.localizedDescription)
                 camsSaveFailed = true
             }
         }
@@ -1584,16 +1647,197 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         UserDefaults.standard.set(favorites, forKey: "favorites")
     }
 
+    /// UX #7：删除收藏（按坐标匹配），持久化到用户默认值。
+    func removeFavorite(_ favorite: JSONObject) {
+        let lat = (favorite["lat"] as? NSNumber)?.doubleValue
+        let lon = (favorite["lon"] as? NSNumber)?.doubleValue
+        favorites.removeAll {
+            ($0["lat"] as? NSNumber)?.doubleValue == lat
+                && ($0["lon"] as? NSNumber)?.doubleValue == lon
+        }
+        UserDefaults.standard.set(favorites, forKey: "favorites")
+    }
+
+    // MARK: - UX #7 会话持久化（上次地点/日期/模式）
+
+    /// 表单参数变化后防抖保存；恢复会话与快照/夹具运行不写用户默认值。
+    private func sessionChanged() {
+        guard sessionPersistenceEnabled, !restoringSession else { return }
+        sessionSaveTask?.cancel()
+        sessionSaveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            guard let self, !Task.isCancelled else { return }
+            self.saveSession()
+        }
+    }
+
+    /// 内部可见以便截图夹具做持久化往返断言；快照运行默认不落盘。
+    func saveSession() {
+        guard sessionPersistenceEnabled else { return }
+        let session: JSONObject = [
+            "name": name, "lat": lat, "lon": lon, "elevation_m": elevation,
+            "timezone_name": timezone, "metadata_ready": metadataReady,
+            "date": date.timeIntervalSince1970, "date_tab": dateTab,
+            "phenomenon": phenomenon, "page": page.rawValue,
+            "selected_regions": selectedRegions.sorted(), "custom_region": customRegion,
+            "west": west, "east": east, "south": south, "north": north,
+        ]
+        UserDefaults.standard.set(session, forKey: "lastSession")
+    }
+
+    /// 内部可见以便截图夹具做持久化往返断言。
+    func restoreSession() {
+        guard sessionPersistenceEnabled,
+              let saved = UserDefaults.standard.dictionary(forKey: "lastSession") else { return }
+        restoringSession = true
+        defer { restoringSession = false }
+        if let value = saved["name"] as? String, !value.isEmpty { name = value }
+        if let value = (saved["lat"] as? NSNumber)?.doubleValue, value.isFinite { lat = value }
+        if let value = (saved["lon"] as? NSNumber)?.doubleValue, value.isFinite { lon = value }
+        if let value = (saved["elevation_m"] as? NSNumber)?.doubleValue, value.isFinite { elevation = value }
+        if let value = saved["timezone_name"] as? String, !value.isEmpty { timezone = value }
+        if let value = (saved["date"] as? NSNumber)?.doubleValue, value.isFinite {
+            date = Date(timeIntervalSince1970: value)
+        }
+        if let value = saved["date_tab"] as? String, ["今天", "明天", "自定义"].contains(value) {
+            dateTab = value
+        }
+        if let value = saved["phenomenon"] as? String, ["dawn", "dusk"].contains(value) {
+            phenomenon = value
+        }
+        if let value = saved["metadata_ready"] as? Bool { metadataReady = value }
+        if let value = saved["selected_regions"] as? [String] { selectedRegions = Set(value) }
+        if let value = saved["custom_region"] as? Bool { customRegion = value }
+        if let value = (saved["west"] as? NSNumber)?.doubleValue, value.isFinite { west = value }
+        if let value = (saved["east"] as? NSNumber)?.doubleValue, value.isFinite { east = value }
+        if let value = (saved["south"] as? NSNumber)?.doubleValue, value.isFinite { south = value }
+        if let value = (saved["north"] as? NSNumber)?.doubleValue, value.isFinite { north = value }
+        // 「今天/明天」是相对启动时刻的语义：跨天重启后按保存日期重算标签。
+        syncDateTab()
+        if dateTab == "今天" || dateTab == "明天" { chooseDate(dateTab) }
+        if let raw = saved["page"] as? String, let savedPage = Page(rawValue: raw) {
+            page = savedPage
+        }
+    }
+
+    /// 按当前时区把 dateTab 对齐到 date 实际落在的今天/明天/自定义。
+    private func syncDateTab() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: timezone) ?? .current
+        if calendar.isDateInToday(date) {
+            dateTab = "今天"
+        } else if calendar.isDateInTomorrow(date) {
+            dateTab = "明天"
+        } else {
+            dateTab = "自定义"
+        }
+    }
+
+    // MARK: - UX #1/#3 结果与原始参数
+
+    /// 统一结果入口：预测成功与历史恢复都经由这里，同时记录结果的原始参数。
+    /// 内部可见以便截图夹具构造「参数已变更」场景。
+    func adoptResult(_ response: JSONObject, kind: Page, params: JSONObject?) {
+        resultParams = params
+        result = response
+        resultKind = kind
+    }
+
+    /// 当前表单是否与结果原始参数不一致（只比较影响结果的键；缺失键视为相同）。
+    var resultParametersStale: Bool {
+        guard result != nil, let params = resultParams else { return false }
+        func sameString(_ key: String, _ current: String) -> Bool {
+            guard let saved = params[key] as? String else { return true }
+            return saved == current
+        }
+        func sameNumber(_ key: String, _ current: Double) -> Bool {
+            guard let saved = (params[key] as? NSNumber)?.doubleValue else { return true }
+            return abs(saved - current) < 1e-9
+        }
+        if !sameString("target_date", targetDateLabel) { return true }
+        if !sameString("phenomenon", phenomenon) { return true }
+        if !sameString("ecmwf_source", ecmwfSource) { return true }
+        if resultKind == .regional {
+            if !sameString("model_source", regionalModel) { return true }
+            if let regions = params["regions"] as? [String] {
+                let current = selectedRegions.sorted() + (customRegion ? ["custom"] : [])
+                if Set(regions) != Set(current) { return true }
+            }
+            if customRegion, let bounds = params["custom_bounds"] as? JSONObject {
+                if !sameNumberNested(bounds, "west", west) || !sameNumberNested(bounds, "east", east)
+                    || !sameNumberNested(bounds, "south", south) || !sameNumberNested(bounds, "north", north) {
+                    return true
+                }
+            }
+        } else {
+            if !sameNumber("lat", lat) || !sameNumber("lon", lon) { return true }
+            if !sameNumber("elevation_m", elevation) { return true }
+            if !sameString("timezone_name", timezone) { return true }
+        }
+        return false
+    }
+
+    private func sameNumberNested(_ object: JSONObject, _ key: String, _ current: Double) -> Bool {
+        guard let saved = (object[key] as? NSNumber)?.doubleValue else { return true }
+        return abs(saved - current) < 1e-9
+    }
+
+    /// 结果区标题：有结果时以结果原始参数为准，表单改动不再让标题错位。
+    var resultTitle: String {
+        if let params = resultParams, result != nil {
+            let name = params["name"] as? String ?? name
+            let date = params["target_date"] as? String ?? targetDateLabel
+            return "\(name) · \(date)"
+        }
+        return "\(name) · \(targetDateLabel)"
+    }
+
+    /// 结果区现象标签：与 resultTitle 同口径，跟随结果原始参数。
+    var resultPhenomenonLabel: String {
+        let value = (result != nil ? resultParams?["phenomenon"] as? String : nil) ?? phenomenon
+        return value == "dawn" ? "朝霞" : "晚霞"
+    }
+
+    /// 「参数已变更」徽标的完整说明（help 提示全文，不截断）。
+    var resultParamsSummary: String {
+        guard let params = resultParams else { return "" }
+        var parts: [String] = []
+        if let value = params["name"] as? String { parts.append("地点：\(value)") }
+        if let lat = (params["lat"] as? NSNumber)?.doubleValue,
+           let lon = (params["lon"] as? NSNumber)?.doubleValue {
+            parts.append(String(format: "坐标：%.4f, %.4f", lat, lon))
+        }
+        if let value = params["target_date"] as? String { parts.append("日期：\(value)") }
+        if let value = params["phenomenon"] as? String {
+            parts.append("现象：\(value == "dawn" ? "朝霞" : "晚霞")")
+        }
+        if resultKind == .regional {
+            if let value = params["model_source"] as? String {
+                parts.append("模式：\(value == "ec" ? "ECMWF" : "GFS")")
+            }
+            if let regions = params["regions"] as? [String], !regions.isEmpty {
+                parts.append("区域：\(regions.joined(separator: "、"))")
+            }
+        }
+        return "结果原始参数 — " + parts.joined(separator: "；")
+    }
+
+    /// UX #12：退出确认依据——是否有仍在运行的前台任务/探测/同步。
+    var hasActiveWork: Bool { busy || probingDownloads || dataSyncRunning }
+
     func shutdown() {
         downloadProbeTask?.cancel()
         locationTimeout?.cancel()
         operation?.cancel()
+        searchTask?.cancel()
         publicationTask?.cancel()
         regionalProfileTask?.cancel()
         frozenProfileTask?.cancel()
         taskHistoryTask?.cancel()
         taskHistoryEventsTask?.cancel()
         syncTickTask?.cancel()
+        sessionSaveTask?.cancel()
+        saveSession()
         engine.stop()
     }
 }
@@ -1602,6 +1846,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
 /// 仅映射已知的协议级错误；未知错误保留原文以便排查。
 func friendlyEngineMessage(_ message: String) -> String {
     let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+    // The lock holder may be the app's own sync round, the background helper, or
+    // an orphan left by a previous uninstall — never attribute it to the helper
+    // alone. The engine may append "(pid N)"; match the stable prefix.
+    if text.hasPrefix("another data sync round is active in another process") {
+        return "另一轮数据同步正在进行（应用内同步或后台助手），本轮已让路；稍后会自动重试。"
+    }
     switch text {
     case "another prepare/forecast is active":
         return "已有预测准备或计算正在进行，请等待完成或先取消，再发起本次操作。"
@@ -1609,8 +1859,6 @@ func friendlyEngineMessage(_ message: String) -> String {
         return "预测准备或计算正在进行，本轮同步已让路；待当前操作完成后再同步。"
     case "another data sync is active":
         return "已有一轮数据同步正在进行，请稍候再试。"
-    case "another data sync round is active in another process":
-        return "后台助手正在另一进程中同步数据，本轮已让路；稍后会自动重试。"
     case "network probe is already active":
         return "网络探测正在进行，请稍候再试。"
     case "desktop operation cancelled", "nowcast preparation cancelled":

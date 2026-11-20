@@ -8,6 +8,8 @@ export interface ObservationSpot {
   elevation_m: number;
   timezone_name: string;
   metadataReady: boolean;
+  /** 引擎 metadata/search 响应的 source 字段（open-meteo-point-metadata / local-timezone+srtm），仅展示用。 */
+  metadataSource?: string;
 }
 export interface MapOptions {
   provider: SourceId;

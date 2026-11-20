@@ -8,6 +8,70 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v1.1.1 (2026-11-20)
+
+海拔来源三档 + macOS 体验修复 + 同步助手卸载修复。
+Elevation source modes, macOS UX fixes, and the sync-helper uninstall fix.
+
+**海拔来源 / Elevation source**
+
+- 新增 `elevation_source` 三档契约（engine `location.rs`）：`auto`（默认，
+  HTTP 优先、SRTM 兜底）、`http`（仅 open-meteo，失败显式报错不静默落
+  SRTM）、`srtm`（跳过 HTTP，本地时区 + SRTM 瓦片，可离线）。
+  New `elevation_source` contract: `auto` (default, HTTP first with SRTM
+  fallback), `http` (open-meteo only, explicit error on failure), `srtm`
+  (fully local timezone + SRTM tiles, works offline).
+- macOS / Android / iOS / 共享 Web 四端设置页均可选择并持久化该档位，
+  随 metadata 与预测准备请求下发；引擎严格校验非法取值。
+  Selectable and persisted in Settings on macOS / Android / iOS / shared
+  Web; forwarded with metadata and prepare payloads; invalid values are
+  rejected by the engine.
+
+**macOS 体验 / macOS UX**
+
+- 结果标题跟随结果的原始参数而非当前表单；参数变更后旧结果保留，标注
+  「参数已变更」并提供一键重算；恢复历史结果先回填原始参数。
+- 任务运行中不再锁死切页/表单/搜索：⌘1-4 切页可用，顶栏常驻进度与取消；
+  搜索/定位走独立轻量状态，不占用全局 busy。
+- 收藏支持右键删除、带坐标命名、空态引导；会话持久化上次地点/日期/模式；
+  时间统一本地时区展示（UTC 进 help）；任务历史行标题去重、后台同步轮次
+  默认折叠；错误全文可见可复制；保存失败保留草稿；卸载助手与任务运行中
+  退出均需显式确认；未预测状态不再误显示预报家族标签。
+- Results keep their original parameters (title, restore, stale badge with
+  one-click recompute); navigation/forms/search stay usable while tasks
+  run; favorites delete/coordinate naming/empty-state guidance; session
+  persistence; local-timezone timestamps; task-history dedup with folded
+  background sync rounds; full copyable errors; drafts kept on save
+  failure; explicit confirmations for helper uninstall and quit-while-
+  running; correct "not forecast yet" labeling.
+
+**同步助手 / Sync helper**
+
+- 修复卸载后台助手后在途同步仍存活的问题：卸载（及安装自愈）时按工作区
+  精确终止 `data_sync_tick` 引擎子进程（SIGTERM → 宽限 → SIGKILL），
+  释放同步锁；应用内同步不受影响。
+  Uninstalling (and install self-heal) now terminates in-flight helper
+  `data_sync_tick` engine rounds for the workspace (SIGTERM, grace period,
+  then SIGKILL), releasing the sync lock.
+- 同步锁竞争错误附带持锁进程 PID；应用文案中性化为「另一轮数据同步正在
+  进行（应用内同步或后台助手）」，不再把应用内同步误报为后台助手。
+  Lock-busy errors now name the holder PID; the app uses neutral wording
+  instead of misattributing in-app sync rounds to the helper.
+
+**发布 / Release**
+
+- 版本收敛 1.1.1（engine / engine-mobile / macOS / Android versionCode 3 /
+  iOS build 3 一致；SemVer patch：修复与小型体验增强）。
+- 多平台构建与回归交由 GitHub Actions（`native-desktop.yml` macOS
+  arm64/x86_64 矩阵 + `ci.yml` 回归）；本地验收 macOS arm64：引擎
+  `cargo test --lib` 501 passed / 0 failed / 3 ignored，Swift 构建 +
+  FFI/夹具/打包冒烟全绿，共享 Web `npm test` 158 pass；海拔三档实测
+  （srtm 本地瓦片 / http 在线 / auto）路由正确。
+  Multi-platform builds/regression run on GitHub Actions; local macOS
+  arm64 acceptance: engine 501 tests passed, Swift build + FFI/fixture/
+  bundle smokes green, shared Web 158 tests passed, live three-mode
+  elevation routing verified.
+
 ## v1.1.0 (2026-11-20)
 
 移动端与 Docker 正式版：Android/iOS 双原生客户端与 Docker 镜像首次发布。

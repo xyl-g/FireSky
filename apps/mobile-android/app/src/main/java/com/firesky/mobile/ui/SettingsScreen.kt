@@ -53,6 +53,7 @@ fun SettingsScreen(store: WorkbenchStore, state: WorkbenchState) {
         Text("设置", fontSize = 22.sp, fontWeight = FontWeight.Bold)
         AppearanceSection(store, state)
         DataSourceSection(store, state)
+        ElevationSourceSection(store, state)
         CamsSection(store, state)
         EngineSection(store, state)
         if (state.error.isNotEmpty()) {
@@ -100,6 +101,28 @@ private fun DataSourceSection(store: WorkbenchStore, state: WorkbenchState) {
         RadioRow("Google Cloud 镜像", state.ecmwfSource == "google") { store.setEcmwfSource("google") }
         Text(
             "EC 下载源会同时用于数据准备和后续预测。GFS 使用 NOAA NOMADS，CAMS 使用 Copernicus ADS。",
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+        )
+    }
+}
+
+@Composable
+private fun ElevationSourceSection(store: WorkbenchStore, state: WorkbenchState) {
+    Section("海拔来源") {
+        RadioRow("自动（HTTP 优先，SRTM 兜底）", state.elevationSource == "auto") {
+            store.setElevationSource("auto")
+        }
+        RadioRow("仅 HTTP（open-meteo）", state.elevationSource == "http") {
+            store.setElevationSource("http")
+        }
+        RadioRow("SRTM 瓦片（本地时区 + 缓存/下载）", state.elevationSource == "srtm") {
+            store.setElevationSource("srtm")
+        }
+        Text(
+            "自动：open-meteo 优先，失败落本地时区+SRTM；仅 HTTP：失败直接报错，不落 SRTM；" +
+                "SRTM：跳过 HTTP，缓存瓦片命中毫秒级，缺瓦片时按下载开关决定下载或报错。" +
+                "切换后对下一次位置搜索/海拔获取生效。",
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
         )

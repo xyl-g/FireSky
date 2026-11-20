@@ -17,13 +17,14 @@ struct FireSkyApp: App {
         .defaultSize(width: 1440, height: 900)
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("单点预测") { if !store.busy { store.page = .point } }
+                // UX #5：⌘1-4 切页不再被全局 busy 锁死；任务继续，顶栏可见进度。
+                Button("单点预测") { store.page = .point }
                     .keyboardShortcut("1")
-                Button("区域预测") { if !store.busy { store.page = .regional } }
+                Button("区域预测") { store.page = .regional }
                     .keyboardShortcut("2")
-                Button("卫星实况") { if !store.busy { store.page = .nowcast } }
+                Button("卫星实况") { store.page = .nowcast }
                     .keyboardShortcut("3")
-                Button("数据与下载") { if !store.busy { store.page = .data } }
+                Button("数据与下载") { store.page = .data }
                     .keyboardShortcut("4")
             }
             CommandGroup(replacing: .appSettings) {
@@ -44,6 +45,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scheduleSnapshot()
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    /// UX #12：仍有任务在运行时退出需要显式确认；快照/夹具运行直接放行。
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard let store, !store.isSnapshotRun, store.hasActiveWork else { return .terminateNow }
+        let alert = NSAlert()
+        alert.messageText = "任务仍在运行，确定退出？"
+        alert.informativeText = "当前状态：\(store.status)。退出会中断正在进行的预测、下载或同步；已完成的上一份有效结果不会丢失。"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "继续运行")
+        alert.addButton(withTitle: "仍要退出")
+        return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
+    }
     func applicationWillTerminate(_ notification: Notification) { store?.shutdown() }
     func scheduleSnapshot() {
         guard !scheduled, let path = ProcessInfo.processInfo.environment["FIRESKY_NATIVE_SNAPSHOT"] else { return }

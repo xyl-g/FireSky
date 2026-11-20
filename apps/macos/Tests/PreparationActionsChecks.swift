@@ -152,6 +152,16 @@ enum PreparationActionsChecks {
             precondition(ProfileQueryBuilder.request(
                 report: ["profile_source": wrongKind], model: "gfs", lat: 30.25, lon: 120.25,
                 localTime: "2026-11-09T17:00:00+08:00") == nil)
+        case "history-time":
+            // UX #4：历史时间戳本地化（小数秒/整秒/带偏移/非法值兜底）。
+            let shanghai = TimeZone(identifier: "Asia/Shanghai")!
+            precondition(historyTimeText("2026-11-20T02:40:01.023Z", timeZone: shanghai) == "11-20 10:40")
+            precondition(historyTimeText("2026-11-20T02:40:01Z", timeZone: shanghai) == "11-20 10:40")
+            precondition(historyTimeText("2026-11-20T10:40:01+08:00", timeZone: shanghai) == "11-20 10:40")
+            precondition(historyTimeText("not-a-timestamp", timeZone: shanghai) == "not-a-timestamp")
+            precondition(historyTimeText("", timeZone: shanghai) == "")
+            let utc = TimeZone(identifier: "UTC")!
+            precondition(historyTimeText("2026-11-20T02:40:01.023Z", timeZone: utc) == "11-20 02:40")
         case "date":
             let parser = ISO8601DateFormatter()
             let midnight = parser.date(from: "2026-11-08T16:30:00Z")!

@@ -370,7 +370,7 @@ test("fresh geolocation applies its metadata response before allowing a forecast
   });
   await fixture(page);
   await page.getByRole("button", { name: "获取当前位置", exact: true }).click();
-  await expect.poll(() => page.evaluate(() => window.__workFixture.requests.filter((item) => item.method === "metadata").map((item) => item.params))).toEqual([{ lat: 31.2304, lon: 121.4737 }]);
+  await expect.poll(() => page.evaluate(() => window.__workFixture.requests.filter((item) => item.method === "metadata").map((item) => item.params))).toEqual([{ lat: 31.2304, lon: 121.4737, elevation_source: "auto" }]);
   await expect(page.locator(".location-meta")).toContainText("海拔未确认");
   await expect(page.locator(".location-name strong")).toHaveText("当前位置");
   await expect(page.getByRole("button", { name: "开始预测", exact: true })).toBeDisabled();
@@ -502,4 +502,22 @@ test("appearance and EC source use Swift settings and survive reload without per
   await expect(page.getByLabel("EC 下载源", { exact: true })).toHaveValue("google");
   await expect(page.getByLabel(/^天地图浏览器 Key/)).toHaveValue("");
   expect(await page.evaluate(() => JSON.stringify(localStorage).includes("fixture-public-key-kept-only-in-memory"))).toBe(false);
+});
+
+test("elevation source setting passes through search/metadata and the response source is displayed", async ({ page }) => {
+  await fixture(page);
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByLabel("海拔来源", { exact: true }).selectOption("srtm");
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("firesky.elevationSource"))).toBe("srtm");
+  await page.getByRole("button", { name: "单点预测", exact: true }).click();
+  await page.getByLabel("搜索地名", { exact: true }).fill("杭州");
+  await page.getByLabel("搜索地名", { exact: true }).press("Enter");
+  await expect.poll(() => page.evaluate(() => window.__workFixture.requests.findLast((item) => item.method === "search")?.params)).toEqual({ query: "杭州", elevation_source: "srtm" });
+  await page.evaluate(() => window.__workFixture.finishLocation("search", 0, { name: "杭州", lat: 30.2741, lon: 120.1551, elevation_m: 8, timezone_name: "Asia/Shanghai", source: "local-timezone+srtm" }));
+  await expect(page.locator(".location-meta")).toContainText("海拔来源：本地时区 + SRTM");
+  await page.getByRole("button", { name: "编辑坐标", exact: true }).click();
+  await page.getByRole("button", { name: "获取海拔与时区", exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.__workFixture.requests.findLast((item) => item.method === "metadata")?.params)).toEqual({ lat: 30.2741, lon: 120.1551, elevation_source: "srtm" });
+  await page.evaluate(() => window.__workFixture.finishLocation("metadata", 0, { lat: 30.2741, lon: 120.1551, elevation_m: 8, timezone_name: "Asia/Shanghai", source: "open-meteo-point-metadata" }));
+  await expect(page.locator(".location-meta")).toContainText("海拔来源：open-meteo 在线");
 });

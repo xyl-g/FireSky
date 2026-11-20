@@ -1,4 +1,4 @@
-# firesky
+# FireSky
 
 burning-sunset (sunset/sunrise glow) prediction
 stack: **native Rust prediction engine and HTTP service + SvelteKit frontend +
@@ -7,9 +7,13 @@ native desktop clients**. The physics follows the methodology of the
 
 > 中文文档：[README.md](README.md)
 
-> Current release **v1.1.0**: macOS / Android / iOS / Docker are officially
-> released (see [Download & install](#download--install-releases)). The UI
-> reference is the [macOS product & UI baseline](docs/MACOS_UI_BASELINE.zh-CN.md);
+> Current release **v1.1.1**: macOS / Android / iOS / Docker are officially
+> released (see [Download & install](#download--install-releases)).
+> This release adds a three-mode elevation source setting (auto / online
+> only / local SRTM only, consistent across all four clients) and fixes the
+> macOS sync-helper uninstall leaving in-flight sync rounds alive, plus a
+> batch of UX issues (see [CHANGELOG](CHANGELOG.md)).
+> The UI reference is the [macOS product & UI baseline](docs/MACOS_UI_BASELINE.zh-CN.md);
 > mobile blueprint and acceptance status:
 > [mobile native plan](docs/MOBILE_NATIVE_PLAN.md).
 
@@ -17,7 +21,7 @@ native desktop clients**. The physics follows the methodology of the
 
 ## Contents
 
-- [firesky](#firesky)
+- [FireSky](#firesky)
   - [Contents](#contents)
   - [Features](#features)
   - [Download \& install (Releases)](#download--install-releases)
@@ -68,23 +72,29 @@ native desktop clients**. The physics follows the methodology of the
 
 Official builds are published on
 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) (current:
-**v1.1.0**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
+**v1.1.1**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
 file names; run it in the directory holding the assets):
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
-v1.1.0 assets:
+v1.1.1 assets:
 
 | Asset | Platform | Notes |
 |---|---|---|
-| `FireSky-1.1.0-macos-arm64.dmg` | macOS 14+ (Apple Silicon) | native desktop `.app`, ad-hoc signed |
-| `FireSky-1.1.0-macos-x86_64.dmg` | macOS 14+ (Intel) | CI Intel build + smoke; runs via Rosetta 2 on Apple Silicon |
-| `FireSky-1.1.0-android-arm64.apk` | Android 8.0+ (arm64-v8a) | self-signed release APK |
-| `FireSky-1.1.0-ios-unsigned.ipa` | iOS 16+ (device) | **unsigned** IPA; re-sign before sideloading (below) |
+| `FireSky-1.1.1-macos-arm64.dmg` | macOS 14+ (Apple Silicon) | native desktop `.app`, ad-hoc signed |
+| `FireSky-1.1.1-macos-x86_64.dmg` | macOS 14+ (Intel) | CI Intel build + smoke; runs via Rosetta 2 on Apple Silicon |
+| `FireSky-1.1.1-android-arm64.apk` | Android 8.0+ (arm64-v8a) | self-signed release APK (1.1.1 build pending) |
+| `FireSky-1.1.1-ios-unsigned.ipa` | iOS 16+ (device) | **unsigned** IPA; re-sign before sideloading (below; 1.1.1 build pending) |
 | `SHA256SUMS.txt` | — | SHA256 manifest for all assets |
-| `FireSky-1.1.0-docker-arm64.tar.gz` | Docker (linux/arm64) | official image tarball (`docker load`; GHCR not published for this release) |
+| `FireSky-1.1.1-docker-arm64.tar.gz` | Docker (linux/arm64) | official image tarball (`docker load`; 1.1.1 build pending, GHCR not published for this release) |
+
+> v1.1.1 ships the macOS assets first (built + smoke-tested on GitHub
+> Actions). Android / iOS / Docker 1.1.1 packages are pending; until then
+> the [v1.1.0](https://github.com/xyl-g/FireSky/releases/tag/v1.1.0) assets
+> remain usable (they lack this release's elevation-source setting and
+> sync-helper fix).
 
 ### macOS
 
@@ -114,7 +124,7 @@ minSdk 26 / Android 8.0+):
 2. **Updates must come from the official APK signed with the same key**:
    install the new version over the old one to keep app data; do not mix in
    re-signed builds from other sources (signature mismatch is rejected).
-3. Command line: `adb install -r FireSky-1.1.0-android-arm64.apk`.
+3. Command line: `adb install -r FireSky-1.1.1-android-arm64.apk`.
 
 ### iOS
 
@@ -138,7 +148,7 @@ for this release). Load the image first, then run — the service listens on
 8765 inside the container:
 
 ```bash
-docker load -i FireSky-1.1.0-docker-arm64.tar.gz   # yields firesky:1.1.0-local
+docker load -i FireSky-1.1.1-docker-arm64.tar.gz   # yields firesky:1.1.1-local
 docker run -d --name firesky \
   -p 127.0.0.1:8765:8765 \
   -v firesky-cache:/data/cache \
@@ -146,14 +156,14 @@ docker run -d --name firesky \
   -v firesky-reports:/data/reports \
   -v firesky-logs:/data/logs \
   -v firesky-state:/data/state \
-  firesky:1.1.0-local
+  firesky:1.1.1-local
 # First start generates the access token (user: firesky; password is the
 # output below — do not paste it into logs or public discussions):
 docker exec firesky cat /data/state/http-token
 # open http://127.0.0.1:8765
 ```
 
-- Build from source: `docker build -f docker/Dockerfile -t firesky:1.1.0 .`,
+- Build from source: `docker build -f docker/Dockerfile -t firesky:1.1.1 .`,
   or `docker compose up -d --build` (compose also binds `127.0.0.1:8765` only
   by default).
 - Persistent volumes, authentication and LAN-exposure notes:
@@ -161,10 +171,10 @@ docker exec firesky cat /data/state/http-token
 
 ### Platform strategy
 
-- **macOS / Android / iOS / Docker**: official release targets of v1.1.0.
+- **macOS / Android / iOS / Docker**: official release targets of v1.1.1.
 - **Windows**: sources and CI build/artifact verification are aligned; the
   official installer will be built and released on a Windows machine later.
-  v1.1.0 ships no Windows asset.
+  v1.1.1 ships no Windows asset.
 - **Linux**: **no longer a release target since 2026-11-20** (user decision);
   the GTK4 client and FFI code are kept and can be built from source. For
   servers, use Docker.

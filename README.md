@@ -1,4 +1,4 @@
-# firesky
+# FireSky
 
 火烧云（朝晚霞）物理预测栈：**Rust 原生预测引擎与 HTTP 服务 + SvelteKit 前端 + 原生桌面**。
 物理与算法基于 [SunsetBot 教程](https://www.sunsetbot.top/halo/) 的方法论独立实现。
@@ -7,7 +7,9 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 
 > English documentation: [README.en.md](README.en.md)
 
-> 当前版本 **v1.1.0**：macOS / Android / iOS / Docker 正式发布（见[下载安装](#下载安装releases)）。
+> 当前版本 **v1.1.1**：macOS / Android / iOS / Docker 正式发布（见[下载安装](#下载安装releases)）。
+> 本版新增海拔来源三档设置（自动 / 仅在线 / 仅本地 SRTM，四端一致），并修复
+> macOS 后台助手卸载后在途同步残留与一批体验问题（详见 [CHANGELOG](CHANGELOG.md)）。
 > UI 以 [macOS 产品与 UI 基准](docs/MACOS_UI_BASELINE.zh-CN.md)为参照，移动端蓝图与验收状态见
 > [移动端双原生计划](docs/MOBILE_NATIVE_PLAN.md)。
 
@@ -15,7 +17,7 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 
 ## 目录 / Contents
 
-- [firesky](#firesky)
+- [FireSky](#firesky)
   - [目录 / Contents](#目录--contents)
   - [功能](#功能)
   - [下载安装（Releases）](#下载安装releases)
@@ -57,23 +59,28 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 ## 下载安装（Releases）
 
 正式版统一从 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) 下载
-（当前 **v1.1.0**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
+（当前 **v1.1.1**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
 与各资产放在同一目录执行）：
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
-v1.1.0 资产清单：
+v1.1.1 资产清单：
 
 | 资产 | 平台 | 说明 |
 |---|---|---|
-| `FireSky-1.1.0-macos-arm64.dmg` | macOS 14+（Apple Silicon） | 原生桌面 `.app`，ad-hoc 签名 |
-| `FireSky-1.1.0-macos-x86_64.dmg` | macOS 14+（Intel） | CI Intel 构建 + 冒烟；Apple Silicon 可经 Rosetta 2 运行 |
-| `FireSky-1.1.0-android-arm64.apk` | Android 8.0+（arm64-v8a） | 自签签名 release APK |
-| `FireSky-1.1.0-ios-unsigned.ipa` | iOS 16+（真机） | **无签名** IPA，需自签后侧载（见下） |
+| `FireSky-1.1.1-macos-arm64.dmg` | macOS 14+（Apple Silicon） | 原生桌面 `.app`，ad-hoc 签名 |
+| `FireSky-1.1.1-macos-x86_64.dmg` | macOS 14+（Intel） | CI Intel 构建 + 冒烟；Apple Silicon 可经 Rosetta 2 运行 |
+| `FireSky-1.1.1-android-arm64.apk` | Android 8.0+（arm64-v8a） | 自签签名 release APK（1.1.1 包待构建） |
+| `FireSky-1.1.1-ios-unsigned.ipa` | iOS 16+（真机） | **无签名** IPA，需自签后侧载（见下；1.1.1 包待构建） |
 | `SHA256SUMS.txt` | — | 全部资产 SHA256 清单 |
-| `FireSky-1.1.0-docker-arm64.tar.gz` | Docker（linux/arm64） | 官方镜像 tarball（`docker load` 导入；本版暂未发布 GHCR） |
+| `FireSky-1.1.1-docker-arm64.tar.gz` | Docker（linux/arm64） | 官方镜像 tarball（`docker load` 导入；1.1.1 包待构建，本版暂未发布 GHCR） |
+
+> v1.1.1 先发布 macOS 双架构资产（GitHub Actions 构建 + 冒烟）；Android / iOS /
+> Docker 的 1.1.1 包待构建，期间可继续使用
+> [v1.1.0](https://github.com/xyl-g/FireSky/releases/tag/v1.1.0) 对应资产
+> （不含本版海拔来源设置与同步助手修复）。
 
 ### macOS
 
@@ -98,7 +105,7 @@ Gatekeeper 默认拦截首次打开：
 1. 下载 APK 后点击安装，按提示允许浏览器/文件管理器「安装未知应用」。
 2. **覆盖更新必须使用同一签名 key 的官方 APK**：直接安装新版本即可保留应用
    数据；请勿混装其他来源的重新签名包（签名不一致会被系统拒绝）。
-3. 命令行安装/更新：`adb install -r FireSky-1.1.0-android-arm64.apk`。
+3. 命令行安装/更新：`adb install -r FireSky-1.1.1-android-arm64.apk`。
 
 ### iOS
 
@@ -117,7 +124,7 @@ Gatekeeper 默认拦截首次打开：
 amd64 请从源码构建；本版暂未发布 GHCR）。先导入镜像再运行，容器内服务监听 8765：
 
 ```bash
-docker load -i FireSky-1.1.0-docker-arm64.tar.gz   # 得到本地镜像 firesky:1.1.0-local
+docker load -i FireSky-1.1.1-docker-arm64.tar.gz   # 得到本地镜像 firesky:1.1.1-local
 docker run -d --name firesky \
   -p 127.0.0.1:8765:8765 \
   -v firesky-cache:/data/cache \
@@ -125,21 +132,21 @@ docker run -d --name firesky \
   -v firesky-reports:/data/reports \
   -v firesky-logs:/data/logs \
   -v firesky-state:/data/state \
-  firesky:1.1.0-local
+  firesky:1.1.1-local
 # 首次启动生成访问令牌（用户名 firesky，密码为下面命令的输出，勿公开粘贴）：
 docker exec firesky cat /data/state/http-token
 # 浏览器打开 http://127.0.0.1:8765
 ```
 
-- 源码构建：`docker build -f docker/Dockerfile -t firesky:1.1.0 .`，或
+- 源码构建：`docker build -f docker/Dockerfile -t firesky:1.1.1 .`，或
   `docker compose up -d --build`（compose 默认同样仅绑定 `127.0.0.1:8765`）。
 - 持久卷、鉴权与局域网发布注意见[部署文档](docs/DEPLOY.md)。
 
 ### 平台策略
 
-- **macOS / Android / iOS / Docker**：v1.1.0 正式发布目标。
+- **macOS / Android / iOS / Docker**：v1.1.1 正式发布目标。
 - **Windows**：源码与 CI 构建/产物验证已对齐；正式安装包后续在 Windows 机器上
-  构建发布，v1.1.0 不含 Windows 资产。
+  构建发布，v1.1.1 不含 Windows 资产。
 - **Linux**：自 2026-11-20 起**不再作为发布目标**（用户裁定）；GTK4 客户端与
   FFI 代码保留，可自行源码构建；服务器部署推荐 Docker。
 

@@ -178,6 +178,8 @@ struct InventoryView: View {
 
 struct SettingsView: View {
     @EnvironmentObject private var store: Store
+    /// UX #11：卸载后台助手是破坏性操作，需要显式确认。
+    @State private var confirmUninstallHelper = false
     var body: some View {
         Form {
             Section("外观") {
@@ -196,6 +198,18 @@ struct SettingsView: View {
                 Text("EC 下载源会同时用于下载探测、数据准备和后续预测。GFS 使用 NOAA NOMADS，CAMS 使用 Copernicus ADS，当前没有可切换的官方镜像。")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            Section("海拔与时区") {
+                Picker("海拔来源", selection: $store.elevationSource) {
+                    Text("自动（HTTP 优先，SRTM 兜底）").tag("auto")
+                    Text("仅 HTTP（open-meteo）").tag("http")
+                    Text("SRTM 下载（本地时区 + 瓦片）").tag("srtm")
+                }
+                Text("「自动」先尝试 open-meteo 海拔接口，失败时回退本地时区 + SRTM 瓦片；「仅 HTTP」不下载瓦片；「SRTM 下载」首次使用会按需下载地形瓦片（每块约数 MB）。设置对之后的海拔获取与预测生效。")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("当前实际来源：\(store.elevationSourceActualLabel)")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section("CAMS · Copernicus ADS") {
                 HStack(alignment: .top, spacing: 10) {
@@ -354,7 +368,7 @@ struct SettingsView: View {
                             }
                             .disabled(store.helperBusy || store.workspace.isEmpty)
                             if store.helperInstalled {
-                                Button("卸载", systemImage: "trash") { store.uninstallHelper() }
+                                Button("卸载", systemImage: "trash") { confirmUninstallHelper = true }
                                     .disabled(store.helperBusy)
                             }
                             Button("刷新", systemImage: "arrow.clockwise") { store.refreshHelperStatus() }
@@ -362,7 +376,8 @@ struct SettingsView: View {
                         }
                         if let summary = store.helperStatus["summary"] as? String, !summary.isEmpty {
                             let run = store.helperStatus["last_run_utc"] as? String ?? ""
-                            Text("上次后台运行 \(dataSyncTimeText(run))：\(summary)")
+                            let prefix = store.helperInstalled ? "上次后台运行" : "卸载前最后一次后台运行"
+                            Text("\(prefix) \(dataSyncTimeText(run))：\(summary)")
                                 .font(.caption).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -398,7 +413,13 @@ struct SettingsView: View {
             if !store.error.isEmpty {
                 Section { Text(store.error).foregroundStyle(.red).textSelection(.enabled) }
             }
-        }.formStyle(.grouped).padding(16).disabled(store.busy)
+        }.formStyle(.grouped).padding(16)
+            .confirmationDialog("卸载后台同步助手？", isPresented: $confirmUninstallHelper) {
+                Button("卸载助手", role: .destructive) { store.uninstallHelper() }
+                Button("保留助手", role: .cancel) {}
+            } message: {
+                Text("卸载后，关闭应用时的后台同步将停止；已下载的数据会保留，可随时重新安装助手。")
+            }
     }
 
     private func retentionField(_ title: String, text: Binding<String>, suffix: String) -> some View {
@@ -483,14 +504,9 @@ struct SettingsView: View {
     }
 
     /// ISO8601 UTC → 本地短时间（月日 时:分），用于「上次同步」展示。
+    /// UX #4：统一走共享的 historyTimeText（兼容小数秒时间戳）。
     private func dataSyncTimeText(_ iso: String) -> String {
-        let parser = ISO8601DateFormatter()
-        parser.formatOptions = [.withInternetDateTime]
-        guard let date = parser.date(from: iso) else { return iso }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "zh_CN")
-        formatter.dateFormat = "MM-dd HH:mm"
-        return formatter.string(from: date)
+        historyTimeText(iso)
     }
 
     private func tutorialStep<Content: View>(_ number: String, _ title: String, detail: String,

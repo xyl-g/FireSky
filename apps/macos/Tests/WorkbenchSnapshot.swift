@@ -88,6 +88,56 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
             }
         }
         if ProcessInfo.processInfo.environment["FIRESKY_TEST_EMPTY"] == "1" { store.result = nil }
+        // v1.1.1 引擎契约：所有预测 payload 透传 elevation_source。
+        precondition(store.payload()["elevation_source"] as? String == store.elevationSource)
+        store.elevationSource = "srtm"
+        precondition(store.payload()["elevation_source"] as? String == "srtm")
+        store.elevationSource = "auto"
+        precondition(store.payload()["elevation_source"] as? String == "auto")
+        if ProcessInfo.processInfo.environment["FIRESKY_TEST_SETTINGS"] == "1" {
+            store.page = .settings
+        }
+        if ProcessInfo.processInfo.environment["FIRESKY_TEST_STALE"] == "1" {
+            // UX #3：改参数保留旧结果并标注原始参数；新结果到来前徽标常亮。
+            precondition(store.result != nil)
+            let params: JSONObject = [
+                "name": "杭州", "lat": store.lat, "lon": store.lon,
+                "elevation_m": store.elevation, "timezone_name": store.timezone,
+                "target_date": store.targetDateLabel, "phenomenon": store.phenomenon,
+                "ecmwf_source": store.ecmwfSource,
+            ]
+            store.adoptResult(store.result!, kind: store.page, params: params)
+            precondition(!store.resultParametersStale)
+            store.phenomenon = store.phenomenon == "dusk" ? "dawn" : "dusk"
+            precondition(store.resultParametersStale)
+            precondition(store.result != nil, "参数变更不得清空旧结果")
+            precondition(store.resultTitle.contains(params["target_date"] as! String))
+            precondition(store.resultParamsSummary.contains("结果原始参数"))
+            print("Stale result banner fixture: ready")
+        }
+        if ProcessInfo.processInfo.environment["FIRESKY_TEST_SESSION"] == "1" {
+            // UX #7：会话持久化往返（测试后恢复原有默认值，不污染真实会话）。
+            let defaults = UserDefaults.standard
+            let previous = defaults.dictionary(forKey: "lastSession")
+            store.sessionPersistenceEnabled = true
+            store.name = "会话测试地点"
+            store.lat = 29.5; store.lon = 119.0
+            store.phenomenon = "dawn"
+            store.saveSession()
+            precondition(defaults.dictionary(forKey: "lastSession")?["name"] as? String == "会话测试地点")
+            store.name = "临时改名"; store.lat = 0; store.phenomenon = "dusk"
+            store.restoreSession()
+            precondition(store.name == "会话测试地点")
+            precondition(abs(store.lat - 29.5) < 1e-9 && abs(store.lon - 119.0) < 1e-9)
+            precondition(store.phenomenon == "dawn")
+            store.sessionPersistenceEnabled = false
+            if let previous {
+                defaults.set(previous, forKey: "lastSession")
+            } else {
+                defaults.removeObject(forKey: "lastSession")
+            }
+            print("Session persistence fixture: ready")
+        }
         store.selectedModel = ProcessInfo.processInfo.environment["FIRESKY_TEST_MODEL"] ?? (partial ? "ec" : "gfs")
         if let tab = ProcessInfo.processInfo.environment["FIRESKY_TEST_TAB"] { store.resultTab = tab }
         if ProcessInfo.processInfo.environment["FIRESKY_TEST_CALENDAR"] == "1" {
@@ -116,6 +166,25 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
                     }
                     guard store.restoringTaskHistoryID == nil, store.taskHistoryError.isEmpty else {
                         fputs("Historical UI restore failed: \(store.taskHistoryError)\n", stderr); exit(1)
+                    }
+                    // UX #1：恢复结果后表单/标题必须回填结果的原始参数。
+                    if let retry = item.retryRequest {
+                        let payload = retry.payload
+                        if let value = payload["name"] as? String {
+                            precondition(store.name == value, "恢复后名称未回填")
+                        }
+                        if let value = (payload["lat"] as? NSNumber)?.doubleValue {
+                            precondition(abs(store.lat - value) < 1e-9, "恢复后纬度未回填")
+                        }
+                        if let value = (payload["lon"] as? NSNumber)?.doubleValue {
+                            precondition(abs(store.lon - value) < 1e-9, "恢复后经度未回填")
+                        }
+                        if let value = payload["target_date"] as? String {
+                            precondition(store.targetDateLabel == value, "恢复后日期未回填")
+                        }
+                        precondition(store.resultParams != nil, "恢复结果缺少原始参数快照")
+                        precondition(!store.resultParametersStale, "恢复后表单与结果参数应一致")
+                        print("Historical restore backfill: ready")
                     }
                     // Single-model contract: a restored regional snapshot may
                     // contain only one model. Keep the product's restored

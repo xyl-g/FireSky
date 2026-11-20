@@ -67,6 +67,20 @@ enum Operation {
     Elevation,
     Tile,
 }
+/// 海拔来源三档（v1.1.1 契约）：auto=HTTP 优先 SRTM 兜底；http=仅 open-meteo，
+/// 失败显式报错不落 SRTM；srtm=跳过 HTTP，本地时区+SRTM 瓦片。
+#[derive(Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum ElevationSource {
+    Auto,
+    Http,
+    Srtm,
+}
+impl Default for ElevationSource {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Params {
@@ -83,6 +97,8 @@ pub struct Params {
     allow_download: bool,
     #[serde(default)]
     force_refresh: bool,
+    #[serde(default)]
+    elevation_source: ElevationSource,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -321,42 +337,50 @@ impl Config {
         lon: f64,
         timeout: f64,
         allow: bool,
+        source: ElevationSource,
     ) -> Result<Value, String> {
         self.check_cancelled()?;
         let (lat, lon) = (rounded(lat), rounded(lon));
-        let online = self
-            .get_json(
-                &self.metadata_url,
-                &[
-                    ("latitude", lat.to_string()),
-                    ("longitude", lon.to_string()),
-                    ("timezone", "auto".into()),
-                    ("forecast_days", "1".into()),
-                ],
-                timeout,
-                1,
-                allow,
+        let online = if source == ElevationSource::Srtm {
+            None
+        } else {
+            Some(
+                self.get_json(
+                    &self.metadata_url,
+                    &[
+                        ("latitude", lat.to_string()),
+                        ("longitude", lon.to_string()),
+                        ("timezone", "auto".into()),
+                        ("forecast_days", "1".into()),
+                    ],
+                    timeout,
+                    1,
+                    allow,
+                )
+                .and_then(|payload| {
+                    Ok((
+                        zone(
+                            payload["timezone"]
+                                .as_str()
+                                .ok_or("missing provider timezone")?,
+                        )?,
+                        elevation(
+                            payload["elevation"]
+                                .as_f64()
+                                .ok_or("missing provider elevation")?,
+                        )?,
+                    ))
+                }),
             )
-            .and_then(|payload| {
-                Ok((
-                    zone(
-                        payload["timezone"]
-                            .as_str()
-                            .ok_or("missing provider timezone")?,
-                    )?,
-                    elevation(
-                        payload["elevation"]
-                            .as_f64()
-                            .ok_or("missing provider elevation")?,
-                    )?,
-                ))
-            });
+        };
         match online {
-            Ok((timezone_name, elevation_m)) => Ok(
+            Some(Ok((timezone_name, elevation_m))) => Ok(
                 json!({"timezone_name":timezone_name,"elevation_m":elevation_m,
                 "queried_lat":lat,"queried_lon":lon,"source":"open-meteo-point-metadata"}),
             ),
-            Err(_) => {
+            // http 档失败必须把错误透传给调用方，不得静默落 SRTM。
+            Some(Err(error)) if source == ElevationSource::Http => Err(error),
+            _ => {
                 let (timezone_name, proof) = self.local_timezone(lat, lon)?;
                 let (elevation_m, path) = self.local_elevation(lat, lon, timeout, allow)?;
                 Ok(
@@ -427,6 +451,7 @@ impl Config {
         timeout: f64,
         fast: bool,
         allow: bool,
+        source: ElevationSource,
     ) -> Result<Option<Value>, String> {
         let payload = self.get_json(
             &self.nominatim_url,
@@ -460,7 +485,7 @@ impl Config {
         let mut result = json!({"name":name,"lat":lat,"lon":lon,"source":"nominatim-openstreetmap",
             "display_name":display_name,"timezone_name":null,"elevation_m":null});
         if !fast {
-            let metadata = self.point_metadata(lat, lon, timeout.min(6.0), allow)?;
+            let metadata = self.point_metadata(lat, lon, timeout.min(6.0), allow, source)?;
             result["timezone_name"] = metadata["timezone_name"].clone();
             result["elevation_m"] = metadata["elevation_m"].clone();
         }
@@ -539,6 +564,7 @@ impl Config {
         fast: bool,
         allow: bool,
         refresh: bool,
+        source: ElevationSource,
     ) -> Result<Value, String> {
         self.check_cancelled()?;
         if !refresh {
@@ -547,7 +573,7 @@ impl Config {
             }
         }
         if fast {
-            if let Ok(Some(value)) = self.nominatim(query, timeout, true, allow) {
+            if let Ok(Some(value)) = self.nominatim(query, timeout, true, allow, source) {
                 return Ok(value);
             }
             if let Ok(Some(value)) = self.meteo(query, timeout, allow) {
@@ -557,7 +583,7 @@ impl Config {
             let found = match self.meteo(query, timeout, allow) {
                 Ok(Some(value)) => Some(value),
                 _ => self
-                    .nominatim(query, timeout, false, allow)?
+                    .nominatim(query, timeout, false, allow, source)?
                     .map(serde_json::from_value)
                     .transpose()
                     .map_err(|e| e.to_string())?,
@@ -821,6 +847,7 @@ pub fn execute(mut params: Params) -> Result<Value, String> {
         serde_json::to_string(&json!({"operation":operation,"query":query,
         "point":point.map(|(a,b)|(rounded(a),rounded(b))),"config":params.config,
         "timeout":timeout_seconds,"allow_download":params.allow_download,
+        "elevation_source":params.elevation_source,
         "timezone_manifest_identity":params.config.timezone_manifest.as_deref().and_then(
             |p|request_file::read::<Value>(p,128*1024).ok().map(|(_,identity)|identity))}))
         .map_err(|e| e.to_string())?
@@ -849,12 +876,17 @@ pub fn execute(mut params: Params) -> Result<Value, String> {
             matches!(params.operation, Operation::Search),
             params.allow_download,
             params.force_refresh,
+            params.elevation_source,
         )?,
         Operation::Metadata => {
             let (a, b) = point.unwrap();
-            params
-                .config
-                .point_metadata(a, b, timeout_seconds, params.allow_download)?
+            params.config.point_metadata(
+                a,
+                b,
+                timeout_seconds,
+                params.allow_download,
+                params.elevation_source,
+            )?
         }
         Operation::Timezone => {
             let (a, b) = point.unwrap();
@@ -899,6 +931,12 @@ pub(crate) fn desktop_dispatch(
     allow_download: bool,
     cancellation: Arc<AtomicBool>,
 ) -> Result<Value, String> {
+    // search 内部也会触发 point metadata，因此两档方法共用同一来源校验。
+    let elevation_source: ElevationSource = match params.get("elevation_source") {
+        None | Some(Value::Null) => ElevationSource::Auto,
+        Some(value) => serde_json::from_value(value.clone())
+            .map_err(|e| format!("invalid elevation_source: {e}"))?,
+    };
     let mut config = config.clone();
     config.cancellation = Some(cancellation);
     let call = |operation, query, lat, lon, timeout_seconds| {
@@ -913,6 +951,7 @@ pub(crate) fn desktop_dispatch(
             timeout_seconds: Some(timeout_seconds),
             allow_download,
             force_refresh: false,
+            elevation_source,
         })
         .map(|value| value["result"].clone())
     };
@@ -958,5 +997,277 @@ mod tests {
         assert_eq!(tile(-56.0, 180.0).unwrap(), "S56E180");
         assert!(tile(60.0, 0.0).is_err());
         assert!(tile(-56.001, 0.0).is_err());
+    }
+
+    // ------------------------------------------------ elevation_source 三档（v1.1.1 §1）
+    // 离线口径：HTTP 端点指向不可达 loopback（url() 允许 loopback HTTP），
+    // 需要「provider 可用」反证时挂一个只回固定 JSON 的本地 TcpListener。
+    const LAT: f64 = 39.9042;
+    const LON: f64 = 116.4074;
+    const TILE_NAME: &str = "N39E116";
+    const TILE_ELEVATION: i16 = 1500;
+
+    fn timezone_manifest() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../resources/app-data/timezones/manifest.json")
+    }
+
+    fn offline_config(root: &Path) -> Config {
+        Config {
+            geocoding_url: "http://127.0.0.1:1/v1/search".into(),
+            metadata_url: "http://127.0.0.1:1/v1/forecast".into(),
+            nominatim_url: "http://127.0.0.1:1/search".into(),
+            srtm_base_url: "http://127.0.0.1:1/skadi".into(),
+            location_cache_path: root.join("locations.json"),
+            srtm_cache_dir: root.join("srtm"),
+            timezone_manifest: Some(timezone_manifest()),
+            request_attempts: 1,
+            retry_seconds: 0.0,
+            lock_timeout_seconds: 5.0,
+            cancellation: None,
+        }
+    }
+
+    /// 预放假 SRTM 瓦片：3601×3601 big-endian int16，全瓦片常量海拔，
+    /// read_srtm 双线性插值后必然等于该常量（与坐标无关）。
+    fn fake_tile(root: &Path) -> PathBuf {
+        let dir = root.join("srtm");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{TILE_NAME}.hgt"));
+        let mut file = File::create(&path).unwrap();
+        let row = TILE_ELEVATION.to_be_bytes().repeat(3601);
+        for _ in 0..3601 {
+            file.write_all(&row).unwrap();
+        }
+        file.sync_all().unwrap();
+        assert_eq!(file.metadata().unwrap().len(), 25_934_402);
+        path
+    }
+
+    /// 单线程顺序应答的本地 JSON provider（Connection: close），
+    /// 返回 base URL；线程随测试进程退出回收。
+    fn spawn_json_server(payload: Value) -> String {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match std::io::BufRead::read_line(&mut reader, &mut line) {
+                        Ok(0) => break,
+                        Ok(_) if line == "\r\n" || line == "\n" => break,
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                }
+                let body = serde_json::to_vec(&payload).unwrap();
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body);
+                let _ = stream.flush();
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn assert_local_srtm(value: &Value) {
+        assert_eq!(value["source"], "local-timezone+srtm");
+        assert_eq!(value["elevation_m"].as_f64().unwrap(), f64::from(TILE_ELEVATION));
+        assert_eq!(value["timezone_name"], "Asia/Shanghai");
+        assert!(value["srtm_path"].as_str().unwrap().ends_with(&format!("{TILE_NAME}.hgt")));
+    }
+
+    #[test]
+    fn elevation_source_params_default_and_invalid() {
+        let base = json!({"operation":"metadata","lat":LAT,"lon":LON});
+        let params: Params = serde_json::from_value(base.clone()).unwrap();
+        assert!(params.elevation_source == ElevationSource::Auto);
+        for (text, expected) in [
+            ("auto", ElevationSource::Auto),
+            ("http", ElevationSource::Http),
+            ("srtm", ElevationSource::Srtm),
+        ] {
+            let mut value = base.clone();
+            value["elevation_source"] = json!(text);
+            let params: Params = serde_json::from_value(value).unwrap();
+            assert!(params.elevation_source == expected);
+        }
+        for bad in [json!("bogus"), json!(""), json!(3), json!(["srtm"])] {
+            let mut value = base.clone();
+            value["elevation_source"] = bad;
+            assert!(serde_json::from_value::<Params>(value).is_err());
+        }
+    }
+
+    #[test]
+    fn http_mode_failure_propagates_without_srtm_fallback() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_tile(dir.path());
+        let config = offline_config(dir.path());
+        // 瓦片就绪、下载允许：http 档失败仍必须透传错误，不得静默落 SRTM。
+        let error = config
+            .point_metadata(LAT, LON, 0.5, true, ElevationSource::Http)
+            .unwrap_err();
+        assert!(error.contains("location provider"), "{error}");
+    }
+
+    #[test]
+    fn auto_mode_falls_back_to_local_timezone_and_srtm() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_tile(dir.path());
+        let config = offline_config(dir.path());
+        let value = config
+            .point_metadata(LAT, LON, 0.5, true, ElevationSource::Auto)
+            .unwrap();
+        assert_local_srtm(&value);
+    }
+
+    #[test]
+    fn auto_and_http_prefer_provider_when_available() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_tile(dir.path());
+        let base = spawn_json_server(json!({"timezone":"UTC","elevation":9999.0}));
+        let mut config = offline_config(dir.path());
+        config.metadata_url = format!("{base}/v1/forecast");
+        for source in [ElevationSource::Auto, ElevationSource::Http] {
+            let value = config.point_metadata(LAT, LON, 2.0, true, source).unwrap();
+            assert_eq!(value["source"], "open-meteo-point-metadata");
+            assert_eq!(value["elevation_m"].as_f64().unwrap(), 9999.0);
+            assert_eq!(value["timezone_name"], "UTC");
+        }
+    }
+
+    #[test]
+    fn srtm_mode_skips_http_even_when_provider_available() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_tile(dir.path());
+        // provider 若被错误访问会返回 9999/UTC；srtm 档必须跳过它。
+        let base = spawn_json_server(json!({"timezone":"UTC","elevation":9999.0}));
+        let mut config = offline_config(dir.path());
+        config.metadata_url = format!("{base}/v1/forecast");
+        let value = config
+            .point_metadata(LAT, LON, 2.0, true, ElevationSource::Srtm)
+            .unwrap();
+        assert_local_srtm(&value);
+    }
+
+    #[test]
+    fn srtm_mode_cache_hit_with_downloads_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let tile = fake_tile(dir.path());
+        let config = offline_config(dir.path());
+        // 缓存命中 + allow_download=false：不触发任何下载/HTTP。
+        let value = config
+            .point_metadata(LAT, LON, 0.5, false, ElevationSource::Srtm)
+            .unwrap();
+        assert_local_srtm(&value);
+        assert_eq!(value["srtm_path"].as_str().unwrap(), tile.to_str().unwrap());
+        // 缺瓦片且禁止下载：报错文案明确。
+        let empty = tempfile::tempdir().unwrap();
+        let config = offline_config(empty.path());
+        let error = config
+            .point_metadata(LAT, LON, 0.5, false, ElevationSource::Srtm)
+            .unwrap_err();
+        assert_eq!(error, "SRTM tile is missing; downloads disabled");
+    }
+
+    #[test]
+    fn execute_memo_identity_includes_elevation_source() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_tile(dir.path());
+        let config = offline_config(dir.path());
+        let params = |source: &str| -> Params {
+            serde_json::from_value(json!({
+                "operation":"metadata","lat":LAT,"lon":LON,"config":config,
+                "timeout_seconds":0.5,"allow_download":true,"elevation_source":source
+            }))
+            .unwrap()
+        };
+        let first = execute(params("srtm")).unwrap();
+        assert_eq!(first["memory_cache_hit"], false);
+        assert_local_srtm(&first["result"]);
+        let second = execute(params("srtm")).unwrap();
+        assert_eq!(second["memory_cache_hit"], true);
+        // 换档不得命中 srtm 的 memo：http 档在不可达 URL 下直接报错。
+        let error = execute(params("http")).unwrap_err();
+        assert!(error.contains("location provider"), "{error}");
+    }
+
+    #[test]
+    fn desktop_dispatch_rejects_invalid_elevation_source() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = offline_config(dir.path());
+        let cancellation = Arc::new(AtomicBool::new(false));
+        for (method, mut params) in [
+            ("metadata", json!({"lat":LAT,"lon":LON})),
+            ("search", json!({"query":"北京"})),
+        ] {
+            params["elevation_source"] = json!("bogus");
+            let error =
+                desktop_dispatch(method, &params, &config, true, cancellation.clone()).unwrap_err();
+            assert!(error.starts_with("invalid elevation_source"), "{error}");
+        }
+    }
+
+    #[test]
+    fn desktop_dispatch_srtm_default_auto_and_http() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_tile(dir.path());
+        let config = offline_config(dir.path());
+        let cancellation = Arc::new(AtomicBool::new(false));
+        let point = json!({"lat":LAT,"lon":LON});
+        // srtm 档透传：禁止下载仍命中缓存瓦片。
+        let mut params = point.clone();
+        params["elevation_source"] = json!("srtm");
+        let result =
+            desktop_dispatch("metadata", &params, &config, false, cancellation.clone()).unwrap();
+        assert_eq!(result["elevation_m"].as_f64().unwrap(), f64::from(TILE_ELEVATION));
+        assert_eq!(result["timezone_name"], "Asia/Shanghai");
+        // 缺省与 null 均按 auto：HTTP 不可用/禁下载时落 local-timezone+srtm。
+        for params in [point.clone(), {
+            let mut value = point.clone();
+            value["elevation_source"] = Value::Null;
+            value
+        }] {
+            let result =
+                desktop_dispatch("metadata", &params, &config, false, cancellation.clone()).unwrap();
+            assert_eq!(result["elevation_m"].as_f64().unwrap(), f64::from(TILE_ELEVATION));
+        }
+        // http 档：禁下载时直接报错，即使瓦片就绪也不落 SRTM。
+        let mut params = point;
+        params["elevation_source"] = json!("http");
+        let error =
+            desktop_dispatch("metadata", &params, &config, false, cancellation.clone()).unwrap_err();
+        assert!(error.contains("location downloads disabled"), "{error}");
+    }
+
+    #[test]
+    fn search_passthrough_srtm_and_http_via_nominatim() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_tile(dir.path());
+        let base = spawn_json_server(json!([{
+            "lat":"39.9042","lon":"116.4074","name":"北京",
+            "display_name":"北京市, 中国","address":{"city":"北京市"}
+        }]));
+        let mut config = offline_config(dir.path());
+        config.nominatim_url = format!("{base}/search");
+        // srtm 档：nominatim 命中后 point metadata 走本地时区+缓存瓦片。
+        let value = config
+            .search("北京", 2.0, false, true, true, ElevationSource::Srtm)
+            .unwrap();
+        assert_eq!(value["source"], "nominatim-openstreetmap");
+        assert_eq!(value["elevation_m"].as_f64().unwrap(), f64::from(TILE_ELEVATION));
+        assert_eq!(value["timezone_name"], "Asia/Shanghai");
+        // http 档：metadata URL 不可达 → search 透传错误（refresh 绕过缓存）。
+        let error = config
+            .search("北京", 2.0, false, true, true, ElevationSource::Http)
+            .unwrap_err();
+        assert!(error.contains("location provider"), "{error}");
     }
 }

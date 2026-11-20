@@ -10,6 +10,7 @@
   import type { BaseId, SourceId } from "./lib/map-grid";
   import type { RetryRequest } from "./lib/task-history";
   import { parseRestoredRequest } from "./lib/workbench-restore";
+  import { loadElevationSource, saveElevationSource, type ElevationSource } from "./lib/settings-state";
   import {
     hello, onDesktopAction, onEngineStatus, quitDesktop, rpcRestart, rpcStatus, RpcError, type DesktopAction, type EngineStatus,
   } from "./lib/ipc";
@@ -44,6 +45,7 @@
   let appearance = $state<"system" | "light" | "dark">(preference("firesky.appearance", ["system", "light", "dark"], "system"));
   let systemDark = $state(false);
   let ecSource = $state(preference("firesky.ecSource", ["ecmwf", "aws", "google"], "ecmwf") as string);
+  let elevationSource = $state<ElevationSource>(loadElevationSource(localStorage));
   let engineWorkspace = $state("");
   let engineBinary = $state("");
   let showMap = $state(false);
@@ -235,6 +237,7 @@
     try { localStorage.setItem("firesky.appearance", appearance); } catch { /* Optional preference storage. */ }
   });
   $effect(() => { try { localStorage.setItem("firesky.ecSource", ecSource); } catch { /* Optional preference storage. */ } });
+  $effect(() => { saveElevationSource(localStorage, elevationSource); });
   $effect(() => { try { localStorage.setItem("firesky.mapProvider", mapProvider); localStorage.setItem("firesky.mapBase", mapBase); } catch { /* Credentials remain in memory. */ } });
   $effect(() => { if (showMap) { mapVisited = true; mapDialog?.showModal(); } else mapDialog?.close(); });
   $effect(() => { if (exitRequested) exitDialog?.showModal(); else exitDialog?.close(); });
@@ -349,7 +352,7 @@
     </header>
     <div class="workspace">
     <div hidden={current === "data" || current === "settings"}>
-      <WorkbenchView bind:this={workbench} kind={workKind} online={engineOk === true} generation={engineGeneration} {regions} {ecSource} {mapOptions} bind:spot onOpenMap={() => { showMap = true; }} onBusy={(value) => { forecastBusy = value; }} />
+      <WorkbenchView bind:this={workbench} kind={workKind} online={engineOk === true} generation={engineGeneration} {regions} {ecSource} {elevationSource} {mapOptions} bind:spot onOpenMap={() => { showMap = true; }} onBusy={(value) => { forecastBusy = value; }} />
     </div>
     {#if dataVisited}
       <div hidden={current !== "data"}>
@@ -362,7 +365,7 @@
       </div>
     {/if}
     {#if current === "settings"}
-      <SettingsView bind:provider={mapProvider} bind:tdtKey bind:base={mapBase} bind:appearance bind:ecSource online={engineOk === true} generation={engineGeneration} {engineWorkspace} {engineBinary} onReconnect={reconnect} {reconnecting} />
+      <SettingsView bind:provider={mapProvider} bind:tdtKey bind:base={mapBase} bind:appearance bind:ecSource bind:elevationSource online={engineOk === true} generation={engineGeneration} {engineWorkspace} {engineBinary} onReconnect={reconnect} {reconnecting} />
     {/if}
     </div>
   </main>
@@ -371,7 +374,7 @@
 <dialog bind:this={mapDialog} class="map-dialog" aria-labelledby="map-picker-title" oncancel={() => { showMap = false; }} onclose={() => { showMap = false; }}>
   <header><div><h2 id="map-picker-title">地图选点</h2><span class="coordinates">{spot.lat.toFixed(5)}°, {spot.lon.toFixed(5)}°</span></div><button onclick={() => { showMap = false; }}>完成</button></header>
   {#if mapVisited}<div class="persistent-map"><MapView {...mapOptions} {spot}
-    onPick={(lat, lon) => { spot = { ...spot, lat, lon, name: "地图选点", metadataReady: false }; }}
+    onPick={(lat, lon) => { spot = { ...spot, lat, lon, name: "地图选点", metadataReady: false, metadataSource: undefined }; }}
     onReady={() => { mapState = ""; mapError = ""; }}
     onError={(error) => { if (error.kind === "initialization") mapState = "地图初始化失败"; if (error.kind !== "tiles") mapError = error.message; }} /></div>{/if}
   {#if mapState || mapError}<footer aria-live="polite">{mapState}{mapError ? ` · ${mapError}` : ""}</footer>{/if}

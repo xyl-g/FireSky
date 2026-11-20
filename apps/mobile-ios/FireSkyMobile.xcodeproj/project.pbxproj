@@ -13,6 +13,8 @@
 		1F6B4BDE8156F49B412B9F64 /* EngineTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6847846E81761D5EF31E3F31 /* EngineTransport.swift */; };
 		240366ED59A57F617221011C /* eccodes in Resources */ = {isa = PBXBuildFile; fileRef = 9F9A1BF6DD2C85BF7AC46FA4 /* eccodes */; };
 		2FE8DB5D775590EF59211867 /* ObservationDate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FDCF5F598D054D3E7C573BA /* ObservationDate.swift */; };
+		46DA434BAB3B62C3F75FF2E4 /* ElevationSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 768189D114CB8A03D959C35E /* ElevationSourceTests.swift */; };
+		4E0E4AB4DC25933B7EFBA939 /* ElevationSourceSetting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68E4A315BBFDEE0525D2FCF9 /* ElevationSourceSetting.swift */; };
 		50489C543EB8B96832B08868 /* ForecastComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25AB1BD1383B8739239E4CCF /* ForecastComparison.swift */; };
 		53632BD4B02C1CE1EDB3C84A /* MapViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 060010B0B36632D961BDF447 /* MapViews.swift */; };
 		5632280517EBDDEE10F590EE /* DownloadProbeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 691AAE099A4E47B63348E095 /* DownloadProbeRow.swift */; };
@@ -61,8 +63,10 @@
 		608C20AC38A43FAC00D1A19D /* FireSkyMobileTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FireSkyMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		6847846E81761D5EF31E3F31 /* EngineTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineTransport.swift; sourceTree = "<group>"; };
 		68ACD42AA1AC463A8A8DF147 /* BrandMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandMark.swift; sourceTree = "<group>"; };
+		68E4A315BBFDEE0525D2FCF9 /* ElevationSourceSetting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElevationSourceSetting.swift; sourceTree = "<group>"; };
 		691AAE099A4E47B63348E095 /* DownloadProbeRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadProbeRow.swift; sourceTree = "<group>"; };
 		6C6D85D685587726F1A1C874 /* FSMobileTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FSMobileTransport.swift; sourceTree = "<group>"; };
+		768189D114CB8A03D959C35E /* ElevationSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElevationSourceTests.swift; sourceTree = "<group>"; };
 		7A0581E99BA2990A41972A34 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		7EC84312697E4F89536613DA /* Store.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Store.swift; sourceTree = "<group>"; };
 		7F90A3FF247DFD5A1D68F2CC /* MockTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockTransportTests.swift; sourceTree = "<group>"; };
@@ -86,6 +90,7 @@
 			isa = PBXGroup;
 			children = (
 				691AAE099A4E47B63348E095 /* DownloadProbeRow.swift */,
+				68E4A315BBFDEE0525D2FCF9 /* ElevationSourceSetting.swift */,
 				25AB1BD1383B8739239E4CCF /* ForecastComparison.swift */,
 				B4058C36876785CBDCC9A297 /* MapZoom.swift */,
 				8FDCF5F598D054D3E7C573BA /* ObservationDate.swift */,
@@ -153,6 +158,7 @@
 		6B06B1E8FF0F0CB74F94E95D /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				768189D114CB8A03D959C35E /* ElevationSourceTests.swift */,
 				C2775939457FE147D075B662 /* FSMobileTransportTests.swift */,
 				7F90A3FF247DFD5A1D68F2CC /* MockTransportTests.swift */,
 				8F0ED6EC0BDA8AE6F7AFBEA6 /* ObservationDateTests.swift */,
@@ -328,6 +334,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				46DA434BAB3B62C3F75FF2E4 /* ElevationSourceTests.swift in Sources */,
 				CE1A6299A166D78FE031F039 /* FSMobileTransportTests.swift in Sources */,
 				EA9341D475843067510602CF /* MockTransportTests.swift in Sources */,
 				C607372C3E64F18478A4D384 /* ObservationDateTests.swift in Sources */,
@@ -341,6 +348,7 @@
 			files = (
 				A9A5B3858EDFE7E9DE20BA51 /* BrandMark.swift in Sources */,
 				5632280517EBDDEE10F590EE /* DownloadProbeRow.swift in Sources */,
+				4E0E4AB4DC25933B7EFBA939 /* ElevationSourceSetting.swift in Sources */,
 				C76EFBF9DB271EC9DD218D96 /* EngineClient.swift in Sources */,
 				1F6B4BDE8156F49B412B9F64 /* EngineTransport.swift in Sources */,
 				D9FEB40CA6213B3F051A7005 /* FSMobileTransport.swift in Sources */,
@@ -445,7 +453,7 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -458,7 +466,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 1.1.0;
+				MARKETING_VERSION = 1.1.1;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -579,7 +587,7 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -598,7 +606,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 1.1.0;
+				MARKETING_VERSION = 1.1.1;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

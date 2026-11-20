@@ -136,7 +136,8 @@ test("regional preparation explicitly confirms a partial model result and keeps 
     .filter((call) => ["check", "prepare", "forecast"].includes(call.method)));
   expect(methods.map((call) => call.method)).toEqual(["check", "prepare", "forecast"]);
   expect(methods[0].params.kind).toBe("regional");
-  expect(methods[0].params.payload).toMatchObject({ regions: ["east-asia"], model_source: "both", spacing_deg: .25 });
+  // 区域单模型契约（引擎拒绝 both）：默认 GFS。
+  expect(methods[0].params.payload).toMatchObject({ regions: ["east-asia"], model_source: "gfs", spacing_deg: .25 });
   expect(methods[2].params).toEqual({ session: "regional-session", confirmed: true });
   await expect(page.locator('[aria-label="GFS 区域摘要"]')).toContainText("预测完成");
   await expect(page.locator('[aria-label="GFS 区域摘要"]')).toContainText("2 有效 · 1 高值");

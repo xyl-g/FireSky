@@ -89,3 +89,21 @@ test("settings keep readable native groups within narrow and wide light and dark
   }
   expect(errors).toEqual([]);
 });
+
+test("elevation source defaults to auto, persists the choice and rejects corrupt stored values", async ({ page }) => {
+  await fixture(page);
+  const select = page.getByLabel("海拔来源", { exact: true });
+  await expect(select).toHaveValue("auto");
+  await expect(select.locator("option")).toHaveText(["自动（在线优先）", "HTTP 在线查询", "SRTM 本地地形"]);
+  await expect(page.getByText("自动：优先 open-meteo 在线查询，失败时自动回退本地时区 + SRTM 地形瓦片。", { exact: true })).toBeVisible();
+  await select.selectOption("http");
+  await expect(page.getByText("HTTP：仅通过 open-meteo 在线查询海拔与时区；查询失败直接报错，不回退本地地形。", { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => localStorage.getItem("firesky.elevationSource"))).toBe("http");
+  await page.reload();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await expect(page.getByLabel("海拔来源", { exact: true })).toHaveValue("http");
+  await page.evaluate(() => localStorage.setItem("firesky.elevationSource", "bogus"));
+  await page.reload();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await expect(page.getByLabel("海拔来源", { exact: true })).toHaveValue("auto");
+});

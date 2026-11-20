@@ -94,6 +94,9 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         default: return "ECMWF 官方"
         }
     }
+    /// 海拔来源三档（v1.1.1 §1）：auto / http / srtm，持久化在 UserDefaults，
+    /// 所有 search/metadata 调用点透传 elevation_source。
+    @Published var elevationSource: String
     @Published var favorites: [JSONObject] = []
     @Published var workspace: String
     @Published var appearance: String
@@ -131,6 +134,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         appearance = defaults.string(forKey: "appearance") ?? "system"
         engineTransport = defaults.string(forKey: "engineTransport") ?? "ffi"
         ecmwfSource = defaults.string(forKey: "ecmwfSource") ?? "ecmwf"
+        elevationSource = ElevationSourceSetting.load(defaults)
         super.init()
         engineConnection = engine.$connected.sink { [weak self] value in self?.online = value }
         favorites = defaults.array(forKey: "favorites") as? [JSONObject] ?? []
@@ -144,6 +148,11 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         UserDefaults.standard.set(value, forKey: "engineTransport")
         status = "正在连接引擎"
         Task { await connect() }
+    }
+
+    /// 海拔来源切换：持久化后对下一次 search/metadata 生效（不清空已有结果）。
+    func setElevationSource(_ value: String) {
+        elevationSource = ElevationSourceSetting.save(value)
     }
 
     func connect() async {
@@ -247,10 +256,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         guard !text.isEmpty, !busy else { return }
         busy = true
         status = "正在查找位置"
+        let source = elevationSource
         operation = Task {
             defer { busy = false }
             do {
-                let point = try await engine.call("search", ["query": text])
+                let point = try await engine.call(
+                    "search", ElevationSourceSetting.searchParams(query: text, source: source))
                 try Task.checkCancellation()
                 applyLocation(point)
                 query = ""
@@ -272,11 +283,13 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         let revision = UUID()
         metadataGeneration = revision
         let a = lat, b = lon
+        let source = elevationSource
         metadataReady = false
         status = "正在获取海拔与时区"
         Task {
             do {
-                let point = try await engine.call("metadata", ["lat": a, "lon": b])
+                let point = try await engine.call(
+                    "metadata", ElevationSourceSetting.metadataParams(lat: a, lon: b, source: source))
                 guard metadataGeneration == revision, a == lat, b == lon else { return }
                 elevation = (point["elevation_m"] as? NSNumber)?.doubleValue ?? 0
                 timezone = point["timezone_name"] as? String ?? timezone

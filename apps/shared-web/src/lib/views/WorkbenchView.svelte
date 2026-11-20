@@ -12,10 +12,11 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
   import type { ForecastKind, MapOptions, ObservationSpot } from "../workbench-types";
   import { restoredRequest } from "../workbench-restore";
   import { validCustomRegionBounds } from "../map-region";
+  import { metadataSourceTitle, withElevationSource, type ElevationSource } from "../settings-state";
 
-  let { kind, online, generation, regions = [], ecSource, mapOptions, spot = $bindable(), onOpenMap, onBusy = () => {} }: {
+  let { kind, online, generation, regions = [], ecSource, elevationSource = "auto", mapOptions, spot = $bindable(), onOpenMap, onBusy = () => {} }: {
     kind: ForecastKind; online: boolean; generation: number; regions?: Array<Record<string, unknown>>;
-    ecSource: string; mapOptions: MapOptions; spot: ObservationSpot; onOpenMap: () => void; onBusy?: (busy: boolean) => void;
+    ecSource: string; elevationSource?: ElevationSource; mapOptions: MapOptions; spot: ObservationSpot; onOpenMap: () => void; onBusy?: (busy: boolean) => void;
   } = $props();
   const controller = new ForecastSessionController({ start: rpcStart, request: rpcRequest }, (next) => { session = next; });
   let session = $state<ForecastSessionState>(controller.state);
@@ -71,6 +72,7 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
   } : spot);
   const resultDate = $derived(String(resultPayload.target_date ?? ""));
   const resultPhenomenon = $derived(String(resultPayload.phenomenon ?? "dusk"));
+  const spotSourceTitle = $derived(metadataSourceTitle(spot.metadataSource));
   // 共享 Web 无桌面宿主打开器限制：报告固定以 HTTP 链接呈现（browser 报告路径）。
   const reports = $derived(reportPaths(result, true));
   const status = $derived(session.phase === "checking" ? "正在检查本地数据" : session.phase === "preparing" ? "正在准备数据"
@@ -96,7 +98,7 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
   function validTimezone() {
     try { new Intl.DateTimeFormat("en", { timeZone: spot.timezone_name }); return true; } catch { return false; }
   }
-  function invalidateLocation() { spot = { ...spot, metadataReady: false }; ++locationRevision; locationBusy = false; locating = false; }
+  function invalidateLocation() { spot = { ...spot, metadataReady: false, metadataSource: undefined }; ++locationRevision; locationBusy = false; locating = false; }
   function editNumber(field: "lat" | "lon" | "elevation_m", raw: string) {
     invalidateLocation();
     if (raw.trim() && Number.isFinite(Number(raw))) spot = { ...spot, [field]: Number(raw) };
@@ -107,7 +109,7 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
     const input = query.trim();
     locationBusy = true; localError = "";
     try {
-      const point = await rpcRequest<Record<string, unknown>>("search", { query: input });
+      const point = await rpcRequest<Record<string, unknown>>("search", withElevationSource({ query: input }, elevationSource));
       if (!alive || revision !== locationRevision || input !== query.trim()) return;
       applyLocation(point);
     } catch (error) { if (alive && revision === locationRevision) localError = error instanceof Error ? error.message : String(error); }
@@ -118,7 +120,8 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
     if (lat === null || lon === null || Math.abs(lat) > 90 || Math.abs(lon) > 180) throw new Error("位置坐标无效。");
     spot = { name: typeof point.name === "string" ? point.name : spot.name, lat, lon,
       elevation_m: elevation ?? -1, timezone_name: typeof point.timezone_name === "string" ? point.timezone_name : spot.timezone_name,
-      metadataReady: elevation !== null && elevation !== -1 && typeof point.timezone_name === "string" };
+      metadataReady: elevation !== null && elevation !== -1 && typeof point.timezone_name === "string",
+      metadataSource: typeof point.source === "string" ? point.source : undefined };
   }
   async function metadata() {
     if (!online || busy || !Number.isFinite(spot.lat) || !Number.isFinite(spot.lon) || Math.abs(spot.lat) > 90 || Math.abs(spot.lon) > 180) {
@@ -127,7 +130,7 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
     const revision = ++locationRevision, lat = spot.lat, lon = spot.lon;
     locationBusy = true; localError = "";
     try {
-      const point = await rpcRequest<Record<string, unknown>>("metadata", { lat, lon });
+      const point = await rpcRequest<Record<string, unknown>>("metadata", withElevationSource({ lat, lon }, elevationSource));
       if (alive && revision === locationRevision && lat === spot.lat && lon === spot.lon) applyLocation({ ...point, name: spot.name });
     } catch (error) { if (alive && revision === locationRevision) localError = error instanceof Error ? error.message : String(error); }
     finally { if (alive && revision === locationRevision) locationBusy = false; }
@@ -141,7 +144,7 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
       if (!alive || revision !== locationRevision) return;
       locating = false;
       if (Date.now() - position.timestamp > 60_000) { localError = "系统返回的位置已过期，请重试。"; return; }
-      spot = { ...spot, name: "当前位置", lat: position.coords.latitude, lon: position.coords.longitude, metadataReady: false };
+      spot = { ...spot, name: "当前位置", lat: position.coords.latitude, lon: position.coords.longitude, metadataReady: false, metadataSource: undefined };
       await tick();
       if (alive && spot.lat === position.coords.latitude && spot.lon === position.coords.longitude) void metadata();
     }, () => {
@@ -315,10 +318,10 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
           <button class="icon-button" title="搜索位置" aria-label="搜索位置" disabled={!online || locationBusy || !query.trim()}><Search size={16} /></button>
           <button type="button" class="icon-button" title="获取当前位置" aria-label="获取当前位置" disabled={locating || locationBusy} onclick={locate}><LocateFixed size={16} /></button>
         </form>
-        {#if locationTab === "地图"}<div class="mini-map"><MapView {...mapOptions} {spot} mini onPick={(lat, lon) => { spot = { ...spot, lat, lon, name: "地图选点", metadataReady: false }; }} /></div>
+        {#if locationTab === "地图"}<div class="mini-map"><MapView {...mapOptions} {spot} mini onPick={(lat, lon) => { spot = { ...spot, lat, lon, name: "地图选点", metadataReady: false, metadataSource: undefined }; }} /></div>
         {:else}<div class="favorites">{#each favorites as favorite (`${favorite.lat},${favorite.lon}`)}<div class="favorite-row"><button onclick={() => { ++locationRevision; locationBusy = false; locating = false; spot = { ...favorite }; }}><MapPin size={13} />{favorite.name}</button><button class="favorite-remove" title={`删除收藏 ${favorite.name}`} aria-label={`删除收藏 ${favorite.name}`} onclick={() => removeFavorite(favorite)}><X size={12} /></button></div>{:else}<p>暂无收藏地点</p>{/each}</div>{/if}
         <div class="location-name"><i></i><div><strong>{spot.name}</strong><span class="coordinates">{spot.lat.toFixed(4)}° N, {spot.lon.toFixed(4)}° E</span></div></div>
-        <div class="location-meta"><span>{spot.metadataReady ? `海拔 ${spot.elevation_m.toFixed(0)} m` : "海拔未确认"}</span><span>{spot.timezone_name}</span></div>
+        <div class="location-meta"><span>{spot.metadataReady ? `海拔 ${spot.elevation_m.toFixed(0)} m` : "海拔未确认"}</span><span>{spot.timezone_name}</span>{#if spotSourceTitle}<span>{spotSourceTitle}</span>{/if}</div>
         <div class="location-actions"><button class="plain" onclick={starLocation}><Star size={13} />收藏当前点</button><button class="plain" onclick={onOpenMap}><Maximize2 size={13} />大地图</button></div>
       </fieldset>
       <fieldset class="parameter-panel" disabled={busy}>

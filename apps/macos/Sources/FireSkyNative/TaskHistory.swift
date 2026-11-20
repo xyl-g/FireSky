@@ -3,11 +3,7 @@ import SwiftUI
 /// Tolerates both plain and fractional-second ISO8601 stamps: engine task
 /// events carry `.300Z` while some receipts use whole seconds.
 func taskTimestamp(_ value: String) -> Date? {
-    let formatter = ISO8601DateFormatter()
-    formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let date = formatter.date(from: value) { return date }
-    formatter.formatOptions = [.withInternetDateTime]
-    return formatter.date(from: value)
+    ObservationDate.parseISO(value)
 }
 
 struct NativeRetryRequest {
@@ -83,9 +79,18 @@ struct NativeTaskHistoryItem: Identifiable {
         case "forecast": "预测计算"
         case "publications": "发布核验"
         case "network_probe": "下载探测"
+        case "data_sync": "后台同步"
         default: "任务"
         }
     }
+
+    /// UX #13：行标题去重（无重试类别时 kindTitle 与 methodTitle 相同）。
+    var rowTitle: String {
+        kindTitle == methodTitle ? methodTitle : "\(kindTitle) · \(methodTitle)"
+    }
+
+    /// UX #13：后台同步轮次默认折叠，避免淹没用户主动发起的任务。
+    var isBackgroundSync: Bool { method == "data_sync" }
 
     var statusTitle: String {
         switch status {
@@ -99,7 +104,10 @@ struct NativeTaskHistoryItem: Identifiable {
     }
 
     var contextTitle: String {
-        guard let payload = retryRequest?.payload else { return "" }
+        guard let payload = retryRequest?.payload else {
+            // UX #13：后台同步没有地点参数，给出明确说明而不是留白。
+            return isBackgroundSync ? "后台数据同步轮次" : ""
+        }
         let name = payload["name"] as? String
             ?? (payload["regions"] as? [String])?.joined(separator: "、")
             ?? ""
@@ -110,7 +118,9 @@ struct NativeTaskHistoryItem: Identifiable {
         case "dusk": phenomenon = "晚霞"
         default: phenomenon = ""
         }
-        return [name, date, phenomenon].filter { !$0.isEmpty }.joined(separator: " · ")
+        let text = [name, date, phenomenon].filter { !$0.isEmpty }.joined(separator: " · ")
+        if text.isEmpty && isBackgroundSync { return "后台数据同步轮次" }
+        return text
     }
 
     var canRestoreResult: Bool {
@@ -157,6 +167,8 @@ struct NativeTaskEvent: Identifiable {
 
 struct NativeTaskHistoryView: View {
     @EnvironmentObject private var store: Store
+    /// UX #13：后台同步轮次默认折叠。
+    @State private var showSyncRounds = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -184,11 +196,24 @@ struct NativeTaskHistoryView: View {
                 ContentUnavailableView("暂无任务记录", systemImage: "clock.arrow.circlepath",
                                        description: Text(store.online ? "完成一次检查或预测后会显示在这里。" : "引擎未连接。"))
             } else {
+                let syncCount = store.taskHistory.filter(\.isBackgroundSync).count
+                if syncCount > 0 {
+                    Button {
+                        showSyncRounds.toggle()
+                    } label: {
+                        Label(showSyncRounds ? "隐藏后台同步轮次（\(syncCount)）"
+                              : "展开后台同步轮次（\(syncCount)）",
+                              systemImage: showSyncRounds ? "chevron.up" : "chevron.down")
+                            .font(.caption)
+                    }.buttonStyle(.borderless)
+                }
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 0) {
                         ForEach(store.taskHistory) { item in
-                            historyRow(item)
-                            Divider()
+                            if showSyncRounds || !item.isBackgroundSync {
+                                historyRow(item)
+                                Divider()
+                            }
                         }
                     }
                 }
@@ -226,7 +251,7 @@ struct NativeTaskHistoryView: View {
                 .frame(width: 22, height: 22)
             VStack(alignment: .leading, spacing: 5) {
                 HStack(spacing: 7) {
-                    Text("\(item.kindTitle) · \(item.methodTitle)")
+                    Text(item.rowTitle)
                         .font(.callout.weight(.medium))
                     Text(item.statusTitle)
                         .font(.caption.weight(.medium))
@@ -236,7 +261,9 @@ struct NativeTaskHistoryView: View {
                     Text(item.contextTitle).font(.caption).foregroundStyle(.secondary)
                 }
                 HStack(spacing: 10) {
-                    Text(item.createdAtUTC).monospacedDigit()
+                    // UX #4：本地时区展示，原始 UTC 放进 help 便于排查。
+                    Text(historyTimeText(item.createdAtUTC)).monospacedDigit()
+                        .help("UTC：\(item.createdAtUTC)")
                     if item.status == "running",
                        let percent = (item.progress["percent"] as? NSNumber)?.doubleValue {
                         Text(String(format: "%.0f%%", percent)).monospacedDigit()
@@ -275,7 +302,7 @@ struct NativeTaskHistoryView: View {
     private func eventsView(_ item: NativeTaskHistoryItem) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Text("\(item.kindTitle) · \(item.methodTitle)事件")
+                Text("\(item.rowTitle)事件")
                     .font(.headline)
                 Spacer()
                 Button { store.selectTaskHistory(item.taskID) } label: {
@@ -292,7 +319,9 @@ struct NativeTaskHistoryView: View {
                 }
                 ForEach(store.taskHistoryEvents) { event in
                     HStack(alignment: .firstTextBaseline, spacing: 9) {
-                        Text(event.atUTC).font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+                        Text(historyTimeText(event.atUTC)).font(.caption2).monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .help("UTC：\(event.atUTC)")
                         Text(event.title).font(.caption.weight(.medium))
                         Text(event.detail).font(.caption2).foregroundStyle(.secondary)
                         Spacer()

@@ -97,7 +97,8 @@ struct WorkbenchRootView: View {
                 .foregroundStyle(.secondary).padding(.bottom, 9)
             ForEach([Page.point, .regional, .nowcast, .data]) { page in
                 Button {
-                    if !store.busy { store.page = page }
+                    // UX #5：切页不再被全局 busy 锁死；运行中的任务继续，顶栏可见进度。
+                    store.page = page
                 } label: {
                     HStack(spacing: 11) {
                         Image(systemName: page.symbol).symbolRenderingMode(.hierarchical)
@@ -117,7 +118,7 @@ struct WorkbenchRootView: View {
             }
             Spacer(minLength: 20)
             Button("设置", systemImage: "gearshape") {
-                if !store.busy { store.page = .settings }
+                store.page = .settings
             }.buttonStyle(.plain).frame(maxWidth: .infinity).padding(.vertical, 18)
         }
         .padding(.horizontal, 15).padding(.top, 24).padding(.bottom, 16)
@@ -135,6 +136,16 @@ struct WorkbenchRootView: View {
                     .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
+            // UX #5：任务运行中切页后，顶栏仍能看到进度与取消入口。
+            if store.busy {
+                HStack(spacing: 7) {
+                    ProgressView().controlSize(.small)
+                    Text(store.status).font(.system(size: 10)).foregroundStyle(.secondary)
+                        .lineLimit(1).frame(maxWidth: 220)
+                    Button { store.cancel() } label: { Image(systemName: "xmark.circle") }
+                        .buttonStyle(.borderless).help("取消当前任务")
+                }.workChip()
+            }
             Text(Date.now.formatted(.dateTime.month(.twoDigits).day(.twoDigits).weekday(.abbreviated)))
                 .font(.system(size: 9)).foregroundStyle(.secondary).workChip()
         }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 10).frame(height: 72)
@@ -158,6 +169,9 @@ struct WorkbenchRootView: View {
                 }.buttonStyle(.plain)
                     .opacity(store.busy || !store.online ? 0.45 : 1)
                     .disabled(store.busy || !store.online)
+                    .help(store.busy ? "当前有任务正在进行（\(store.status)），完成或取消后可开始新预测。"
+                          : !store.online ? "引擎未连接，请先在左下角重新连接。"
+                          : "先预检本地数据，确认后开始预测。")
                 if store.page == .nowcast {
                     Button("预热卫星与数据", systemImage: "arrow.down.to.line") { store.beginCheck() }
                         .buttonStyle(.borderless).font(.system(size: 10))
@@ -209,13 +223,16 @@ struct WorkLocationView: View {
             HStack(spacing: 6) {
                 TextField("搜索地名，如「西湖」或「杭州」", text: $store.query).onSubmit { store.search() }
                     .textFieldStyle(.roundedBorder).controlSize(.large)
-                Button { store.search() } label: { Image(systemName: "magnifyingglass") }
-                    .help("搜索位置").controlSize(.large)
+                Button { store.search() } label: {
+                    if store.searching { ProgressView().controlSize(.mini).frame(width: 16, height: 16) }
+                    else { Image(systemName: "magnifyingglass").frame(width: 16, height: 16) }
+                }
+                    .help("搜索位置").controlSize(.large).disabled(store.searching)
                 Button { store.locate() } label: {
                     if store.locating { ProgressView().controlSize(.mini).frame(width: 16, height: 16) }
                     else { Image(systemName: "location").frame(width: 16, height: 16) }
                 }.help("获取当前位置").accessibilityLabel("获取当前位置")
-                    .controlSize(.large).disabled(store.locating || store.busy)
+                    .controlSize(.large).disabled(store.locating)
             }
             if store.page == .regional {
                 VStack(spacing: 8) {
@@ -229,13 +246,28 @@ struct WorkLocationView: View {
                 ForecastMap(store: store, mini: true).frame(height: 176)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             } else {
+                // UX #7：收藏可删除（右键菜单），空收藏给出引导而不是空白。
                 ScrollView {
-                    VStack(spacing: 6) {
-                        ForEach(Array(store.favorites.enumerated()), id: \.offset) { _, item in
-                            Button(item["name"] as? String ?? "收藏位置") { store.applyLocation(item) }
-                                .buttonStyle(.borderless).frame(maxWidth: .infinity, alignment: .leading)
-                        }
-                    }.padding(8)
+                    if store.favorites.isEmpty {
+                        VStack(spacing: 6) {
+                            Image(systemName: "star").foregroundStyle(.secondary)
+                            Text("还没有收藏位置").font(.system(size: 11, weight: .medium))
+                            Text("搜索或在地图上选好地点后，点击下方「收藏当前点」。")
+                                .font(.system(size: 9)).foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }.frame(maxWidth: .infinity, minHeight: 160)
+                    } else {
+                        VStack(spacing: 6) {
+                            ForEach(Array(store.favorites.enumerated()), id: \.offset) { _, item in
+                                Button(item["name"] as? String ?? "收藏位置") { store.applyLocation(item) }
+                                    .buttonStyle(.borderless).frame(maxWidth: .infinity, alignment: .leading)
+                                    .contextMenu {
+                                        Button("删除收藏", role: .destructive) { store.removeFavorite(item) }
+                                    }
+                                    .help("点击切换到此位置；右键可删除收藏")
+                            }
+                        }.padding(8)
+                    }
                 }.frame(height: 176)
             }
             HStack(spacing: 9) {
@@ -248,6 +280,7 @@ struct WorkLocationView: View {
             }
             HStack(spacing: 5) {
                 Text(store.metadataReady ? String(format: "海拔 %.0f m", store.elevation) : "海拔未确认").workChip()
+                    .help("海拔来源设置：\(store.elevationSourceLabel)；实际来源：\(store.elevationSourceActualLabel)")
                 Text(store.timezone).lineLimit(1).workChip()
             }.font(.system(size: 9)).foregroundStyle(.secondary)
             HStack {
@@ -255,7 +288,7 @@ struct WorkLocationView: View {
                 Spacer()
                 Button("大地图", systemImage: "arrow.up.left.and.arrow.down.right") { store.showMapPicker = true }
             }.buttonStyle(.borderless).font(.system(size: 10))
-        }.padding(15).workSurface().disabled(store.busy)
+        }.padding(15).workSurface()
     }
     private func coordinate(_ title: String, _ value: Binding<Double>) -> some View {
         HStack {
@@ -307,7 +340,7 @@ struct WorkParametersView: View {
             if !store.error.isEmpty {
                 Text(store.error).font(.system(size: 10)).foregroundStyle(.red).textSelection(.enabled)
             }
-        }.padding(15).workSurface().disabled(store.busy)
+        }.padding(15).workSurface()
     }
     private func number(_ title: String, _ value: Binding<Double>) -> some View {
         HStack {
@@ -394,13 +427,39 @@ private struct WorkCalendarView: View {
     }
 }
 
+/// UX #3：参数变更后旧结果保留，用此徽标说明结果对应旧参数，并提供一键重算。
+struct WorkStaleResultBanner: View {
+    @EnvironmentObject private var store: Store
+    var body: some View {
+        if store.resultParametersStale {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
+                    .foregroundStyle(.orange)
+                Text("参数已变更 · 当前结果对应旧参数")
+                    .font(.system(size: 10, weight: .medium)).foregroundStyle(.orange)
+                    .help(store.resultParamsSummary)
+                Spacer(minLength: 4)
+                Button("按新参数重算") { store.beginCheck() }
+                    .buttonStyle(.borderless).font(.system(size: 10))
+                    .disabled(store.busy || !store.online)
+                    .help(store.busy ? "当前有任务正在进行，完成或取消后可重算。" : store.resultParamsSummary)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+            .help(store.resultParamsSummary)
+        }
+    }
+}
+
 struct WorkHeroView: View {
     @EnvironmentObject private var store: Store
     private var comparison: ForecastComparison { store.pointComparison }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("\(store.name) · \(store.targetDateLabel) \(store.phenomenon == "dawn" ? "朝霞" : "晚霞")")
+            // UX #1/#3：标题跟随结果原始参数，而不是当前表单。
+            Text("\(store.resultTitle) \(store.resultPhenomenonLabel)")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
+            WorkStaleResultBanner()
             HStack(alignment: .top, spacing: 18) {
                 summary("gfs")
                 Divider().frame(height: 124).opacity(0.5)
@@ -443,7 +502,9 @@ struct WorkHeroView: View {
                 if let cycle = cycleLabel(model, report) {
                     Text("起报 \(cycle)").workChip()
                 }
-                Text(familyLabel(report?["dominant_burnable_pressure_family"])).workChip()
+                Text(report == nil ? "未预测" : familyLabel(report?["dominant_burnable_pressure_family"])).workChip()
+                    .help(report == nil ? "尚未运行预测；完成一次预测后显示主导可烧压力族。"
+                          : "主导可烧压力族（来自本次预测结果）")
             }.font(.system(size: 9)).foregroundStyle(.secondary)
             Text(modelSourceNote(model))
                 .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(2)
@@ -2058,6 +2119,7 @@ struct WorkRegionPage: View {
     var body: some View {
         VStack(spacing: 12) {
             controls
+            WorkStaleResultBanner()
             HStack(spacing: 16) {
                 summary(store.regionalModel)
                 Spacer(minLength: 0)
@@ -2095,8 +2157,12 @@ struct WorkRegionPage: View {
                 }
             }
             if !store.error.isEmpty {
+                // UX #17：错误全文可见、可选中复制，不再截断成两行。
                 Text(store.error).font(.system(size: 10)).foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading).lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .help(store.error)
             }
         }.padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 16)
             .onExitCommand { store.editingRegionOnMap = false }
@@ -2136,7 +2202,7 @@ struct WorkRegionPage: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                         HStack { Spacer(); Button("完成") { store.showRegionBounds = false } }
-                    }.padding(18).frame(width: 310).disabled(store.busy)
+                    }.padding(18).frame(width: 310)
                 }
             Divider().frame(height: 22)
             WorkDateButton().frame(width: 150)
@@ -2148,8 +2214,11 @@ struct WorkRegionPage: View {
             Button { store.beginCheck() } label: {
                 Label("开始预测", systemImage: "play.fill")
                     .font(.system(size: 12, weight: .semibold)).padding(.horizontal, 7).frame(height: 25)
-            }.buttonStyle(.borderedProminent).disabled(!store.online)
-        }.controlSize(.regular).disabled(store.busy)
+            }.buttonStyle(.borderedProminent).disabled(store.busy || !store.online)
+                .help(store.busy ? "当前有任务正在进行（\(store.status)），完成或取消后可开始新预测。"
+                      : !store.online ? "引擎未连接，请先重新连接。"
+                      : "先预检本地数据，确认后开始区域预测。")
+        }.controlSize(.regular)
     }
 
     private func summary(_ model: String) -> some View {
@@ -2425,7 +2494,8 @@ private struct RegionalCellDetail: View {
                 scoreCard("事件窗口质量 / 2.5", cell.eventQuality)
             }
             VStack(alignment: .leading, spacing: 3) {
-                row("主导可烧压力族", cell.pressureFamily.map { familyLabel($0) } ?? "无可烧目标云")
+                row("主导可烧压力族", cell.pressureFamily.map { familyLabel($0) } ?? "未提供")
+                    .help("结果未包含该格点的主导可烧压力族字段；通常表示无可烧目标云。")
                 row("有效可烧云", cell.cloudCoverageEffective.map { String(format: "%.1f%%", $0 * 100) } ?? "未计算")
                 row("可烧时长", cell.durationMinutes.map { String(format: "%.0f 分钟", $0) } ?? "未计算")
                 row("质量 AOD", cell.qualityAod.map { String(format: "%.3f", $0) } ?? "未计算")
@@ -2442,7 +2512,6 @@ private struct RegionalCellDetail: View {
             }
             .buttonStyle(.borderless)
             .help("用该网格的坐标、模式、日期与现象预填单点预测")
-            .disabled(store.busy)
             .accessibilityLabel("在单点模式打开 \(cell.label)")
         }
         .padding(8)
@@ -2484,8 +2553,9 @@ private struct WorkNowcastHeroView: View {
     private var nowcast: JSONObject { report?["nowcast"] as? JSONObject ?? [:] }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("\(store.name) · \(store.targetDateLabel) \(store.phenomenon == "dawn" ? "朝霞" : "晚霞")")
+            Text("\(store.resultTitle) \(store.resultPhenomenonLabel)")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
+            WorkStaleResultBanner()
             HStack(alignment: .top, spacing: 18) {
                 VStack(alignment: .leading, spacing: 9) {
                     HStack(spacing: 6) {
