@@ -127,10 +127,6 @@ pub struct AssessmentRequest {
     detail: Option<String>,
 }
 
-fn default_true() -> bool {
-    true
-}
-
 /// True when the request asks for (or defaults to) the full diagnostic payload.
 fn wants_full_detail(detail: &Option<String>) -> Result<bool, String> {
     match detail.as_deref() {
@@ -151,6 +147,9 @@ fn default_max_distance_km() -> f64 {
 pub struct AerosolInput {
     aod550: f64,
     #[serde(default = "default_aerosol_source")]
+    // Contract field: accepted for payload compatibility (deny_unknown_fields),
+    // not consumed by the assessment yet.
+    #[allow(dead_code)]
     source: String,
     #[serde(default = "default_aerosol_quality")]
     quality: String,

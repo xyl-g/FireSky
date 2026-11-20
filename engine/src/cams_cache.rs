@@ -534,6 +534,7 @@ pub(crate) fn model_grid_covers_group(
     true
 }
 
+#[cfg(test)]
 pub(crate) fn model_grid_covers(
     path: &Path,
     codes: &EcCodes,

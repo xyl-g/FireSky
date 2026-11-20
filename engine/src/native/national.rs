@@ -811,6 +811,7 @@ impl AerosolColumn {
             * 1000.0
     }
 
+    #[cfg(test)]
     fn vertical_optical_depth(
         &self,
         lower_height_asl_m: f32,
@@ -2973,6 +2974,7 @@ impl SkyBuffers {
         self.begin_layer_cache_with_key(cell_count, None);
     }
 
+    #[cfg(test)]
     fn begin_layer_cache_for_sample(
         &mut self,
         cell_count: usize,

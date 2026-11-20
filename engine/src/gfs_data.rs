@@ -245,7 +245,7 @@ pub fn build_url(
         // NOMADS expects longitudes in 0..360 with rightlon >= leftlon. A
         // wrapped request (west > east) is served as the complementary span
         // when sent as negative leftlon, so express it as west..east+360.
-        let mut left = if west < 0.0 { west + 360.0 } else { west };
+        let left = if west < 0.0 { west + 360.0 } else { west };
         let mut right = if east < 0.0 { east + 360.0 } else { east };
         if right < left {
             right += 360.0;

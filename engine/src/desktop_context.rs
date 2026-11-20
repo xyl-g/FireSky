@@ -705,7 +705,7 @@ fn domain(
     let multi_region = regions.is_some_and(|v| v.len() > 1);
     let bbox = if model == "ec" && explicit && forced.is_empty() {
         selected = None;
-        let mut bbox = union_bbox(points, 0.)?;
+        let bbox = union_bbox(points, 0.)?;
         // 显式点集若退化（单点，或共线使某一轴零跨度），紧贴包络会塌成
         // 单行/单列：EC 代理网格无法从单一格点推断间距（"EC proxy requires
         // at least one non-singleton axis"），CAMS 覆盖合同也要求至少两条
