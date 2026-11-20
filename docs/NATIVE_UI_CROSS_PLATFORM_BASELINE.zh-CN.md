@@ -1,6 +1,6 @@
 # 原生 UI + Rust FFI 跨平台基线
 
-更新日期：2026-11-12
+更新日期：2026-11-20
 
 本文记录 macOS 基线完成后，Windows/Linux 仿照 macOS 接入的实际状态。
 它区分“源码和合同已完成”和“目标机器已验收”，不把静态检查当作发布验收。
@@ -42,7 +42,10 @@ Application cold-start and native bundle smoke: passed
 ```
 
 仍需发布环境验收：Intel x86_64 真机、真实 CAMS 账号和上游网络、无开发工具
-clean-machine、Developer ID 签名/公证/staple、权限/代理/升级/卸载保留数据。
+clean-machine、权限/代理/升级/卸载保留数据。（2026-11-20 更新：Developer
+ID 签名/公证为用户裁定不做，v1.0.0 以 ad-hoc 签名发布，见
+`docs/RELEASE_MACOS.zh-CN.md`；Intel 载荷已由 CI macos-26-intel 构建+冒烟，
+真机验收仍开放。）
 
 ## 3. Windows 对齐实现
 
@@ -66,8 +69,9 @@ bash scripts/test_windows_ffi_contract.sh: passed
 git diff --check: passed
 ```
 
-当前主机没有 `dotnet` 和 Windows 运行环境，尚未完成 WinUI 编译、x64/ARM64
-真机启动、资源缺失负例和真实 CAMS 数据验收。
+本地主机没有 `dotnet` 和 Windows 运行环境；WinUI x64/ARM64 编译与产物验证
+已由 GitHub CI（windows-2022 / windows-11-arm）完成（2026-11-20，见 §7）。
+真机启动、资源缺失负例和真实 CAMS 数据验收仍开放。
 
 Windows 数据页已按 macOS 数据页合同接入任务历史 UI（2026-11-14）：
 `task_history(limit=100)` 响应与单条记录校验（schema、automatic_restart、
@@ -112,8 +116,11 @@ bash scripts/test_linux_ffi.sh
   非 Linux 主机：明确跳过运行时 smoke
 ```
 
-当前主机是 macOS，因此 Linux GTK4 目标机运行、发行包、x86_64/ARM64 目标构建、
-桌面权限/通知/文件选择器和真实 CAMS 数据仍待 Linux 主机验收。
+本地主机是 macOS；Linux GTK4 构建与 FFI hello smoke 已由 GitHub CI
+ubuntu-24.04 完成，`linux-ffi` 在 ubuntu-24.04 / ubuntu-24.04-arm 上运行
+`scripts/test_linux_ffi.sh`（含缺资源负例），覆盖 amd64/arm64（2026-11-20，
+见 §7）。发行包/安装器、桌面权限/通知/文件选择器和真实 CAMS 数据仍待
+Linux 真机验收。
 
 ## 5. 不可移植边界
 
@@ -140,3 +147,44 @@ bash scripts/test_linux_ffi.sh
 
 在这些门禁完成前，交付状态应写为“macOS 实现完成；Windows/Linux 源码与 FFI
 合同已对齐，目标机发布验收待完成”，不能宣称三端发布完成。
+
+## 7. Native Desktop CI 首次全绿（2026-11-20）
+
+run 44571959210 @ f341ef8（主 CI run 44571959208 同 commit 亦绿），10 jobs
+全部 success：
+
+| Job | Runner | 验证范围 |
+| --- | --- | --- |
+| Native resource contracts | ubuntu-24.04 | 资源清单审计、Docker 运行时契约、Windows FFI 适配契约 |
+| SwiftUI + Rust FFI arm64 | macos-26 | 构建、DMG hdiutil VALID、FFI bundle 冒烟 |
+| SwiftUI + Rust FFI x86_64 | macos-26-intel | 同上（Intel 原生构建） |
+| Docker linux/amd64 / arm64 | ubuntu-24.04 | 镜像构建 + 运行时冒烟 |
+| Linux GTK4 + Rust FFI | ubuntu-24.04 | GTK4 构建 + FFI hello smoke |
+| WinUI + Rust FFI x64 | windows-2022 | vcpkg ecCodes bundle、Rust 引擎、dotnet 编译、产物验证（exe/引擎 DLL/资源清单/无 Python） |
+| WinUI + Rust FFI arm64 | windows-11-arm | 同上（ARM64 原生） |
+| Linux FFI amd64 / arm64 | ubuntu-24.04 / ubuntu-24.04-arm | `test_linux_ffi.sh` C++ FFI 合同 + 缺资源负例 |
+
+依赖链：contracts → macos-native（双架构，fail-fast:false）→
+linux-native + windows-native → linux-ffi；Docker 独立并行。
+
+打通修复链（四提交）：
+
+1. `18259b8`：区域单模型契约三端（Linux GTK/WinUI/Web）对齐 macOS；
+   vcpkg bundle 按 port manifest 计算非 host 依赖闭包，排除 python3 等
+   host 构建依赖 DLL。
+2. `fd414c8`：NuGet NU1605 修复（BuildTools 10.0.26100.4654）；地图资产
+   恢复为 `apps/shared/` vendored 副本（leaflet 1.9.4 + firesky.png）。
+3. `e95c52d`：WinUI 首次编译 6 处 C# 错误（Utf8 缺 new、IntPtr Task 字段
+   遮蔽、Panel.IsEnabled 递归禁用、历史时间戳 required 属性）。
+4. `f341ef8`：verify 步骤输出路径修复——`dotnet -p:Platform` 限定产物在
+   `bin/<Platform>/Release/...` 而非 `bin/Release`，改为递归搜 bin/ 并按
+   引擎 DLL 存在性筛出完整产物。
+
+CI 验证 ≠ 真机发布验收。仍开放：Windows/Linux 真机交互式 UI、发行包/
+安装器、桌面权限/通知/文件选择器、真实 CAMS 账号与代理、clean-machine
+安装/升级/卸载（§6 门禁）；macOS Intel 真机（CI Intel 构建+冒烟已过）。
+Developer ID 签名/公证为用户裁定不做（ad-hoc 发布）。
+
+交付状态（2026-11-20）：macOS 正式发布 v1.0.0（ad-hoc，双架构 DMG，见
+`docs/RELEASE_MACOS.zh-CN.md`）；Windows/Linux 源码与 FFI 合同对齐且 CI
+构建+产物验证+冒烟通过，目标机发布验收待完成。

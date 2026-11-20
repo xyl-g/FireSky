@@ -8,10 +8,13 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
-## v1.0.0 (2026-11-15)
+## v1.0.0 (2026-11-20)
 
 首个原生正式版：macOS SwiftUI/AppKit + Rust FFI 单引擎。
 First native major release: macOS SwiftUI/AppKit with a single Rust engine.
+
+2026-11-20 正式发布（GitHub Release `v1.0.0`，双架构 DMG）；2026-11-15
+完成发布模拟预演。
 
 **架构 / Architecture**
 
@@ -33,12 +36,35 @@ First native major release: macOS SwiftUI/AppKit with a single Rust engine.
 - 近似光路模板缓存保持 opt-in（实测 4 核 CPU -18.4%，但改变 10.6% 点的
   最佳时刻步，未获容差审批，默认关闭）。
 
-**发布模拟 / Release rehearsal**
+**跨平台与移动 / Cross-platform & mobile**
 
-- 见 `docs/RELEASE_V1_SIMULATION_2026-11-15.zh-CN.md`（构建、测试、冒烟、
-  打包与校验记录）；DMG 校验和见 `dist/v1.0.0/SHA256SUMS.txt`。
-- 已知限制：ad-hoc 签名（无 Developer ID/公证）；Windows/Linux 原生端
-  暂停；Docker/Web 部署验收未完成；空闲受控性能窗口未获得。
+- Native Desktop CI 首次全绿（run 44571959210 @ f341ef8，10 jobs）：
+  macOS arm64/x86_64（DMG + hdiutil 校验 + FFI bundle 冒烟）、Windows
+  WinUI x64/ARM64（编译 + 产物验证：exe/引擎 DLL/资源清单/无 Python）、
+  Linux GTK4（构建 + FFI smoke）、Linux FFI amd64/arm64、Docker
+  amd64/arm64 构建 + 运行时冒烟、原生资源契约。
+- 区域单模型契约三端对齐 macOS：Linux GTK/WinUI/Web 区域页改为 GFS/EC
+  单选（引擎拒绝区域 `model_source:"both"`），回放恢复同步对齐。
+- MN1 移动里程碑：`engine-mobile` 承载桌面同源 `serve_runtime`；iOS
+  模拟器全链路 GFS+EC 真实解码、预置缓存零网络、与桌面帧级 parity；
+  Android `libengine_mobile.so` 仅依赖系统库。MN2/MN3（Android 全链路、
+  真机与 definitions 打包）进行中，见 `docs/MOBILE_NATIVE_PLAN.md`。
+
+**正式发布 / Release**
+
+- 发布流程与证据：`docs/RELEASE_MACOS.zh-CN.md`；模拟预演记录
+  `docs/RELEASE_V1_SIMULATION_2026-11-15.zh-CN.md`。
+- 载荷：`FireSky-1.0.0-macos-arm64.dmg`（本地构建，全门禁通过）与
+  `FireSky-1.0.0-macos-x86_64.dmg`（CI Intel runner 构建 + 冒烟），同源码
+  f341ef8；`SHA256SUMS.txt` 随 Release 发布。
+- 门禁（2026-11-20）：Rust 491 passed / 0 failed / 3 ignored + 集成
+  4+2+4；pytest 契约 38 passed / 1 skipped；clean-machine/冷启动/bundle
+  冒烟 4/4；离线 flow ×3 + UI 回放 ×3（deny network*）全过；双 DMG
+  hdiutil verify + 挂载校验（版本/架构/codesign/资源清单）。
+- 已知限制：ad-hoc 签名（无 Developer ID/公证，首次打开需手动放行，见
+  发布文档）；Windows/Linux 真机交互式 UI 验收与正式安装包未完成；
+  macOS Intel 真机验收未完成（CI Intel 构建+冒烟已过）；空闲受控性能
+  窗口未获得。
 
 **清理 / Cleanup**
 
