@@ -9,6 +9,9 @@ final class FireSkyMobileUITests: XCTestCase {
 
     func testPointForecastChain() throws {
         let app = XCUIApplication()
+        // v1.1.0 起 Store 默认 ffi 真引擎；UI 冒烟仍走 Mock 链路（确定性数据、
+        // 无网络依赖）。经 UserDefaults argument domain 显式固定 mock 通道。
+        app.launchArguments += ["-engineTransport", "mock"]
         app.launch()
 
         // 首启 CAMS 提醒（Mock hello 返回未配置）→ 稍后

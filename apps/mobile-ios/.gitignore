@@ -2,3 +2,5 @@
 *.xcuserstate
 xcuserdata/
 .DS_Store
+# ecCodes definitions/samples bundle staging（scripts/build-engine.sh 生成，~131MB，不入库）
+Resources/eccodes/

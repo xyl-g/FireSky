@@ -11,6 +11,7 @@
 		0FEF9C69BB160C56A5839D53 /* MapZoom.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4058C36876785CBDCC9A297 /* MapZoom.swift */; };
 		146251A5F7BE8C96EFC89EEE /* WorkbenchKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1CFF6D650BEE78B45DDC04D /* WorkbenchKit.swift */; };
 		1F6B4BDE8156F49B412B9F64 /* EngineTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6847846E81761D5EF31E3F31 /* EngineTransport.swift */; };
+		240366ED59A57F617221011C /* eccodes in Resources */ = {isa = PBXBuildFile; fileRef = 9F9A1BF6DD2C85BF7AC46FA4 /* eccodes */; };
 		2FE8DB5D775590EF59211867 /* ObservationDate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FDCF5F598D054D3E7C573BA /* ObservationDate.swift */; };
 		50489C543EB8B96832B08868 /* ForecastComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25AB1BD1383B8739239E4CCF /* ForecastComparison.swift */; };
 		53632BD4B02C1CE1EDB3C84A /* MapViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 060010B0B36632D961BDF447 /* MapViews.swift */; };
@@ -69,6 +70,7 @@
 		8F0ED6EC0BDA8AE6F7AFBEA6 /* ObservationDateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationDateTests.swift; sourceTree = "<group>"; };
 		8FDCF5F598D054D3E7C573BA /* ObservationDate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationDate.swift; sourceTree = "<group>"; };
 		9A17A2EE3CDBF3501E672DA1 /* PointWorkbenchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PointWorkbenchView.swift; sourceTree = "<group>"; };
+		9F9A1BF6DD2C85BF7AC46FA4 /* eccodes */ = {isa = PBXFileReference; lastKnownFileType = folder; name = eccodes; path = Resources/eccodes; sourceTree = SOURCE_ROOT; };
 		A1CFF6D650BEE78B45DDC04D /* WorkbenchKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchKit.swift; sourceTree = "<group>"; };
 		B39B751FC7468FDE51B0FB94 /* EngineClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineClient.swift; sourceTree = "<group>"; };
 		B4058C36876785CBDCC9A297 /* MapZoom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapZoom.swift; sourceTree = "<group>"; };
@@ -172,11 +174,20 @@
 			path = Views;
 			sourceTree = "<group>";
 		};
+		7758D6E8B7BA602512F39D37 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				9F9A1BF6DD2C85BF7AC46FA4 /* eccodes */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
 		8EDCFB81808DEA98CDB719B4 = {
 			isa = PBXGroup;
 			children = (
 				654C8812EEF35B7133EB72B7 /* FireSkyMobile */,
 				640FC1B3E2428916D76DA2BE /* Native */,
+				7758D6E8B7BA602512F39D37 /* Resources */,
 				6B06B1E8FF0F0CB74F94E95D /* Tests */,
 				53BB6A9F6AA9ADFC02162497 /* UITests */,
 				57A2AAD799B31045A8D74D9C /* Products */,
@@ -238,6 +249,7 @@
 			buildConfigurationList = F8C704F7E06479ABAA1EC378 /* Build configuration list for PBXNativeTarget "FireSkyMobile" */;
 			buildPhases = (
 				E88DC2A698FDF4825DCCD67B /* Sources */,
+				543531D1D16897D0920287E5 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -291,6 +303,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		543531D1D16897D0920287E5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				240366ED59A57F617221011C /* eccodes in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		21C582B9D9252B20BA672CC6 /* Sources */ = {
@@ -422,7 +445,7 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -435,7 +458,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 1.1.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -556,7 +579,7 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -575,7 +598,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 0.1.0;
+				MARKETING_VERSION = 1.1.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

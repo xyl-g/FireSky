@@ -7,8 +7,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "1.1.0"
+    CURRENT_PROJECT_VERSION: "2"
     CODE_SIGN_STYLE: Automatic
     CODE_SIGNING_ALLOWED: "NO"
 targets:
@@ -23,6 +23,12 @@ targets:
       # scripts/build-engine.sh 构建两个切片（device + simulator），再 xcodegen + 构建。
       - path: Native
         buildPhase: none
+      # ecCodes definitions/samples bundle（scripts/build-engine.sh staging 生成，
+      # 已 gitignore）。type: folder = 蓝色文件夹引用，整目录按原样拷入 Bundle 根
+      # → Bundle.main.resourceURL/eccodes/definitions（FSMobileTransport 读取）。
+      - path: Resources/eccodes
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: cn.firesky.mobile

@@ -5,6 +5,16 @@ enum ObservationDate {
         format(date, timezone: timezone, pattern: "yyyy-MM-dd")
     }
 
+    /// "yyyy-MM-dd" → Date（result_restore 恢复 target_date 用；与 macOS 同语义）。
+    static func date(_ value: String, timezone: String) -> Date? {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: timezone) ?? .current
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.date(from: value)
+    }
+
     static func timeLabel(_ date: Date, timezone: String) -> String {
         format(date, timezone: timezone, pattern: "HH:mm")
     }

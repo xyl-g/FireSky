@@ -25,10 +25,16 @@ final class FSMobileTransport: EngineTransport {
         // 单实例契约：先回收既有实例（fsm_stop 幂等，未启动亦返回 0）。
         _ = fsm_stop()
         // definitions 注入（MM0 坑 10/12/13）：bundle resource 路径交引擎侧，
-        // 由其先注入单数 ECCODES_DEFINITION_PATH 再初始化；bundle 尚未打包该
-        // 资源（MN1 交付）时传 NULL，契约语义「NULL 则不注入」。
+        // 由其先注入单数 ECCODES_DEFINITION_PATH 再初始化（v1.1.0 起
+        // scripts/build-engine.sh 已把 brew definitions staging 进 Bundle）。
+        // bundle 缺失该资源时传 NULL，契约语义「NULL 则不注入」。
         // cache_root 传 NULL → 引擎默认（由 workspace 语义推导）。
         let definitions = Self.bundledDefinitionsPath()
+        // samples 契约不在 fsm_start 内（ffi 只注入 definitions）；ecCodes
+        // 模板克隆/编码需要 samples，这里同样 bundle 优先注入，真机离线可用。
+        if let samples = Self.bundledSamplesPath() {
+            setenv("ECCODES_SAMPLES_PATH", samples, 1)
+        }
         let user = Unmanaged.passUnretained(self).toOpaque()
         let result: Int32
         if let definitions {
@@ -49,8 +55,18 @@ final class FSMobileTransport: EngineTransport {
     }
 
     /// bundle 内 eccodes/definitions 资源目录；不存在或非目录返回 nil（不注入）。
-    private static func bundledDefinitionsPath() -> String? {
-        guard let url = Bundle.main.resourceURL?.appendingPathComponent("eccodes/definitions") else {
+    /// internal（非 private）：RealEngineChainTests 断言 bundle 优先路径（MM0 坑 12）。
+    static func bundledDefinitionsPath() -> String? {
+        bundledResourceDirectory("eccodes/definitions")
+    }
+
+    /// bundle 内 eccodes/samples 资源目录；不存在或非目录返回 nil。
+    static func bundledSamplesPath() -> String? {
+        bundledResourceDirectory("eccodes/samples")
+    }
+
+    private static func bundledResourceDirectory(_ relative: String) -> String? {
+        guard let url = Bundle.main.resourceURL?.appendingPathComponent(relative) else {
             return nil
         }
         var isDirectory: ObjCBool = false

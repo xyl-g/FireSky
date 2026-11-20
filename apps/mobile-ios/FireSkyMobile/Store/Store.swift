@@ -97,7 +97,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var favorites: [JSONObject] = []
     @Published var workspace: String
     @Published var appearance: String
-    /// 引擎通道：mock（内置模拟，默认）或 ffi（engine-mobile C 契约）。
+    /// 引擎通道：ffi（engine-mobile C 契约，v1.1.0 起默认）或 mock（内置模拟，
+    /// 设置页可切回，供无引擎库环境调试 UI）。
     @Published var engineTransport: String
     private var engineConnection: AnyCancellable?
     private let location = CLLocationManager()
@@ -115,8 +116,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     private var connecting = false
 
     private static func makeTransport() -> EngineTransport {
-        let choice = UserDefaults.standard.string(forKey: "engineTransport") ?? "mock"
-        return choice == "ffi" ? FSMobileTransport() : MockTransport()
+        let choice = UserDefaults.standard.string(forKey: "engineTransport") ?? "ffi"
+        return choice == "mock" ? MockTransport() : FSMobileTransport()
     }
 
     override init() {
@@ -128,7 +129,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         try? FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
         workspace = dataDirectory.path
         appearance = defaults.string(forKey: "appearance") ?? "system"
-        engineTransport = defaults.string(forKey: "engineTransport") ?? "mock"
+        engineTransport = defaults.string(forKey: "engineTransport") ?? "ffi"
         ecmwfSource = defaults.string(forKey: "ecmwfSource") ?? "ecmwf"
         super.init()
         engineConnection = engine.$connected.sink { [weak self] value in self?.online = value }
@@ -169,8 +170,76 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             status = "引擎已连接"
             error = ""
             UserDefaults.standard.set(workspace, forKey: "workspace")
+            // result_restore 链（参照 macOS Store.loadTaskHistory/restoreTaskResult）：
+            // hello 能力含 task_history/result_restore 时自动恢复最近一次可恢复的
+            // 单点 forecast。Mock 通道 hello 无 capabilities → 跳过，不影响 mock 链路。
+            let capabilities = Set(hello["capabilities"] as? [String] ?? [])
+            if capabilities.isSuperset(of: ["task_history", "result_restore"]) {
+                await restoreLatestForecastResult()
+            }
             if page == .data { await loadInventory() }
         } catch { self.error = error.localizedDescription; status = "引擎未连接" }
+    }
+
+    /// 冷启动/kill-restart 后恢复最近一次已完成的单点预测结果。
+    /// 协议与桌面逐帧一致：task_history(limit 20，created_at_utc 降序) →
+    /// 首个 done 且带 firesky-result-snapshot-v1 引用的 point forecast →
+    /// result_restore(task_id) → 应用 result 与 location/date/phenomenon 参数。
+    /// 守 busy/generation/session：不得覆盖进行中的会话或用户已产生的新结果。
+    private func restoreLatestForecastResult() async {
+        guard online, !busy, !showPreflight, session == nil, result == nil else { return }
+        let revision = generation
+        do {
+            let history = try await engine.call("task_history", ["limit": 20])
+            guard generation == revision, !busy, !showPreflight, session == nil, result == nil,
+                  history["schema"] as? String == "firesky-task-history-v1",
+                  let tasks = history["tasks"] as? [JSONObject] else { return }
+            guard let item = tasks.first(where: { task in
+                guard task["method"] as? String == "forecast",
+                      task["status"] as? String == "done",
+                      let taskID = task["task_id"] as? String, !taskID.isEmpty,
+                      let retry = task["retry_request"] as? JSONObject,
+                      retry["kind"] as? String == "point",
+                      retry["payload"] is JSONObject,
+                      let reference = task["result_ref"] as? JSONObject,
+                      let snapshot = reference["snapshot"] as? JSONObject,
+                      snapshot["contract"] as? String == "firesky-result-snapshot-v1",
+                      snapshot["sha256"] is String else { return false }
+                return true
+            }), let taskID = item["task_id"] as? String else { return }
+            let response = try await engine.call("result_restore", ["task_id": taskID])
+            guard generation == revision, !busy, !showPreflight, session == nil, result == nil,
+                  response["model_results"] is JSONObject else { return }
+            // 先落参数再落 result：lat/lon/date/phenomenon 的 didSet 会清 result。
+            if let payload = (item["retry_request"] as? JSONObject)?["payload"] as? JSONObject {
+                applyRestoredPayload(payload)
+            }
+            result = response
+            // 与 confirm() 一致：gfs 缺失回退 ec。
+            selectedModel = (response["model_results"] as? JSONObject)?["gfs"] == nil ? "ec" : "gfs"
+            status = "已恢复历史结果"
+            error = ""
+        } catch {
+            // 恢复失败不打断连接（引擎仍在线，可正常发起新预测）。
+            guard generation == revision, !Task.isCancelled else { return }
+            self.error = "历史结果恢复失败：\(error.localizedDescription)"
+        }
+    }
+
+    /// 恢复 retry_request.payload 中的观测参数（macOS applyRetryPayload 的单点子集）。
+    private func applyRestoredPayload(_ payload: JSONObject) {
+        if let value = payload["name"] as? String { name = value }
+        if let value = (payload["lat"] as? NSNumber)?.doubleValue { lat = value }
+        if let value = (payload["lon"] as? NSNumber)?.doubleValue { lon = value }
+        if let value = (payload["elevation_m"] as? NSNumber)?.doubleValue { elevation = value }
+        if let value = payload["timezone_name"] as? String { timezone = value }
+        if let value = payload["target_date"] as? String,
+           let day = ObservationDate.date(value, timezone: timezone) {
+            date = day
+        }
+        if let value = payload["phenomenon"] as? String { phenomenon = value }
+        if let value = payload["ecmwf_source"] as? String { ecmwfSource = value }
+        metadataReady = true
     }
 
     func search() {
