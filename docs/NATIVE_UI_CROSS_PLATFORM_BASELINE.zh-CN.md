@@ -185,6 +185,19 @@ CI 验证 ≠ 真机发布验收。仍开放：Windows/Linux 真机交互式 UI�
 安装/升级/卸载（§6 门禁）；macOS Intel 真机（CI Intel 构建+冒烟已过）。
 Developer ID 签名/公证为用户裁定不做（ad-hoc 发布）。
 
-交付状态（2026-11-20）：macOS 正式发布 v1.0.0（ad-hoc，双架构 DMG，见
-`docs/RELEASE_MACOS.zh-CN.md`）；Windows/Linux 源码与 FFI 合同对齐且 CI
-构建+产物验证+冒烟通过，目标机发布验收待完成。
+交付状态（2026-11-20，v1.1.0）：macOS 正式发布 v1.1.0（ad-hoc，双架构 DMG，
+沿用 v1.0.0 门禁；v1.0.0 为首个正式版，见 `docs/RELEASE_MACOS.zh-CN.md`）；
+Android 自签签名 APK、iOS 无签名 device IPA、Docker 镜像（GHCR
+`ghcr.io/xyl-g/firesky:1.1.0`，tarball 兜底）随 v1.1.0 首次发布，移动端验收
+（模拟器全链 + 桌面帧级 parity + 会话恢复）见 `docs/MOBILE_NATIVE_PLAN.md`。
+
+平台策略注记（2026-11-20 用户裁定）：
+
+- **Windows**：v1.1.0 不含 Windows 发布资产；源码与 FFI 合同、CI 构建+产物
+  验证保持现状，正式安装包后续在 Windows 机器上构建发布。§3 所列真机启动、
+  资源缺失负例与真实 CAMS 验收转为该后续工作的前置项。
+- **Linux**：自 2026-11-20 起**不再作为发布目标**；GTK4/C++ 客户端与 FFI
+  代码、CI 验证 job 全部保留（本文 §4 降级为源码构建参考），发行包/安装器
+  与 Linux 真机发布验收不再推进；服务器部署推荐 Docker。
+- §6 门禁对 Windows/Linux 不再阻塞发布；macOS 已发布项沿用
+  `docs/RELEASE_MACOS.zh-CN.md` 的实际门禁记录，Intel 真机验收仍开放。

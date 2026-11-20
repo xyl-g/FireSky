@@ -1,33 +1,45 @@
 # firesky
 
-独立自足的火烧云（朝晚霞）物理预测栈：**Rust 原生预测引擎与 HTTP 服务 + SvelteKit 前端 + 原生桌面**。
+火烧云（朝晚霞）物理预测栈：**Rust 原生预测引擎与 HTTP 服务 + SvelteKit 前端 + 原生桌面**。
 物理与算法基于 [SunsetBot 教程](https://www.sunsetbot.top/halo/) 的方法论独立实现。
 
-An independent burning-sunset prediction stack: **native Rust prediction engine and HTTP service + SvelteKit frontend + native desktop clients**.
+A burning-sunset prediction stack: **native Rust prediction engine and HTTP service + SvelteKit frontend + native desktop clients**.
 
 > English documentation: [README.en.md](README.en.md)
 
-> 当前主线：以 [macOS 产品与 UI 基准](docs/MACOS_UI_BASELINE.zh-CN.md)完善原生端，
-> 其他 UI 最终向其对齐；状态与顺序见 [2026-11-13 接续计划](docs/archive/NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。
+> 当前版本 **v1.1.0**：macOS / Android / iOS / Docker 正式发布（见[下载安装](#下载安装releases)）。
+> UI 以 [macOS 产品与 UI 基准](docs/MACOS_UI_BASELINE.zh-CN.md)为参照，移动端蓝图与验收状态见
+> [移动端双原生计划](docs/MOBILE_NATIVE_PLAN.md)。
 
 ---
 
 ## 目录 / Contents
 
-1. [功能](#功能)
-2. [架构与物理原理](#架构与物理原理)
-3. [系统要求与安装](#系统要求与安装)
-4. [数据源与注册要求（重要）](#数据源与注册要求)
-5. [配置说明](#配置说明)
-6. [使用：后端 / 前端 / CLI](#使用)
-7. [API 端点清单](#api-端点清单)
-8. [测试与不变量回归](#测试与不变量回归)
-9. [目录结构](#目录结构)
-10. [常见问题排查](#常见问题排查)
-11. [原理文档（深入）](docs/PRINCIPLES.md)
-12. [部署文档](docs/DEPLOY.md)
-13. [配置参考](docs/CONFIGURATION.md)
-14. [致谢](#致谢)
+- [firesky](#firesky)
+  - [目录 / Contents](#目录--contents)
+  - [功能](#功能)
+  - [下载安装（Releases）](#下载安装releases)
+    - [macOS](#macos)
+    - [Android](#android)
+    - [iOS](#ios)
+    - [Docker 自托管](#docker-自托管)
+    - [平台策略](#平台策略)
+  - [架构与物理原理](#架构与物理原理)
+  - [系统要求与安装](#系统要求与安装)
+  - [数据源与注册要求](#数据源与注册要求)
+  - [配置说明](#配置说明)
+  - [使用](#使用)
+    - [后端 + 前端（推荐）](#后端--前端推荐)
+    - [CLI（引擎直用，不起服务）](#cli引擎直用不起服务)
+  - [API 端点清单](#api-端点清单)
+  - [测试与不变量回归](#测试与不变量回归)
+  - [桌面应用（本地单机）](#桌面应用本地单机)
+    - [地图底图与天地图 Key](#地图底图与天地图-key)
+  - [移动应用（v1 范围）](#移动应用v1-范围)
+  - [目录结构](#目录结构)
+  - [常见问题排查](#常见问题排查)
+  - [来源](#来源)
+  - [致谢](#致谢)
 
 ## 功能
 
@@ -36,8 +48,100 @@ An independent burning-sunset prediction stack: **native Rust prediction engine 
 - **实况 nowcast**：向日葵 9 号卫星（HSD 分段）云柱反演 + 天气雷达对流修正
 - **后端服务**：Rust/Axum 异步 job + SSE + gzip + 严格输入身份缓存
 - **最小前端**：`/forecast`（点/区域预测）、`/now`（实况）、`/outlook`（形势图）、`/admin`（管理控制台）
-- **原生桌面**：正式路线是 macOS SwiftUI/AppKit + Rust FFI，Windows WinUI 3 和 Linux 原生 UI
-  按同一 ABI 后续对齐；[构建与迁移状态](apps/README.md)。
+- **原生桌面**：macOS SwiftUI/AppKit + Rust FFI 为正式桌面主线；Windows WinUI 3
+  源码与 CI 验证已对齐（正式包后续在 Windows 机器构建），Linux 原生 UI 代码保留
+  （不再作为发布目标，见[平台策略](#平台策略)）；[构建与迁移状态](apps/README.md)。
+- **移动应用**：iOS SwiftUI + Android Kotlin/Compose 双原生，预测引擎内嵌进程内
+  （`engine-mobile`，与桌面同源）；v1 单点预测，见[移动应用（v1 范围）](#移动应用v1-范围)。
+
+## 下载安装（Releases）
+
+正式版统一从 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) 下载
+（当前 **v1.1.0**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
+与各资产放在同一目录执行）：
+
+```bash
+shasum -a 256 -c SHA256SUMS.txt
+```
+
+v1.1.0 资产清单：
+
+| 资产 | 平台 | 说明 |
+|---|---|---|
+| `FireSky-1.1.0-macos-arm64.dmg` | macOS 14+（Apple Silicon） | 原生桌面 `.app`，ad-hoc 签名 |
+| `FireSky-1.1.0-macos-x86_64.dmg` | macOS 14+（Intel） | CI Intel 构建 + 冒烟；Apple Silicon 可经 Rosetta 2 运行 |
+| `FireSky-1.1.0-android-arm64.apk` | Android 8.0+（arm64-v8a） | 自签签名 release APK |
+| `FireSky-1.1.0-ios-unsigned.ipa` | iOS 16+（真机） | **无签名** IPA，需自签后侧载（见下） |
+| `SHA256SUMS.txt` | — | 全部资产 SHA256 清单 |
+| `FireSky-1.1.0-docker-arm64.tar.gz` | Docker（linux/arm64） | 官方镜像 tarball（`docker load` 导入；本版暂未发布 GHCR） |
+
+### macOS
+
+DMG 拖入「应用程序」即可。发布为 **ad-hoc 签名（无 Developer ID / 公证）**，
+Gatekeeper 默认拦截首次打开：
+
+- **macOS 14**：右键 `FireSky.app` →「打开」；或系统设置 → 隐私与安全性 →「仍要打开」。
+- **macOS 15 及以上**：右键打开已不再绕过 Gatekeeper。首次双击被拦截后，到
+  系统设置 → 隐私与安全性 →「仍要打开」；或终端执行：
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/FireSky.app
+  ```
+
+仅从官方 Release 页下载并先核对 SHA256。完整发布流程与门禁见
+[macOS 发布文档](docs/RELEASE_MACOS.zh-CN.md)。
+
+### Android
+
+自签签名 release APK（不上架应用商店；仅 arm64-v8a，minSdk 26 / Android 8.0+）：
+
+1. 下载 APK 后点击安装，按提示允许浏览器/文件管理器「安装未知应用」。
+2. **覆盖更新必须使用同一签名 key 的官方 APK**：直接安装新版本即可保留应用
+   数据；请勿混装其他来源的重新签名包（签名不一致会被系统拒绝）。
+3. 命令行安装/更新：`adb install -r FireSky-1.1.0-android-arm64.apk`。
+
+### iOS
+
+发布为**无签名 device IPA**，不能直接安装。用免费 Apple ID 通过
+[AltStore](https://altstore.io) 或 [Sideloadly](https://sideloadly.io) 重新签名
+后侧载到真机：
+
+- 免费账号签名 **7 天有效**，到期需重签（AltStore 在同一 Wi-Fi 下可自动刷新）；
+  免费账号同时最多 3 个自签 App。
+- 首次启动前：设置 → 通用 → VPN 与设备管理 → 信任对应开发者证书。
+- 质量验收以模拟器 `xcodebuild test` 全链为准，IPA 只是分发载体。
+
+### Docker 自托管
+
+官方镜像以 Release 资产 tarball 分发（**linux/arm64**，本地构建 + 冒烟通过；
+amd64 请从源码构建；本版暂未发布 GHCR）。先导入镜像再运行，容器内服务监听 8765：
+
+```bash
+docker load -i FireSky-1.1.0-docker-arm64.tar.gz   # 得到本地镜像 firesky:1.1.0-local
+docker run -d --name firesky \
+  -p 127.0.0.1:8765:8765 \
+  -v firesky-cache:/data/cache \
+  -v firesky-cams:/data/cams \
+  -v firesky-reports:/data/reports \
+  -v firesky-logs:/data/logs \
+  -v firesky-state:/data/state \
+  firesky:1.1.0-local
+# 首次启动生成访问令牌（用户名 firesky，密码为下面命令的输出，勿公开粘贴）：
+docker exec firesky cat /data/state/http-token
+# 浏览器打开 http://127.0.0.1:8765
+```
+
+- 源码构建：`docker build -f docker/Dockerfile -t firesky:1.1.0 .`，或
+  `docker compose up -d --build`（compose 默认同样仅绑定 `127.0.0.1:8765`）。
+- 持久卷、鉴权与局域网发布注意见[部署文档](docs/DEPLOY.md)。
+
+### 平台策略
+
+- **macOS / Android / iOS / Docker**：v1.1.0 正式发布目标。
+- **Windows**：源码与 CI 构建/产物验证已对齐；正式安装包后续在 Windows 机器上
+  构建发布，v1.1.0 不含 Windows 资产。
+- **Linux**：自 2026-11-20 起**不再作为发布目标**（用户裁定）；GTK4 客户端与
+  FFI 代码保留，可自行源码构建；服务器部署推荐 Docker。
 
 ## 架构与物理原理
 
@@ -219,16 +323,35 @@ cd apps/shared-web && npm run check && npm run build # 0 errors
 OpenFreeMap 底图继续选点。境内公开使用须用天地图（《地图管理条例》要求有审图号的
 底图），OpenFreeMap 仅限中国境外。
 
+## 移动应用（v1 范围）
+
+双原生：iOS SwiftUI（`apps/mobile-ios/`）+ Android Kotlin/Compose
+（`apps/mobile-android/`）。预测引擎内嵌 App 进程内（`engine-mobile/`，与桌面
+`desktop` 子命令同源，JSON-lines 帧协议逐帧一致），ecCodes definitions 随包
+打包（约 131 MB，裁剪为后续优化），离线预测依赖预置/已下载缓存。
+
+- **v1 做**：单点预测（GFS/EC 双模型）、数据会话 check→prepare→confirm（进度/
+  取消）、观测点管理、设置（CAMS Key 写沙箱）、上次结果离线查看与**杀 App 重启
+  自动恢复**（`result_restore`，与 macOS 语义一致）。
+- **v1 不做**：区域预测、实况 nowcast、HTML 报告、后台预取。
+- **地图**：iOS 已用 MapKit 原生实现；Android 地图延后，v1 以坐标/收藏输入选点。
+- **验收**：Android 模拟器 instrumented 全链 + 与桌面帧级 parity + kill-restart
+  恢复；iOS 模拟器 `xcodebuild test` 全绿（bundle definitions 真实生效，不靠
+  宿主环境注入）。接线与验收记录见[移动端双原生计划](docs/MOBILE_NATIVE_PLAN.md)。
+
 ## 目录结构
 
 ```
 firesky/
 ├── engine/                # Rust 引擎：HTTP 服务 / CLI / 桌面 FFI / 数据同步
+├── engine-mobile/         # 移动端进程内引擎（C ABI fsmobile.h + JNI shim）
 ├── native/                # Rust 光线追踪评分器（cdylib）
 ├── apps/
 │   ├── macos/             # SwiftUI/AppKit + Rust FFI（正式桌面主线）
-│   ├── windows/           # WinUI 3 + Rust FFI
-│   ├── linux/             # GTK4/C++ + Rust FFI
+│   ├── mobile-android/    # Kotlin/Compose + JNI（v1.1.0 起正式发布）
+│   ├── mobile-ios/        # SwiftUI + 静态链接引擎（v1.1.0 起正式发布）
+│   ├── windows/           # WinUI 3 + Rust FFI（正式包后续在 Windows 机器构建）
+│   ├── linux/             # GTK4/C++ + Rust FFI（代码保留，不再作为发布目标）
 │   └── shared-web/        # 共享 Web SPA（Rust HTTP 与 Docker 同源托管）
 ├── frontend/              # 旧 SvelteKit 前端（待合并，契约测试保留）
 ├── resources/app-data/    # 内置城市目录与时区数据集（sha256 清单审计）

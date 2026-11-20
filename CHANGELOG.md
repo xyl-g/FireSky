@@ -8,6 +8,55 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v1.1.0 (2026-11-20)
+
+移动端与 Docker 正式版：Android/iOS 双原生客户端与 Docker 镜像首次发布。
+First mobile & Docker release: native Android/iOS clients and the Docker image.
+
+**新模块 / New modules**
+
+- **Android**（Kotlin/Compose + JNI）：`engine-mobile` 真引擎接线（手工 C ABI
+  `fsmobile.h` + JNI shim，D2 裁定路线）；ecCodes definitions 完整树随 assets
+  打包、首启解包到 filesDir；默认传输 mock → ffi（设置页保留 mock 切换）；
+  自签签名 release APK（arm64-v8a，minSdk 26）。本地模拟器 instrumented
+  全链 + 与桌面帧级 parity + kill-restart 会话恢复验收通过（测试计数见发布
+  门禁日志，证据归档 output/）。
+- **iOS**（SwiftUI）：definitions 进 Bundle（`Resources/eccodes/definitions`
+  文件夹引用，测试 bundle 优先，消除宿主 env 注入假阳性）；默认传输 ffi；
+  模拟器 `xcodebuild test` 全绿（含新增 kill-restart 恢复测试，计数见发布
+  门禁日志）；无签名 device IPA 供 AltStore/Sideloadly 免费 Apple ID 自签
+  侧载（7 天有效）。地图为 MapKit 原生（D1 裁定）。
+- **Docker**：三阶段镜像以 Release 资产 tarball 分发
+  （`FireSky-1.1.0-docker-arm64.tar.gz`，linux/arm64 本地构建 + 冒烟通过；
+  amd64 可源码构建；本版暂未发布 GHCR）。
+
+**引擎 / Engine**
+
+- 修复全部编译警告：去除多余 `mut`、仅测试引用函数加 `#[cfg(test)]`、serde
+  `deny_unknown_fields` 契约字段标注 `#[allow(dead_code)]`；零行为变化。
+  `cargo test --release` 491 passed / 0 failed / 3 ignored。
+
+**会话恢复 / Session restore**
+
+- 移动双端对齐 macOS `result_restore` 语义：hello → task_history → 最近可
+  恢复 forecast → 恢复 result 与 location/date/phenomenon 参数（gfs 缺失回退
+  ec），守 busy/generation，不覆盖进行中会话；杀 App 重启自动恢复上次结果。
+
+**发布 / Release**
+
+- 版本收敛 1.1.0（engine / engine-mobile / macOS / Android / iOS 一致；
+  SemVer minor：新增 Android/iOS/Docker 模块）。
+- 载荷：`FireSky-1.1.0-macos-arm64.dmg`、`FireSky-1.1.0-macos-x86_64.dmg`
+  （沿用 v1.0.0 门禁）、`FireSky-1.1.0-android-arm64.apk`、
+  `FireSky-1.1.0-ios-unsigned.ipa`、`SHA256SUMS.txt`、Docker tarball（兜底）。
+  安装指引（Gatekeeper xattr / Android 未知来源+同 key 覆盖 / iOS 自签 7 天 /
+  docker run）见 README「下载安装 / Releases」。
+- 平台策略（2026-11-20 用户裁定）：Windows 正式包后续在 Windows 机器构建
+  （源码与 CI 验证保留）；Linux 不再作为发布目标（GTK4/FFI 代码保留）。
+- 已知限制：移动端 v1 仅单点预测（无区域/实况）；Android 地图延后（坐标/
+  收藏输入）；iOS 真机蜂窝下载验收待硬件；definitions 约 131 MB 待裁剪；
+  macOS ad-hoc 签名（无 Developer ID/公证，首次打开需手动放行）。
+
 ## v1.0.0 (2026-11-20)
 
 首个原生正式版：macOS SwiftUI/AppKit + Rust FFI 单引擎。

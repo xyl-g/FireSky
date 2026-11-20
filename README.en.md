@@ -1,30 +1,47 @@
 # firesky
 
-An independent, self-contained burning-sunset (sunset/sunrise glow) prediction
+burning-sunset (sunset/sunrise glow) prediction
 stack: **native Rust prediction engine and HTTP service + SvelteKit frontend +
 native desktop clients**. The physics follows the methodology of the
 [SunsetBot tutorial](https://www.sunsetbot.top/halo/).
 
 > 中文文档：[README.md](README.md)
 
+> Current release **v1.1.0**: macOS / Android / iOS / Docker are officially
+> released (see [Download & install](#download--install-releases)). The UI
+> reference is the [macOS product & UI baseline](docs/MACOS_UI_BASELINE.zh-CN.md);
+> mobile blueprint and acceptance status:
+> [mobile native plan](docs/MOBILE_NATIVE_PLAN.md).
+
 ---
 
 ## Contents
 
-1. [Features](#features)
-2. [Architecture & physics](#architecture--physics)
-3. [Requirements & installation](#requirements--installation)
-4. [Data sources & registration (important)](#data-sources--registration)
-5. [Configuration](#configuration)
-6. [Usage: backend / frontend / CLI](#usage)
-7. [API endpoints](#api-endpoints)
-8. [Testing & invariant regression](#testing--invariant-regression)
-9. [Repository layout](#repository-layout)
-10. [Troubleshooting](#troubleshooting)
-11. [Principles (deep dive)](docs/PRINCIPLES.en.md)
-12. [Deployment guide](docs/DEPLOY.en.md)
-13. [Configuration reference](docs/CONFIGURATION.en.md)
-14. [Acknowledgments](#acknowledgments)
+- [firesky](#firesky)
+  - [Contents](#contents)
+  - [Features](#features)
+  - [Download \& install (Releases)](#download--install-releases)
+    - [macOS](#macos)
+    - [Android](#android)
+    - [iOS](#ios)
+    - [Docker (self-hosting)](#docker-self-hosting)
+    - [Platform strategy](#platform-strategy)
+  - [Architecture \& physics](#architecture--physics)
+  - [Requirements \& installation](#requirements--installation)
+  - [Data sources \& registration](#data-sources--registration)
+  - [Configuration](#configuration)
+  - [Usage](#usage)
+    - [Backend + frontend (recommended)](#backend--frontend-recommended)
+    - [CLI (engine only, no server)](#cli-engine-only-no-server)
+  - [API endpoints](#api-endpoints)
+  - [Testing \& invariant regression](#testing--invariant-regression)
+  - [Desktop app (local, single-machine)](#desktop-app-local-single-machine)
+    - [Map basemaps and the Tianditu key](#map-basemaps-and-the-tianditu-key)
+  - [Mobile apps (v1 scope)](#mobile-apps-v1-scope)
+  - [Repository layout](#repository-layout)
+  - [Troubleshooting](#troubleshooting)
+  - [Origin](#origin)
+  - [Acknowledgments](#acknowledgments)
 
 ## Features
 
@@ -36,7 +53,121 @@ native desktop clients**. The physics follows the methodology of the
   radar convective correction.
 - **Backend service**: Rust/Axum jobs + SSE + gzip + checked input caches.
 - **Minimal frontend**: `/forecast`, `/now`, `/outlook`, `/admin`.
-- **Native desktop**: macOS SwiftUI/AppKit and Windows WinUI 3, directly launching Rust. See [build instructions and migration status](apps/README.md). The old PySide6 app was retired (2026-11-13); user data (~/.firesky-desktop favorites and current spot) imports automatically into the native app.
+- **Native desktop**: macOS SwiftUI/AppKit + Rust FFI is the primary desktop
+  line; Windows WinUI 3 sources and CI build/artifact verification are aligned
+  (the official installer will be built on a Windows machine later), and the
+  Linux native UI code is kept but no longer a release target (see
+  [Platform strategy](#platform-strategy)). See
+  [build instructions and migration status](apps/README.md). The old PySide6 app was retired (2026-11-13); user data (~/.firesky-desktop favorites and current spot) imports automatically into the native app.
+- **Mobile apps**: dual-native iOS SwiftUI + Android Kotlin/Compose with the
+  prediction engine embedded in-process (`engine-mobile`, same source as the
+  desktop runtime); v1 covers point forecasts — see
+  [Mobile apps (v1 scope)](#mobile-apps-v1-scope).
+
+## Download & install (Releases)
+
+Official builds are published on
+[GitHub Releases](https://github.com/xyl-g/FireSky/releases) (current:
+**v1.1.0**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
+file names; run it in the directory holding the assets):
+
+```bash
+shasum -a 256 -c SHA256SUMS.txt
+```
+
+v1.1.0 assets:
+
+| Asset | Platform | Notes |
+|---|---|---|
+| `FireSky-1.1.0-macos-arm64.dmg` | macOS 14+ (Apple Silicon) | native desktop `.app`, ad-hoc signed |
+| `FireSky-1.1.0-macos-x86_64.dmg` | macOS 14+ (Intel) | CI Intel build + smoke; runs via Rosetta 2 on Apple Silicon |
+| `FireSky-1.1.0-android-arm64.apk` | Android 8.0+ (arm64-v8a) | self-signed release APK |
+| `FireSky-1.1.0-ios-unsigned.ipa` | iOS 16+ (device) | **unsigned** IPA; re-sign before sideloading (below) |
+| `SHA256SUMS.txt` | — | SHA256 manifest for all assets |
+| `FireSky-1.1.0-docker-arm64.tar.gz` | Docker (linux/arm64) | official image tarball (`docker load`; GHCR not published for this release) |
+
+### macOS
+
+Drag the app from the DMG into Applications. Releases are **ad-hoc signed
+(no Developer ID / notarization)**, so Gatekeeper blocks the first launch:
+
+- **macOS 14**: right-click `FireSky.app` → Open; or System Settings →
+  Privacy & Security → Open Anyway.
+- **macOS 15 and later**: right-click → Open no longer bypasses Gatekeeper.
+  After the first blocked launch, use System Settings → Privacy & Security →
+  Open Anyway, or run:
+
+  ```bash
+  xattr -dr com.apple.quarantine /Applications/FireSky.app
+  ```
+
+Download only from the official Releases page and check SHA256 first. Full
+release runbook and gates: [macOS release doc](docs/RELEASE_MACOS.zh-CN.md).
+
+### Android
+
+Self-signed release APK (not distributed via app stores; arm64-v8a only,
+minSdk 26 / Android 8.0+):
+
+1. Open the downloaded APK and allow "install unknown apps" for your
+   browser/file manager when prompted.
+2. **Updates must come from the official APK signed with the same key**:
+   install the new version over the old one to keep app data; do not mix in
+   re-signed builds from other sources (signature mismatch is rejected).
+3. Command line: `adb install -r FireSky-1.1.0-android-arm64.apk`.
+
+### iOS
+
+The release is an **unsigned device IPA** and cannot be installed directly.
+Re-sign it with a free Apple ID via [AltStore](https://altstore.io) or
+[Sideloadly](https://sideloadly.io) and sideload onto a device:
+
+- Free-account signatures are **valid for 7 days** and must be refreshed
+  (AltStore auto-refreshes on the same Wi-Fi); free accounts allow at most
+  3 sideloaded apps at a time.
+- Before first launch: Settings → General → VPN & Device Management → trust
+  the developer certificate.
+- Quality acceptance is the simulator `xcodebuild test` chain; the IPA is
+  only the distribution vehicle.
+
+### Docker (self-hosting)
+
+The official image ships as a Release-asset tarball (**linux/arm64**, built
+locally and smoke-tested; build from source for amd64; GHCR is not published
+for this release). Load the image first, then run — the service listens on
+8765 inside the container:
+
+```bash
+docker load -i FireSky-1.1.0-docker-arm64.tar.gz   # yields firesky:1.1.0-local
+docker run -d --name firesky \
+  -p 127.0.0.1:8765:8765 \
+  -v firesky-cache:/data/cache \
+  -v firesky-cams:/data/cams \
+  -v firesky-reports:/data/reports \
+  -v firesky-logs:/data/logs \
+  -v firesky-state:/data/state \
+  firesky:1.1.0-local
+# First start generates the access token (user: firesky; password is the
+# output below — do not paste it into logs or public discussions):
+docker exec firesky cat /data/state/http-token
+# open http://127.0.0.1:8765
+```
+
+- Build from source: `docker build -f docker/Dockerfile -t firesky:1.1.0 .`,
+  or `docker compose up -d --build` (compose also binds `127.0.0.1:8765` only
+  by default).
+- Persistent volumes, authentication and LAN-exposure notes:
+  [deployment guide](docs/DEPLOY.en.md).
+
+### Platform strategy
+
+- **macOS / Android / iOS / Docker**: official release targets of v1.1.0.
+- **Windows**: sources and CI build/artifact verification are aligned; the
+  official installer will be built and released on a Windows machine later.
+  v1.1.0 ships no Windows asset.
+- **Linux**: **no longer a release target since 2026-11-20** (user decision);
+  the GTK4 client and FFI code are kept and can be built from source. For
+  servers, use Docker.
 
 ## Architecture & physics
 
@@ -163,17 +294,18 @@ engine/target/release/firesky-engine forecast --input request.json --workspace "
 ## API endpoints
 
 See the [native HTTP contract and outstanding routes](docs/archive/RUST_RUNTIME_CUTOVER.zh-CN.md#http-范围).
+Parameters, response fields and call examples: [forecast API doc](docs/FORECAST_API.md).
 
 | Endpoint | Method | Purpose |
 |---|---|---|
 | `/api/v1/firesky/health` | GET | health check |
 | `/api/v1/firesky/forecasts/national/contract` | GET | regional algorithm/cache-version contract |
 | `/api/v1/firesky/forecasts` | POST | start a point-forecast job (async) |
-| `/api/v1/firesky/forecasts/results/{job_id}` | GET | fetch job result (failures surface as 400/500) |
+| `/api/v1/firesky/forecasts/results/{job_id}` | GET | fetch job result (404 while unfinished; task failures are 500, unavailable GFS input is 503) |
 | `/api/v1/firesky/forecasts/national` | POST | start a regional forecast job |
 | `/api/v1/firesky/forecasts/nowcast` | POST | start a nowcast job (satellite + radar) |
 | `/api/v1/firesky/map-frames` | GET | map frames (token + time) |
-| `/api/v1/firesky/forecasts/national/summary` | POST | regional summary (strict field contract) |
+| `/api/v1/firesky/forecasts/national/summary` | GET | regional summary (strict field contract) |
 | `/api/v1/firesky/points/metadata`, `/locations/search` | GET | observer metadata / place-name search |
 | `/api/v1/firesky/data/*` | POST/GET | data-download planner (`data/fetch` async job, `sources`: `gfs`/`ecmwf`/`cams`) + status / prune |
 | `/api/v1/firesky/cache/warmup` | POST | hot-city forecast cache warmup |
@@ -193,14 +325,16 @@ cd apps/shared-web && npm run check && npm run build # 0 errors
   contracts (settings persistence, due gates, circuit breaker, fail-closed).
 - `tests/test_native_preparation_ui.py`: macOS Swift preparation/display logic
   compile checks.
-- After changing `native/src/*.rs`, rebuild with
-  `./scripts/build_native_variants.sh` before running tests — otherwise they
-  load the stale dylib and report misleading results.
+- The scoring core has been merged into the engine crate
+  (`engine/src/native/`); after changing it, rebuild the engine
+  (`make engine` / `make desktop-macos`) before running tests.
 
 ## Desktop app (local, single-machine)
 
-Current native clients launch the Rust engine directly:
-[macOS SwiftUI / Windows WinUI](apps/README.md). The Tauri desktop shell and
+The primary desktop delivery is macOS SwiftUI/AppKit + Rust FFI; the Windows
+WinUI and Linux native UIs extend only along the macOS ABI, preflight and
+task-lifecycle contracts ([build and migration status](apps/README.md) records
+the actual acceptance boundary per platform). The Tauri desktop shell and
 the legacy PySide6 app are retired (2026-11-13); the shared browser web now
 lives in `apps/shared-web/` and is served by the Rust HTTP service and Docker.
 Old user data (~/.firesky-desktop favorites and current spot) imports
@@ -226,16 +360,43 @@ one the map shows a setup card and offers a one-click switch to OpenFreeMap.
 Public use inside China must stay on Tianditu (Chinese map regulations require
 a licensed basemap); OpenFreeMap is for locations outside China.
 
+## Mobile apps (v1 scope)
+
+Dual-native: iOS SwiftUI (`apps/mobile-ios/`) + Android Kotlin/Compose
+(`apps/mobile-android/`). The prediction engine runs embedded in the app
+process (`engine-mobile/`, same source as the desktop `desktop` subcommand;
+the JSON-lines frame protocol is frame-for-frame identical). ecCodes
+definitions ship inside the package (~131 MB; trimming is a follow-up
+optimization); offline forecasts rely on seeded/downloaded caches.
+
+- **In v1**: point forecasts (independent GFS/EC results), the data session
+  check→prepare→confirm (progress/cancel), observer management, settings
+  (CAMS key written to the sandbox), offline viewing of the last result and
+  **automatic restore after kill-restart** (`result_restore`, same semantics
+  as macOS).
+- **Not in v1**: regional forecasts, live nowcast, HTML reports, background
+  prefetch.
+- **Maps**: iOS already uses native MapKit; the Android map is deferred — v1
+  picks locations via coordinates/favorites.
+- **Acceptance**: Android emulator instrumented full chain + frame-level
+  parity against the desktop + kill-restart restore; iOS simulator
+  `xcodebuild test` all green (bundle definitions genuinely in effect, no
+  host-environment injection). Wiring and acceptance records:
+  [mobile native plan](docs/MOBILE_NATIVE_PLAN.md).
+
 ## Repository layout
 
 ```
 firesky/
 ├── engine/                # Rust engine: HTTP service / CLI / desktop FFI / data sync
+├── engine-mobile/         # in-process mobile engine (C ABI fsmobile.h + JNI shim)
 ├── native/                # Rust ray-traced scorer (cdylib)
 ├── apps/
 │   ├── macos/             # SwiftUI/AppKit + Rust FFI (primary desktop)
-│   ├── windows/           # WinUI 3 + Rust FFI
-│   ├── linux/             # GTK4/C++ + Rust FFI
+│   ├── mobile-android/    # Kotlin/Compose + JNI (officially released since v1.1.0)
+│   ├── mobile-ios/        # SwiftUI + statically linked engine (officially released since v1.1.0)
+│   ├── windows/           # WinUI 3 + Rust FFI (official installer built on a Windows machine later)
+│   ├── linux/             # GTK4/C++ + Rust FFI (code kept, no longer a release target)
 │   └── shared-web/        # shared web SPA (served by Rust HTTP and Docker)
 ├── frontend/              # legacy SvelteKit frontend (pending merge, contract tests kept)
 ├── resources/app-data/    # bundled city catalog & timezone dataset (sha256 manifest)
@@ -248,7 +409,7 @@ firesky/
 
 | Symptom | Cause & fix |
 |---|---|
-| `national CPU scorer library not found` | run `./scripts/build_native_variants.sh` first |
+| `national CPU scorer library not found` | stale standalone-scorer error; the scoring core is merged into the engine — rebuild it (`make engine`) |
 | `No cached CAMS optical profile covers ...` | the CAMS cache lacks this cycle's file — warm via the endpoint (needs an ADS key) or copy an existing `.cache/cams` |
 | `CAMS full profile does not cover every model cell` | CAMS horizontal area too small — widen the warmup `area` |
 | forecast says "GFS cycle unavailable" | NOMADS publish lag is ~5h45m; use an earlier cycle or retry later |
