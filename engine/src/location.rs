@@ -10,7 +10,7 @@ use std::{
     io::{Read, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex, OnceLock,
     },
     time::{Duration, Instant},
@@ -37,7 +37,7 @@ pub struct Config {
     retry_seconds: f64,
     lock_timeout_seconds: f64,
     #[serde(skip)]
-    cancellation: Option<Arc<AtomicBool>>,
+    pub(crate) cancellation: Option<Arc<AtomicBool>>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -179,6 +179,23 @@ fn client() -> Result<&'static Client, String> {
                 .user_agent(USER_AGENT)
                 .build()
                 .map_err(|_| "cannot initialize location HTTP client".into())
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+/// Data-plane client for SRTM tile downloads. Unlike the geocoding client it
+/// honors the environment proxy (the established data-plane rule, matching
+/// ADS): tile CDNs are unreachable from networks that require the proxy, and
+/// proxy-less environments behave identically to a direct client.
+fn srtm_client() -> Result<&'static Client, String> {
+    static CLIENT: OnceLock<Result<Client, String>> = OnceLock::new();
+    CLIENT
+        .get_or_init(|| {
+            Client::builder()
+                .user_agent(USER_AGENT)
+                .build()
+                .map_err(|_| "cannot initialize SRTM HTTP client".into())
         })
         .as_ref()
         .map_err(Clone::clone)
@@ -610,6 +627,142 @@ impl Config {
             return Ok((read_srtm(&target, lat, lon)?, target));
         }
         require(allow, "SRTM tile is missing; downloads disabled")?;
+        let elevation = self.fetch_tile(&name, lat, lon, timeout, None)?;
+        Ok((elevation, target))
+    }
+
+    /// Shared tile download core (phase D): lock-guarded, bounds-checked,
+    /// publishes atomically via a pending temp file. Emits optional progress
+    /// events (`terrain` envelope) with real received/total bytes; percent is
+    /// `null` when the provider omits content length. Cancellation is checked
+    /// per chunk so the cancel delay is bounded by one 64 KiB read.
+    /// GET one tile's compressed bytes with bounds, cancellation and optional
+    /// progress; a 404 classifies as `Absent` so bulk runs can mark ocean
+    /// tiles missing without retry churn.
+    fn fetch_tile_bytes(
+        &self,
+        name: &str,
+        timeout: f64,
+        progress: Option<&(dyn Fn(Value) -> Result<(), String> + Sync)>,
+    ) -> Result<Vec<u8>, (bool, String)> {
+        let endpoint = url(&format!(
+            "{}/{}/{}.hgt.gz",
+            self.srtm_base_url.trim_end_matches('/'),
+            &name[..3],
+            name
+        ))
+        .map_err(|e| (false, e))?;
+        let client = srtm_client().map_err(|e| (false, e))?;
+        let response = client
+            .get(endpoint)
+            .timeout(Duration::from_secs_f64(timeout.max(60.0)))
+            .send()
+            .map_err(|_| (false, "SRTM download transport failed".to_string()))?;
+        if response.status().as_u16() == 404 {
+            return Err((true, "SRTM tile does not exist".to_string()));
+        }
+        require(
+            response.status().is_success(),
+            "SRTM provider returned non-success status",
+        )
+        .map_err(|e| (false, e))?;
+        let total = response
+            .content_length()
+            .filter(|n| *n <= MAX_COMPRESSED);
+        require(
+            response.content_length().is_none_or(|n| n <= MAX_COMPRESSED),
+            "SRTM compressed tile exceeds bound",
+        )
+        .map_err(|e| (false, e))?;
+        let mut compressed = Vec::new();
+        let mut received = 0u64;
+        let mut last_percent: Option<i64> = None;
+        let mut reader = response.take(MAX_COMPRESSED + 1);
+        loop {
+            self.check_cancelled().map_err(|e| (false, e))?;
+            let mut chunk = [0u8; 65_536];
+            let count = reader
+                .read(&mut chunk)
+                .map_err(|_| (false, "SRTM download failed".to_string()))?;
+            if count == 0 {
+                break;
+            }
+            compressed.extend_from_slice(&chunk[..count]);
+            received += count as u64;
+            require(
+                received <= MAX_COMPRESSED,
+                "SRTM compressed tile exceeds bound",
+            )
+            .map_err(|e| (false, e))?;
+            if let Some(progress) = progress {
+                let percent = total
+                    .filter(|t| *t > 0)
+                    .map(|t| (received as f64 / t as f64 * 100.0).min(99.0));
+                let rounded = percent.map(|v| v as i64);
+                if rounded != last_percent {
+                    last_percent = rounded;
+                    progress(json!({"terrain": {
+                        "stage": "downloading",
+                        "tile": name,
+                        "received_bytes": received,
+                        "total_bytes": total,
+                        "percent": percent,
+                    }}))
+                    .map_err(|e| (false, e))?;
+                }
+            }
+        }
+        Ok(compressed)
+    }
+
+    /// Decompress-verify-publish a fetched tile; returns the decompressed size
+    /// and, for point fetches, the sampled elevation validated before the
+    /// file is published. Valid tiles are exactly one of the two known SRTM
+    /// dimensions, so bulk runs can accept a tile by size alone.
+    fn publish_tile(
+        &self,
+        name: &str,
+        compressed: &[u8],
+        sample: Option<(f64, f64)>,
+    ) -> Result<(u64, Option<f64>), String> {
+        let mut decoder = GzDecoder::new(compressed);
+        let mut pending = tempfile::Builder::new()
+            .prefix(".firesky-srtm-")
+            .tempfile_in(&self.srtm_cache_dir)
+            .map_err(|e| e.to_string())?;
+        let count = std::io::copy(&mut decoder.by_ref().take(MAX_TILE + 1), &mut pending)
+            .map_err(|_| "invalid SRTM gzip/CRC".to_string())?;
+        require(
+            count <= MAX_TILE && decoder.into_inner().is_empty(),
+            "SRTM gzip exceeds bounds or has trailing data",
+        )?;
+        require(
+            matches!(count, 2_884_802 | 25_934_402),
+            "downloaded tile has unknown SRTM dimensions",
+        )?;
+        pending.as_file().sync_all().map_err(|e| e.to_string())?;
+        let elevation = match sample {
+            Some((lat, lon)) => Some(read_srtm(pending.path(), lat, lon)?),
+            None => None,
+        };
+        let target = self.srtm_cache_dir.join(format!("{name}.hgt"));
+        require(!regular(&target)?, "SRTM tile appeared during download")?;
+        pending
+            .persist_noclobber(&target)
+            .map_err(|e| e.error.to_string())?;
+        sync_dir(&self.srtm_cache_dir)?;
+        Ok((count, elevation))
+    }
+
+    fn fetch_tile(
+        &self,
+        name: &str,
+        lat: f64,
+        lon: f64,
+        timeout: f64,
+        progress: Option<&(dyn Fn(Value) -> Result<(), String> + Sync)>,
+    ) -> Result<f64, String> {
+        let target = self.srtm_cache_dir.join(format!("{name}.hgt"));
         directory(&self.srtm_cache_dir)?;
         let _lock = Lock::acquire_checked(
             &target.with_extension("hgt.lock"),
@@ -617,60 +770,371 @@ impl Config {
             || self.check_cancelled(),
         )?;
         if regular(&target)? {
-            return Ok((read_srtm(&target, lat, lon)?, target));
+            return read_srtm(&target, lat, lon);
         }
+        let compressed = self
+            .fetch_tile_bytes(name, timeout, progress)
+            .map_err(|(_, message)| message)?;
+        if let Some(progress) = progress {
+            progress(json!({"terrain": {"stage": "verifying", "tile": name}}))?;
+        }
+        let (_, elevation) = self.publish_tile(name, &compressed, Some((lat, lon)))?;
+        match elevation {
+            Some(value) => Ok(value),
+            None => Err("tile elevation sampling is missing".into()),
+        }
+    }
+
+    /// Phase D contract: terrain tile inventory for the data page. Lists all
+    /// local tiles (capped; `tile_count` always reports the real total) and,
+    /// when coordinates are given, the tile that covers them with its local
+    /// state. Out-of-coverage latitude is a status, not an error, so the UI
+    /// can explain the boundary instead of faking data. With
+    /// `estimate_global`, samples provider HEAD sizes to estimate the bulk
+    /// (global) download footprint before the user confirms it.
+    pub(crate) fn terrain_inventory(&self, params: &Value) -> Result<Value, String> {
+        let mut tiles = Vec::new();
+        let mut tile_count = 0usize;
+        if let Ok(entries) = fs::read_dir(&self.srtm_cache_dir) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let Some(stem) = name.strip_suffix(".hgt") else {
+                    continue;
+                };
+                if !is_tile_name(stem) {
+                    continue;
+                }
+                tile_count += 1;
+                if tiles.len() < 200 {
+                    tiles.push(json!({
+                        "name": stem,
+                        "bytes": entry.metadata().map(|meta| meta.len()).unwrap_or(0),
+                    }));
+                }
+            }
+        }
+        tiles.sort_by(|a, b| a["name"].as_str().cmp(&b["name"].as_str()));
+        let mut result = json!({
+            "contract": "rust-terrain-inventory-v1",
+            "tiles": tiles,
+            "tile_count": tile_count,
+            "tiles_truncated": tile_count > tiles.len(),
+            "srtm_cache_dir": self.srtm_cache_dir.display().to_string(),
+        });
+        let (lat, lon) = match (params.get("lat"), params.get("lon")) {
+            (Some(lat), Some(lon)) => match (number(lat), number(lon)) {
+                (Ok(lat), Ok(lon)) => (lat, lon),
+                _ => return Ok(result),
+            },
+            _ => return Ok(result),
+        };
+        coordinates(lat, lon)?;
+        let coverage_ok = (-56.0..60.0).contains(&lat);
+        result["coverage_ok"] = json!(coverage_ok);
+        if coverage_ok {
+            let name = tile(lat, lon)?;
+            let target = self.srtm_cache_dir.join(format!("{name}.hgt"));
+            let exists = regular(&target)?;
+            result["tile"] = json!({
+                "name": name,
+                "exists": exists,
+                "bytes": if exists {
+                    fs::metadata(&target).map(|meta| meta.len()).unwrap_or(0)
+                } else { 0 },
+                "lat_range": [lat.floor(), lat.floor() + 1.0],
+                "lon_range": [lon.floor(), lon.floor() + 1.0],
+            });
+        }
+        if params["estimate_global"] == json!(true) {
+            let candidates = bulk_candidates(-56, 59, -180, 179)?;
+            let existing = candidates
+                .iter()
+                .filter(|name| {
+                    regular(&self.srtm_cache_dir.join(format!("{name}.hgt"))).unwrap_or(false)
+                })
+                .count();
+            // Sampling is best-effort: transport failures yield no estimate
+            // instead of blocking the inventory.
+            let estimated_bytes = self.estimate_bulk_bytes(&candidates);
+            result["global"] = json!({
+                "candidates": candidates.len(),
+                "existing": existing,
+                "estimated_bytes": estimated_bytes,
+                "estimated_gb": estimated_bytes.map(|bytes| bytes as f64 / 1e9),
+            });
+        }
+        Ok(result)
+    }
+
+    /// HEAD-sample up to 12 spread tiles and extrapolate the bulk footprint.
+    /// Ocean tiles (404) are excluded from the sample average, so the result
+    /// overestimates by the ocean fraction — an honest upper bound, never a
+    /// fabricated exact size.
+    fn estimate_bulk_bytes(&self, candidates: &[String]) -> Option<u64> {
+        if candidates.len() < 12 {
+            return None;
+        }
+        let indices = [0, 7, 23, 61, 127, 251, 503, 1021, 2053, 4177, 8389, candidates.len() - 1];
+        let mut sampled = 0usize;
+        let mut total = 0u64;
+        for index in indices {
+            match self.head_tile_size(&candidates[index]) {
+                Some(size) => {
+                    sampled += 1;
+                    total += size;
+                }
+                None => {}
+            }
+        }
+        (sampled > 0).then(|| total / sampled as u64 * candidates.len() as u64)
+    }
+
+    fn head_tile_size(&self, name: &str) -> Option<u64> {
         let endpoint = url(&format!(
             "{}/{}/{}.hgt.gz",
             self.srtm_base_url.trim_end_matches('/'),
             &name[..3],
             name
-        ))?;
-        let response = client()?
-            .get(endpoint)
-            .timeout(Duration::from_secs_f64(timeout.max(60.0)))
+        ))
+        .ok()?;
+        let client = srtm_client().ok()?;
+        let response = client
+            .head(endpoint)
+            .timeout(Duration::from_secs_f64(30.0))
             .send()
-            .map_err(|_| "SRTM download transport failed")?;
-        require(
-            response.status().is_success(),
-            "SRTM provider returned non-success status",
-        )?;
-        require(
-            response
-                .content_length()
-                .is_none_or(|n| n <= MAX_COMPRESSED),
-            "SRTM compressed tile exceeds bound",
-        )?;
-        let mut compressed = Vec::new();
+            .ok()?;
+        if !response.status().is_success() {
+            return None;
+        }
+        // reqwest's Response::content_length() reports the (empty) HEAD body,
+        // not the header; the real tile size lives in the Content-Length
+        // header itself.
         response
-            .take(MAX_COMPRESSED + 1)
-            .read_to_end(&mut compressed)
-            .map_err(|_| "SRTM download failed")?;
-        require(
-            compressed.len() as u64 <= MAX_COMPRESSED,
-            "SRTM compressed tile exceeds bound",
-        )?;
-        self.check_cancelled()?;
-        let mut decoder = GzDecoder::new(compressed.as_slice());
-        let mut pending = tempfile::Builder::new()
-            .prefix(".firesky-srtm-")
-            .tempfile_in(&self.srtm_cache_dir)
-            .map_err(|e| e.to_string())?;
-        let count = std::io::copy(&mut decoder.by_ref().take(MAX_TILE + 1), &mut pending)
-            .map_err(|_| "invalid SRTM gzip/CRC")?;
-        require(
-            count <= MAX_TILE && decoder.into_inner().is_empty(),
-            "SRTM gzip exceeds bounds or has trailing data",
-        )?;
-        pending.as_file().sync_all().map_err(|e| e.to_string())?;
-        let result = read_srtm(pending.path(), lat, lon)?;
-        self.check_cancelled()?;
-        require(!regular(&target)?, "SRTM tile appeared during download")?;
-        pending
-            .persist_noclobber(&target)
-            .map_err(|e| e.error.to_string())?;
-        sync_dir(&self.srtm_cache_dir)?;
-        Ok((result, target))
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)?
+            .to_str()
+            .ok()?
+            .parse()
+            .ok()
     }
+
+    /// Bulk (global) terrain download: enumerate candidate tiles over the
+    /// requested bounds (default = full SRTM coverage), skip tiles that
+    /// already exist (resumable), download the rest with bounded concurrency,
+    /// and classify provider 404s as absent (ocean) instead of failing. Runs
+    /// do not hold the compute lock; per-tile download locks keep concurrent
+    /// readers safe. Cancellation and a free-disk guardrail stop the run
+    /// while keeping every finished tile.
+    fn terrain_download_global(
+        &self,
+        params: &Value,
+        progress: &(dyn Fn(Value) -> Result<(), String> + Sync),
+    ) -> Result<Value, String> {
+        let south = params["bounds"]["south"].as_i64().unwrap_or(-56);
+        let north = params["bounds"]["north"].as_i64().unwrap_or(59);
+        let west = params["bounds"]["west"].as_i64().unwrap_or(-180);
+        let east = params["bounds"]["east"].as_i64().unwrap_or(179);
+        let candidates = bulk_candidates(south, north, west, east)?;
+        let timeout = params
+            .get("timeout_seconds")
+            .and_then(Value::as_f64)
+            .filter(|v| v.is_finite() && (10.0..=900.0).contains(v))
+            .unwrap_or(300.0);
+        directory(&self.srtm_cache_dir)?;
+        // Guardrail: refuse to start when the sampled estimate exceeds the
+        // available disk space. `force` lets operators override a stale or
+        // unavailable estimate.
+        if params["force"] != json!(true) {
+            if let Some(estimate) = self.estimate_bulk_bytes(&candidates) {
+                let available = fs2::available_space(&self.srtm_cache_dir).ok();
+                if let Some(available) = available {
+                    require(
+                        estimate < available,
+                        &format!(
+                            "bulk terrain download needs about {:.0} GB but only {:.0} GB is available; free space or pass force",
+                            estimate as f64 / 1e9,
+                            available as f64 / 1e9
+                        ),
+                    )?;
+                }
+            }
+        }
+        let cursor = AtomicUsize::new(0);
+        let existing = AtomicUsize::new(0);
+        let downloaded = AtomicUsize::new(0);
+        let absent = AtomicUsize::new(0);
+        let failed = AtomicUsize::new(0);
+        let received = AtomicU64::new(0);
+        let cancelled = AtomicBool::new(false);
+        let disk_stopped = AtomicBool::new(false);
+        let total = candidates.len();
+        let workers = total.min(4).max(1);
+        std::thread::scope(|scope| {
+            for _ in 0..workers {
+                scope.spawn(|| loop {
+                    if cancelled.load(Ordering::Acquire) || disk_stopped.load(Ordering::Acquire) {
+                        return;
+                    }
+                    if self.check_cancelled().is_err() {
+                        cancelled.store(true, Ordering::Release);
+                        return;
+                    }
+                    let index = cursor.fetch_add(1, Ordering::Relaxed);
+                    if index >= total {
+                        return;
+                    }
+                    let name = &candidates[index];
+                    let target = self.srtm_cache_dir.join(format!("{name}.hgt"));
+                    if regular(&target).unwrap_or(true) {
+                        existing.fetch_add(1, Ordering::Relaxed);
+                    } else {
+                        let outcome = match self.fetch_tile_bytes(name, timeout, None) {
+                            Ok(compressed) => self
+                                .publish_tile(name, &compressed, None)
+                                .map_err(|message| (false, message)),
+                            Err((tile_absent, message)) => Err((tile_absent, message)),
+                        };
+                        match outcome {
+                            Ok((bytes, _)) => {
+                                downloaded.fetch_add(1, Ordering::Relaxed);
+                                received.fetch_add(bytes, Ordering::Relaxed);
+                                // Free-disk guardrail: stop early instead of
+                                // filling the volume; finished tiles persist.
+                                if downloaded.load(Ordering::Relaxed) % 32 == 0 {
+                                    let available =
+                                        fs2::available_space(&self.srtm_cache_dir).ok();
+                                    if available.is_some_and(|space| space < 2_000_000_000) {
+                                        disk_stopped.store(true, Ordering::Release);
+                                    }
+                                }
+                            }
+                            Err((tile_absent, _)) if tile_absent => {
+                                absent.fetch_add(1, Ordering::Relaxed);
+                            }
+                            Err(_) => {
+                                failed.fetch_add(1, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                    let resolved = existing.load(Ordering::Relaxed)
+                        + downloaded.load(Ordering::Relaxed)
+                        + absent.load(Ordering::Relaxed)
+                        + failed.load(Ordering::Relaxed);
+                    let _ = progress(json!({"terrain": {
+                        "stage": "global",
+                        "candidates": total,
+                        "resolved": resolved,
+                        "existing": existing.load(Ordering::Relaxed),
+                        "downloaded": downloaded.load(Ordering::Relaxed),
+                        "absent": absent.load(Ordering::Relaxed),
+                        "failed": failed.load(Ordering::Relaxed),
+                        "received_bytes": received.load(Ordering::Relaxed),
+                        "percent": (resolved as f64 / total as f64 * 100.0).min(100.0),
+                        "current_tile": name,
+                    }}));
+                });
+            }
+        });
+        let was_cancelled = cancelled.load(Ordering::Acquire) || self.check_cancelled().is_err();
+        Ok(json!({
+            "contract": "rust-terrain-download-v1",
+            "status": if was_cancelled { "cancelled" } else { "done" },
+            "mode": "global",
+            "bounds": {"south": south, "north": north, "west": west, "east": east},
+            "candidates": total,
+            "existing": existing.load(Ordering::Relaxed),
+            "downloaded": downloaded.load(Ordering::Relaxed),
+            "absent": absent.load(Ordering::Relaxed),
+            "failed": failed.load(Ordering::Relaxed),
+            "received_bytes": received.load(Ordering::Relaxed),
+            "received_gb": received.load(Ordering::Relaxed) as f64 / 1e9,
+            "stopped_reason": if disk_stopped.load(Ordering::Acquire) { json!("disk_space") } else { json!(null) },
+        }))
+    }
+
+    /// Phase D contract: explicit terrain download for the data page. `point`
+    /// mode (default) fetches the tile covering the given coordinates with
+    /// real stage progress; `global` mode bulk-downloads the whole coverage.
+    /// Both reuse the same bounded download/verify/publish core, never
+    /// re-download existing tiles and support cancellation. Out-of-coverage
+    /// latitude is a status, not an error.
+    pub(crate) fn terrain_download(
+        &self,
+        params: &Value,
+        progress: &(dyn Fn(Value) -> Result<(), String> + Sync),
+    ) -> Result<Value, String> {
+        let timeout = params
+            .get("timeout_seconds")
+            .and_then(Value::as_f64)
+            .filter(|v| v.is_finite() && (10.0..=900.0).contains(v))
+            .unwrap_or(300.0);
+        if params["mode"].as_str() == Some("global") {
+            // Workers check cancellation on their first loop pass, so a
+            // pre-cancelled run reports `status: cancelled` instead of an
+            // opaque error.
+            return self.terrain_download_global(params, progress);
+        }
+        self.check_cancelled()?;
+        let lat = number(&params["lat"])?;
+        let lon = number(&params["lon"])?;
+        coordinates(lat, lon)?;
+        if !(-56.0..60.0).contains(&lat) {
+            return Ok(json!({
+                "contract": "rust-terrain-download-v1",
+                "status": "out_of_coverage",
+                "message": "SRTM coverage is -56 <= latitude < 60",
+            }));
+        }
+        let name = tile(lat, lon)?;
+        let target = self.srtm_cache_dir.join(format!("{name}.hgt"));
+        if regular(&target)? {
+            return Ok(json!({
+                "contract": "rust-terrain-download-v1",
+                "status": "exists",
+                "tile": name,
+                "elevation_m": read_srtm(&target, lat, lon)?,
+            }));
+        }
+        let elevation = self.fetch_tile(&name, lat, lon, timeout, Some(progress))?;
+        Ok(json!({
+            "contract": "rust-terrain-download-v1",
+            "status": "downloaded",
+            "tile": name,
+            "elevation_m": elevation,
+        }))
+    }
+}
+
+/// Candidate tile names over an inclusive 1° grid; the default bounds cover
+/// the whole SRTM domain (-56 ≤ lat < 60). Used by bulk download and its
+/// inventory estimate.
+fn bulk_candidates(south: i64, north: i64, west: i64, east: i64) -> Result<Vec<String>, String> {
+    require(south <= north && west <= east, "invalid terrain bounds")?;
+    require(
+        (-56..=59).contains(&south)
+            && (-56..=59).contains(&north)
+            && (-180..=179).contains(&west)
+            && (-180..=179).contains(&east),
+        "terrain bounds exceed SRTM coverage (-56 <= lat < 60)",
+    )?;
+    let count = ((north - south + 1) as usize).saturating_mul((east - west + 1) as usize);
+    require(
+        count <= 120_000,
+        "terrain bulk request exceeds 120000 candidate tiles",
+    )?;
+    let mut names = Vec::with_capacity(count);
+    for a in south..=north {
+        for b in west..=east {
+            names.push(format!(
+                "{}{:02}{}{:03}",
+                if a >= 0 { "N" } else { "S" },
+                a.abs(),
+                if b >= 0 { "E" } else { "W" },
+                b.abs()
+            ));
+        }
+    }
+    Ok(names)
 }
 fn number(value: &Value) -> Result<f64, String> {
     value
@@ -700,6 +1164,16 @@ fn tile(lat: f64, lon: f64) -> Result<String, String> {
         if b >= 0 { "E" } else { "W" },
         b.abs()
     ))
+}
+/// Recognizes `[NS]##[EW]###` tile stems so the terrain inventory only lists
+/// real SRTM tiles, never lock files or unrelated cache content.
+fn is_tile_name(name: &str) -> bool {
+    let bytes = name.as_bytes();
+    bytes.len() == 7
+        && matches!(bytes[0], b'N' | b'S')
+        && bytes[1..3].iter().all(u8::is_ascii_digit)
+        && matches!(bytes[3], b'E' | b'W')
+        && bytes[4..7].iter().all(u8::is_ascii_digit)
 }
 fn read_srtm(path: &Path, lat: f64, lon: f64) -> Result<f64, String> {
     coordinates(lat, lon)?;
@@ -1269,5 +1743,280 @@ mod tests {
             .search("北京", 2.0, false, true, true, ElevationSource::Http)
             .unwrap_err();
         assert!(error.contains("location provider"), "{error}");
+    }
+    // ------------------------------------------------ 地形下载契约（阶段 D）
+
+    /// 本地 gzip 服务器：应答假 SRTM 瓦片（.hgt.gz），带 Content-Length。
+    fn spawn_tile_server(root: &Path) -> String {
+        let dir = root.join("tile-src");
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("{TILE_NAME}.hgt.gz"));
+        let row = TILE_ELEVATION.to_be_bytes().repeat(3601);
+        let mut tile = Vec::new();
+        for _ in 0..3601 {
+            tile.extend_from_slice(&row);
+        }
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut encoder, &tile).unwrap();
+        let body = encoder.finish().unwrap();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut line = String::new();
+                loop {
+                    line.clear();
+                    match std::io::BufRead::read_line(&mut reader, &mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) if line == "\r\n" || line == "\n" => break,
+                        Ok(_) => {}
+                    }
+                }
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(head.as_bytes());
+                let _ = stream.write_all(&body);
+                let _ = stream.flush();
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    /// 路径感知 Skadi 服务器：仅 served 集合内的瓦片返回 200，其余 404，
+    /// 用于 bulk 下载的海洋/缺失分类测试。
+    fn spawn_skadi_server(root: &Path, served: &[&str]) -> String {
+        let dir = root.join("tile-src");
+        fs::create_dir_all(&dir).unwrap();
+        let row = TILE_ELEVATION.to_be_bytes().repeat(3601);
+        let mut tile = Vec::new();
+        for _ in 0..3601 {
+            tile.extend_from_slice(&row);
+        }
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        std::io::Write::write_all(&mut encoder, &tile).unwrap();
+        let body = encoder.finish().unwrap();
+        let served: Vec<String> = served.iter().map(|name| name.to_string()).collect();
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { break };
+                let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+                let mut request_line = String::new();
+                if std::io::BufRead::read_line(&mut reader, &mut request_line).is_err() {
+                    continue;
+                }
+                loop {
+                    let mut line = String::new();
+                    match std::io::BufRead::read_line(&mut reader, &mut line) {
+                        Ok(0) | Err(_) => break,
+                        Ok(_) if line == "\r\n" || line == "\n" => break,
+                        Ok(_) => {}
+                    }
+                }
+                let name = request_line
+                    .split_whitespace()
+                    .nth(1)
+                    .and_then(|path| path.rsplit('/').next())
+                    .and_then(|file| file.strip_suffix(".hgt.gz"))
+                    .unwrap_or("");
+                let head = if served.iter().any(|item| item == name) {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n",
+                        body.len()
+                    )
+                } else {
+                    "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        .to_string()
+                };
+                let _ = stream.write_all(head.as_bytes());
+                if served.iter().any(|item| item == name) {
+                    let _ = stream.write_all(&body);
+                }
+                let _ = stream.flush();
+            }
+        });
+        format!("http://{addr}")
+    }
+
+    fn progress_collector() -> (Arc<Mutex<Vec<Value>>>, impl Fn(Value) -> Result<(), String> + Send + Sync) {
+        let events: Arc<Mutex<Vec<Value>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = events.clone();
+        let callback = move |event: Value| {
+            sink.lock().unwrap().push(event);
+            Ok(())
+        };
+        (events, callback)
+    }
+
+    #[test]
+    fn terrain_inventory_lists_tiles_and_focused_state() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_tile(dir.path());
+        let config = offline_config(dir.path());
+        let value = config
+            .terrain_inventory(&json!({"lat": LAT, "lon": LON}))
+            .unwrap();
+        assert_eq!(value["contract"], "rust-terrain-inventory-v1");
+        assert_eq!(value["coverage_ok"], true);
+        assert_eq!(value["tile"]["name"], TILE_NAME);
+        assert_eq!(value["tile"]["exists"], true);
+        assert!(value["tile"]["bytes"].as_u64().unwrap() > 0);
+        let tiles = value["tiles"].as_array().unwrap();
+        assert_eq!(tiles.len(), 1);
+        assert_eq!(tiles[0]["name"], TILE_NAME);
+        // 未给坐标时只列本地瓦片，不带焦点。
+        let value = config.terrain_inventory(&json!({})).unwrap();
+        assert!(value.get("coverage_ok").is_none());
+        assert_eq!(value["tiles"].as_array().unwrap().len(), 1);
+        // 超界纬度是状态而非错误。
+        let value = config
+            .terrain_inventory(&json!({"lat": 65.0, "lon": LON}))
+            .unwrap();
+        assert_eq!(value["coverage_ok"], false);
+        assert!(value.get("tile").is_none());
+        // 无效坐标是错误。
+        assert!(config.terrain_inventory(&json!({"lat": 200.0, "lon": 0.0})).is_err());
+    }
+
+    #[test]
+    fn terrain_download_exists_reuses_local_tile_without_network() {
+        let dir = tempfile::tempdir().unwrap();
+        fake_tile(dir.path());
+        let config = offline_config(dir.path());
+        let value = config
+            .terrain_download(&json!({"lat": LAT, "lon": LON}), &|_| Ok(()))
+            .unwrap();
+        assert_eq!(value["status"], "exists");
+        assert_eq!(value["tile"], TILE_NAME);
+        assert_eq!(value["elevation_m"].as_f64().unwrap(), f64::from(TILE_ELEVATION));
+    }
+
+    #[test]
+    fn terrain_download_out_of_coverage_is_a_status() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = offline_config(dir.path());
+        let value = config
+            .terrain_download(&json!({"lat": 65.0, "lon": LON}), &|_| Ok(()))
+            .unwrap();
+        assert_eq!(value["status"], "out_of_coverage");
+    }
+
+    #[test]
+    fn terrain_download_fetches_publishes_and_reports_progress() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = spawn_tile_server(dir.path());
+        let mut config = offline_config(dir.path());
+        config.srtm_base_url = format!("{base}/skadi");
+        let (events, progress) = progress_collector();
+        let value = config
+            .terrain_download(&json!({"lat": LAT, "lon": LON}), &progress)
+            .unwrap();
+        assert_eq!(value["status"], "downloaded");
+        assert_eq!(value["tile"], TILE_NAME);
+        assert_eq!(value["elevation_m"].as_f64().unwrap(), f64::from(TILE_ELEVATION));
+        let target = dir.path().join("srtm").join(format!("{TILE_NAME}.hgt"));
+        assert!(target.is_file());
+        assert!(config
+            .terrain_inventory(&json!({"lat": LAT, "lon": LON}))
+            .unwrap()["tile"]["exists"]
+            .as_bool()
+            .unwrap());
+        // 进度含 downloading（百分比/字节数）与 verifying 两阶段。
+        let events = events.lock().unwrap();
+        let stages: Vec<String> = events
+            .iter()
+            .filter_map(|event| event["terrain"]["stage"].as_str().map(str::to_owned))
+            .collect();
+        assert!(stages.contains(&"downloading".to_owned()), "{stages:?}");
+        assert!(stages.contains(&"verifying".to_owned()), "{stages:?}");
+        let downloading = events
+            .iter()
+            .find(|event| event["terrain"]["stage"] == "downloading")
+            .unwrap();
+        assert!(downloading["terrain"]["total_bytes"].as_u64().unwrap() > 0);
+    }
+
+    #[test]
+    fn terrain_download_honours_cancellation_per_chunk() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = spawn_tile_server(dir.path());
+        let mut config = offline_config(dir.path());
+        config.srtm_base_url = format!("{base}/skadi");
+        let cancel = Arc::new(AtomicBool::new(true));
+        config.cancellation = Some(cancel);
+        let error = config
+            .terrain_download(&json!({"lat": LAT, "lon": LON}), &|_| Ok(()))
+            .unwrap_err();
+        assert!(error.contains("cancelled"), "{error}");
+        assert!(!dir.path().join("srtm").join(format!("{TILE_NAME}.hgt")).exists());
+    }
+
+    #[test]
+    fn terrain_bulk_download_skips_existing_and_counts_ocean_404() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = spawn_skadi_server(dir.path(), &["N00E000"]);
+        let mut config = offline_config(dir.path());
+        config.srtm_base_url = format!("{base}/skadi");
+        // 候选 2x2 = S01E000/S01E001/N00E000/N00E001；服务器只服务 N00E000。
+        let value = config
+            .terrain_download(&json!({
+                "mode": "global",
+                "bounds": {"south": -1, "north": 0, "west": 0, "east": 1},
+            }), &|_| Ok(()))
+            .unwrap();
+        assert_eq!(value["status"], "done");
+        assert_eq!(value["candidates"], 4);
+        assert_eq!(value["downloaded"], 1);
+        assert_eq!(value["absent"], 3);
+        assert_eq!(value["failed"], 0);
+        let target = dir.path().join("srtm").join("N00E000.hgt");
+        assert!(target.is_file());
+        // 断点续传：重跑时已有瓦片直接跳过，不再下载。
+        let again = config
+            .terrain_download(&json!({
+                "mode": "global",
+                "bounds": {"south": -1, "north": 0, "west": 0, "east": 1},
+            }), &|_| Ok(()))
+            .unwrap();
+        assert_eq!(again["existing"], 1);
+        assert_eq!(again["downloaded"], 0);
+        assert_eq!(again["absent"], 3);
+    }
+
+    #[test]
+    fn terrain_bulk_download_reports_cancelled_and_keeps_tiles() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = spawn_tile_server(dir.path());
+        let mut config = offline_config(dir.path());
+        config.srtm_base_url = format!("{base}/skadi");
+        config.cancellation = Some(Arc::new(AtomicBool::new(true)));
+        let value = config
+            .terrain_download(&json!({
+                "mode": "global",
+                "bounds": {"south": -1, "north": 0, "west": 0, "east": 1},
+            }), &|_| Ok(()))
+            .unwrap();
+        assert_eq!(value["status"], "cancelled");
+        assert_eq!(value["downloaded"], 0);
+    }
+
+    #[test]
+    fn terrain_bulk_bounds_are_validated() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = offline_config(dir.path());
+        for bad in [
+            json!({"mode": "global", "bounds": {"south": -60, "north": 0, "west": 0, "east": 1}}),
+            json!({"mode": "global", "bounds": {"south": 0, "north": -1, "west": 0, "east": 1}}),
+            json!({"mode": "global", "bounds": {"south": 0, "north": 0, "west": 170, "east": 190}}),
+        ] {
+            assert!(config.terrain_download(&bad, &|_| Ok(())).is_err(), "{bad}");
+        }
     }
 }

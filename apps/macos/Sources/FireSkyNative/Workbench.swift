@@ -80,7 +80,10 @@ struct WorkbenchRootView: View {
         .task { await store.connect() }
         .onChange(of: store.page) { _, page in
             if page == .data {
-                Task { await store.loadInventory() }
+                Task {
+                    await store.loadInventory()
+                    store.loadTerrain()
+                }
             }
             if page == .history {
                 store.loadTaskHistory()

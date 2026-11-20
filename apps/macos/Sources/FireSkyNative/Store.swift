@@ -256,6 +256,26 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var helperMessageFailed = false
     @Published var helperStatus: JSONObject = [:]
     @Published var taskHistory: [NativeTaskHistoryItem] = []
+    /// 手动数据删除（方案 5.2）：引擎预览 → 确认 → 执行，对象身份由引擎冻结。
+    @Published var pendingDataDelete: JSONObject?
+    @Published var dataDeletePreview: JSONObject?
+    @Published var dataDeletePreviewing = false
+    @Published var dataDeleteRunning = false
+    @Published var dataDeleteMessage = ""
+    @Published var dataDeleteFailed = false
+    /// SRTM 地形下载（方案 7）：独立契约，不附着 metadata。下载动作按用户
+    /// 口径为全球批量（跳过已有、海洋瓦片自动缺失、可取消续传）。
+    @Published var terrain: JSONObject?
+    @Published var terrainLoading = false
+    @Published var terrainDownloading = false
+    @Published var terrainCancelling = false
+    @Published var terrainMessage = ""
+    @Published var terrainMessageFailed = false
+    @Published var terrainProgress: JSONObject = [:]
+    /// 全球下载确认所需的估算（候选数/已有/体积抽样估算）。
+    @Published var terrainEstimate: JSONObject?
+    @Published var terrainEstimateLoading = false
+    @Published var showGlobalTerrainConfirm = false
     @Published var taskHistoryTotal = 0
     @Published var taskHistoryIssues = 0
     @Published var taskHistoryLoaded = false
@@ -278,6 +298,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     private var frozenProfileTask: Task<Void, Never>?
     private var downloadProbeTask: Task<Void, Never>?
     private var taskHistoryTask: Task<Void, Never>?
+    private var terrainTask: Task<Void, Never>?
+    private var terrainDownloadTask: Task<Void, Never>?
     private var taskHistoryEventsTask: Task<Void, Never>?
     /// 60 秒心跳（设计 5.1/11.3）：唯一节拍源，调度决策全部在引擎。
     private var syncTickTask: Task<Void, Never>?
@@ -395,6 +417,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             UserDefaults.standard.set(engineBinary, forKey: "engineBinary")
             if page == .data {
                 await loadInventory()
+                loadTerrain()
             }
             if page == .data || page == .history {
                 loadTaskHistory()
@@ -763,6 +786,207 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             let response = try await engine.call("inventory")
             inventory = response["datasets"] as? [JSONObject] ?? []
         } catch { fail(error) }
+    }
+
+    // MARK: - 手动数据删除（方案 5.2）
+
+    /// 选择范围并请求引擎预览；范围始终由库存周期键描述，不传磁盘路径。
+    func beginDataDelete(source: String, cycle: String?) {
+        guard online, !busy, !dataDeleteRunning, !dataDeletePreviewing, !probingDownloads else { return }
+        var scope: JSONObject = ["source": source]
+        if let cycle { scope["cycle"] = cycle }
+        pendingDataDelete = scope
+        dataDeletePreview = nil
+        dataDeleteMessage = ""
+        dataDeleteFailed = false
+        dataDeletePreviewing = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { dataDeletePreviewing = false }
+            do {
+                dataDeletePreview = try await engine.call("data_delete_preview", ["scope": scope])
+            } catch {
+                pendingDataDelete = nil
+                dataDeleteMessage = friendlyEngineMessage(error.localizedDescription)
+                dataDeleteFailed = true
+            }
+        }
+    }
+
+    func cancelDataDelete() {
+        pendingDataDelete = nil
+        dataDeletePreview = nil
+    }
+
+    /// 确认后执行。预览过期（范围内容变化）时保留范围并提示重新确认，
+    /// 不静默扩大或重试删除。
+    func executeDataDelete() {
+        guard online, !busy, !dataDeleteRunning,
+              let scope = pendingDataDelete,
+              let preview = dataDeletePreview,
+              let previewID = preview["preview_id"] as? String else { return }
+        dataDeleteRunning = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { dataDeleteRunning = false }
+            do {
+                let result = try await engine.call("data_delete_execute", [
+                    "scope": scope, "preview_id": previewID, "confirm": true,
+                ])
+                pendingDataDelete = nil
+                dataDeletePreview = nil
+                dataDeleteMessage = dataDeleteResultSummary(result)
+                dataDeleteFailed = ((result["failed"] as? [Any])?.count ?? 0) > 0
+                await loadInventory()
+            } catch {
+                dataDeletePreview = nil
+                dataDeleteMessage = friendlyEngineMessage(error.localizedDescription)
+                dataDeleteFailed = true
+            }
+        }
+    }
+
+    /// 已删除 / 跳过 / 失败 / 实际释放空间的一行摘要。
+    private func dataDeleteResultSummary(_ result: JSONObject) -> String {
+        let deleted = (result["deleted"] as? NSNumber)?.intValue ?? 0
+        let skipped = (result["skipped"] as? [Any])?.count ?? 0
+        let failed = (result["failed"] as? [Any])?.count ?? 0
+        let mb = (result["freed_mb"] as? NSNumber)?.doubleValue ?? 0
+        var parts = ["已删除 \(deleted) 个文件，释放 \(String(format: "%.1f", mb)) MB"]
+        if skipped > 0 { parts.append("占用中跳过 \(skipped) 个") }
+        if failed > 0 { parts.append("失败 \(failed) 个") }
+        return parts.joined(separator: "；")
+    }
+
+    // MARK: - SRTM 地形下载（方案 7）
+
+    /// 读取当前地点对应瓦片与本地状态；进数据管理页时调用。
+    func loadTerrain() {
+        guard online, !terrainLoading, !terrainDownloading else { return }
+        terrainTask?.cancel()
+        terrainTask = Task { [weak self] in
+            guard let self else { return }
+            terrainLoading = true
+            defer {
+                terrainLoading = false
+                terrainTask = nil
+            }
+            do {
+                terrain = try await engine.call("terrain_inventory", ["lat": lat, "lon": lon])
+                terrainMessage = ""
+                terrainMessageFailed = false
+            } catch {
+                guard !Task.isCancelled else { return }
+                terrain = nil
+                terrainMessage = friendlyEngineMessage(error.localizedDescription)
+                terrainMessageFailed = true
+            }
+        }
+    }
+
+    /// 请求全球下载估算（HEAD 抽样，几秒）；完成后弹确认框。
+    func loadTerrainEstimate() {
+        guard online, !terrainDownloading, !terrainEstimateLoading else { return }
+        terrainEstimateLoading = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { terrainEstimateLoading = false }
+            do {
+                terrainEstimate = try await engine.call("terrain_inventory",
+                                                        ["lat": lat, "lon": lon, "estimate_global": true])
+                showGlobalTerrainConfirm = terrainEstimate != nil
+            } catch {
+                terrainEstimate = nil
+                terrainMessage = friendlyEngineMessage(error.localizedDescription)
+                terrainMessageFailed = true
+            }
+        }
+    }
+
+    /// 地形下载任务：global=全球批量（默认动作），point=仅当前地点瓦片。
+    /// 真实阶段进度、可取消；不触发预测也不回填地点。
+    func downloadTerrain(global: Bool) {
+        guard online, !busy, !terrainDownloading, !probingDownloads else { return }
+        terrainDownloading = true
+        terrainCancelling = false
+        terrainMessage = ""
+        terrainProgress = [:]
+        showGlobalTerrainConfirm = false
+        var params: JSONObject = ["timeout_seconds": global ? 120.0 : 600.0]
+        if global {
+            params["mode"] = "global"
+        } else {
+            params["lat"] = lat
+            params["lon"] = lon
+        }
+        terrainDownloadTask = Task { [weak self] in
+            guard let self else { return }
+            defer {
+                terrainDownloading = false
+                terrainCancelling = false
+                terrainDownloadTask = nil
+            }
+            do {
+                let result = try await engine.call("terrain_download", params,
+                                                   progress: { [weak self] event in
+                    guard let self, let terrain = event["terrain"] as? JSONObject else { return }
+                    self.terrainProgress = terrain
+                })
+                try Task.checkCancellation()
+                terrainMessage = terrainResultMessage(result, global: global)
+                terrainMessageFailed = terrainMessageFailedFlag(result, global: global)
+            } catch {
+                terrainMessage = Task.isCancelled
+                    ? "已停止下载；已完成的瓦片保留，重新开始会跳过它们。"
+                    : friendlyEngineMessage(error.localizedDescription)
+                terrainMessageFailed = !Task.isCancelled
+            }
+            loadTerrain()
+        }
+    }
+
+    private func terrainResultMessage(_ result: JSONObject, global: Bool) -> String {
+        let status = result["status"] as? String ?? ""
+        if global {
+            let downloaded = (result["downloaded"] as? NSNumber)?.intValue ?? 0
+            let absent = (result["absent"] as? NSNumber)?.intValue ?? 0
+            let failed = (result["failed"] as? NSNumber)?.intValue ?? 0
+            let gb = (result["received_gb"] as? NSNumber)?.doubleValue ?? 0
+            let summary = "新增 \(downloaded) 块、缺失 \(absent) 块、失败 \(failed) 块，占用 \(String(format: "%.1f", gb)) GB。"
+            switch status {
+            case "cancelled":
+                if result["stopped_reason"] as? String == "disk_space" {
+                    return "磁盘空间不足已停止：\(summary)重新开始会跳过已有瓦片。"
+                }
+                return "已停止下载：\(summary)重新开始会跳过已有瓦片。"
+            default:
+                if failed > 0 {
+                    return "全球下载完成（部分失败）：\(summary)再次运行可重试失败瓦片。"
+                }
+                return "全球下载完成：\(summary)"
+            }
+        }
+        switch status {
+        case "exists": return "地形瓦片已存在，直接复用本地数据。"
+        case "downloaded": return "已下载地形瓦片 \(result["tile"] as? String ?? "")。"
+        case "out_of_coverage": return result["message"] as? String ?? "该位置不在 SRTM 覆盖范围内。"
+        default: return "下载未完成。"
+        }
+    }
+
+    private func terrainMessageFailedFlag(_ result: JSONObject, global: Bool) -> Bool {
+        let status = result["status"] as? String ?? ""
+        if global {
+            return ((result["failed"] as? NSNumber)?.intValue ?? 0) > 0
+                || result["stopped_reason"] as? String == "disk_space"
+        }
+        return status == "out_of_coverage" || status == "failed"
+    }
+
+    func cancelTerrainDownload() {
+        guard terrainDownloading else { return }
+        terrainCancelling = true
+        terrainDownloadTask?.cancel()
     }
 
     func loadTaskHistory() {

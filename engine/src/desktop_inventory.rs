@@ -404,6 +404,51 @@ pub(crate) fn local_snapshot(
     let value = aggregate(kind, root, &files, false, cancel)?;
     Ok((value, files.into_iter().map(|entry| entry.path).collect()))
 }
+
+/// Cycle→GRIB-file groups keyed exactly like the inventory `cycles` object so
+/// UI delete scopes can reference displayed cycle keys. Files the inventory
+/// cannot index (missing GFS sidecar) group under "" and are only addressable
+/// through whole-source deletion.
+pub(crate) fn cycle_files(
+    source: &str,
+    root: &Path,
+    cancel: &AtomicBool,
+) -> Result<BTreeMap<String, Vec<PathBuf>>, String> {
+    let kind = match source {
+        "gfs" => Source::Gfs,
+        "ecmwf" => Source::Ecmwf,
+        "cams" => Source::Cams,
+        _ => return Err("unknown desktop inventory source".into()),
+    };
+    let mut files = Vec::new();
+    walk(root, &mut files, cancel)?;
+    static EC_KEY: OnceLock<Regex> = OnceLock::new();
+    static CAMS_KEY: OnceLock<Regex> = OnceLock::new();
+    let ec = EC_KEY
+        .get_or_init(|| Regex::new(r"^ifs-basic-v2-([0-9]{10})-f([0-9]{3})\.grib2$").unwrap());
+    let cams = CAMS_KEY.get_or_init(||Regex::new(
+        r"^cams-optics-v2-([0-9]{4})-([0-9]{2})-([0-9]{2})-([0-9]{4})-([0-9]{3})-([a-z0-9]+)\.grib$").unwrap());
+    let mut groups = BTreeMap::<String, Vec<PathBuf>>::new();
+    for entry in files {
+        let name = entry
+            .path
+            .file_name()
+            .and_then(|v| v.to_str())
+            .ok_or("inventory file path is not UTF-8")?;
+        let key = match kind {
+            Source::Gfs => gfs_metadata(&entry.path).map(|(key, _, _)| key),
+            Source::Ecmwf => ec.captures(name).map(|m| m[1].to_owned()),
+            Source::Cams => cams
+                .captures(name)
+                .map(|m| format!("{}-{}-{} {}", &m[1], &m[2], &m[3], &m[4])),
+        };
+        groups
+            .entry(key.unwrap_or_default())
+            .or_default()
+            .push(entry.path);
+    }
+    Ok(groups)
+}
 fn aggregate(
     source: Source,
     root: &Path,
