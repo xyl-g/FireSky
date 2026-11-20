@@ -2,7 +2,8 @@ import AppKit
 import Charts
 import SwiftUI
 
-private let warm = Color(nsColor: NSColor(name: nil) { appearance in
+// Shared brand accent; used by the workbench and the settings category rail.
+let warm = Color(nsColor: NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
         ? NSColor(calibratedRed: 1, green: 0.55, blue: 0.38, alpha: 1)
         : NSColor(calibratedRed: 0.74, green: 0.32, blue: 0.24, alpha: 1)
@@ -38,6 +39,7 @@ struct WorkbenchRootView: View {
                 topbar
                 Group {
                     if store.page == .data { InventoryView() }
+                    else if store.page == .history { NativeTaskHistoryView() }
                     else if store.page == .settings { SettingsView() }
                     else if store.page == .regional { WorkRegionPage() }
                     else { workbench }
@@ -78,10 +80,10 @@ struct WorkbenchRootView: View {
         .task { await store.connect() }
         .onChange(of: store.page) { _, page in
             if page == .data {
-                Task {
-                    await store.loadInventory()
-                    store.loadTaskHistory()
-                }
+                Task { await store.loadInventory() }
+            }
+            if page == .history {
+                store.loadTaskHistory()
             }
             if page == .settings { Task { await store.refreshCAMSConfiguration() } }
         }
@@ -95,7 +97,7 @@ struct WorkbenchRootView: View {
             }.padding(.leading, 6).padding(.bottom, 30)
             Text("观测工作台").font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary).padding(.bottom, 9)
-            ForEach([Page.point, .regional, .nowcast, .data]) { page in
+            ForEach([Page.point, .regional, .nowcast, .data, .history]) { page in
                 Button {
                     // UX #5：切页不再被全局 busy 锁死；运行中的任务继续，顶栏可见进度。
                     store.page = page
@@ -105,10 +107,6 @@ struct WorkbenchRootView: View {
                             .font(.system(size: 17, weight: .regular)).frame(width: 22, height: 22)
                         Text(page.title).font(.system(size: 13, weight: store.page == page ? .semibold : .regular))
                         Spacer(minLength: 0)
-                        if page == .data && store.downloadProbeDate == nil {
-                            Circle().fill(store.probingDownloads ? Color.orange : Color.red)
-                                .frame(width: 7, height: 7).help("尚未完成 GFS / EC / CAMS 下载探测")
-                        }
                     }
                     .padding(.horizontal, 12).frame(height: 46)
                     .foregroundStyle(store.page == page ? warm : Color.primary.opacity(0.72))
@@ -130,10 +128,12 @@ struct WorkbenchRootView: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(store.page.title).font(.system(size: 22, weight: .bold))
-                Text(store.page == .data ? "本地原始数据 · 周期与时效 · 按需下载"
-                     : store.page == .regional ? store.regionalTitle
-                     : String(format: "%@ · %.4f° N, %.4f° E", store.name, store.lat, store.lon))
-                    .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                // 副标题只在该页面有地点语义时显示；管理页不借用预测地点上下文。
+                if store.page.showsLocationSubtitle {
+                    Text(store.page == .regional ? store.regionalTitle
+                         : String(format: "%@ · %.4f° N, %.4f° E", store.name, store.lat, store.lon))
+                        .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
             Spacer()
             // UX #5：任务运行中切页后，顶栏仍能看到进度与取消入口。
@@ -146,8 +146,6 @@ struct WorkbenchRootView: View {
                         .buttonStyle(.borderless).help("取消当前任务")
                 }.workChip()
             }
-            Text(Date.now.formatted(.dateTime.month(.twoDigits).day(.twoDigits).weekday(.abbreviated)))
-                .font(.system(size: 9)).foregroundStyle(.secondary).workChip()
         }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 10).frame(height: 72)
     }
 

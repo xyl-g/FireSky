@@ -165,68 +165,34 @@ struct NativeTaskEvent: Identifiable {
     }
 }
 
+/// 任务历史独立侧栏页面：左侧列表 + 右侧详情区，支持类型/状态筛选。
 struct NativeTaskHistoryView: View {
     @EnvironmentObject private var store: Store
     /// UX #13：后台同步轮次默认折叠。
     @State private var showSyncRounds = false
+    /// 任务类型筛选：all / 主动任务 / 后台同步。
+    @State private var kindFilter = "all"
+
+    private var visibleHistory: [NativeTaskHistoryItem] {
+        switch kindFilter {
+        case "active": store.taskHistory.filter { !$0.isBackgroundSync }
+        case "sync": store.taskHistory.filter(\.isBackgroundSync)
+        default: showSyncRounds ? store.taskHistory : store.taskHistory.filter { !$0.isBackgroundSync }
+        }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("任务历史").font(.title.weight(.semibold))
-                    Text(store.taskHistoryLoaded
-                         ? "显示最近 \(store.taskHistory.count) 项，共 \(store.taskHistoryTotal) 项"
-                         : "记录数据检查、准备、预测和下载探测任务")
-                        .font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            Divider()
+            HStack(alignment: .top, spacing: 0) {
+                listColumn
+                if store.selectedTaskHistoryID != nil {
+                    Divider()
+                    detailColumn
                 }
-                Spacer()
-                Button { store.loadTaskHistory() } label: {
-                    Image(systemName: "arrow.clockwise")
-                }.help("刷新任务历史")
-                    .disabled(!store.online || store.taskHistoryLoading)
-            }
-            if !store.taskHistoryError.isEmpty {
-                Text(store.taskHistoryError).font(.callout).foregroundStyle(.red)
-                    .textSelection(.enabled)
-            }
-            if store.taskHistoryLoading && store.taskHistory.isEmpty {
-                ProgressView("正在读取任务记录…").frame(maxWidth: .infinity, minHeight: 140)
-            } else if store.taskHistory.isEmpty {
-                ContentUnavailableView("暂无任务记录", systemImage: "clock.arrow.circlepath",
-                                       description: Text(store.online ? "完成一次检查或预测后会显示在这里。" : "引擎未连接。"))
-            } else {
-                let syncCount = store.taskHistory.filter(\.isBackgroundSync).count
-                if syncCount > 0 {
-                    Button {
-                        showSyncRounds.toggle()
-                    } label: {
-                        Label(showSyncRounds ? "隐藏后台同步轮次（\(syncCount)）"
-                              : "展开后台同步轮次（\(syncCount)）",
-                              systemImage: showSyncRounds ? "chevron.up" : "chevron.down")
-                            .font(.caption)
-                    }.buttonStyle(.borderless)
-                }
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(store.taskHistory) { item in
-                            if showSyncRounds || !item.isBackgroundSync {
-                                historyRow(item)
-                                Divider()
-                            }
-                        }
-                    }
-                }
-            }
-            if store.taskHistoryIssues > 0 {
-                Text("\(store.taskHistoryIssues) 项记录无法核验，未将未知状态标为中断。")
-                    .font(.caption).foregroundStyle(.orange)
-            }
-            if let selected = store.taskHistory.first(where: { $0.taskID == store.selectedTaskHistoryID }) {
-                eventsView(selected)
             }
         }
-        .padding(30)
         .task { store.loadTaskHistory() }
         .confirmationDialog("删除任务记录？", isPresented: Binding(
             get: { store.pendingForgetTaskID != nil },
@@ -244,92 +210,218 @@ struct NativeTaskHistoryView: View {
         }
     }
 
-    private func historyRow(_ item: NativeTaskHistoryItem) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Image(systemName: statusSymbol(item.status))
-                .foregroundStyle(statusColor(item.status))
-                .frame(width: 22, height: 22)
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(spacing: 7) {
-                    Text(item.rowTitle)
-                        .font(.callout.weight(.medium))
-                    Text(item.statusTitle)
-                        .font(.caption.weight(.medium))
-                        .foregroundStyle(statusColor(item.status))
-                }
-                if !item.contextTitle.isEmpty {
-                    Text(item.contextTitle).font(.caption).foregroundStyle(.secondary)
-                }
-                HStack(spacing: 10) {
-                    // UX #4：本地时区展示，原始 UTC 放进 help 便于排查。
-                    Text(historyTimeText(item.createdAtUTC)).monospacedDigit()
-                        .help("UTC：\(item.createdAtUTC)")
-                    if item.status == "running",
-                       let percent = (item.progress["percent"] as? NSNumber)?.doubleValue {
-                        Text(String(format: "%.0f%%", percent)).monospacedDigit()
-                    }
-                    if item.status == "interrupted" { Text("不会自动重跑") }
-                }.font(.caption2).foregroundStyle(.secondary)
+    private var header: some View {
+        HStack(spacing: 10) {
+            Text(store.taskHistoryLoaded
+                 ? "最近 \(store.taskHistory.count) 项 · 共 \(store.taskHistoryTotal) 项"
+                 : "记录数据检查、准备、预测和下载探测任务")
+                .font(.caption).foregroundStyle(.secondary)
+            if store.taskHistoryIssues > 0 {
+                Text("\(store.taskHistoryIssues) 项无法核验")
+                    .font(.caption).foregroundStyle(.orange)
             }
-            Spacer(minLength: 8)
-            HStack(spacing: 8) {
-                Button {
-                    store.selectTaskHistory(item.taskID)
-                } label: {
-                    Image(systemName: store.selectedTaskHistoryID == item.taskID
-                          ? "list.bullet.rectangle.fill" : "list.bullet.rectangle")
-                }.help("查看任务事件").buttonStyle(.borderless)
-                if item.canRestoreResult {
-                    Button { store.restoreTaskResult(item) } label: {
-                        Image(systemName: "arrow.uturn.left.circle")
-                    }.help("恢复已发布结果").buttonStyle(.borderless)
-                        .disabled(store.busy || store.restoringTaskHistoryID != nil)
-                }
-                if item.retryRequest != nil {
-                    Button { store.restoreTaskParameters(item) } label: {
-                        Image(systemName: "arrow.clockwise.circle")
-                    }.help("恢复参数并重新检查数据").buttonStyle(.borderless)
-                        .disabled(store.busy || item.status == "running" || store.restoringTaskHistoryID != nil)
-                }
-                Button { store.pendingForgetTaskID = item.taskID } label: {
-                    Image(systemName: "trash")
-                }.help("删除任务记录").buttonStyle(.borderless)
-                    .disabled(store.busy || item.status == "running" || store.forgettingTaskHistoryID != nil)
-            }
-        }.padding(.vertical, 12)
+            Spacer()
+            // 筛选：主动任务 / 后台同步轮次。
+            Picker("", selection: $kindFilter) {
+                Text("全部").tag("all")
+                Text("主动任务").tag("active")
+                Text("后台同步").tag("sync")
+            }.pickerStyle(.segmented).frame(width: 220)
+                .controlSize(.small)
+                .accessibilityLabel("任务类型筛选")
+            Button { store.loadTaskHistory() } label: {
+                Image(systemName: "arrow.clockwise")
+            }.help("刷新任务历史")
+                .disabled(!store.online || store.taskHistoryLoading)
+        }.padding(.horizontal, 20).padding(.vertical, 10)
     }
 
-    private func eventsView(_ item: NativeTaskHistoryItem) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("\(item.rowTitle)事件")
-                    .font(.headline)
-                Spacer()
-                Button { store.selectTaskHistory(item.taskID) } label: {
-                    Image(systemName: "xmark")
-                }.help("关闭任务事件").buttonStyle(.borderless)
+    private var listColumn: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if !store.taskHistoryError.isEmpty {
+                Text(store.taskHistoryError).font(.callout).foregroundStyle(.red)
+                    .textSelection(.enabled).padding(20)
             }
+            if store.taskHistoryLoading && store.taskHistory.isEmpty {
+                ProgressView("正在读取任务记录…").frame(maxWidth: .infinity, minHeight: 140)
+            } else if visibleHistory.isEmpty {
+                ContentUnavailableView(
+                    store.taskHistory.isEmpty ? "暂无任务记录" : "没有符合筛选的任务",
+                    systemImage: "clock.arrow.circlepath",
+                    description: Text(store.online
+                        ? (store.taskHistory.isEmpty ? "完成一次检查或预测后会显示在这里。" : "换个筛选条件试试。")
+                        : "引擎未连接。"))
+            } else {
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 0) {
+                            ForEach(visibleHistory) { item in
+                                historyRow(item)
+                                    .id(item.taskID)
+                                Divider().padding(.leading, 52)
+                            }
+                        }
+                    }
+                    .onChange(of: store.selectedTaskHistoryID) { _, selected in
+                        if let selected { proxy.scrollTo(selected, anchor: .center) }
+                    }
+                }
+            }
+            if !store.online && store.taskHistoryError.isEmpty {
+                Label("引擎未连接，显示的是上次读取的记录。", systemImage: "wifi.slash")
+                    .font(.caption).foregroundStyle(.secondary).padding(20)
+            }
+        }.frame(minWidth: 420)
+    }
+
+    /// 右侧详情区：任务摘要 + 事件时间线；固定宽度，随选中项刷新。
+    private var detailColumn: some View {
+        Group {
+            if let selected = store.taskHistory.first(where: { $0.taskID == store.selectedTaskHistoryID }) {
+                VStack(alignment: .leading, spacing: 12) {
+                    HStack(alignment: .top) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(selected.rowTitle).font(.headline)
+                            if !selected.contextTitle.isEmpty {
+                                Text(selected.contextTitle).font(.callout).foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        Button { store.clearTaskHistorySelection() } label: {
+                            Image(systemName: "xmark")
+                        }.help("关闭详情").buttonStyle(.borderless)
+                    }
+                    summaryCard(selected)
+                    Divider()
+                    eventsCard(selected)
+                }.padding(20).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+        }.background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+            .frame(width: 360)
+    }
+
+    /// 摘要卡：状态、原始 UTC、进度、恢复说明；动作按钮集中在列表行。
+    private func summaryCard(_ item: NativeTaskHistoryItem) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            summaryRow("状态", item.statusTitle + (item.status == "interrupted" ? "（不会自动重跑）" : ""))
+            summaryRow("创建时间", historyTimeText(item.createdAtUTC),
+                       help: "UTC：\(item.createdAtUTC)")
+            summaryRow("更新时间", historyTimeText(item.updatedAtUTC),
+                       help: "UTC：\(item.updatedAtUTC)")
+            if item.status == "running",
+               let percent = (item.progress["percent"] as? NSNumber)?.doubleValue {
+                ProgressView(value: percent, total: 100)
+                summaryRow("进度", String(format: "%.0f%%", percent))
+            }
+            if item.cancelRequested {
+                summaryRow("取消", "已请求取消，等待任务停止")
+            }
+            if item.canRestoreResult {
+                summaryRow("恢复", "可从已发布快照恢复本任务结果")
+            }
+            if item.retryRequest != nil {
+                summaryRow("重试", "可恢复参数并重新检查数据")
+            }
+            summaryRow("删除记录", "只删除状态和事件，不影响报告与天气数据")
+        }.padding(12)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func summaryRow(_ title: String, _ value: String, help: String? = nil) -> some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text(title).font(.caption).foregroundStyle(.secondary).frame(width: 64, alignment: .leading)
+            Text(value).font(.caption).textSelection(.enabled)
+            Spacer(minLength: 0)
+        }.help(help ?? value)
+    }
+
+    /// 事件时间线：与旧版一致，带截断提示与逐条 UTC help。
+    private func eventsCard(_ item: NativeTaskHistoryItem) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("事件").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             if store.taskHistoryEventsLoading {
                 ProgressView().controlSize(.small)
             } else if !store.taskHistoryEventsError.isEmpty {
                 Text(store.taskHistoryEventsError).font(.caption).foregroundStyle(.red)
+            } else if store.taskHistoryEvents.isEmpty {
+                Text("没有已记录的事件。").font(.caption).foregroundStyle(.secondary)
             } else {
                 if store.taskHistoryEventsTruncated {
                     Text("较早事件已超出保留上限。").font(.caption).foregroundStyle(.secondary)
                 }
-                ForEach(store.taskHistoryEvents) { event in
-                    HStack(alignment: .firstTextBaseline, spacing: 9) {
-                        Text(historyTimeText(event.atUTC)).font(.caption2).monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .help("UTC：\(event.atUTC)")
-                        Text(event.title).font(.caption.weight(.medium))
-                        Text(event.detail).font(.caption2).foregroundStyle(.secondary)
-                        Spacer()
-                    }.padding(.vertical, 3)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(store.taskHistoryEvents) { event in
+                            HStack(alignment: .firstTextBaseline, spacing: 9) {
+                                Text(historyTimeText(event.atUTC)).font(.caption2).monospacedDigit()
+                                    .foregroundStyle(.secondary)
+                                    .help("UTC：\(event.atUTC)")
+                                Text(event.title).font(.caption.weight(.medium))
+                                Text(event.detail).font(.caption2).foregroundStyle(.secondary)
+                                Spacer()
+                            }.padding(.vertical, 3)
+                        }
+                    }
                 }
             }
-        }
-        .padding(.top, 10)
+        }.frame(maxHeight: .infinity, alignment: .top)
+    }
+
+    private func historyRow(_ item: NativeTaskHistoryItem) -> some View {
+        Button {
+            store.selectTaskHistory(item.taskID)
+        } label: {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: statusSymbol(item.status))
+                    .foregroundStyle(statusColor(item.status))
+                    .frame(width: 22, height: 22)
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 7) {
+                        Text(item.rowTitle)
+                            .font(.callout.weight(.medium))
+                        Text(item.statusTitle)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(statusColor(item.status))
+                    }
+                    if !item.contextTitle.isEmpty {
+                        Text(item.contextTitle).font(.caption).foregroundStyle(.secondary)
+                    }
+                    HStack(spacing: 10) {
+                        // UX #4：本地时区展示，原始 UTC 放进 help 便于排查。
+                        Text(historyTimeText(item.createdAtUTC)).monospacedDigit()
+                            .help("UTC：\(item.createdAtUTC)")
+                        if item.status == "running",
+                           let percent = (item.progress["percent"] as? NSNumber)?.doubleValue {
+                            Text(String(format: "%.0f%%", percent)).monospacedDigit()
+                        }
+                        if item.status == "interrupted" { Text("不会自动重跑") }
+                    }.font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                HStack(spacing: 8) {
+                    if item.canRestoreResult {
+                        Button { store.restoreTaskResult(item) } label: {
+                            Image(systemName: "arrow.uturn.left.circle")
+                        }.help("恢复已发布结果").buttonStyle(.borderless)
+                            .disabled(store.busy || store.restoringTaskHistoryID != nil)
+                    }
+                    if item.retryRequest != nil {
+                        Button { store.restoreTaskParameters(item) } label: {
+                            Image(systemName: "arrow.clockwise.circle")
+                        }.help("恢复参数并重新检查数据").buttonStyle(.borderless)
+                            .disabled(store.busy || item.status == "running" || store.restoringTaskHistoryID != nil)
+                    }
+                    Button { store.pendingForgetTaskID = item.taskID } label: {
+                        Image(systemName: "trash")
+                    }.help("删除任务记录").buttonStyle(.borderless)
+                        .disabled(store.busy || item.status == "running" || store.forgettingTaskHistoryID != nil)
+                }
+            }
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .contentShape(Rectangle())
+            .background(store.selectedTaskHistoryID == item.taskID
+                        ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.18) : Color.clear)
+        }.buttonStyle(.plain)
     }
 
     private func statusSymbol(_ status: String) -> String {

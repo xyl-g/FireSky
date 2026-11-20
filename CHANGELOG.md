@@ -8,6 +8,52 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v1.2.0 (2026-11-20)
+
+macOS 信息架构重构：任务历史独立页面 + 设置分类拆分 + 数据管理瘦身。
+macOS information-architecture rework: standalone Task History page,
+categorized Settings, and a slimmer Data Management page.
+
+**macOS 信息架构 / macOS information architecture**
+
+- 任务历史成为独立侧栏页面（`Page.history`，⌘5）：左列表 + 右详情区，
+  新增「全部 / 主动任务 / 后台同步」筛选；行内直接提供恢复结果、恢复
+  参数并重查、删除记录三个动作；详情区含状态、原始 UTC、进度与完整
+  事件时间线。不再嵌在数据页底部。
+  Task History is now a standalone sidebar page (⌘5) with a list/detail
+  split, an all/active/background-sync filter, and inline restore/
+  retry/delete actions; details show status, raw UTC, progress, and the
+  full event timeline instead of living at the bottom of the data page.
+- 设置拆分为四类：通用（主题）、数据（下载源 / CAMS / 下载连通性 /
+  后台同步与助手 / 存储与保留 / 数据目录）、位置与海拔（海拔来源，
+  移除冒充配置的「当前实际来源」）、高级（自定义引擎路径）。切换分类
+  保留表单草稿；CAMS 提醒跳转直接落位到「数据」并展开教程。
+  Settings is split into General / Data / Location & Elevation /
+  Advanced; drafts survive category switches, and the CAMS onboarding
+  alert jumps straight to the Data category with the tutorial expanded.
+- 数据管理页瘦身：移除嵌入的下载连通性卡片与「立即同步」（随同步配置
+  迁入「设置 → 数据」），顶部显示实际数据目录并提供「同步设置」跳转；
+  库存仅统计模式数据时明确标注口径。
+  The Data Management page drops the embedded probe card and "sync now"
+  (moved to Settings → Data), shows the resolved data directory up
+  front, links to sync settings, and states that totals cover the model
+  datasets only.
+- 顶栏按页面生成：设置 / 数据管理 / 任务历史不再借用预测地点（修复
+  设置页误显示「杭州 · 坐标」），删除装饰性日期 chip；数据侧栏红点
+  移除（探测状态在设置内中性呈现）。
+  The topbar no longer leaks the forecast location onto Settings /
+  Data / History (fixes "Hangzhou · coordinates" appearing in
+  Settings), drops the decorative date chip, and removes the sidebar
+  probe badge (probe state is presented neutrally in Settings).
+
+**发布 / Release**
+
+- 版本收敛 1.2.0（engine / engine-mobile / macOS / Android versionCode 4 /
+  iOS build 4 一致；SemVer minor：UI 信息架构变更）。
+- 本地验收 macOS arm64：`cargo build` 引擎 1.2.0、Swift 构建 + FFI/
+  夹具/打包冒烟全绿；数据管理 / 任务历史 / 设置三页快照视觉验收通过
+  （无坐标泄漏、筛选与分类栏齐全、无破版）。
+
 ## v1.1.1 (2026-11-20)
 
 海拔来源三档 + macOS 体验修复 + 同步助手卸载修复。

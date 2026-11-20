@@ -17,15 +17,17 @@ struct FireSkyApp: App {
         .defaultSize(width: 1440, height: 900)
         .commands {
             CommandGroup(replacing: .newItem) {
-                // UX #5：⌘1-4 切页不再被全局 busy 锁死；任务继续，顶栏可见进度。
+                // UX #5：⌘1-5 切页不再被全局 busy 锁死；任务继续，顶栏可见进度。
                 Button("单点预测") { store.page = .point }
                     .keyboardShortcut("1")
                 Button("区域预测") { store.page = .regional }
                     .keyboardShortcut("2")
                 Button("卫星实况") { store.page = .nowcast }
                     .keyboardShortcut("3")
-                Button("数据与下载") { store.page = .data }
+                Button("数据管理") { store.page = .data }
                     .keyboardShortcut("4")
+                Button("任务历史") { store.page = .history }
+                    .keyboardShortcut("5")
             }
             CommandGroup(replacing: .appSettings) {
                 Button("设置…") { store.page = .settings }.keyboardShortcut(",")

@@ -4,14 +4,15 @@ import Combine
 import SwiftUI
 
 enum Page: String, CaseIterable, Identifiable {
-    case point, regional, nowcast, data, settings
+    case point, regional, nowcast, data, history, settings
     var id: String { rawValue }
     var title: String {
         switch self {
         case .point: "单点预测"
         case .regional: "区域预测"
         case .nowcast: "实况观测"
-        case .data: "数据与下载"
+        case .data: "数据管理"
+        case .history: "任务历史"
         case .settings: "设置"
         }
     }
@@ -20,8 +21,17 @@ enum Page: String, CaseIterable, Identifiable {
         case .point: "location.circle"
         case .regional: "map"
         case .nowcast: "scope"
-        case .data: "arrow.down.circle"
+        case .data: "externaldrive"
+        case .history: "clock.arrow.circlepath"
         case .settings: "gearshape"
+        }
+    }
+    /// 需要地点上下文副标题的页面；管理页只显示标题本身，不借用预测地点。
+    var showsLocationSubtitle: Bool {
+        switch self {
+        case .point, .nowcast: true
+        case .regional: true
+        case .data, .history, .settings: false
         }
     }
 }
@@ -213,6 +223,10 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var savingRetention = false
     @Published var retentionMessage = ""
     @Published var retentionSaveFailed = false
+    /// 设置当前分类；CAMS 提醒、数据页跳转共用同一落位，避免各处自持状态。
+    @Published var settingsCategory: SettingsCategory = .data
+    /// UX #11：卸载后台助手是破坏性操作，确认弹窗由设置数据分区持有状态。
+    @Published var confirmUninstallHelper = false
     /// 后台数据同步（设计 11 节）：UI 只镜像引擎设置文件（事实来源在引擎），
     /// 不经 UserDefaults 持久化；默认全关。
     @Published var dataSyncEnabled = false
@@ -381,6 +395,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             UserDefaults.standard.set(engineBinary, forKey: "engineBinary")
             if page == .data {
                 await loadInventory()
+            }
+            if page == .data || page == .history {
                 loadTaskHistory()
             }
         } catch { self.error = error.localizedDescription; status = "引擎未连接" }
@@ -1193,7 +1209,9 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     }
 
     func openCAMSSetup() {
+        // 设置已拆分类：CAMS 在「数据」分区，进入时直接落位并展开教程。
         page = .settings
+        settingsCategory = .data
         showCAMSTutorial = true
     }
 
