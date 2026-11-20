@@ -53,6 +53,8 @@ jobs:
 
   linux-native:
     name: Linux GTK4 + Rust FFI
+    # 2026-11-20 临时停用：Linux 已降级为非发布目标，当前无法判断可用性（用户裁定）。
+    if: false
     # Linux follows the macOS ABI and lifecycle baseline; do not fan out
     # platform UI builds before the macOS gate has passed.
     needs: macos-native
@@ -129,6 +131,8 @@ jobs:
     # Windows follows the macOS ABI baseline. This builds the actual WinUI
     # client and Rust DLL for both required Windows architectures.
     name: WinUI + Rust FFI ${{ matrix.arch }}
+    # 2026-11-20 临时停用：Windows 发布延后，当前无法判断可用性（用户裁定）。
+    if: false
     needs: macos-native
     strategy:
       fail-fast: false
@@ -221,6 +225,8 @@ jobs:
     # Linux currently verifies the shared native FFI foundation. The full
     # toolkit UI and installer remain a follow-up after this contract gate.
     name: Linux FFI ${{ matrix.arch }}
+    # 2026-11-20 临时停用：随 linux-native/windows-native 一并关闭（用户裁定）。
+    if: false
     needs: windows-native
     strategy:
       fail-fast: false
