@@ -13,6 +13,7 @@ on:
       - "resources/**"
       - "scripts/build_app_resources.py"
       - "scripts/bundle_macos_eccodes.sh"
+      - "scripts/build_windows_native.ps1"
       - "scripts/test_macos_native.sh"
       - "scripts/test_macos_swift_fixtures.sh"
       - "scripts/test_docker_contract.sh"
@@ -121,10 +122,11 @@ jobs:
 
   windows-native:
     # Windows follows the macOS ABI baseline. This builds the actual WinUI
-    # client and Rust DLL for both required Windows architectures.
+    # client and Rust DLL for both required Windows architectures, and stages
+    # the release zip via scripts/build_windows_native.ps1 (same path as local
+    # builds). 2026-11-21 恢复：Windows 原生链已在真实 Windows 机器上完成
+    # 构建/运行冒烟（feat/windows-release）。
     name: WinUI + Rust FFI ${{ matrix.arch }}
-    # 2026-11-20 临时停用：Windows 发布延后，当前无法判断可用性（用户裁定）。
-    if: false
     needs: macos-native
     strategy:
       fail-fast: false
@@ -132,13 +134,11 @@ jobs:
         include:
           - runner: windows-2022
             arch: x64
-            platform: x64
             rid: win-x64
             target: x86_64-pc-windows-msvc
             triplet: x64-windows
           - runner: windows-11-arm
             arch: arm64
-            platform: ARM64
             rid: win-arm64
             target: aarch64-pc-windows-msvc
             triplet: arm64-windows
@@ -175,43 +175,30 @@ jobs:
             "$env:VCPKG_TRIPLET" `
             "$env:RUNNER_TEMP/eccodes-bundle"
           if ($LASTEXITCODE -ne 0) { throw "ecCodes bundle failed" }
-      - name: Build WinUI native app
-        shell: pwsh
-        env:
-          # runner context is only valid at step level; a job-level env with
-          # runner.temp makes GitHub reject the whole workflow at startup.
-          FIRESKY_ECCODES_ROOT: ${{ runner.temp }}\eccodes-bundle
-        run: |
-          dotnet build apps/windows/FireSky/FireSky.csproj `
-            -c Release `
-            -p:Platform=${{ matrix.platform }} `
-            -r ${{ matrix.rid }} `
-            -p:FireSkyEcCodesRoot="$env:FIRESKY_ECCODES_ROOT" `
-            --self-contained true
-      - name: Verify FFI payload
+      - name: Build and package WinUI native app
         shell: pwsh
         run: |
-          # -p:Platform=x64/ARM64 时 .NET SDK 输出在 bin\<Platform>\Release\，
-          # WinUI 再叠加 net8.0-…\win10-<arch>\ 层级；不会落在 bin\Release。
-          $root = "apps/windows/FireSky/bin"
-          if (!(Test-Path $root)) { throw "build output root was not produced: $root" }
-          $exe = Get-ChildItem $root -Recurse -Filter "FireSky.exe" |
-            Where-Object { Test-Path (Join-Path $_.Directory.FullName "Resources\firesky_engine.dll") } |
-            Select-Object -First 1
-          if ($null -eq $exe) { throw "FireSky.exe with packaged firesky_engine.dll was not produced" }
-          $dll = Join-Path $exe.Directory.FullName "Resources\firesky_engine.dll"
-          if (!(Test-Path $dll)) { throw "firesky_engine.dll was not packaged" }
-          $manifest = Join-Path $exe.Directory.FullName "Resources\app-data\RESOURCE-MANIFEST.json"
-          if (!(Test-Path $manifest)) { throw "application resource manifest was not packaged" }
-          if ((Get-ChildItem $exe.Directory.FullName -Recurse -Include "*python*","*pyside*","*pyobjc*").Count -gt 0) {
-            throw "Python runtime files found in native package"
-          }
+          # 打包脚本复用本 job 已构建的 ecCodes bundle；引擎与 WinUI 构建、
+          # 载荷校验、清理暂存与 zip+sha256 都走与本地一致的单一路径。
+          pwsh -ExecutionPolicy Bypass -File scripts/build_windows_native.ps1 `
+            -Arch ${{ matrix.arch }} `
+            -EccodesRoot "$env:RUNNER_TEMP\eccodes-bundle"
+      - name: Build Windows installer (Inno Setup)
+        shell: pwsh
+        run: |
+          choco install innosetup -y --no-progress
+          pwsh -ExecutionPolicy Bypass -File scripts/build_windows_installer.ps1 `
+            -Arch ${{ matrix.arch }}
       - name: Upload WinUI native package
         uses: actions/upload-artifact@v4
         with:
           name: FireSky-windows-${{ matrix.arch }}
           if-no-files-found: error
-          path: apps/windows/FireSky/bin/**
+          path: |
+            dist/native-windows/*.zip
+            dist/native-windows/*.zip.sha256
+            dist/native-windows/*-setup.exe
+            dist/native-windows/*-setup.exe.sha256
 
   linux-ffi:
     # Linux currently verifies the shared native FFI foundation. The full
@@ -311,10 +298,11 @@ jobs:
 
   release:
     name: Publish GitHub Release
-    # 打 v* tag 时自动发布：macOS 双架构 DMG 取自本 run 的矩阵产物，
-    # 不再需要本地下载/上传。移动端/Docker 资产仍按 README 口径另行补齐。
+    # 打 v* tag 时自动发布：macOS 双架构 DMG 与 Windows 双架构 zip 取自本
+    # run 的矩阵产物，不再需要本地下载/上传。移动端/Docker 资产仍按 README
+    # 口径另行补齐。
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: macos-native
+    needs: [macos-native, windows-native]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -330,17 +318,32 @@ jobs:
         with:
           name: FireSky-macos-x86_64
           path: artifacts/x86_64
-      - name: Stage DMGs and SHA256SUMS
+      - name: Download Windows x64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: FireSky-windows-x64
+          path: artifacts/windows-x64
+      - name: Download Windows arm64 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: FireSky-windows-arm64
+          path: artifacts/windows-arm64
+      - name: Stage DMGs, zips, installers and SHA256SUMS
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p release-assets
           find artifacts -name '*.dmg' -exec cp {} release-assets/ \;
+          find artifacts \( -name '*.zip' -o -name '*-setup.exe' \) -exec cp {} release-assets/ \;
           # 资产文件名必须带 tag 版本，防止旧版本产物混入。
           for arch in arm64 x86_64; do
             test -f "release-assets/FireSky-${VERSION}-macos-${arch}.dmg"
           done
-          (cd release-assets && sha256sum FireSky-*.dmg > SHA256SUMS.txt)
+          for arch in x64 arm64; do
+            test -f "release-assets/FireSky-${VERSION}-windows-${arch}.zip"
+            test -f "release-assets/FireSky-${VERSION}-windows-${arch}-setup.exe"
+          done
+          (cd release-assets && sha256sum FireSky-*.dmg FireSky-*.zip FireSky-*-setup.exe > SHA256SUMS.txt)
           (cd release-assets && sha256sum -c SHA256SUMS.txt)
       - name: Extract changelog section for this version
         run: |
