@@ -109,7 +109,7 @@ struct InventoryView: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .lineLimit(1).truncationMode(.middle)
                             .help(store.workspace)
-                        Text("仅统计模式数据（GFS / EC / CAMS）；地形、卫星等类别以目录为准。")
+                        Text("已统计占用仅覆盖模式数据（GFS / EC / CAMS）；地形与卫星以目录为准。")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -126,6 +126,13 @@ struct InventoryView: View {
                         }
                     } label: { Image(systemName: "folder") }.help("在访达中打开数据目录")
                 }
+                if !store.dataDeleteMessage.isEmpty {
+                    Text(store.dataDeleteMessage)
+                        .font(.caption)
+                        .foregroundStyle(store.dataDeleteFailed ? Color.red : Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                TerrainPanelView()
                 ForEach(Array(store.inventory.enumerated()), id: \.offset) { _, dataset in
                     let source = dataset["source"] as? String ?? ""
                     let title = source == "ecmwf" ? "EC" : source.uppercased()
@@ -143,6 +150,11 @@ struct InventoryView: View {
                                     NSWorkspace.shared.open(URL(fileURLWithPath: path))
                                 }
                             } label: { Image(systemName: "folder") }.help("在访达中打开")
+                            Button {
+                                store.beginDataDelete(source: source, cycle: nil)
+                            } label: { Image(systemName: "trash") }
+                                .help("清空该数据源")
+                                .disabled(store.busy || !store.online || store.dataDeleteRunning)
                         }
                         DisclosureGroup("\(cycles.count) 个周期", isExpanded: Binding(
                             get: { store.expandedInventory.contains(source) },
@@ -154,6 +166,12 @@ struct InventoryView: View {
                                     Text(key).monospaced()
                                     Spacer()
                                     Text("\(item["files"] as? Int ?? 0) 个文件").foregroundStyle(.secondary)
+                                    Button {
+                                        store.beginDataDelete(source: source, cycle: key)
+                                    } label: { Image(systemName: "trash") }
+                                        .buttonStyle(.borderless)
+                                        .help("删除该周期")
+                                        .disabled(store.busy || !store.online || store.dataDeleteRunning)
                                 }.font(.callout).padding(.vertical, 5)
                             }
                         }
@@ -164,6 +182,213 @@ struct InventoryView: View {
                 if !store.error.isEmpty { Text(store.error).foregroundStyle(.red) }
             }.padding(30)
         }
+        .confirmationDialog("删除本地数据？", isPresented: Binding(
+            get: { store.pendingDataDelete != nil && store.dataDeletePreview != nil },
+            set: { if !$0 { store.cancelDataDelete() } }
+        )) {
+            Button("删除", role: .destructive) { store.executeDataDelete() }
+                .disabled(store.dataDeleteRunning)
+            Button("取消", role: .cancel) { store.cancelDataDelete() }
+        } message: {
+            Text(deleteConfirmationText)
+        }
+    }
+
+    /// 确认文案：具体范围 + 文件数 + 预计释放空间；占用中文件会跳过。
+    private var deleteConfirmationText: String {
+        guard let preview = store.dataDeletePreview,
+              let scope = store.pendingDataDelete else {
+            return "正在生成删除预览…"
+        }
+        let source = scope["source"] as? String ?? ""
+        let title = source == "ecmwf" ? "EC" : source.uppercased()
+        let files = (preview["file_count"] as? NSNumber)?.intValue ?? 0
+        let mb = (preview["total_mb"] as? NSNumber)?.doubleValue ?? 0
+        let protected = (preview["protected"] as? [Any])?.count ?? 0
+        if let cycle = scope["cycle"] as? String {
+            return "删除 \(title) 的周期 \(cycle)：共 \(files) 个文件，预计释放 \(String(format: "%.1f", mb)) MB。占用中的文件会跳过；报告与任务记录不受影响。"
+        }
+        var text = "清空 \(title) 的全部本地数据：共 \(files) 个文件，预计释放 \(String(format: "%.1f", mb)) MB。占用中的文件会跳过。"
+        if protected > 0 {
+            text += "当前有 \(protected) 个文件被下载任务占用，将跳过。"
+        }
+        return text
+    }
+}
+
+/// 数据管理页的 SRTM 地形面板（方案 7）：目标瓦片、本地状态与显式下载。
+/// 下载主动作为全球批量（用户口径）：确认估算后整域下载，跳过已有瓦片，
+/// 海洋瓦片自动标记缺失；点级下载保留为次级入口。
+struct TerrainPanelView: View {
+    @EnvironmentObject private var store: Store
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Image(systemName: "mountain.2").font(.title2).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("地形 SRTM").font(.headline)
+                    Text(terrainSubtitle).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                if store.terrainLoading || store.terrainEstimateLoading {
+                    ProgressView().controlSize(.small)
+                }
+                if store.terrainDownloading {
+                    Button("取消", systemImage: "stop.fill") { store.cancelTerrainDownload() }
+                        .disabled(store.terrainCancelling)
+                } else {
+                    // 区域预设（用户口径：按区域下载；全球为其中一个预设）。
+                    Picker("", selection: $store.terrainRegion) {
+                        ForEach(TerrainRegion.allCases) { region in
+                            Text(region.rawValue).tag(region)
+                        }
+                    }.pickerStyle(.menu).frame(width: 104)
+                        .disabled(!store.online || store.busy)
+                        .accessibilityLabel("下载区域")
+                    Button("下载区域地形", systemImage: "globe") {
+                        store.loadTerrainEstimate()
+                    }
+                    .disabled(!store.online || store.busy)
+                    .help("确认估算后下载所选区域的 SRTM 瓦片（跳过已有；可随时取消续传）")
+                    Button("仅当前地点", systemImage: "arrow.down.to.line") {
+                        store.downloadTerrainPoint()
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(!store.online || store.busy || coverageMissing)
+                    .help("只下载当前地点对应的一块瓦片")
+                }
+                Button { store.loadTerrain() } label: { Image(systemName: "arrow.clockwise") }
+                    .help("刷新地形状态")
+                    .disabled(!store.online || store.terrainDownloading)
+            }
+            if store.terrainDownloading {
+                if isBulkRun {
+                    globalProgress
+                } else {
+                    pointProgress
+                }
+            }
+            if !store.terrainMessage.isEmpty {
+                Text(store.terrainMessage).font(.caption)
+                    .foregroundStyle(store.terrainMessageFailed ? Color.red : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            localTilesLine
+        }.padding(18)
+            .background(Color(nsColor: .controlBackgroundColor).opacity(0.72),
+                        in: RoundedRectangle(cornerRadius: 10))
+            .confirmationDialog(downloadConfirmTitle, isPresented: Binding(
+                get: { store.showGlobalTerrainConfirm },
+                set: { if !$0 { store.showGlobalTerrainConfirm = false } }
+            )) {
+                Button("开始下载", role: .destructive) {
+                    store.downloadTerrain(region: store.terrainRegion)
+                }
+                Button("取消", role: .cancel) { store.showGlobalTerrainConfirm = false }
+            } message: {
+                Text(globalConfirmText)
+            }
+    }
+
+    private var isBulkRun: Bool {
+        store.terrainProgress["candidates"] != nil
+    }
+
+    private var downloadConfirmTitle: String {
+        store.terrainRegion == .global ? "下载全球地形数据？" : "下载\(store.terrainRegion.rawValue)地形数据？"
+    }
+
+    private var coverageMissing: Bool {
+        store.terrain?["coverage_ok"] as? Bool == false
+    }
+
+    /// 全球批量进度行：总体百分比 + 每类计数 + 当前瓦片。
+    private var globalProgress: some View {
+        let progress = store.terrainProgress
+        let percent = (progress["percent"] as? NSNumber)?.doubleValue ?? 0
+        let downloaded = (progress["downloaded"] as? NSNumber)?.intValue ?? 0
+        let candidates = (progress["candidates"] as? NSNumber)?.intValue ?? 0
+        let absent = (progress["absent"] as? NSNumber)?.intValue ?? 0
+        let failed = (progress["failed"] as? NSNumber)?.intValue ?? 0
+        let existing = (progress["existing"] as? NSNumber)?.intValue ?? 0
+        let bytes = (progress["received_bytes"] as? NSNumber)?.int64Value ?? 0
+        let current = progress["current_tile"] as? String ?? ""
+        return VStack(alignment: .leading, spacing: 6) {
+            ProgressView(value: percent, total: 100)
+            HStack {
+                Text("\(Int(percent))% · 已下载 \(downloaded)/\(candidates) · 已有 \(existing) · 缺失 \(absent) · 失败 \(failed)")
+                Spacer()
+                if !current.isEmpty { Text("当前 \(current)") }
+            }.font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+                .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+        }
+    }
+
+    /// 点级进度行：单瓦片下载百分比或校验阶段。
+    private var pointProgress: some View {
+        HStack(spacing: 8) {
+            if let percent = (store.terrainProgress["percent"] as? NSNumber)?.doubleValue {
+                ProgressView(value: percent, total: 100).frame(width: 180)
+                Text("\(Int(percent))%").monospacedDigit().font(.caption)
+            } else {
+                ProgressView().controlSize(.small)
+                Text(store.terrainProgress["stage"] as? String == "verifying"
+                     ? "校验瓦片数据…" : "下载中…").font(.caption)
+            }
+            if let received = (store.terrainProgress["received_bytes"] as? NSNumber)?.int64Value {
+                let size = ByteCountFormatter.string(fromByteCount: received, countStyle: .file)
+                if let total = (store.terrainProgress["total_bytes"] as? NSNumber)?.int64Value {
+                    Text("\(size) / \(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))")
+                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                } else {
+                    Text(size).font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                }
+            }
+        }
+    }
+
+    /// 本地瓦片行：少量列出名称，大量只报数量。
+    @ViewBuilder
+    private var localTilesLine: some View {
+        let count = (store.terrain?["tile_count"] as? NSNumber)?.intValue ?? 0
+        if count > 8 {
+            Text("本地已有 \(count) 块瓦片。").font(.caption).foregroundStyle(.secondary)
+        } else if let tiles = store.terrain?["tiles"] as? [JSONObject], !tiles.isEmpty {
+            Text("本地瓦片：\(tiles.map { $0["name"] as? String ?? "" }.joined(separator: "、"))")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    private var terrainSubtitle: String {
+        guard let terrain = store.terrain else {
+            return store.online ? "全球瓦片下载后会覆盖任意地点，无需再按点下载。" : "引擎未连接。"
+        }
+        if terrain["coverage_ok"] as? Bool == false {
+            return "当前纬度不在 SRTM 覆盖范围（-56 ≤ 纬度 < 60）。"
+        }
+        guard let tile = terrain["tile"] as? JSONObject else {
+            return "显示本地已有地形瓦片。"
+        }
+        let name = tile["name"] as? String ?? ""
+        let exists = tile["exists"] as? Bool == true
+        let location = String(format: "%.4f° N, %.4f° E", store.lat, store.lon)
+        return "目标 \(store.name)（\(location)）· 瓦片 \(name) · \(exists ? "已有本地瓦片" : "未下载")"
+    }
+
+    /// 确认文案：所选区域候选数 + 抽样估算体积 + 已有数量 + 续传说明。
+    private var globalConfirmText: String {
+        let global = store.terrainEstimate?["global"] as? JSONObject ?? [:]
+        let candidates = (global["candidates"] as? NSNumber)?.intValue ?? 0
+        let existing = (global["existing"] as? NSNumber)?.intValue ?? 0
+        var text = "将下载\(store.terrainRegion.rawValue)的 SRTM 瓦片：候选 \(candidates) 块，本地已有 \(existing) 块会自动跳过（海洋上的瓦片是很小的空值瓦片，同样会下载）。下载耗时较长且占用磁盘，可随时取消，重新开始会跳过已下载瓦片。"
+        if let gb = (global["estimated_gb"] as? NSNumber)?.doubleValue {
+            text += String(format: "按抽样估算体积约 %.0f GB（抽样混合了海洋小瓦片与陆地大瓦片，实际体积以运行时用量为准）。", gb)
+        } else {
+            text += "暂时无法估算体积（网络或服务不可用），开始后会显示实际用量。"
+        }
+        return text
     }
 }
 
@@ -192,6 +417,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 
 struct SettingsView: View {
     @EnvironmentObject private var store: Store
+    @EnvironmentObject private var updater: Updater
     /// 分类与卸载确认状态都在 store：跨分区动作（CAMS 提醒跳转、助手卸载）可直接落位。
     private var category: Binding<SettingsCategory> {
         Binding(get: { store.settingsCategory }, set: { store.settingsCategory = $0 })
@@ -257,6 +483,72 @@ struct SettingsView: View {
                     .onChange(of: store.appearance) { _, _ in store.saveAppearance() }
                     .accessibilityLabel("主题")
             }
+            Divider()
+            updaterBlock
+        }
+    }
+
+    /// 软件更新块：当前版本、检查/下载/安装状态与自动检查开关。
+    @ViewBuilder
+    private var updaterBlock: some View {
+        let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        VStack(alignment: .leading, spacing: 10) {
+            Text("软件更新").font(.callout.weight(.medium))
+            HStack {
+                Text("当前版本 \(currentVersion)").font(.caption).foregroundStyle(.secondary)
+                if updater.phase == .checking { ProgressView().controlSize(.small) }
+                Spacer()
+                Button("检查更新") { updater.checkForUpdates(interactive: true) }
+                    .disabled(updater.phase == .checking || updater.phase == .downloading
+                              || updater.phase == .installing)
+            }
+            switch updater.phase {
+            case .current:
+                Text(updater.message).font(.caption).foregroundStyle(.secondary)
+            case .idle, .checking:
+                EmptyView()
+            case .available:
+                if let info = updater.info {
+                    Text("发现新版本 \(info.version)，可在下载后自动安装。")
+                        .font(.callout.weight(.medium)).foregroundStyle(Color.green)
+                    if !info.notes.isEmpty {
+                        DisclosureGroup("发布说明") {
+                            Text(info.notes)
+                                .font(.caption).foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    Button("下载并安装", systemImage: "arrow.down.circle.fill") {
+                        updater.downloadAndInstall()
+                    }
+                    .help("下载 DMG、校验 SHA256 后自动安装到「应用程序」并重启")
+                }
+            case .downloading:
+                VStack(alignment: .leading, spacing: 6) {
+                    ProgressView(value: max(Double(updater.receivedBytes), 1),
+                                 total: max(Double(updater.totalBytes), 1))
+                    HStack {
+                        Text("已下载 \(ByteCountFormatter.string(fromByteCount: updater.receivedBytes, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: updater.totalBytes, countStyle: .file))")
+                            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        Spacer()
+                        Button("取消") { updater.cancelDownload() }
+                    }
+                }
+            case .installing:
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("正在安装，完成后应用将自动重启。").font(.caption).foregroundStyle(.secondary)
+                }
+            case .failed:
+                Text(updater.message).font(.caption).foregroundStyle(.red)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("重试") { updater.checkForUpdates(interactive: true) }
+            }
+            Toggle("启动时自动检查更新", isOn: $updater.autoCheck)
+                .font(.caption)
+                .disabled(updater.phase == .downloading || updater.phase == .installing)
         }
     }
 

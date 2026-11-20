@@ -200,7 +200,7 @@ fn tree_bytes(path: &Path) -> Result<u64, String> {
     Ok(bytes)
 }
 
-fn walk(root: &Path) -> Result<Vec<PathBuf>, String> {
+pub(crate) fn walk(root: &Path) -> Result<Vec<PathBuf>, String> {
     if !root.exists() {
         return Ok(Vec::new());
     }
@@ -236,7 +236,7 @@ fn walk(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(result)
 }
 
-fn sibling_lock(path: &Path) -> bool {
+pub(crate) fn sibling_lock(path: &Path) -> bool {
     let candidates = [
         PathBuf::from(format!("{}.lock", path.display())),
         PathBuf::from(format!("{}.decode.lock", path.display())),
@@ -244,6 +244,50 @@ fn sibling_lock(path: &Path) -> bool {
         path.with_file_name(".prune.lock"),
     ];
     candidates.iter().any(|candidate| candidate.exists())
+}
+
+/// Flock-verified occupancy check for manual deletion (phase C). A `.part`
+/// side file is always a live download. A `.lock` file whose flock is free is
+/// a crashed leftover: deletion may proceed, and the lock file itself stays on
+/// disk — lock/lease files are never unlinked, matching retention semantics,
+/// so flock mutual exclusion keeps working for in-flight holders.
+pub(crate) fn download_lock_held(path: &Path) -> bool {
+    if PathBuf::from(format!("{}.part", path.display())).exists() {
+        return true;
+    }
+    for candidate in [
+        PathBuf::from(format!("{}.lock", path.display())),
+        PathBuf::from(format!("{}.decode.lock", path.display())),
+    ] {
+        if !candidate.exists() {
+            continue;
+        }
+        let mut options = fs::OpenOptions::new();
+        options.read(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+        }
+        let Ok(file) = options.open(&candidate) else {
+            return true;
+        };
+        if file.metadata().is_ok_and(|meta| !meta.is_file()) {
+            return true;
+        }
+        match fs2::FileExt::try_lock_exclusive(&file) {
+            Ok(()) => {
+                let _ = fs2::FileExt::unlock(&file);
+            }
+            Err(error)
+                if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
+            {
+                return true;
+            }
+            Err(_) => return true,
+        }
+    }
+    false
 }
 
 fn parent_lock(path: &Path) -> bool {
@@ -336,7 +380,7 @@ fn parse_cycle(path: &Path, source: &str) -> Result<Option<DateTime<Utc>>, Strin
         .transpose()
 }
 
-fn related_files(path: &Path, source: &str, all: &[PathBuf]) -> Vec<PathBuf> {
+pub(crate) fn related_files(path: &Path, source: &str, all: &[PathBuf]) -> Vec<PathBuf> {
     let stem = path.file_name().and_then(|v| v.to_str()).unwrap_or("");
     let prefix = stem
         .strip_suffix(".grib2")

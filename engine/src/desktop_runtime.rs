@@ -40,6 +40,7 @@ pub struct Runtime {
     operation: Mutex<()>,
     network_probe: Mutex<()>,
     sync: Mutex<()>,
+    terrain: Mutex<()>,
 }
 
 fn decode<T: DeserializeOwned>(value: Value) -> Result<T, String> {
@@ -138,6 +139,7 @@ impl Runtime {
             operation: Mutex::new(()),
             network_probe: Mutex::new(()),
             sync: Mutex::new(()),
+            terrain: Mutex::new(()),
         })
     }
 
@@ -440,6 +442,7 @@ impl Runtime {
                 | "data_sync"
                 | "data_sync_run"
                 | "data_sync_tick"
+                | "terrain_download"
         ) {
             return Ok(None);
         }
@@ -498,7 +501,7 @@ impl Runtime {
                 "protocol":1,"engine":"firesky-rust","workspace":self.workspace,
                 "source_id":env!("FIRESKY_ENGINE_SOURCE_ID"),
                 "runtime_python_used":false,"production_desktop_complete":false,
-                "capabilities":["point","regional","nowcast","inventory","search","metadata","network_probe","data_sync","cancel","profile_query","task_history","task_events","result_restore"],
+                "capabilities":["point","regional","nowcast","inventory","search","metadata","network_probe","data_sync","cancel","profile_query","task_history","task_events","result_restore","data_delete","terrain_inventory","terrain_download"],
                 "profile_capabilities":{
                     "dynamic_model_cross_section":true,"regional_result_points":true,
                     "satellite_step_solar_path":true,"dynamic_satellite_vertical":false,
@@ -654,6 +657,51 @@ impl Runtime {
                 location::desktop_dispatch(method, &params, &self.location, true, cancel)
             }
             "inventory" => desktop_inventory::execute(&self.inventory, cancel),
+            "data_delete_preview" | "data_delete_execute" => {
+                // Deletion shares the compute lock with prepare/forecast and
+                // refuses to run while a sync round is active, matching the
+                // cross-process occupancy matrix (design 7.1 / phase C).
+                let _operation = self
+                    .operation
+                    .try_lock()
+                    .map_err(|_| "another prepare/forecast is active")?;
+                let _sync = self
+                    .sync
+                    .try_lock()
+                    .map_err(|_| "another data sync is active")?;
+                if method == "data_delete_preview" {
+                    crate::desktop_delete::preview(&self.workspace, &params, &cancel)
+                } else {
+                    crate::desktop_delete::execute(&self.workspace, &params, &cancel)
+                }
+            }
+            "terrain_inventory" => {
+                let mut config = self.location.clone();
+                config.cancellation = Some(cancel);
+                config.terrain_inventory(&params)
+            }
+            "terrain_download" => {
+                let _terrain = self
+                    .terrain
+                    .try_lock()
+                    .map_err(|_| "another terrain download is active")?;
+                if params["mode"].as_str() == Some("global") {
+                    // Bulk runs last hours and must not hold the compute lock;
+                    // per-tile download locks already protect concurrent
+                    // readers, and inventory/delete detect the live locks.
+                    let mut config = self.location.clone();
+                    config.cancellation = Some(cancel);
+                    config.terrain_download(&params, progress)
+                } else {
+                    let _operation = self
+                        .operation
+                        .try_lock()
+                        .map_err(|_| "another prepare/forecast is active")?;
+                    let mut config = self.location.clone();
+                    config.cancellation = Some(cancel);
+                    config.terrain_download(&params, progress)
+                }
+            }
             "profile_query" => {
                 crate::desktop_profiles::query(&self.workspace, decode(params)?, &cancel)
             }

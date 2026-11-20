@@ -45,6 +45,7 @@ for check in \
 done
 
 swiftc -parse-as-library -swift-version 5 -target "$TARGET" \
+    "$ROOT/apps/macos/Sources/FireSkyNative/JSONTypes.swift" \
     "$ROOT/apps/macos/Sources/FireSkyNative/EngineClient.swift" \
     "$ROOT/apps/macos/Sources/FireSkyNative/FFIEngineClient.swift" \
     "$ROOT/apps/macos/Sources/FireSkyNative/SyncHelperInstaller.swift" \
@@ -53,6 +54,14 @@ swiftc -parse-as-library -swift-version 5 -target "$TARGET" \
 "$FIXTURE_DIR/sync-helper-checks" >/dev/null
 
 swiftc -parse-as-library -swift-version 5 -target "$TARGET" \
+    "$ROOT/apps/macos/Sources/FireSkyNative/JSONTypes.swift" \
+    "$ROOT/apps/macos/Sources/FireSkyNative/Updater.swift" \
+    "$ROOT/apps/macos/Tests/UpdaterChecks.swift" \
+    -o "$FIXTURE_DIR/updater-checks"
+"$FIXTURE_DIR/updater-checks" >/dev/null
+
+swiftc -parse-as-library -swift-version 5 -target "$TARGET" \
+    "$ROOT/apps/macos/Sources/FireSkyNative/JSONTypes.swift" \
     "$ROOT/apps/macos/Sources/FireSkyNative/EngineClient.swift" \
     "$ROOT/apps/macos/Sources/FireSkyNative/FFIEngineClient.swift" \
     "$ROOT/tests/fixtures/rust_location_client.swift" \

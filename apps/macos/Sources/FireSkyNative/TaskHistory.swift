@@ -80,6 +80,7 @@ struct NativeTaskHistoryItem: Identifiable {
         case "publications": "发布核验"
         case "network_probe": "下载探测"
         case "data_sync": "后台同步"
+        case "terrain_download": "地形下载"
         default: "任务"
         }
     }

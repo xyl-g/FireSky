@@ -137,14 +137,21 @@ fi
 sign_app "$APP"
 codesign --verify --deep --strict "$APP"
 
-# Package a distributable DMG around the signed app. The release simulation
-# previously did this by hand; folding it into the bundle script means both
-# local builds and CI produce the DMG artifact. Set FIRESKY_BUILD_DMG=0 to skip.
+# Package a distributable DMG around the signed app. The staging layout puts
+# the app next to an /Applications symlink so Finder shows the classic
+# drag-to-install window; the app itself also offers to self-move when
+# launched from a mounted image (see FireSkyApp.move-to-Applications logic).
+# Set FIRESKY_BUILD_DMG=0 to skip.
+DMG_STAGING=""
+trap 'rm -rf "$ICON_TMP" "${DMG_STAGING:-}"' EXIT
 if [ "${FIRESKY_BUILD_DMG:-1}" = "1" ]; then
     VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
     DMG="$OUT/FireSky-$VERSION-macos-$MACOS_ARCH.dmg"
     rm -f "$DMG"
-    hdiutil create -volname "FireSky $VERSION" -srcfolder "$APP" -ov -format UDZO "$DMG"
+    DMG_STAGING="$(mktemp -d "${TMPDIR:-/tmp}/firesky-dmg.XXXXXX")"
+    cp -R "$APP" "$DMG_STAGING/FireSky.app"
+    ln -s /Applications "$DMG_STAGING/Applications"
+    hdiutil create -volname "FireSky $VERSION" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG"
     hdiutil verify "$DMG"
     printf '%s\n' "$DMG"
 fi

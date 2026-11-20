@@ -69,6 +69,147 @@ installer, CI publishing).
   采样点标注与网格/采样开关。
   The shared map document gains the fixed palette, missing-data legend,
   drag-drawn bounds and sample annotations.
+## v1.5.0 (2026-11-21)
+
+应用内更新逻辑（GitHub Releases 检查 → 下载 → 校验 → 自动安装）。
+In-app software update flow (check GitHub Releases, download, verify,
+install automatically).
+
+**软件更新 / Software update**
+
+- 新增设置 → 通用「软件更新」：检查更新、发现新版本时显示版本号与发布
+  说明（折叠）、下载进度与取消；启动后自动静默检查（默认开，可关），
+  发现新版本时侧栏「设置」入口显示绿色徽标。
+  Settings → General gains a "Software update" block: check for updates,
+  release notes (collapsed) and download progress with cancellation; a
+  silent check runs after launch (on by default, toggleable) and a green
+  badge appears on the sidebar Settings entry when a new version exists.
+- 下载完成后自动执行 SHA256SUMS.txt 完整性校验，随后挂载 DMG 拷贝安装
+  到「应用程序」（旧版本先入废纸篓）并自动重启；校验失败或无写权限时
+  给出明确提示与手动安装指引。下载/检查走 URLSession（系统代理；源码
+  运行时遵循环境代理变量）。
+  After download the SHA256SUMS.txt checksum is verified, then the DMG is
+  mounted, copied into /Applications (previous install trashed) and the
+  app relaunches automatically; checksum or permission failures explain
+  manual installation. Checking and downloading use URLSession (system
+  proxy settings; environment proxy variables honored for dev runs).
+- 版本比较/资产名匹配/架构探测/release 解析/校验和行解析为纯函数，进
+  入 Swift fixture 门禁（UpdaterChecks）。
+  Version comparison, asset matching, architecture detection, release
+  parsing and checksum-row parsing are pure functions covered by the
+  new UpdaterChecks Swift fixture gate.
+- JSONObject typealias 抽到共享 JSONTypes.swift（主 target 与 fixture
+  共用）。
+  The JSONObject typealias moved to shared JSONTypes.swift.
+
+## v1.4.0 (2026-11-21)
+
+DMG 安装引导（拖拽 + 自助移动）+ 地形区域下载预设。
+DMG install guidance (drag-to-Applications plus self-install prompt) and
+region presets for terrain download.
+
+**macOS 安装体验 / macOS install experience**
+
+- DMG 现在内置 `/Applications` 符号链接：Finder 打开即是经典的拖拽安装
+  窗口；打包冒烟新增挂载校验（应用可访问 + 符号链接指向正确）。
+  The DMG now ships an `/Applications` symlink next to the app, so Finder
+  opens the classic drag-to-install window; bundle smoke verifies the
+  layout by mounting the image.
+- 从挂载的磁盘映像双击启动时，应用主动提供安装引导：「应用程序」已有
+  相同或更新版本时提供打开已装版本；否则拷贝安装（旧版本先移入废纸篓）
+  并重新打开；无写权限时提示手动拖拽。快照/夹具与常规路径不受影响。
+  Launching from a mounted image now offers self-install: open the
+  already-installed copy when it is same-or-newer, otherwise copy-install
+  (older install goes to Trash first) and relaunch; a permission failure
+  explains manual drag-install instead of failing silently.
+
+**区域地形下载 / Region terrain download**
+
+- 下载范围从"全球"细化为区域预设（用户口径）：中国、东亚、东南亚、亚洲、
+  欧洲、北美、南美、非洲、大洋洲、全球，均为覆盖矩形直接映射引擎
+  `bounds`；确认框按所选区域展示候选数/已有/抽样估算体积。全球保留为
+  预设之一。
+  Download scope gains region presets (China, East Asia, Southeast Asia,
+  Asia, Europe, North America, South America, Africa, Oceania, Global);
+  each maps to an engine `bounds` rectangle and the confirmation dialog
+  shows per-region candidate counts, existing tiles and the sampled size
+  estimate. Global remains one of the presets.
+- `terrain_inventory` 估算接口支持 `bounds`（区域预设复用同一抽样路径），
+  焦点瓦片改为可选（估算请求不必带坐标）。
+  The `terrain_inventory` estimate honors `bounds`, and the focused tile
+  became optional (estimate requests need no coordinates).
+
+## v1.3.0 (2026-11-21)
+
+数据管理手动删除 + 全球 SRTM 地形下载（引擎契约 + macOS 接入）。
+Manual data deletion and global SRTM terrain download (engine contracts,
+wired into macOS).
+
+**数据管理 / Data management**
+
+- 新增 `data_delete_preview` / `data_delete_execute` 契约：按库存周期键或
+  整源删除（UI 不传磁盘路径）；预览冻结候选集（路径+大小+mtime 身份哈希），
+  执行时重算校验，过期即拒绝——确认过的范围不会静默扩大。下载锁
+  （flock 核验）占用中的文件跳过并单独报告；GRIB 连同索引/元数据 sidecar
+  整组删除；报告、快照与任务记录不受影响。
+  New `data_delete_preview` / `data_delete_execute` contracts: delete by
+  inventory cycle key or whole source (no disk paths from the UI). The
+  preview freezes the candidate set behind an identity hash; execute
+  re-derives it and rejects stale previews so a confirmed scope can never
+  silently grow. Flock-verified download locks defer busy files, GRIBs
+  delete together with their index/metadata sidecars; reports, snapshots
+  and task records are untouched.
+- macOS 数据管理页：每个周期与每个数据源新增删除入口，确认框显示
+  具体范围、文件数与预计释放空间；执行后显示已删除/跳过/失败/实际
+  释放并刷新库存。
+  The macOS data page gains per-cycle and per-source delete actions with
+  a confirmation showing the exact scope, file count and estimated
+  space; results report deleted/skipped/failed/actual freed bytes.
+
+**全球地形下载 / Global terrain download**
+
+- `terrain_download` 支持全球批量模式（用户口径：下载即全球，不是单点）：
+  枚举全部候选瓦片（默认整个 SRTM 覆盖域，支持 bounds 注入），跳过已
+  有瓦片（断点续传），4 并发下载，服务端 404 归类为缺失而非失败；
+  `terrain_inventory` 提供按 Content-Length 头抽样的体积估算（候选数/
+  已有/预计 GB），确认框展示后再开始。Skadi 数据集对海洋也有小空值
+  瓦片，因此全球下载通常覆盖全部候选（抽样估算因海陆混合可能偏低，
+  以运行时用量为准）。下载不占用计算锁；磁盘空间护栏（启动前估算
+  校验 + 运行中低于 2 GB 自动停止）保留已完成瓦片。
+  `terrain_download` gains a global bulk mode: it enumerates every
+  candidate tile (whole SRTM coverage by default, bounds injectable),
+  skips existing tiles (resumable), downloads with bounded concurrency,
+  and classifies provider 404s as absent rather than failures;
+  `terrain_inventory` adds Content-Length-header-sampled size estimates
+  shown in the confirmation dialog before starting. The Skadi dataset
+  also ships small void tiles over oceans, so a global run typically
+  downloads every candidate; bulk runs hold no compute lock and a
+  free-disk guardrail (pre-start estimate check plus a 2 GB runtime
+  stop) preserves finished tiles.
+- macOS 数据管理页「地形 SRTM」面板：主按钮「下载全球地形数据」（确认
+  候选/体积/已有后开始），批量进度显示总体百分比、已下载/缺失/失败/
+  已有计数与当前瓦片；「仅当前地点」保留为次级入口。取消可从任务
+  历史页查看（地形下载记录为任务）。
+  The macOS terrain panel makes "download global terrain" the primary
+  action behind the estimate confirmation, shows aggregate progress
+  (percent, downloaded/absent/failed/existing, current tile), and keeps
+  point download as a secondary action; runs appear in Task History.
+
+**其他 / Other**
+
+- SRTM 瓦片下载改用遵循环境代理的数据面 HTTP client（与 ADS 同一口径），
+  修复需要代理的网络下直连 S3 挂起、整请求超时失败的问题；无代理环境
+  行为不变。
+  SRTM tile downloads now use a data-plane HTTP client that honors the
+  environment proxy (the established ADS rule), fixing hangs and
+  whole-request timeouts on networks that require the proxy; proxy-less
+  environments are unchanged.
+- 下载瓦片尺寸以真实 gzip 边界校验（仅接受两种已知 SRTM 维度），取消
+  响应以 64 KiB 分块为上界；`tile_count`/`tiles_truncated` 让大规模
+  本地清单不再膨胀 JSON。
+  Tile acceptance validates the real gzip bounds (only the two known SRTM
+  dimensions), cancellation is bounded by one 64 KiB chunk, and terrain
+  inventory caps the tiles list (`tile_count`/`tiles_truncated`).
 
 ## v1.2.0 (2026-11-20)
 

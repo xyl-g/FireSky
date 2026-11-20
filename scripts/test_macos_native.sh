@@ -156,4 +156,19 @@ if [ "${FIRESKY_APP_SMOKE:-0}" = "1" ]; then
     echo "macOS application cold-start smoke: ok"
 fi
 
+# DMG 安装布局：应用旁必须有指向 /Applications 的符号链接（拖拽安装），
+# 且应用本体与引擎资源可从只读挂载访问。
+DMG_PATH="$(compgen -G "$ROOT/dist/native-macos/FireSky-*.dmg" | sort | tail -1 || true)"
+if [ -n "$DMG_PATH" ]; then
+    DMG_MOUNT="$(mktemp -d "${TMPDIR:-/tmp}/firesky-dmg-mount.XXXXXX")"
+    hdiutil attach -nobrowse -readonly -mountpoint "$DMG_MOUNT" "$DMG_PATH" >/dev/null
+    test -d "$DMG_MOUNT/FireSky.app"
+    test -x "$DMG_MOUNT/FireSky.app/Contents/MacOS/FireSky"
+    test -L "$DMG_MOUNT/Applications"
+    test "$(readlink "$DMG_MOUNT/Applications")" = "/Applications"
+    hdiutil detach "$DMG_MOUNT" >/dev/null
+    rm -rf "$DMG_MOUNT"
+    echo "macOS DMG install layout: ok"
+fi
+
 echo "macOS native bundle smoke: ok"

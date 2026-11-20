@@ -2,7 +2,6 @@ import Foundation
 import Combine
 import Darwin
 
-typealias JSONObject = [String: Any]
 
 struct EngineError: LocalizedError {
     let message: String
