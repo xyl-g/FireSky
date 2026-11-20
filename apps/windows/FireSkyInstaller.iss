@@ -32,7 +32,8 @@ CloseApplications=yes
 RestartApplications=no
 
 [Languages]
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+; 简体中文为精简覆盖层（未覆盖条目回退 Default.isl）；官方 6.7 不自带中文包。
+Name: "chinesesimplified"; MessagesFile: "compiler:Default.isl,{#ScriptDir}\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
@@ -68,15 +69,17 @@ begin
 end;
 
 function InitializeSetup(): Boolean;
+var
+  Msg: String;
 begin
   Result := True;
   if not WebView2Installed() then
   begin
-    MsgBox(
-      '未检测到 WebView2 Runtime（FireSky 地图组件依赖）。' #13#10 #13#10 +
-      '可以从微软官网安装 Evergreen Runtime 后继续：' #13#10 +
-      'https://developer.microsoft.com/microsoft-edge/webview2/' #13#10 #13#10 +
-      '仍可继续安装，但首次运行地图将无法加载。',
-      '缺少 WebView2 Runtime', MB_OK, 0);
+    Msg := '缺少 WebView2 Runtime' #13#10 #13#10
+         + '未检测到 WebView2 Runtime（FireSky 地图组件依赖）。' #13#10
+         + '可以从微软官网安装 Evergreen Runtime 后继续：' #13#10
+         + 'https://developer.microsoft.com/microsoft-edge/webview2/' #13#10 #13#10
+         + '仍可继续安装，但首次运行地图将无法加载。';
+    MsgBox(Msg, mbError, MB_OK);
   end;
 end;

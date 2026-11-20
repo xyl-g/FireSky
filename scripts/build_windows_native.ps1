@@ -1,4 +1,4 @@
-# Builds the FireSky WinUI native package: Rust engine DLL + WinUI app +
+﻿# Builds the FireSky WinUI native package: Rust engine DLL + WinUI app +
 # ecCodes runtime bundle, staged clean and zipped for release distribution.
 #
 # Windows 口径对齐 scripts/build_macos_native.sh：版本读 engine/Cargo.toml，
@@ -26,7 +26,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$Root = Split-Path -Parent $PSScriptRoot
 
 if (-not $Arch) {
     if ([System.Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture -eq "Arm64") { $Arch = "arm64" } else { $Arch = "x64" }
@@ -99,7 +99,7 @@ foreach ($required in @(
     "Resources\app-data\RESOURCE-MANIFEST.json",
     "Resources\eccodes\bin\eccodes.dll",
     "Resources\eccodes\share\eccodes\definitions",
-    "Resources\Map\map.html")) {
+    "Assets\Map\map.html")) {
     if (-not (Test-Path (Join-Path $AppDir $required))) {
         throw "package payload missing: $required"
     }

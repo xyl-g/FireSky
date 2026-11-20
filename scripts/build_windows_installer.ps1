@@ -1,4 +1,4 @@
-# Builds the FireSky Windows installer (Inno Setup) from the staged package
+﻿# Builds the FireSky Windows installer (Inno Setup) from the staged package
 # tree produced by scripts/build_windows_native.ps1.
 #
 # Usage:
@@ -16,7 +16,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$Root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+$Root = Split-Path -Parent $PSScriptRoot
 if (-not $OutDir) { $OutDir = Join-Path $Root "dist\native-windows" }
 $Version = (Select-String -Path (Join-Path $Root "engine\Cargo.toml") -Pattern '^version = "([^"]*)"').Matches[0].Groups[1].Value
 if (-not $Version) { throw "cannot read version from engine/Cargo.toml" }
@@ -37,13 +37,23 @@ if (-not $IsccPath -or -not (Test-Path $IsccPath)) {
     throw "ISCC.exe not found; install Inno Setup 6 (winget install JRSoftware.InnoSetup) or pass -IsccPath."
 }
 
+$IssFile = Join-Path $Root "apps\windows\FireSkyInstaller.iss"
 & $IsccPath "/DAppVersion=$Version" "/DArch=$Arch" "/DStageDir=$Stage" `
-    (Join-Path $Root "apps\windows\FireSkyInstaller.iss")
+    "/DScriptDir=$(Split-Path -Parent $IssFile)" `
+    $IssFile
 if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed" }
 
-$Setup = Join-Path $OutDir "FireSky-$Version-windows-$Arch-setup.exe"
-if (-not (Test-Path $Setup)) { throw "installer output missing: $Setup" }
-$Hash = (Get-FileHash $Setup -Algorithm SHA256).Hash.ToLowerInvariant()
-Set-Content -Path "$Setup.sha256" -Value "$Hash  FireSky-$Version-windows-$Arch-setup.exe" -Encoding ascii
+# ISCC 输出在 StageDir（.iss 的 OutputDir）；移到发布目录。
+try {
+    $Built = Join-Path $Stage "FireSky-$Version-windows-$Arch-setup.exe"
+    $Setup = Join-Path $OutDir "FireSky-$Version-windows-$Arch-setup.exe"
+    if (-not (Test-Path -LiteralPath $Built)) { throw "installer output missing: $Built" }
+    Move-Item -LiteralPath $Built -Destination $Setup -Force
+    $Hash = (Get-FileHash -LiteralPath $Setup -Algorithm SHA256).Hash.ToLowerInvariant()
+    Set-Content -LiteralPath "$Setup.sha256" -Value "$Hash  FireSky-$Version-windows-$Arch-setup.exe" -Encoding ascii
+} catch {
+    Write-Host $_.InvocationInfo.PositionMessage
+    throw
+}
 Write-Host "installer: $Setup"
 Write-Host "sha256:    $Hash"
