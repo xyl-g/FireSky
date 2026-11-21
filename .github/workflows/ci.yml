@@ -98,30 +98,6 @@ jobs:
         working-directory: apps/shared-web
         run: npm run build
 
-  frontend-legacy-contracts:
-    timeout-minutes: 15
-    name: legacy frontend/ contract tests (pending merge)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: npm ci
-        working-directory: frontend
-        run: npm ci --no-audit --no-fund
-      # 契约测试经 vite ModuleRunner 加载 TS，tsconfig extends
-      # ./.svelte-kit/tsconfig.json；干净 checkout 上必须先 sync 生成。
-      - name: svelte-kit sync
-        working-directory: frontend
-        run: npx svelte-kit sync
-      - name: Native contract tests
-        working-directory: frontend
-        run: npm run test:contracts
-
-
   desktop:
     timeout-minutes: 45
     name: SwiftUI + Rust bundle
