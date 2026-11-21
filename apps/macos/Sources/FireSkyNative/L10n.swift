@@ -141,6 +141,11 @@ enum L10n {
         "确定预测": "Confirm forecast",
         "确定分析": "Confirm analysis",
         "下载缺失数据": "Download missing data",
+        "下载前先知道": "Before you download",
+        "首次下载耗时取决于本机缺失的数据集与网络。上方只列本次预测所需文件；已下载文件不会重复下载，过程中可取消，失败项会保留并提示重试。":
+            "First-download time depends on which datasets are missing and your network. The list above covers only this forecast; existing files are not downloaded twice. You can cancel, and failed items stay listed for retry.",
+        "CAMS Key 未配置时仍可使用本地缓存；如需气溶胶数据，可在设置中配置后重新预检。":
+            "Local caches remain usable without a CAMS key. Configure it in Settings and re-check if you need aerosol data.",
         "继续预测": "Forecast anyway",
         "预测准备": "Forecast preparation",
         "实况准备": "Nowcast preparation",

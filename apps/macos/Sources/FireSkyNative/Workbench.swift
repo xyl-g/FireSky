@@ -580,6 +580,95 @@ struct WorkStaleResultBanner: View {
     }
 }
 
+/// 首次成功路径：不替代预检窗口，只把用户下一步要做的四件事放到可见位置。
+private struct WorkFirstRunGuide: View {
+    @EnvironmentObject private var store: Store
+    @Environment(\.colorScheme) private var scheme
+
+    private struct Step: View {
+        @Environment(\.colorScheme) private var scheme
+        let number: String
+        let symbol: String
+        let title: String
+        let detail: String
+        let action: String
+        var disabled = false
+        let run: () -> Void
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 7) {
+                    Image(systemName: symbol)
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(warm)
+                    Text(number).font(.system(size: 10, weight: .bold)).monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).font(.system(size: 12, weight: .semibold))
+                    Text(detail).font(.system(size: 10)).foregroundStyle(.secondary)
+                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 2)
+                Button(action) { run() }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 11, weight: .medium))
+                    .disabled(disabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(10)
+            .frame(minHeight: 116, alignment: .leading)
+            .background(Color.primary.opacity(scheme == .dark ? 0.045 : 0.035),
+                        in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.secondary.opacity(0.16), lineWidth: 1)
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 13, weight: .semibold)).foregroundStyle(warm)
+                Text("首次预测 · 四步完成").font(.system(size: 12, weight: .semibold))
+                Spacer(minLength: 8)
+                Text("每一步都可稍后调整").font(.system(size: 10)).foregroundStyle(.secondary)
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 158), spacing: 10)], spacing: 10) {
+                Step(number: "01", symbol: "map", title: "选好地点",
+                     detail: "搜索、地图选点或选择收藏点", action: "打开地图") {
+                    store.showMapPicker = true
+                }
+                Step(number: "02", symbol: "location", title: "确认位置",
+                     detail: store.metadataReady ? "海拔与时区已确认" : "获取并确认海拔与时区",
+                     action: store.metadataReady ? "调整坐标" : "编辑坐标") {
+                    store.editingCoordinates.toggle()
+                }
+                Step(number: "03", symbol: "key.horizontal", title: "数据源",
+                     detail: store.camsConfigured ? "CAMS 已配置" : "CAMS 可选，仍可使用本地数据",
+                     action: store.camsConfigured ? "查看配置" : "配置 CAMS") {
+                    store.openCAMSSetup()
+                }
+                Step(number: "04", symbol: "arrow.down.circle", title: "预检与下载",
+                     detail: "逐项确认缺失数据，过程中可取消", action: "数据预检",
+                     disabled: store.busy || !store.online) {
+                    store.beginCheck()
+                }
+            }
+            Text("提示：首次下载量取决于本机缺失的数据集；预检会列出本次所需文件与状态，下载后可随时重新预检。")
+                .font(.system(size: 10)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel("首次下载量取决于本机缺失的数据集，预检会列出本次所需文件与状态。")
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fireSkySurface(role: .content, emphasized: true)
+    }
+}
+
 /// 行动摘要（交接文档 P0-2）：只读取 Rust 报告字段，不在 SwiftUI 重算科学结果。
 /// 双模式并列展示，不平均、不互相填补；缺测与单模式失败都有独立文案。
 private struct WorkActionSummaryView: View {
@@ -662,45 +751,51 @@ private struct WorkActionSummaryView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: statusSymbol)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(warm)
-                Text("行动摘要").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
-                Spacer(minLength: 8)
-                if !snapshots.isEmpty {
-                    Button {
-                        store.starLocation()
-                    } label: {
-                        Label("收藏该地点", systemImage: "star")
+        Group {
+            if snapshots.isEmpty && failedModels.isEmpty && store.result == nil {
+                WorkFirstRunGuide()
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Image(systemName: statusSymbol)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(warm)
+                        Text("行动摘要").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        if !snapshots.isEmpty {
+                            Button {
+                                store.starLocation()
+                            } label: {
+                                Label("收藏该地点", systemImage: "star")
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 11))
+                            .disabled(!store.metadataReady)
+                            .help(store.metadataReady ? "把当前观测点加入收藏" : "请先确认海拔与时区，再收藏该地点")
+                        }
                     }
-                    .buttonStyle(.borderless)
-                    .font(.system(size: 11))
-                    .disabled(!store.metadataReady)
-                    .help(store.metadataReady ? "把当前观测点加入收藏" : "请先确认海拔与时区，再收藏该地点")
+                    Text(headline)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(.primary)
+                        .accessibilityLabel("结论：\(headline)")
+                    if !timingText.isEmpty {
+                        Text(timingText)
+                            .font(.system(size: 12)).monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("时间与窗口：\(timingText)")
+                    }
+                    ForEach(notes, id: \.self) { note in
+                        Text(note)
+                            .font(.system(size: 11))
+                            .foregroundStyle(.orange)
+                            .accessibilityLabel(note)
+                    }
                 }
-            }
-            Text(headline)
-                .font(.system(size: 15, weight: .semibold))
-                .foregroundStyle(.primary)
-                .accessibilityLabel("结论：\(headline)")
-            if !timingText.isEmpty {
-                Text(timingText)
-                    .font(.system(size: 12)).monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .accessibilityLabel("时间与窗口：\(timingText)")
-            }
-            ForEach(notes, id: \.self) { note in
-                Text(note)
-                    .font(.system(size: 11))
-                    .foregroundStyle(.orange)
-                    .accessibilityLabel(note)
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fireSkySurface(role: .content, emphasized: !snapshots.isEmpty)
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .fireSkySurface(role: .content, emphasized: !snapshots.isEmpty)
     }
 }
 

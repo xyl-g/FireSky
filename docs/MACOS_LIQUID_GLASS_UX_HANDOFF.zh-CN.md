@@ -821,3 +821,10 @@ GFS/EC 双摘要、0–2.5 指数、档位、最佳时刻、推荐窗口、天�
 - `apps/macos/Tests/WorkbenchSnapshot.swift` 补齐 `Updater` 环境对象，使回放夹具能启动 `WorkbenchRootView`。
 - 回放截图：`output/ui-polish-20261122/action-summary-fixtures/screenshots/{agree,disagree,partial,missing,stale}.png`。
 - 已确认五种分支文案、时间与限制因素均按预期显示；旧参数分支同时保留结果与重算提示。该证据属于派生夹具回放，不等同于真实上游验收。
+
+### 20.6 首次成功路径与预检预期（P0-2 已完成）
+
+- 单点空态新增 `WorkFirstRunGuide`：选点、确认位置、数据源、预检与下载四步，按钮全部连接现有能力（地图、坐标编辑、CAMS 配置、`beginCheck`），无假入口。
+- 预检窗口新增「下载前先知道」：明确首次下载量取决于缺失数据集与网络，已下载文件不重复下载，过程可取消，失败项保留可重试；不声明固定耗时或体积。
+- 新增三条英文 L10n 文案，避免英文模式回退中文。
+- 验证截图：`output/ui-polish-20261122/first-run/{empty-light,empty-dark,empty-1120,preflight-light}.png`；窄窗口下四步引导自然换行，无截断。说明见同目录 `README.md`。

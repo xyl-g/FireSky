@@ -52,6 +52,29 @@ struct PreflightView: View {
                     if row.id != store.rows.last?.id { Divider() }
                 }
             }
+            if !store.rows.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(L10n.t("下载前先知道"), systemImage: "info.circle")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.primary)
+                    Text(L10n.t("首次下载耗时取决于本机缺失的数据集与网络。上方只列本次预测所需文件；已下载文件不会重复下载，过程中可取消，失败项会保留并提示重试。"))
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !store.camsConfigured {
+                        Text(L10n.t("CAMS Key 未配置时仍可使用本地缓存；如需气溶胶数据，可在设置中配置后重新预检。"))
+                            .font(.system(size: 10)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(10)
+                .background(Color.primary.opacity(scheme == .dark ? 0.05 : 0.035),
+                            in: RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(warm.opacity(0.18), lineWidth: 1)
+                }
+                .padding(.top, 10)
+            }
             VStack(alignment: .leading, spacing: 8) {
                 if store.checking {
                     ProgressView(value: store.percent, total: 100)
