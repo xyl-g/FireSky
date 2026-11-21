@@ -557,7 +557,7 @@ fn referenced_maps(report_roots: &[PathBuf], map_root: &Path) -> Result<BTreeSet
     Ok(refs)
 }
 
-fn roots(workspace: &Path, key: &str, default: &str) -> PathBuf {
+pub(crate) fn roots(workspace: &Path, key: &str, default: &str) -> PathBuf {
     let visible = match default {
         ".cache/gfs" => "gfs",
         ".cache/ecmwf" => "ecmwf",
@@ -664,7 +664,7 @@ fn snapshot_cleanup(root: &Path, days: f64, now: DateTime<Utc>) -> Result<Result
 /// nowcast results carry a `map_token`; regional results embed their frames
 /// inline and need no external map. Snapshots larger than the scan bound are
 /// regional frame bundles, so skipping them cannot orphan a referenced map.
-fn snapshot_map_refs(root: &Path, map_root: &Path) -> Result<BTreeSet<PathBuf>, String> {
+pub(crate) fn snapshot_map_refs(root: &Path, map_root: &Path) -> Result<BTreeSet<PathBuf>, String> {
     let mut refs = BTreeSet::new();
     if !root.is_dir() {
         return Ok(refs);

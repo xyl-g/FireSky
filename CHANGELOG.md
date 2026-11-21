@@ -104,6 +104,35 @@ ships release capability (self-contained zip, installer, CI publishing).
   breaking inventory/check before any download; normalized only real path
   levels and tolerated error 1, with a Windows regression test. The app
   assembly now embeds the engine version for in-app update comparison.
+## v1.9.2 (2026-11-21)
+
+数据管理类目扩展（A1）+ 毛玻璃卡片视觉（P3，QiuChenly AppStore 风格借鉴）。
+Data-management category expansion (A1) and frosted-glass card visuals
+(P3, borrowing from the QiuChenly AppStore style).
+
+**数据管理类目 / Data categories**
+
+- `inventory` 契约新增 `categories`：模型源之外的四类数据统计（卫星
+  HSD、地形 SRTM、已发布报告、地图帧）+ 单点/区域结果缓存。
+  The `inventory` contract gains `categories`: stats for satellite HSD,
+  SRTM, published reports, map frames, and point/regional result caches.
+- 手动删除 scope v2：`{"category": X}` 整类删除与 `{"category": X,
+  "item": id}` 按项删除（卫星按扫描日、地形按瓦片名）；**map-frames
+  删除时自动保护仍被存活快照引用的帧**（引用集来自任务历史快照扫描，
+  保护项在预览 protected 中单独列出）；模型源周期删除契约保持兼容。
+  Delete scope v2 supports whole-category and per-item deletion
+  (satellite by scan day, SRTM by tile name); map frames referenced by
+  live snapshots are automatically protected and listed separately.
+
+**毛玻璃卡片 / Frosted-glass cards**
+
+- 数据管理页全面卡片化：地形/库存/空态各为独立 `regularMaterial`
+  毛玻璃卡（16pt 大圆角 + hairline），移除通栏 Divider；探测与地形卡
+  同步升级；dark 主题卡片与背景层次实测 +13 lum（原 <1）。
+  The data page is fully cardified: each block is an independent
+  frosted-glass card (16pt radius + hairline), Dividers removed; dark
+  theme card-vs-background separation measured at +13 lum.
+
 ## v1.9.1 (2026-11-21)
 
 > 版本口径（2026-11-21 用户裁定）：**日常迭代一律 patch +1**（1.9.0 →

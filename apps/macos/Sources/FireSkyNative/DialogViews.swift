@@ -178,7 +178,8 @@ struct InventoryView: View {
                             }
                         }
                     }
-                    Divider()
+                    .padding(16)
+                    .glassCard()
                 }
                 if store.inventory.isEmpty && store.error.isEmpty && !store.layoutLoading {
                     VStack(spacing: 10) {
@@ -189,6 +190,7 @@ struct InventoryView: View {
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
                     .padding(.vertical, 24)
+                    .glassCard()
                 }
                 if !store.error.isEmpty { Text(store.error).foregroundStyle(.red) }
             }.padding(30)
@@ -287,8 +289,7 @@ struct TerrainPanelView: View {
             }
             localTilesLine
         }.padding(18)
-            .background(Color(nsColor: .controlBackgroundColor).opacity(0.72),
-                        in: RoundedRectangle(cornerRadius: 10))
+            .glassCard()
             .confirmationDialog(downloadConfirmTitle, isPresented: Binding(
                 get: { store.showGlobalTerrainConfirm },
                 set: { if !$0 { store.showGlobalTerrainConfirm = false } }
@@ -479,7 +480,7 @@ struct SettingsView: View {
     // MARK: - 通用
 
     private var generalSection: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             settingsHeader("通用")
             VStack(alignment: .leading, spacing: 8) {
                 Text("主题").font(.callout.weight(.medium))

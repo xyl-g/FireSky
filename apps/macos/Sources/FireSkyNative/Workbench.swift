@@ -3038,15 +3038,9 @@ private extension Dictionary where Key == String, Value == Any {
 
 private struct WorkSurface: ViewModifier {
     var emphasized = false
-    @Environment(\.colorScheme) private var scheme
     func body(content: Content) -> some View {
-        content.background {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(scheme == .dark ? Color.white.opacity(emphasized ? 0.075 : 0.045) : Color.white.opacity(emphasized ? 0.82 : 0.60))
-        }.overlay {
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(scheme == .dark ? Color.white.opacity(emphasized ? 0.16 : 0.09) : Color.white.opacity(0.80), lineWidth: 1)
-        }
+        // v1.10 设计 P3：毛玻璃材质 + 16px 圆角（GlassCard 同源）。
+        content.glassCard(emphasized: emphasized)
     }
 }
 

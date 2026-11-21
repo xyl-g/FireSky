@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 use std::{
     env, fs,
     path::{Path, PathBuf},
+    sync::atomic::{AtomicBool, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -446,4 +447,70 @@ mod tests {
             .any(|v| v == "FIRESKY_GFS_CACHE_DIR"));
         remove_env("FIRESKY_GFS_CACHE_DIR");
     }
+}
+
+/// 数据管理页的类目扫描（v1.9.2，方案 §5.1 完整表格）：模型源之外的四类
+/// 数据（卫星/地形/报告/地图帧）与两类结果缓存（单点/区域）。只读统计，
+/// 删除走 desktop_delete 的类目 scope。
+pub fn inventory_categories(workspace: &Path, cancel: &AtomicBool) -> Result<Value, String> {
+    use std::sync::atomic::Ordering;
+    fn check(cancel: &AtomicBool) -> Result<(), String> {
+        if cancel.load(Ordering::Acquire) {
+            Err("inventory operation cancelled".into())
+        } else {
+            Ok(())
+        }
+    }
+    fn scan(path: &Path, cancel: &AtomicBool) -> Result<(usize, u64), String> {
+        check(cancel)?;
+        let metadata = match fs::symlink_metadata(path) {
+            Ok(metadata) => metadata,
+            Err(_) => return Ok((0, 0)),
+        };
+        if metadata.is_file() {
+            return Ok((1, metadata.len()));
+        }
+        if !metadata.is_dir() {
+            return Ok((0, 0));
+        }
+        let mut files = 0usize;
+        let mut bytes = 0u64;
+        let mut pending = vec![path.to_owned()];
+        while let Some(directory) = pending.pop() {
+            check(cancel)?;
+            for entry in fs::read_dir(&directory).map_err(|e| e.to_string())? {
+                let entry = entry.map_err(|e| e.to_string())?;
+                let metadata = entry.metadata().map_err(|e| e.to_string())?;
+                if metadata.is_dir() {
+                    pending.push(entry.path());
+                } else if metadata.is_file() {
+                    files += 1;
+                    bytes = bytes.saturating_add(metadata.len());
+                }
+            }
+            if files > 1_000_000 {
+                return Err("inventory category exceeds one million files".into());
+            }
+        }
+        Ok((files, bytes))
+    }
+    let categories: Vec<(&str, PathBuf)> = vec![
+        ("satellite", resolve(workspace, "FIRESKY_HSD_CACHE_DIR", ".cache/himawari-hsd", "himawari-hsd")),
+        ("srtm", resolve(workspace, "FIRESKY_SRTM_CACHE_DIR", ".cache/srtm", "srtm")),
+        ("reports", resolve(workspace, "FIRESKY_REPORT_DIR", "reports/web", "reports")),
+        ("map-frames", resolve(workspace, "FIRESKY_MAP_CACHE_DIR", ".cache/map-frames", "map-frames")),
+        ("point-forecasts", resolve(workspace, "FIRESKY_POINT_CACHE_DIR", ".cache/point-forecasts", "point-forecasts")),
+        ("regional-forecasts", resolve(workspace, "FIRESKY_REGIONAL_CACHE_DIR", ".cache/regional-forecasts", "regional-forecasts")),
+    ];
+    let mut rows = Vec::new();
+    for (category, path) in categories {
+        let (file_count, bytes) = scan(&path, cancel)?;
+        rows.push(json!({
+            "category": category,
+            "path": path.display().to_string(),
+            "file_count": file_count,
+            "bytes": bytes,
+        }));
+    }
+    Ok(json!({"contract": "firesky-data-categories-v1", "categories": rows}))
 }

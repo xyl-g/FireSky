@@ -677,7 +677,13 @@ impl Runtime {
             "search" | "metadata" => {
                 location::desktop_dispatch(method, &params, &self.location, true, cancel)
             }
-            "inventory" => desktop_inventory::execute(&self.inventory, cancel),
+            "inventory" => {
+                let mut value = desktop_inventory::execute(&self.inventory, cancel.clone())?;
+                // v1.9.2 数据管理类目（方案 §5.1 完整表格）：模型源之外的
+                // 卫星/地形/报告/地图帧/结果缓存统计。
+                value["categories"] = crate::paths::inventory_categories(&self.workspace, &cancel)?;
+                Ok(value)
+            }
             "data_layout_status" => {
                 let mut value = crate::paths::status(&self.workspace);
                 // 迁移需要独占：忙时 UI 显示原因而非失败。

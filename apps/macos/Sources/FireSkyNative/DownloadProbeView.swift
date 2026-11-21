@@ -71,7 +71,6 @@ struct DownloadProbeView: View {
                 Text(store.downloadProbeError).font(.caption).foregroundStyle(.red).textSelection(.enabled)
             }
         }.padding(18)
-            .background(Color(nsColor: .controlBackgroundColor).opacity(0.72),
-                        in: RoundedRectangle(cornerRadius: 10))
+            .glassCard()
     }
 }

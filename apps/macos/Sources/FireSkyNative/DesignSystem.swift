@@ -133,3 +133,45 @@ extension Color {
                   blue: Double(blue) / 255, opacity: alpha)
     }
 }
+
+/// 玻璃卡片（设计 P3，QiuChenly AppStore 风格借鉴）：regularMaterial 毛玻璃
+/// + 16px 圆角 + hairline 边框；emphasized 用于 hero 区（暖橙 hairline）。
+struct GlassCard: ViewModifier {
+    var emphasized = false
+    @Environment(\.colorScheme) private var scheme
+
+    func body(content: Content) -> some View {
+        let dark = scheme == .dark
+        content
+            .background {
+                if #available(macOS 26.0, *) {
+                    // glassEffect 的视觉圆角约为参数一半，24pt 才能达到
+                    // 规格 16pt 观感；dark 下叠加 tint 保证与背景分离。
+                    Color.clear
+                        .glassEffect(.regular, in: .rect(cornerRadius: 24))
+                        .background(
+                            dark ? Color.white.opacity(0.06) : Color.clear,
+                            in: .rect(cornerRadius: 24)
+                        )
+                } else {
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(.regularMaterial.opacity(emphasized ? 0.92 : 0.62))
+                }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 24)
+                    .strokeBorder(
+                        emphasized
+                            ? Color(red: 1.00, green: 0.55, blue: 0.38).opacity(0.55)
+                            : dark ? Color.white.opacity(0.14) : Color.black.opacity(0.08),
+                        lineWidth: 1
+                    )
+            }
+    }
+}
+
+extension View {
+    func glassCard(emphasized: Bool = false) -> some View {
+        modifier(GlassCard(emphasized: emphasized))
+    }
+}

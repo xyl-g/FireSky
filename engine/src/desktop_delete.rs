@@ -21,37 +21,129 @@ use std::{
 const MAX_CANDIDATES: usize = 1_000_000;
 
 #[derive(Clone, Debug)]
-struct Scope {
-    source: String,
-    /// Inventory cycle key; `None` selects the whole source.
-    cycle: Option<String>,
+enum Scope {
+    /// 模型源（gfs/ecmwf/cams）＋可选周期键（库存周期删除）。
+    Model { source: String, cycle: Option<String> },
+    /// 类目删除（v1.9.2 数据管理扩展）：satellite/srtm/reports/map-frames/
+    /// point-forecasts/regional-forecasts；item 可选（卫星扫描日 YYYYMMDD、
+    /// 地形瓦片名），缺省整类。
+    Category { category: String, item: Option<String> },
+}
+
+const DELETE_CATEGORIES: &[&str] = &[
+    "satellite", "srtm", "reports", "map-frames", "point-forecasts", "regional-forecasts",
+];
+
+impl Scope {
+    /// 模型源的源名；类目删除返回空（无 sidecar 相关逻辑）。
+    fn model_source(&self) -> &str {
+        match self {
+            Scope::Model { source, .. } => source,
+            Scope::Category { .. } => "",
+        }
+    }
+
+    /// 模型周期键；类目删除为 None。
+    fn cycle_key(&self) -> Option<&str> {
+        match self {
+            Scope::Model { cycle, .. } => cycle.as_deref(),
+            Scope::Category { .. } => None,
+        }
+    }
+
+    /// scope 摘要（响应回显）。
+    fn summary(&self) -> Value {
+        match self {
+            Scope::Model { source, cycle } => {
+                json!({"source": source, "cycle": cycle})
+            }
+            Scope::Category { category, item } => {
+                json!({"category": category, "item": item})
+            }
+        }
+    }
 }
 
 fn scope(params: &Value) -> Result<Scope, String> {
     let scope = params
         .get("scope")
         .ok_or("data delete requires a scope object")?;
-    let source = scope["source"]
-        .as_str()
+    // 模型源 scope（v1.3.0 契约，保持兼容）。
+    if let Some(source) = scope
+        .get("source")
+        .and_then(Value::as_str)
         .filter(|v| matches!(*v, "gfs" | "ecmwf" | "cams"))
-        .ok_or("scope source must be gfs, ecmwf or cams")?;
-    let cycle = match scope.get("cycle") {
-        None | Some(Value::Null) => None,
-        Some(value) => {
-            let raw = value.as_str().filter(|v| !v.is_empty() && v.len() <= 64);
-            if raw.is_none() {
-                return Err("scope cycle must be the inventory cycle key".into());
+    {
+        let cycle = match scope.get("cycle") {
+            None | Some(Value::Null) => None,
+            Some(value) => {
+                let raw = value.as_str().filter(|v| !v.is_empty() && v.len() <= 64);
+                if raw.is_none() {
+                    return Err("scope cycle must be the inventory cycle key".into());
+                }
+                Some(raw.unwrap().to_owned())
             }
-            Some(raw.unwrap().to_owned())
+        };
+        return Ok(Scope::Model {
+            source: source.into(),
+            cycle,
+        });
+    }
+    // 类目 scope（v1.9.2）。
+    if let Some(category) = scope.get("category").and_then(Value::as_str) {
+        if !DELETE_CATEGORIES.contains(&category) {
+            return Err(format!(
+                "scope category must be one of: {}",
+                DELETE_CATEGORIES.join(", ")
+            ));
         }
-    };
-    Ok(Scope {
-        source: source.into(),
-        cycle,
-    })
+        let item = match scope.get("item") {
+            None | Some(Value::Null) => None,
+            Some(value) => {
+                let raw = value.as_str().filter(|v| !v.is_empty() && v.len() <= 128);
+                if raw.is_none() {
+                    return Err("scope item must be a nonempty identifier".into());
+                }
+                Some(raw.unwrap().to_owned())
+            }
+        };
+        return Ok(Scope::Category {
+            category: category.into(),
+            item,
+        });
+    }
+    Err("scope requires either source (model) or category".into())
 }
 
-fn root_for(workspace: &Path, source: &str) -> Result<PathBuf, String> {
+/// 类目/模型源 → 缓存根路径（同 env 覆盖规则）。
+fn root_for_scope(workspace: &Path, scope: &Scope) -> Result<PathBuf, String> {
+    match scope {
+        Scope::Model { source, .. } => root_for_model(workspace, source),
+        Scope::Category { category, .. } => {
+            let legacy = match category.as_str() {
+                "satellite" => ".cache/himawari-hsd",
+                "srtm" => ".cache/srtm",
+                "reports" => "reports/web",
+                "map-frames" => ".cache/map-frames",
+                "point-forecasts" => ".cache/point-forecasts",
+                "regional-forecasts" => ".cache/regional-forecasts",
+                _ => return Err("unknown delete category".into()),
+            };
+            let visible = match category.as_str() {
+                "satellite" => "himawari-hsd",
+                "srtm" => "srtm",
+                "reports" => "reports",
+                "map-frames" => "map-frames",
+                "point-forecasts" => "point-forecasts",
+                "regional-forecasts" => "regional-forecasts",
+                _ => return Err("unknown delete category".into()),
+            };
+            Ok(crate::paths::resolve(workspace, "", legacy, visible))
+        }
+    }
+}
+
+fn root_for_model(workspace: &Path, source: &str) -> Result<PathBuf, String> {
     let (key, default) = match source {
         "gfs" => ("FIRESKY_GFS_CACHE_DIR", ".cache/gfs"),
         "ecmwf" => ("FIRESKY_ECMWF_CACHE_DIR", ".cache/ecmwf"),
@@ -114,13 +206,91 @@ fn candidates(
     workspace: &Path,
     scope: &Scope,
     cancel: &AtomicBool,
-) -> Result<Vec<Candidate>, String> {
-    let root = root_for(workspace, &scope.source)?;
+) -> Result<(Vec<Candidate>, Vec<Value>), String> {
+    let root = root_for_scope(workspace, scope)?;
     if !root.is_dir() {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), Vec::new()));
     }
-    let groups = desktop_inventory::cycle_files(&scope.source, &root, cancel)?;
-    let gribs: Vec<PathBuf> = match &scope.cycle {
+    // 类目 scope：整类或按 item 过滤（卫星扫描日 / 地形瓦片名）。
+    let Scope::Category { category, item } = scope else {
+        return model_candidates(workspace, scope, &root, cancel)
+            .map(|rows| (rows, Vec::new()));
+    };
+    // map-frames 引用保护（方案 §5.1）：仍被存活快照引用的帧不进候选，
+    // 单独列入 protected 供 UI 说明。
+    let referenced = if category == "map-frames" {
+        // 口径与 cache_retention::apply 一致：快照直接存放在任务根目录下。
+        let tasks_root = crate::paths::resolve(
+            workspace,
+            "FIRESKY_TASK_HISTORY_DIR",
+            ".firesky/state/tasks",
+            "state/tasks",
+        );
+        crate::cache_retention::snapshot_map_refs(&tasks_root, &root).unwrap_or_default()
+    } else {
+        Default::default()
+    };
+    let files = crate::cache_retention::walk(&root)?;
+    let mut out = Vec::new();
+    let mut protected = Vec::new();
+    for path in files {
+        check(cancel)?;
+        let Ok(metadata) = fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !metadata.is_file() {
+            continue;
+        }
+        if referenced.contains(&path) {
+            protected.push(json!({
+                "path": path.display().to_string(),
+                "reason": "referenced by an existing snapshot",
+            }));
+            continue;
+        }
+        let name = path
+            .file_name()
+            .and_then(|v| v.to_str())
+            .ok_or("category file path is not UTF-8")?;
+        let matched = match (category.as_str(), item) {
+            ("satellite", Some(day)) => name.contains(day.as_str()),
+            ("srtm", Some(tile)) => name == format!("{tile}.hgt"),
+            (_, Some(_)) | (_, None) => true,
+        };
+        if !matched {
+            continue;
+        }
+        if out.len() > MAX_CANDIDATES {
+            return Err("delete candidate set exceeds one million files".into());
+        }
+        out.push(Candidate {
+            path: path.clone(),
+            relative: relative_path(&root, &path)?,
+            bytes: metadata.len(),
+            mtime_ns: metadata
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|v| v.as_nanos()),
+            sidecars: Vec::new(),
+        });
+    }
+    out.sort_by(|a, b| a.relative.cmp(&b.relative));
+    Ok((out, protected))
+}
+
+/// 模型源（gfs/ecmwf/cams）候选：GRIB 按周期分组 + 索引/元数据 sidecar。
+fn model_candidates(
+    workspace: &Path,
+    scope: &Scope,
+    root: &Path,
+    cancel: &AtomicBool,
+) -> Result<Vec<Candidate>, String> {
+    let Scope::Model { source, cycle } = scope else {
+        return Ok(Vec::new());
+    };
+    let groups = desktop_inventory::cycle_files(source, root, cancel)?;
+    let gribs: Vec<PathBuf> = match cycle {
         None => groups.into_values().flatten().collect(),
         Some(key) => {
             let paths = groups
@@ -129,7 +299,7 @@ fn candidates(
             paths.clone()
         }
     };
-    let all = cache_retention::walk(&root)?;
+    let all = cache_retention::walk(root)?;
     let mut out = Vec::new();
     for grib in gribs {
         check(cancel)?;
@@ -139,9 +309,9 @@ fn candidates(
         if !metadata.is_file() {
             continue;
         }
-        let rel = relative_path(&root, &grib)?;
+        let rel = relative_path(root, &grib)?;
         let mut sidecars = Vec::new();
-        for path in cache_retention::related_files(&grib, &scope.source, &all) {
+        for path in cache_retention::related_files(&grib, scope.model_source(), &all) {
             if path == grib {
                 continue;
             }
@@ -199,8 +369,8 @@ fn identity(scope: &Scope, candidates: &[Candidate]) -> String {
             hasher.update(format!(":{}:{}\n", bytes, mtime.unwrap_or(0)).as_bytes());
         }
     }
-    hasher.update(scope.source.as_bytes());
-    hasher.update(scope.cycle.as_deref().unwrap_or("").as_bytes());
+    hasher.update(scope.model_source().as_bytes());
+    hasher.update(scope.cycle_key().unwrap_or("").as_bytes());
     let digest = hasher.finalize();
     digest
         .iter()
@@ -225,7 +395,7 @@ fn protected(candidates: &[Candidate]) -> Vec<Value> {
 
 pub fn preview(workspace: &Path, params: &Value, cancel: &AtomicBool) -> Result<Value, String> {
     let scope = scope(params)?;
-    let candidates = candidates(workspace, &scope, cancel)?;
+    let (candidates, category_protected) = candidates(workspace, &scope, cancel)?;
     if candidates.is_empty() {
         return Err("nothing to delete for this scope".into());
     }
@@ -251,18 +421,19 @@ pub fn preview(workspace: &Path, params: &Value, cancel: &AtomicBool) -> Result<
         }
     }
     let unindexed = scope
-        .cycle
-        .as_ref()
+        .cycle_key()
         .is_some_and(|key| key.is_empty());
+    let mut protected_rows = protected(&candidates);
+    protected_rows.extend(category_protected);
     Ok(json!({
         "contract": "rust-data-delete-preview-v1",
         "preview_id": preview_id,
-        "scope": {"source": scope.source, "cycle": scope.cycle},
+        "scope": scope.summary(),
         "data_file_count": candidates.len(),
         "file_count": objects.len(),
         "total_bytes": total_bytes,
         "total_mb": total_bytes as f64 / 1_048_576.0,
-        "protected": protected(&candidates),
+        "protected": protected_rows,
         "unindexed_included": unindexed,
         "objects": objects,
     }))
@@ -277,7 +448,7 @@ pub fn execute(workspace: &Path, params: &Value, cancel: &AtomicBool) -> Result<
     if params["confirm"] != json!(true) {
         return Err("data delete execute requires confirm=true".into());
     }
-    let candidates = candidates(workspace, &scope, cancel)?;
+    let (candidates, category_protected) = candidates(workspace, &scope, cancel)?;
     if candidates.is_empty() {
         return Err("nothing to delete for this scope".into());
     }
@@ -323,7 +494,7 @@ pub fn execute(workspace: &Path, params: &Value, cancel: &AtomicBool) -> Result<
     }
     Ok(json!({
         "contract": "rust-data-delete-execute-v1",
-        "scope": {"source": scope.source, "cycle": scope.cycle},
+        "scope": scope.summary(),
         "preview_id": preview_id,
         "deleted": deleted,
         "skipped": skipped,
@@ -486,11 +657,11 @@ mod tests {
         .contains("not present"));
         assert!(preview(
             workspace.path(),
-            &json!({"scope": {"source": "satellite"}}),
+            &json!({"scope": {"source": "bogus"}}),
             &AtomicBool::new(false),
         )
         .unwrap_err()
-        .contains("source must be"));
+        .contains("scope requires either source (model) or category"));
     }
 
     #[test]
@@ -552,6 +723,122 @@ mod tests {
         assert!(preview(
             empty.path(),
             &json!({"scope": {"source": "cams"}}),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err()
+        .contains("nothing to delete"));
+    }
+
+    #[test]
+    fn category_scope_deletes_satellite_by_day_and_protects_map_references() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path();
+        // 卫星：raw/日期帧文件（文件名含扫描时间前缀）。
+        let raw = workspace.join(".cache/himawari-hsd/raw");
+        fs::create_dir_all(&raw).unwrap();
+        fs::write(raw.join("frame-20261111T054000000Z-+30.0+120.0-1.0.npz"), b"a").unwrap();
+        fs::write(raw.join("frame-20261112T054000000Z-+30.0+120.0-1.0.npz"), b"b").unwrap();
+        // 地图帧：一帧被快照引用（保护）、一帧孤立（可删）。
+        let map_root = workspace.join(".cache/map-frames");
+        // 工作区含 .cache → Legacy 布局，快照在 .firesky/state/tasks 下
+        //（与引擎 resolve 的 Legacy 口径一致）。
+        let tasks_root = workspace.join(".firesky/state/tasks");
+        // 真实 token 为 24 位 hex（digest[..24]）。
+        let token_kept = "aaaaaaaaaaaaaaaaaaaaaaaa";
+        let token_deleted = "bbbbbbbbbbbbbbbbbbbbbbbb";
+        for token in [token_kept, token_deleted] {
+            let frame = map_root.join("native-map-v1").join(format!("map-frame-v25-{token}.json.gz"));
+            fs::create_dir_all(frame.parent().unwrap()).unwrap();
+            fs::write(&frame, b"map").unwrap();
+        }
+        // 引用 kept token 的快照。
+        fs::create_dir_all(&tasks_root).unwrap();
+        let snapshot_id = "c".repeat(64);
+        fs::write(
+            tasks_root.join(format!("{snapshot_id}.json")),
+            json!({"map_token": token_kept}).to_string(),
+        ).unwrap();
+
+        // 卫星按扫描日删除：仅匹配日期的帧进候选。
+        let preview_value = preview(
+            workspace,
+            &json!({"scope": {"category": "satellite", "item": "20261111"}}),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(preview_value["data_file_count"], 1);
+        let result = execute(
+            workspace,
+            &json!({"scope": {"category": "satellite", "item": "20261111"},
+                    "preview_id": preview_value["preview_id"], "confirm": true}),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(result["deleted"], 1);
+        assert!(!raw.join("frame-20261111T054000000Z-+30.0+120.0-1.0.npz").exists());
+        assert!(raw.join("frame-20261112T054000000Z-+30.0+120.0-1.0.npz").exists());
+
+        // 地图帧整类：被快照引用的 token 进 protected（引用保护），孤立的删除。
+        let refs_debug = crate::cache_retention::snapshot_map_refs(
+            &workspace.join("state/tasks"),
+            &map_root,
+        ).unwrap();
+        eprintln!("refs={:?} snapshot_exists={}", refs_debug, workspace.join("state/tasks").join(format!("{snapshot_id}.json")).exists());
+        let preview_value = preview(
+            workspace,
+            &json!({"scope": {"category": "map-frames"}}),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(preview_value["data_file_count"], 1);
+        assert_eq!(preview_value["protected"].as_array().unwrap().len(), 1);
+        let result = execute(
+            workspace,
+            &json!({"scope": {"category": "map-frames"},
+                    "preview_id": preview_value["preview_id"], "confirm": true}),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(result["deleted"], 1);
+        assert!(map_root.join("native-map-v1").join(format!("map-frame-v25-{token_kept}.json.gz")).exists());
+        assert!(!map_root.join("native-map-v1").join(format!("map-frame-v25-{token_deleted}.json.gz")).exists());
+    }
+
+    #[test]
+    fn category_scope_reports_for_class_and_empty_category() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = dir.path();
+        fs::create_dir_all(workspace.join("reports/web")).unwrap();
+        fs::write(workspace.join("reports/web/result.json"), b"{}").unwrap();
+        // reports 整类：reports/web 的 web 壳内文件。
+        let preview_value = preview(
+            workspace,
+            &json!({"scope": {"category": "reports"}}),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(preview_value["data_file_count"], 1);
+        let result = execute(
+            workspace,
+            &json!({"scope": {"category": "reports"},
+                    "preview_id": preview_value["preview_id"], "confirm": true}),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(result["deleted"], 1);
+        // 非法类目被拒绝。
+        assert!(preview(
+            workspace,
+            &json!({"scope": {"category": "unknown"}}),
+            &AtomicBool::new(false),
+        )
+        .unwrap_err()
+        .contains("scope category must be one of"));
+        // 空类目：nothing to delete。
+        let empty = tempfile::tempdir().unwrap();
+        assert!(preview(
+            empty.path(),
+            &json!({"scope": {"category": "satellite"}}),
             &AtomicBool::new(false),
         )
         .unwrap_err()
