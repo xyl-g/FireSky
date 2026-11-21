@@ -5,7 +5,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CLIENT="$ROOT/apps/windows/FireSky/EngineClient.cs"
 PROJECT="$ROOT/apps/windows/FireSky/FireSky.csproj"
 PREFLIGHT="$ROOT/apps/windows/FireSky/PreflightDialog.cs"
-WINDOW="$ROOT/apps/windows/FireSky/MainWindow.xaml.cs"
+# UI 已拆分为 partial 文件：契约 grep 覆盖全部 MainWindow 分片。
+WINDOW_PARTIALS="$ROOT/apps/windows/FireSky/MainWindow.xaml.cs
+$ROOT/apps/windows/FireSky/MainWindow.Data.cs
+$ROOT/apps/windows/FireSky/MainWindow.History.cs
+$ROOT/apps/windows/FireSky/MainWindow.Nowcast.cs
+$ROOT/apps/windows/FireSky/MainWindow.Regional.cs
+$ROOT/apps/windows/FireSky/MainWindow.Results.cs
+$ROOT/apps/windows/FireSky/MainWindow.Settings.cs
+$ROOT/apps/windows/FireSky/MainWindow.Updater.cs"
 HEADER="$ROOT/engine/include/firesky_ffi.h"
 
 test -f "$CLIENT"
@@ -53,26 +61,41 @@ for method in \
   save_retention_settings \
   profile_query \
   task_history \
-  task_events
+  task_events \
+  data_delete_preview \
+  data_delete_execute \
+  terrain_inventory \
+  terrain_download \
+  cams_credentials \
+  save_cams_key \
+  network_probe \
+  data_sync_settings \
+  save_data_sync_settings \
+  data_sync_due \
+  data_sync_run
 do
-  if ! rg -q "\"$method\"" "$CLIENT" "$WINDOW"; then
+  if ! rg -q "\"$method\"" $WINDOW_PARTIALS; then
     echo "Windows client does not expose the required Rust method: $method" >&2
     exit 1
   fi
 done
 for capability in profile_query task_history task_events result_restore; do
-  rg -F -q "\"$capability\"" "$WINDOW"
+  rg -F -q "\"$capability\"" $WINDOW_PARTIALS
 done
-for method in task_forget result_restore; do
-  rg -F -q "\"$method\"" "$WINDOW"
+for method in task_forget result_restore data_sync_run; do
+  rg -F -q "\"$method\"" $WINDOW_PARTIALS
 done
-rg -F -q '"city_ranking"' "$WINDOW"
-rg -q '"forecast"' "$WINDOW"
-rg -q '\["confirmed"\][[:space:]]*=[[:space:]]*true' "$WINDOW"
-rg -F -q 'if (page == "nowcast")' "$WINDOW"
-rg -F -q 'payload["forecast_mode"] = "nowcast"' "$WINDOW"
-rg -F -q 'payload["model_source"] = "satellite"' "$WINDOW"
-rg -F -q 'payload["satellite_source"] = "auto"' "$WINDOW"
+rg -F -q '"city_ranking"' $WINDOW_PARTIALS
+rg -q '"forecast"' $WINDOW_PARTIALS
+rg -q '\["confirmed"\][[:space:]]*=[[:space:]]*true' $WINDOW_PARTIALS
+rg -F -q 'if (page == "nowcast")' $WINDOW_PARTIALS
+rg -F -q 'payload["forecast_mode"] = "nowcast"' $WINDOW_PARTIALS
+rg -F -q 'payload["model_source"] = "satellite"' $WINDOW_PARTIALS
+rg -F -q 'payload["satellite_source"] = "auto"' $WINDOW_PARTIALS
+# v1.5.0 契约：周期龄确认与 elevation/ecmwf 来源透传。
+rg -F -q 'cycle_age_confirmed' $WINDOW_PARTIALS
+rg -F -q '"elevation_source"' $WINDOW_PARTIALS
+rg -F -q '"ecmwf_source"' $WINDOW_PARTIALS
 for resource_contract in \
   "RESOURCE-MANIFEST.json" \
   "FIRESKY_REQUIRE_APP_RESOURCES" \
