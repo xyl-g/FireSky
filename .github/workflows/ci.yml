@@ -157,10 +157,8 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - name: 安装 Android SDK（cmdline-tools + platform）
-        uses: android-actions/setup-android@v3
-      - name: 接受 SDK 许可
-        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+      # ubuntu runner 预装 Android SDK（ANDROID_HOME + licenses 已接受）；
+      # unit test 只需 compileDebugKotlin，不触发 native/JNI 打包链。
       - name: Kotlin 编译 + 单元测试（MockTransport 全链契约）
         run: |
           cd apps/mobile-android
