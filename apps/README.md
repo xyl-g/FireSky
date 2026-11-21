@@ -173,6 +173,25 @@ navigation, system location permissions, map integration, packaging and
 target-machine real-data acceptance remain after the shared FFI contract is
 stable. No separate JSONL production protocol is introduced.
 
+## 移动端构建链（Android / iOS，v1.9.x 正式发布目标）
+
+- **Android APK**（CI `mobile-release` job 随 `v*` tag 构建直发；本地：
+  `cd apps/mobile-android && ./gradlew :app:assembleDebug`）：
+  1. 交叉静态库先备好：`bash .cache/mm0-cross/build-all.sh`
+     （ecCodes 2.50 + libaec → `.cache/mm0-cross/build-android/lib/*.a`；
+     ecbuild 拒 Android → ecCodes 必须 `DISABLE_OS_CHECK=ON`）。
+  2. `gradle cargoAndroidEngine` **按本机 NDK 派生** CC/AR/linker
+     （`ndk.dir` / `ANDROID_NDK_ROOT`），仓库 `.cargo/config.toml`
+     **不得携带机器绝对路径**（v1.9.5–1.9.7 发布失败的根因：darwin
+     NDK 路径让 ubuntu runner 直接失败；机器专属钉扎放 `~/.cargo/config.toml`）。
+  3. `linkEngineJni` 同样按平台派生 host 标签（darwin-aarch64 优先）。
+- **iOS**（`ci.yml ios-native` + Xcode 源码构建）：模拟器静态库 →
+  `engine-mobile aarch64-ios-sim` → 真引擎 XCTest；本机构建必须
+  `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer`。
+- 版本口径：`engine/Cargo.toml` 为唯一版本源（应用更新比较依据）；
+  Android `versionCode`/iOS `CURRENT_PROJECT_VERSION` 随每次发布 +1；
+  **测试数据（视觉快照 PNG）不入库**，Playwright 现场生成。
+
 ## Workflow Contract
 
 - Point and regional forecasts always run GFS and EC independently.
