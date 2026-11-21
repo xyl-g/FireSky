@@ -211,6 +211,19 @@ struct NativeTaskHistoryView: View {
         }
     }
 
+    /// 统一空态（方案 4.6）：品牌小图 24% + 标题 + 说明，四端同构。
+    private func emptyState(title: String, message: String) -> some View {
+        VStack(spacing: 10) {
+            FireSkyMark()
+                .frame(width: 32, height: 32)
+                .opacity(0.24)
+            Text(title).font(.system(size: 13, weight: .medium))
+            Text(message).font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
     private var header: some View {
         HStack(spacing: 10) {
             Text(store.taskHistoryLoaded
@@ -413,24 +426,29 @@ struct NativeTaskHistoryView: View {
                     }.font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
-                HStack(spacing: 8) {
+                // 方案 D9：动作收进「…」菜单，命中区 36、危险项红字隔离。
+                Menu {
                     if item.canRestoreResult {
-                        Button { store.restoreTaskResult(item) } label: {
-                            Image(systemName: "arrow.uturn.left.circle")
-                        }.help("恢复已发布结果").buttonStyle(.borderless)
+                        Button("恢复已发布结果") { store.restoreTaskResult(item) }
                             .disabled(store.busy || store.restoringTaskHistoryID != nil)
                     }
                     if item.retryRequest != nil {
-                        Button { store.restoreTaskParameters(item) } label: {
-                            Image(systemName: "arrow.clockwise.circle")
-                        }.help("恢复参数并重新检查数据").buttonStyle(.borderless)
+                        Button("恢复参数并重新检查数据") { store.restoreTaskParameters(item) }
                             .disabled(store.busy || item.status == "running" || store.restoringTaskHistoryID != nil)
                     }
-                    Button { store.pendingForgetTaskID = item.taskID } label: {
-                        Image(systemName: "trash")
-                    }.help("删除任务记录").buttonStyle(.borderless)
-                        .disabled(store.busy || item.status == "running" || store.forgettingTaskHistoryID != nil)
+                    Divider()
+                    Button(role: .destructive) { store.pendingForgetTaskID = item.taskID } label: {
+                        Label("删除任务记录", systemImage: "trash")
+                    }
+                    .disabled(store.busy || item.status == "running" || store.forgettingTaskHistoryID != nil)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("任务动作")
+                .disabled(store.forgettingTaskHistoryID != nil)
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
             .contentShape(Rectangle())

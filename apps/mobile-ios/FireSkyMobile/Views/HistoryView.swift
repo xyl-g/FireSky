@@ -13,9 +13,10 @@ struct HistoryView: View {
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if store.taskHistory.isEmpty {
                     VStack(spacing: 10) {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .font(.largeTitle).foregroundStyle(.secondary)
-                        Text("暂无任务记录").font(.headline)
+                        FireSkyMark()
+                            .frame(width: 32, height: 32)
+                            .opacity(0.24)
+                        Text("暂无任务记录").font(.system(size: 13, weight: .medium))
                         Text(store.online
                              ? "完成一次检查或预测后会显示在这里。"
                              : "引擎未连接。")
@@ -102,31 +103,27 @@ private struct HistoryRow: View {
                         .monospacedDigit()
                 }
                 Spacer(minLength: 4)
-                HStack(spacing: 6) {
+                // 方案 D9：动作收进「…」菜单，危险项红字隔离。
+                Menu {
                     if item.canRestoreResult {
-                        Button {
-                            store.restoreTaskResult(item)
-                        } label: {
-                            Image(systemName: "arrow.uturn.left.circle")
-                        }
-                        .disabled(store.busy || store.restoringTaskID != nil)
+                        Button("恢复已发布结果") { store.restoreTaskResult(item) }
+                            .disabled(store.busy || store.restoringTaskID != nil)
                     }
                     if item.retryPayload != nil {
-                        Button {
-                            store.restoreTaskParameters(item)
-                        } label: {
-                            Image(systemName: "arrow.clockwise.circle")
-                        }
-                        .disabled(store.busy || item.status == "running" || store.restoringTaskID != nil)
+                        Button("恢复参数并重新检查数据") { store.restoreTaskParameters(item) }
+                            .disabled(store.busy || item.status == "running" || store.restoringTaskID != nil)
                     }
+                    Divider()
                     Button(role: .destructive) {
                         store.setPendingForgetTask(item.taskID)
                     } label: {
-                        Image(systemName: "trash")
+                        Label("删除任务记录", systemImage: "trash")
                     }
                     .disabled(store.busy || item.status == "running")
+                } label: {
+                    Image(systemName: "ellipsis.circle")
                 }
-                .buttonStyle(.borderless)
+                
             }
             if isSelected {
                 TaskDetail(item: item)

@@ -104,6 +104,29 @@ ships release capability (self-contained zip, installer, CI publishing).
   breaking inventory/check before any download; normalized only real path
   levels and tolerated error 1, with a Windows regression test. The app
   assembly now embeds the engine version for in-app update comparison.
+## v1.9.1 (2026-11-21)
+
+> 版本口径（2026-11-21 用户裁定）：**日常迭代一律 patch +1**（1.9.0 →
+> 1.9.1 → 1.9.2…），仅重大功能里程碑才升 minor。避免一天内 minor 跳号。
+
+UI 设计系统 P2 落地（docs/UI_DESIGN_REFRESH_2026-11-21 方案 D6/D7/D9）。
+Design system P2 rollout (D6/D7/D9 of the refresh proposal).
+
+- **历史行菜单化**（D9）：行尾三个图标按钮（恢复/重试/删除）收进单个
+  「…」菜单（macOS Menu / iOS Menu / Android DropdownMenu），命中区 36，
+  删除项红字隔离；三端快照验收通过。
+  History rows collapse the restore/retry/delete icon buttons into a
+  single "…" menu with the destructive item isolated (verified on all
+  three platforms).
+- **设置锚点导航**（D7）：macOS 设置 → 数据分类顶部新增锚点 chips
+  （下载源/CAMS/连通性/同步/保留/目录），点击滚动直达，消除 5+ 屏长
+  滚动；快照验收确认顺序为页头 → chips → 内容。
+  macOS Settings → Data gains anchor chips for direct navigation.
+- **空态品牌化**（D6）：历史页与数据管理页空态统一为品牌小图（24%
+  透明度）+ 标题 + 说明；Android 用 WbTwilight 图标等价呈现。
+  Empty states are unified with a subtle brand mark across platforms.
+- 版本收敛 1.10.0（engine/engine-mobile/macOS/Android versionCode 14/iOS build 14）。
+
 ## v1.9.0 (2026-11-21)
 
 UI 设计系统 P1 落地（docs/UI_DESIGN_REFRESH_2026-11-21 方案，纯视觉层）。

@@ -17,7 +17,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.ui.draw.alpha
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.PauseCircle
@@ -36,6 +39,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -90,6 +97,12 @@ fun HistoryScreen(store: WorkbenchStore, state: WorkbenchState) {
             state.taskHistory.isEmpty() -> {
                 WorkSurface(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                        Icon(
+                    Icons.Filled.WbTwilight,
+                    contentDescription = null,
+                    Modifier.size(32.dp).alpha(0.24f),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
                         Text("暂无任务记录", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                         Text(
                             if (state.online) "完成一次检查或预测后会显示在这里。" else "引擎未连接。",
@@ -100,6 +113,7 @@ fun HistoryScreen(store: WorkbenchStore, state: WorkbenchState) {
                 }
             }
             else -> LazyColumn(verticalArrangement = Arrangement.spacedBy(0.dp)) {
+                // 顶部品牌空态由下方 isEmpty 分支处理；列表分支内为数据行。
                 state.taskHistory.forEach { item ->
                     item("row-${item.taskId}") {
                         HistoryRow(store, state, item)
@@ -180,31 +194,57 @@ private fun HistoryRow(store: WorkbenchStore, state: WorkbenchState, item: TaskH
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
                 )
             }
-            Row {
-                if (item.canRestoreResult) {
-                    IconButton(
-                        onClick = { store.restoreTaskResult(item) },
-                        enabled = !state.busy && state.restoringTaskId == null,
-                        modifier = Modifier.size(30.dp),
-                    ) {
-                        Icon(Icons.Filled.Restore, contentDescription = "恢复已发布结果", Modifier.size(16.dp))
-                    }
-                }
-                if (item.retryPayload != null) {
-                    IconButton(
-                        onClick = { store.restoreTaskParameters(item) },
-                        enabled = !state.busy && item.status != "running" && state.restoringTaskId == null,
-                        modifier = Modifier.size(30.dp),
-                    ) {
-                        Icon(Icons.Filled.Refresh, contentDescription = "恢复参数并重新检查", Modifier.size(16.dp))
-                    }
-                }
+            // 方案 D9：动作收进「…」菜单，危险项红字隔离。
+            var menuExpanded by remember { mutableStateOf(false) }
+            Box {
                 IconButton(
-                    onClick = { store.setPendingForgetTask(item.taskId) },
-                    enabled = !state.busy && item.status != "running",
+                    onClick = { menuExpanded = true },
+                    enabled = !state.busy,
                     modifier = Modifier.size(30.dp),
                 ) {
-                    Icon(Icons.Filled.Delete, contentDescription = "删除任务记录", Modifier.size(16.dp))
+                    Icon(Icons.Filled.MoreHoriz, contentDescription = "任务动作", Modifier.size(16.dp))
+                }
+                androidx.compose.material3.DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                ) {
+                    if (item.canRestoreResult) {
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text("恢复已发布结果", fontSize = 12.sp) },
+                            onClick = {
+                                menuExpanded = false
+                                store.restoreTaskResult(item)
+                            },
+                            enabled = !state.busy && state.restoringTaskId == null,
+                        )
+                    }
+                    if (item.retryPayload != null) {
+                        androidx.compose.material3.DropdownMenuItem(
+                            text = { Text("恢复参数并重新检查数据", fontSize = 12.sp) },
+                            onClick = {
+                                menuExpanded = false
+                                store.restoreTaskParameters(item)
+                            },
+                            enabled = !state.busy && item.status != "running" && state.restoringTaskId == null,
+                        )
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f))
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text("删除任务记录", fontSize = 12.sp, color = MaterialTheme.colorScheme.error) },
+                        onClick = {
+                            menuExpanded = false
+                            store.setPendingForgetTask(item.taskId)
+                        },
+                        enabled = !state.busy && item.status != "running",
+                        leadingIcon = {
+                            Icon(
+                                Icons.Filled.Delete,
+                                contentDescription = null,
+                                Modifier.size(16.dp),
+                                tint = MaterialTheme.colorScheme.error,
+                            )
+                        },
+                    )
                 }
             }
         }

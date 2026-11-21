@@ -180,7 +180,16 @@ struct InventoryView: View {
                     }
                     Divider()
                 }
-                if store.inventory.isEmpty && store.error.isEmpty { ProgressView().frame(maxWidth: .infinity) }
+                if store.inventory.isEmpty && store.error.isEmpty && !store.layoutLoading {
+                    VStack(spacing: 10) {
+                        FireSkyMark().frame(width: 32, height: 32).opacity(0.24)
+                        Text("本地缓存为空").font(.system(size: 13, weight: .medium))
+                        Text("完成一次预测或在设置中配置数据源后，这里会显示库存。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .center)
+                    .padding(.vertical, 24)
+                }
                 if !store.error.isEmpty { Text(store.error).foregroundStyle(.red) }
             }.padding(30)
         }
@@ -553,20 +562,52 @@ struct SettingsView: View {
 
     // MARK: - 数据
 
+    /// 数据分类锚点（方案 D7）：6 大块超 5 屏滚动，chips 点击直达。
+    private let dataAnchors: [(String, String)] = [
+        ("下载源", "anchor-sources"), ("CAMS", "anchor-cams"),
+        ("连通性", "anchor-probe"), ("同步", "anchor-sync"),
+        ("保留", "anchor-retention"), ("目录", "anchor-directory"),
+    ]
+
     private var dataSection: some View {
-        VStack(alignment: .leading, spacing: 26) {
-            settingsHeader("数据")
-            dataSourcesBlock
-            Divider()
-            camsBlock
-            Divider()
-            DownloadProbeView()
-            Divider()
-            dataSyncBlock
-            Divider()
-            retentionBlock
-            Divider()
-            dataDirectoryBlock
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: 26) {
+                    settingsHeader("数据")
+                    HStack(spacing: 6) {
+                        ForEach(dataAnchors, id: \.1) { anchor in
+                            Button {
+                                withAnimation { proxy.scrollTo(anchor.1, anchor: .top) }
+                            } label: {
+                                Text(anchor.0)
+                                    .font(.system(size: 11, weight: .medium))
+                                    .padding(.horizontal, 8).padding(.vertical, 4)
+                                    .background(Color(nsColor: .controlBackgroundColor).opacity(0.72),
+                                                in: RoundedRectangle(cornerRadius: 6))
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                        }
+                    }
+                    dataSourcesBlock
+                        .id("anchor-sources")
+                    Divider()
+                    camsBlock
+                        .id("anchor-cams")
+                    Divider()
+                    DownloadProbeView()
+                        .id("anchor-probe")
+                    Divider()
+                    dataSyncBlock
+                        .id("anchor-sync")
+                    Divider()
+                    retentionBlock
+                        .id("anchor-retention")
+                    Divider()
+                    dataDirectoryBlock
+                        .id("anchor-directory")
+                }
+            }
         }
     }
 
