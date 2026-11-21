@@ -2605,7 +2605,13 @@ struct WorkRegionPage: View {
             VStack(alignment: .leading, spacing: 4) {
                 Text(report.peak?.quality.map { String(format: "%.2f", $0) } ?? "—")
                     .font(.system(size: 25, weight: .semibold)).monospacedDigit()
-                Text("区域峰值").font(.system(size: 9)).foregroundStyle(.secondary)
+                Text(L10n.text("区域峰值", "Regional peak")).font(.system(size: 9)).foregroundStyle(.secondary)
+                if let peak = report.peak {
+                    Text("\(L10n.text("最佳地点", "Best location")) · \(peak.label)")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .help("\(peak.label) · \(peak.level)")
+                }
             }
             Spacer(minLength: 2)
             VStack(alignment: .trailing, spacing: 5) {
@@ -2925,11 +2931,20 @@ private struct WorkNowcastHeroView: View {
     @EnvironmentObject private var store: Store
     private var report: JSONObject? { store.resultKind == .nowcast ? store.result : nil }
     private var nowcast: JSONObject { report?["nowcast"] as? JSONObject ?? [:] }
+    private var presentation: NowcastPresentation { NowcastPresentation(report: report) }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("\(store.resultTitle) \(store.resultPhenomenonLabel)")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             WorkStaleResultBanner()
+            if let mapCapability = report?["map_capability"] as? JSONObject,
+               mapCapability["available"] as? Bool == false {
+                Label(friendlyEngineMessage(mapCapability["reason"] as? String ?? "实况地图未发布"),
+                      systemImage: "exclamationmark.triangle")
+                    .font(.system(size: 10)).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel(L10n.text("实况地图不可用", "Nowcast map unavailable"))
+            }
             HStack(alignment: .top, spacing: 18) {
                 VStack(alignment: .leading, spacing: 9) {
                     HStack(spacing: 6) {
@@ -2948,6 +2963,9 @@ private struct WorkNowcastHeroView: View {
                     Text(report?["peak_quality_level"] as? String ?? report?["quality_level"] as? String ?? "峰值质量指数")
                         .font(.system(size: 9)).foregroundStyle(.secondary)
                     Text("推荐窗口 \(windowLabel(report))").font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text("\(L10n.text("卫星覆盖", "Satellite coverage"))：\(coverageSummary)")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }.frame(maxWidth: .infinity, minHeight: 124, alignment: .topLeading)
                 Divider().frame(height: 124).opacity(0.5)
                 VStack(alignment: .leading, spacing: 9) {
@@ -2965,6 +2983,12 @@ private struct WorkNowcastHeroView: View {
         guard let value = nowcast["image_valid_time_utc"] as? String,
               let date = ISO8601DateFormatter().date(from: value) else { return "—" }
         return ObservationDate.timeLabel(date, timezone: store.timezone)
+    }
+
+    private var coverageSummary: String {
+        guard report != nil else { return L10n.text("等待分析", "Waiting for analysis") }
+        let stats = presentation.profileStats
+        return "\(stats.statusLabel) · \(stats.coverageText)"
     }
 
     // nowcast-8: real source & channel from the backend (desktop_nowcast_adjustment.rs:991,994),
@@ -3096,12 +3120,6 @@ private struct WorkNowcastResultsView: View {
                     Spacer()
                     Text(nowcast[key] as? String ?? presentation.value(key)).textSelection(.enabled).lineLimit(2)
                 }.font(.system(size: 11))
-            }
-            if let map = report?["map_capability"] as? JSONObject,
-               map["available"] as? Bool == false {
-                Label(friendlyEngineMessage(map["reason"] as? String ?? "实况地图未发布"), systemImage: "map")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-                    .lineLimit(2).help(friendlyEngineMessage(map["reason"] as? String ?? ""))
             }
         }.padding(18).frame(maxWidth: .infinity, alignment: .leading).workSurface()
     }

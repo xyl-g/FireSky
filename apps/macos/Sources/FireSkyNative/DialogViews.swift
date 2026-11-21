@@ -518,6 +518,8 @@ struct SettingsView: View {
     private var generalSection: some View {
         VStack(alignment: .leading, spacing: 16) {
             settingsHeader("通用")
+            settingsStatusSummary
+            Divider()
             VStack(alignment: .leading, spacing: 8) {
                 Text(L10n.t("主题")).font(.callout.weight(.medium))
                 Picker("", selection: $store.appearance) {
@@ -531,6 +533,56 @@ struct SettingsView: View {
             Divider()
             updaterBlock
         }
+    }
+
+    /// 只读状态摘要：把引擎、数据源和后台助手状态放在设置入口，
+    /// 并给出回到数据管理分区的明确入口；不新增任何不可用开关。
+    private var settingsStatusSummary: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L10n.text("状态摘要", "Status summary")).font(.callout.weight(.medium))
+            HStack(spacing: 8) {
+                statusBadge(title: L10n.text("引擎", "Engine"),
+                            value: store.online ? L10n.text("已连接", "Connected") : L10n.text("未连接", "Offline"),
+                            healthy: store.online)
+                statusBadge(title: L10n.text("数据源", "Data sources"),
+                            value: store.dataSyncConfigured ? L10n.text("已配置", "Configured") : L10n.text("未配置", "Not configured"),
+                            healthy: store.dataSyncConfigured)
+                statusBadge(title: L10n.text("后台助手", "Helper"),
+                            value: store.helperLoaded ? L10n.text("运行中", "Running")
+                                : store.helperInstalled ? L10n.text("未加载", "Not loaded")
+                                : L10n.text("未安装", "Not installed"),
+                            healthy: store.helperLoaded)
+            }
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                    store.settingsCategory = .data
+                }
+            } label: {
+                Label(L10n.text("查看数据管理与连接状态", "Open data & connection settings"),
+                      systemImage: "arrow.right.circle")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(L10n.text("查看数据管理与连接状态", "Open data & connection settings"))
+        }
+        .padding(12)
+        .fireSkySurface(role: .content, cornerRadius: 8)
+    }
+
+    private func statusBadge(title: String, value: String, healthy: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.system(size: 9)).foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Circle().fill(healthy ? Color.green : Color.orange).frame(width: 5, height: 5)
+                Text(value).font(.system(size: 11, weight: .medium)).lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 8).padding(.vertical, 7)
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.55),
+                    in: RoundedRectangle(cornerRadius: 7))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title)：\(value)")
     }
 
     /// 软件更新块：当前版本、检查/下载/安装状态与自动检查开关。

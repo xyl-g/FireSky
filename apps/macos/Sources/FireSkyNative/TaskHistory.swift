@@ -172,10 +172,15 @@ private final class HistoryFilterState: ObservableObject {
     @Published var kindFilter = "all"
 }
 
+private final class HistoryRestoreConfirmation: ObservableObject {
+    @Published var taskID: String?
+}
+
 /// 任务历史独立侧栏页面：左侧列表 + 右侧详情区，支持类型/状态筛选。
 struct NativeTaskHistoryView: View {
     @EnvironmentObject private var store: Store
     @StateObject private var filters = HistoryFilterState()
+    @StateObject private var restoreConfirmation = HistoryRestoreConfirmation()
 
     private var visibleHistory: [NativeTaskHistoryItem] {
         switch filters.kindFilter {
@@ -211,6 +216,22 @@ struct NativeTaskHistoryView: View {
             Button(L10n.text("保留记录", "Keep record"), role: .cancel) { store.pendingForgetTaskID = nil }
         } message: {
             Text(L10n.text("只删除状态和事件，不删除已发布报告或天气数据。", "Only status and events are removed; published reports and weather data are kept."))
+        }
+        .confirmationDialog(L10n.text("查看该次结果？", "View this result?"), isPresented: Binding(
+            get: { restoreConfirmation.taskID != nil },
+            set: { if !$0 { restoreConfirmation.taskID = nil } }
+        )) {
+            Button(L10n.text("恢复并查看", "Restore and view")) {
+                if let taskID = restoreConfirmation.taskID,
+                   let item = store.taskHistory.first(where: { $0.taskID == taskID }) {
+                    store.restoreTaskResult(item)
+                }
+                restoreConfirmation.taskID = nil
+            }
+            .disabled(store.busy || store.restoringTaskHistoryID != nil)
+            Button(L10n.text("取消", "Cancel"), role: .cancel) { restoreConfirmation.taskID = nil }
+        } message: {
+            Text(L10n.text("工作台会切到该次已发布结果并回填其原始参数；当前未保存的输入会被替换。恢复结果不会重新检查数据。", "The workbench switches to this published result and restores its original parameters; unsaved inputs will be replaced. No data check is re-run."))
         }
     }
 
@@ -326,6 +347,38 @@ struct NativeTaskHistoryView: View {
                             .buttonStyle(.borderless)
                     }
                     summaryCard(selected)
+                    if selected.canRestoreResult || fullReportPath(for: selected) != nil {
+                        VStack(alignment: .leading, spacing: 7) {
+                            HStack(spacing: 8) {
+                                if selected.canRestoreResult {
+                                    Button {
+                                        restoreConfirmation.taskID = selected.taskID
+                                    } label: {
+                                        Label(L10n.text("查看该次结果", "View this result"),
+                                              systemImage: "arrow.right.circle.fill")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+                                    .disabled(store.busy || store.restoringTaskHistoryID != nil)
+                                    .help(L10n.text("从已发布快照恢复结果，不修改当前参数、不重新检查数据。", "Restore the published result without changing current parameters or re-checking data."))
+                                }
+                                if let path = fullReportPath(for: selected) {
+                                    Button {
+                                        openFullReport(path)
+                                    } label: {
+                                        Label(L10n.text("完整报告", "Full report"), systemImage: "doc.text")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .controlSize(.small)
+                                    .help(L10n.text("打开该次预测的 HTML 报告。", "Open this forecast's HTML report."))
+                                }
+                            }
+                            Text(L10n.text("恢复结果只回到已发布快照；「恢复参数并重新检查数据」仍在任务动作菜单中。", "Restoring returns to the published snapshot; restore-and-re-check stays in task actions."))
+                                .font(.caption2).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                     if selected.method == "forecast", selected.status == "done" {
                         Divider()
                         forecastResultCard(selected)
@@ -336,6 +389,21 @@ struct NativeTaskHistoryView: View {
             }
         }.background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
             .frame(width: 360)
+    }
+
+    /// 已选任务的 HTML 报告路径只从已加载快照读取，不在 SwiftUI 重新计算。
+    private func fullReportPath(for item: NativeTaskHistoryItem) -> String? {
+        guard store.taskResultTaskID == item.taskID,
+              let models = store.taskResult?["model_results"] as? JSONObject else { return nil }
+        return ["gfs", "ec"].compactMap { model in
+            (models[model] as? JSONObject)?["html_report_path"] as? String
+        }.first { !$0.isEmpty }
+    }
+
+    private func openFullReport(_ path: String) {
+        let url = URL(fileURLWithPath: path, relativeTo: URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath))
+        NSWorkspace.shared.open(url)
     }
 
     /// 摘要卡：状态、原始 UTC、进度、恢复说明；动作按钮集中在列表行。
@@ -538,12 +606,16 @@ struct NativeTaskHistoryView: View {
                 // 方案 D9：动作收进「…」菜单，命中区 36、危险项红字隔离。
                 Menu {
                     if item.canRestoreResult {
-                        Button(L10n.text("恢复已发布结果", "Restore published result")) { store.restoreTaskResult(item) }
-                            .disabled(store.busy || store.restoringTaskHistoryID != nil)
+                        Button(L10n.text("查看该次结果", "View this result")) {
+                            restoreConfirmation.taskID = item.taskID
+                        }
+                        .disabled(store.busy || store.restoringTaskHistoryID != nil)
+                        .help(L10n.text("从已发布快照恢复结果，不修改当前参数、不重新检查数据。", "Restore the published result without changing current parameters or re-checking data."))
                     }
                     if item.retryRequest != nil {
                         Button(L10n.text("恢复参数并重新检查数据", "Restore parameters & re-check")) { store.restoreTaskParameters(item) }
                             .disabled(store.busy || item.status == "running" || store.restoringTaskHistoryID != nil)
+                            .help(L10n.text("回到预检并回填该次参数，不会直接恢复结果。", "Return to preflight with these parameters; the result is not restored."))
                     }
                     Divider()
                     Button(role: .destructive) { store.pendingForgetTaskID = item.taskID } label: {

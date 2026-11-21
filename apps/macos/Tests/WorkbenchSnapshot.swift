@@ -98,6 +98,7 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
         precondition(store.payload()["elevation_source"] as? String == "auto")
         if ProcessInfo.processInfo.environment["FIRESKY_TEST_SETTINGS"] == "1" {
             store.page = .settings
+            store.settingsCategory = .general
         }
         if ProcessInfo.processInfo.environment["FIRESKY_TEST_STALE"] == "1" {
             // UX #3：改参数保留旧结果并标注原始参数；新结果到来前徽标常亮。
@@ -253,6 +254,17 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
                 print("Download probe UI: " + store.downloadProbeRows.map { "\($0.source)=\($0.state)" }.joined(separator: ", "))
                 if env["FIRESKY_TEST_PROBE_SETTINGS"] == "1" { store.page = .settings }
             }
+            if env["FIRESKY_TEST_HISTORY"] == "1" {
+                store.page = .history
+                store.loadTaskHistory()
+                for _ in 0..<200 where !store.taskHistoryLoaded {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                if let item = store.taskHistory.first(where: { $0.method == "forecast" && $0.canRestoreResult })
+                    ?? store.taskHistory.first {
+                    store.selectTaskHistory(item.taskID)
+                }
+            }
             if let width = env["FIRESKY_NATIVE_WIDTH"].flatMap(Double.init),
                let height = env["FIRESKY_NATIVE_HEIGHT"].flatMap(Double.init),
                width >= 1120, height >= 720, width <= 2560, height <= 1600 {
@@ -342,6 +354,12 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
         ]
         value["summary"] = "界面测试数据，非真实实况分析。"
         value["cross_section"] = ["solar_azimuth_deg": 240.0]
+        if ProcessInfo.processInfo.environment["FIRESKY_TEST_NOWCAST_MAP_UNAVAILABLE"] == "1" {
+            value["map_capability"] = [
+                "available": false,
+                "reason": "卫星扫描与目标时刻相差超过 30 分钟（界面测试）",
+            ]
+        }
         return value
     }
 

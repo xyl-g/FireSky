@@ -794,7 +794,7 @@ GFS/EC 双摘要、0–2.5 指数、档位、最佳时刻、推荐窗口、天�
 
 - 第一轮未把根布局整体迁移到 `NavigationSplitView`；本轮先建立正确的表面分工和选中反馈，P1-1 的结论见 §20.10。
 - 未实现系统通知、提醒、原生分享或 Keychain 迁移；界面没有放置对应假按钮。
-- 未重排区域预测和卫星实况页的专用工具组；自适应网格与表面规范对它们生效，但专用摘要仍需单独验收。
+- 第一轮未重排区域预测和卫星实况页的专用工具组；P1-2 的摘要与前置说明见 §20.11。
 - 未做全链路 VoiceOver 和 Reduce Motion / Reduce Transparency / Increase Contrast 真机矩阵；代码路径已支持，仍需系统设置逐项走查。
 - 未修改任何 Rust 科学算法、预测字段、缺测语义、任务生命周期或数据删除范围。
 
@@ -860,3 +860,12 @@ GFS/EC 双摘要、0–2.5 指数、档位、最佳时刻、推荐窗口、天�
 - 最终采用 §12.2「对齐而非一次替换」的路线：保留自定义根布局，但把侧栏显隐状态从裸 `Bool` 改为 `NavigationSplitViewVisibility`（`.all` / `.detailOnly`）语义；顶栏按钮切换的是列可见性，Reduce Motion 行为不变。这样后续真机确认 `NavigationSplitView` 行为后可以直接替换容器，不需要再改侧栏状态模型。
 - 最终截图：`output/ui-polish-20261122/navigation-aligned/{light-1440,dark-1440,light-1120}.png`。1120×720 下品牌行、侧栏、顶栏和首次引导完整可见，未引入横向溢出。
 - `swift build --disable-sandbox --package-path apps/macos`：Build complete；`git diff --check`：通过。
+
+### 20.11 专用页面与操作可发现性（P1-2 已完成）
+
+- 区域预测：`summary()` 在「区域峰值」下直接显示 `report.peak.label` 作为最佳地点，不新增跨模式补齐或择优算法；地图、固定色带、缺测语义和排行均未改动。
+- 卫星实况：Hero 在推荐窗口下显示 `NowcastPresentation.profileStats` 的覆盖状态与覆盖率；`map_capability.available == false` 的原因上提到 Hero，诊断区重复提示移除。雷达未接入、未知样本和未计算云类仍按原有独立文案显示。
+- 设置：通用页新增只读「状态摘要」，显示引擎连接、数据源配置、后台助手状态，并提供回到「数据」分类的入口。摘要不新增开关，也不把明文凭据描述成 Keychain。
+- 任务历史：详情区把「查看该次结果」提升为主按钮，旁边提供「完整报告」直达入口，并补一句与「恢复参数并重新检查数据」的区分说明。菜单项改用同一确认路径；确认文案明确会回填原始参数、替换当前未保存输入，且不重新检查数据。
+- 验证截图：`output/ui-polish-20261122/page-refinement/{regional,nowcast,settings,history}.png`。其中 nowcast 使用派生夹具开启 `map_capability` 不可用分支，history 使用本地历史任务工作区；二者不是真实上游验收。
+- 夹具新增仅用于截图的 `FIRESKY_TEST_HISTORY` 与 `FIRESKY_TEST_NOWCAST_MAP_UNAVAILABLE` 开关，不改变生产路径。`swift build --disable-sandbox --package-path apps/macos`：Build complete。
