@@ -349,6 +349,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     private var taskResultTask: Task<Void, Never>?
     private var taskResultCache: [String: JSONObject] = [:]
     private var engineConnection: AnyCancellable?
+    /// 设置页同步状态轮询（v1.9.6）。
+    private var syncRefreshTimer: AnyCancellable?
     private let location = CLLocationManager()
     private var operation: Task<Void, Never>?
     private var searchTask: Task<Void, Never>?
@@ -397,6 +399,17 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             try? FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
         }
         workspace = root
+        // v1.9.6：启动时清理其它工作区的杂散 helper 轮（仅正式安装包——
+        // 源码运行环境的测试工作区轮不归 GUI 管）。陈旧 launchd plist 指向
+        // 旧 workspace 时，杂散轮会与真实轮并行抢带宽（走查实例：/tmp
+        // 测试工作区全源同步 56 min）。正式 helper 被 SIGTERM 后由 launchd
+        // 在下个 tick 自动拉起，只有杂散轮真正消失。
+        if isBundled {
+            let expectedWorkspace = root
+            Task.detached(priority: .utility) {
+                SyncHelperInstaller.terminateStaleHelpers(expectedWorkspace: expectedWorkspace)
+            }
+        }
         engineBinary = env["FIRESKY_RUST_ENGINE_BIN"] ?? defaults.string(forKey: "engineBinary") ?? ""
         appearance = env["FIRESKY_NATIVE_APPEARANCE"] ?? defaults.string(forKey: "appearance") ?? "system"
         ecmwfSource = defaults.string(forKey: "ecmwfSource") ?? "ecmwf"
@@ -404,6 +417,17 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         elevationSource = ["auto", "http", "srtm"].contains(savedElevationSource) ? savedElevationSource : "auto"
         super.init()
         engineConnection = engine.$connected.sink { [weak self] value in self?.online = value }
+        // v1.9.6：设置页可见时每 15s 轮询同步状态与后台助手状态——后台
+        // 轮次、CAMS 补齐与熔断变化不再依赖手动刷新；手动会话（busy）期间
+        // 跳过，避免覆盖进行中的操作文案。
+        syncRefreshTimer = Timer.publish(every: 15, on: .main, in: .common)
+            .autoconnect()
+            .sink { [weak self] _ in
+                guard let self, self.page == .settings, self.online,
+                      !self.busy, !self.dataSyncRunning else { return }
+                Task { await self.refreshDataSyncState() }
+                self.refreshHelperStatus()
+            }
         favorites = defaults.array(forKey: "favorites") as? [JSONObject] ?? []
         let legacy = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".firesky-desktop")
         if favorites.isEmpty,

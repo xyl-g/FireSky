@@ -993,6 +993,15 @@ struct SettingsView: View {
         if let attempt = state["last_attempt_utc"] as? String, !attempt.isEmpty {
             details.append("上次同步 \(dataSyncTimeText(attempt))")
         }
+        // v1.9.6：显示上一轮实际耗时——串行时代 GFS 一轮 20+ 分钟，用户
+        // 需要知道"慢"的具体量级（引擎 elapsed_ms）。
+        if let elapsed = (result["elapsed_ms"] as? NSNumber)?.doubleValue, elapsed > 0 {
+            let seconds = elapsed / 1000
+            details.append(seconds >= 60
+                ? L10n.text(String(format: "耗时 %.0f 分 %.0f 秒", seconds / 60, seconds.truncatingRemainder(dividingBy: 60)),
+                            String(format: "Took %.0f min %.0f s", seconds / 60, seconds.truncatingRemainder(dividingBy: 60)))
+                : L10n.text(String(format: "耗时 %.0f 秒", seconds), String(format: "Took %.0f s", seconds)))
+        }
         if let errors = result["errors"] as? [String], let first = errors.first, !first.isEmpty {
             details.append("最近错误：\(first)")
         }

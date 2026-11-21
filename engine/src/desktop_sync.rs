@@ -26,7 +26,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         Mutex,
     },
     time::{Instant, SystemTime},
@@ -453,7 +453,12 @@ fn commit_probe_failure(
         });
         for name in requested {
             if let Some(source) = latest.source_mut(name) {
-                source.last_result = Some(result_summary("failed", &row, task_id));
+                // v1.9.6：标记这是探测失败（未真正尝试下载、未消耗间隔），
+                // 供 due_for_source 的欠账重试区分——探测失败不触发重试，
+                // 避免上游不可达时 60s tick 空转放大。
+                let mut summary = result_summary("failed", &row, task_id);
+                summary["probe_only"] = json!(true);
+                source.last_result = Some(summary);
             }
         }
         persist_state(state_file, &latest)
@@ -615,7 +620,18 @@ fn due_for_source(
         }
     }
     let Some(publication) = publication.filter(|p| p.verified && p.cycle.is_some()) else {
-        return (false, "publication_unverified".into());
+        // v1.9.6 欠账重试：上一轮真实下载失败（非探测失败）且间隔已过时，
+        // 即使发布探测暂未核验也再次尝试——run() 会重新探测，ADS 恢复可达
+        // （如代理就绪）后自动补齐失败周期，无需手动干预。探测失败（网络
+        // 层，未消耗间隔）不触发重试，避免上游不可达时空转放大。
+        let retryable = state.last_result.as_ref().is_some_and(|result| {
+            result["status"].as_str() == Some("failed") && result["probe_only"] != true
+        });
+        return if retryable {
+            (true, "retry_after_failure".into())
+        } else {
+            (false, "publication_unverified".into())
+        };
     };
     if let Some(last) = state
         .last_cycle
@@ -978,13 +994,22 @@ fn sync_cams(
     Ok(value)
 }
 
-fn sync_gfs(
+/// 逐文件下载的工作线程池大小。NOMADS 允许的连接数远高于此；GFS 缓存
+/// 索引写有全局 flock、每目标文件各有 lock，并发安全（v1.9.6：串行
+/// 121 文件 ≈ 22 min → 4 并发 ≈ 6 min）。
+const SYNC_DOWNLOAD_WORKERS: usize = 4;
+
+fn sync_gfs<G>(
     context: &RunContext<'_>,
     anchor: &str,
     cycle: DateTime<Utc>,
     horizon: u32,
     cancel: &AtomicBool,
-) -> Result<Value, String> {
+    file_progress: &G,
+) -> Result<Value, String>
+where
+    G: Fn(u64, u64) -> Result<(), String> + Sync,
+{
     let started = Instant::now();
     // Point forecasts request hourly leads over a domain enlarged by
     // source_radius (up to 2000 km). Prefetch the same hourly grid over an
@@ -992,10 +1017,7 @@ fn sync_gfs(
     // forecast reuses this cache instead of re-downloading (coverage reuse).
     let bbox = gfs_sync_bbox(anchor)?;
     let hours: Vec<u32> = (0..=horizon).collect();
-    let mut files = Vec::new();
-    let mut cache_hits = 0_usize;
-    let mut downloaded = 0_usize;
-    crate::cancel_scope::with_shared_cancel(cancel, |shared| {
+    let files = crate::cancel_scope::with_shared_cancel(cancel, |shared| {
         let client = gfs_data::GfsClient::with_cancel(
             gfs_data::Config {
                 cache_dir: context.gfs_cache_dir.clone(),
@@ -1007,24 +1029,23 @@ fn sync_gfs(
             },
             shared,
         )?;
-        for &hour in &hours {
-            check(cancel)?;
+        let rows = download_pool(&hours, cancel, file_progress, |hour| {
             let row = client
-                .resolve(cycle, hour, Some(bbox), false, true)?
+                .resolve(cycle, *hour, Some(bbox), false, true)?
                 .ok_or_else(|| format!("GFS f{hour:03} did not resolve to a cache file"))?;
-            match row["status"].as_str() {
-                Some("downloaded") => downloaded += 1,
-                Some(_) => cache_hits += 1,
-                _ => {}
-            }
-            files.push(json!({
+            Ok(json!({
                 "forecast_hour": hour,
                 "path": row["path"],
                 "status": row["status"],
-            }));
-        }
-        Ok(())
+            }))
+        })?;
+        Ok(rows)
     })?;
+    let cache_hits = files
+        .iter()
+        .filter(|row| row["status"].as_str().is_some_and(|s| s != "downloaded"))
+        .count();
+    let downloaded = files.len() - cache_hits;
     Ok(json!({
         "region": anchor,
         "bbox": bbox,
@@ -1036,39 +1057,142 @@ fn sync_gfs(
     }))
 }
 
-fn sync_ec(
+/// 共享的逐文件下载线程池：光标分发 work 项，4 个 worker 并发调用
+/// `fetch`；首错即停（其余 worker 快速退出）；每完成一项回调 file_progress，
+/// 回调失败置取消位（轮次状态转 cancelled，与源级 progress 错误语义一致）。
+/// 返回按 work 项原始顺序排列的结果。
+fn download_pool<T, F, G>(
+    items: &[T],
+    cancel: &AtomicBool,
+    file_progress: &G,
+    fetch: F,
+) -> Result<Vec<Value>, String>
+where
+    T: Sync,
+    F: Fn(&T) -> Result<Value, String> + Sync,
+    G: Fn(u64, u64) -> Result<(), String> + Sync,
+{
+    let total = items.len() as u64;
+    let cursor = AtomicUsize::new(0);
+    let done = AtomicUsize::new(0);
+    let first_error: Mutex<Option<String>> = Mutex::new(None);
+    let rows: Mutex<Vec<Option<Value>>> = Mutex::new((0..items.len()).map(|_| None).collect());
+    std::thread::scope(|scope| {
+        for _ in 0..SYNC_DOWNLOAD_WORKERS.min(items.len()) {
+            scope.spawn(|| loop {
+                if cancel.load(Ordering::Acquire) || first_error.lock().unwrap().is_some() {
+                    return;
+                }
+                let index = cursor.fetch_add(1, Ordering::AcqRel);
+                if index >= items.len() {
+                    return;
+                }
+                match fetch(&items[index]) {
+                    Ok(row) => {
+                        rows.lock().unwrap()[index] = Some(row);
+                        let finished = done.fetch_add(1, Ordering::AcqRel) + 1;
+                        if file_progress(finished as u64, total).is_err() {
+                            cancel.store(true, Ordering::Release);
+                        }
+                    }
+                    Err(error) => {
+                        let _ = first_error.lock().unwrap().replace(error);
+                    }
+                }
+            });
+        }
+    });
+    if let Some(error) = first_error.lock().unwrap().take() {
+        return Err(error);
+    }
+    check(cancel)?;
+    let rows = rows.into_inner().map_err(|_| "sync worker rows poisoned")?;
+    Ok(rows
+        .into_iter()
+        .map(|row| row.unwrap_or_else(|| json!({"status": "skipped"})))
+        .collect())
+}
+
+fn sync_ec<G>(
     context: &RunContext<'_>,
     cycle: DateTime<Utc>,
     horizon: u32,
     source: &str,
     cancel: &AtomicBool,
-) -> Result<Value, String> {
+    file_progress: &G,
+) -> Result<Value, String>
+where
+    G: Fn(u64, u64) -> Result<(), String> + Sync,
+{
     check(cancel)?;
+    let started = Instant::now();
+    let hours = ec_forecast_hours(horizon);
     // Per-hour cancellation: the provider checks the flag before every
     // transfer, so a cancelled round stops within one file download.
-    let mut value = ecmwf_data::execute_cancellable(
-        ecmwf_data::Params {
-            operation: "download".into(),
-            config: ecmwf_data::Config {
-                cache_dir: context.ecmwf_cache_dir.clone(),
-                source: source.to_owned(),
-                ..Default::default()
+    // v1.9.6：改为 4 并发逐小时下载——每目标文件有独立 lock（ecmwf_data
+    // download 的 {file}.lock），并发安全；41 文件 ≈ 32 min → ≈ 8 min。
+    let brackets: Mutex<Option<Value>> = Mutex::new(None);
+    let index_requests = AtomicUsize::new(0);
+    let range_requests = AtomicUsize::new(0);
+    let downloaded_bytes = AtomicUsize::new(0);
+    let rows = download_pool(&hours, cancel, file_progress, |hour| {
+        let mut value = ecmwf_data::execute_cancellable(
+            ecmwf_data::Params {
+                operation: "download".into(),
+                config: ecmwf_data::Config {
+                    cache_dir: context.ecmwf_cache_dir.clone(),
+                    source: source.to_owned(),
+                    ..Default::default()
+                },
+                cycle_utc: Some(time_contract::iso(cycle)),
+                forecast_hour: None,
+                forecast_hours: Some(vec![*hour]),
+                reference_utc: None,
+                now_utc: None,
+                evaluation_utcs: Vec::new(),
+                max_cycles: 8,
+                allow_download: true,
+                use_cache_for_cycle: true,
             },
-            cycle_utc: Some(time_contract::iso(cycle)),
-            forecast_hour: None,
-            forecast_hours: Some(ec_forecast_hours(horizon)),
-            reference_utc: None,
-            now_utc: None,
-            evaluation_utcs: Vec::new(),
-            max_cycles: 8,
-            allow_download: true,
-            use_cache_for_cycle: true,
-        },
-        cancel,
-    )?;
-    value["lead_horizon_hours"] = json!(horizon);
-    value["ecmwf_source"] = json!(source);
-    Ok(value)
+            cancel,
+        )?;
+        index_requests.fetch_add(
+            value["index_requests"].as_u64().unwrap_or(0) as usize,
+            Ordering::AcqRel,
+        );
+        range_requests.fetch_add(
+            value["range_requests"].as_u64().unwrap_or(0) as usize,
+            Ordering::AcqRel,
+        );
+        downloaded_bytes.fetch_add(
+            value["downloaded_bytes"].as_u64().unwrap_or(0) as usize,
+            Ordering::AcqRel,
+        );
+        let _ = brackets.lock().unwrap().get_or_insert(value["brackets"].clone());
+        let files = value["files"].take();
+        Ok(files)
+    })?;
+    let files = rows
+        .into_iter()
+        .flat_map(|row| match row {
+            value @ Value::Array(_) => value.as_array().unwrap().to_owned(),
+            Value::Null => Vec::new(),
+            row => vec![row],
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "contract": "rust-ecmwf-data-v1",
+        "cycle_utc": time_contract::iso(cycle),
+        "lead_horizon_hours": horizon,
+        "ecmwf_source": source,
+        "forecast_hours": hours,
+        "brackets": brackets.lock().unwrap().clone().unwrap_or(Value::Null),
+        "files": files,
+        "index_requests": index_requests.load(Ordering::Acquire),
+        "range_requests": range_requests.load(Ordering::Acquire),
+        "downloaded_bytes": downloaded_bytes.load(Ordering::Acquire),
+        "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
+    }))
 }
 
 /// One synchronous sync round. Sources fail independently (fail-closed,
@@ -1297,10 +1421,33 @@ pub fn run(
                 // New cycle, or the same cycle with a stale/untracked
                 // footprint: re-run the provider; per-lead resolve reuses
                 // covering cache files and only downloads what is missing.
+                // v1.9.6：把本源在轮内的百分比区间细分为文件进度——长下载
+                // （GFS 20+ min）期间 UI 不再停在源起点百分比不动。
+                let base_percent = index * 100 / total;
+                let span_percent = 100 / total.max(1);
+                let source_key: &str = name;
+                let file_progress = move |done: u64, total_files: u64| {
+                    let within = if total_files == 0 {
+                        0
+                    } else {
+                        done.min(total_files) * span_percent as u64 / total_files
+                    };
+                    progress(json!({
+                        "stage": "sync",
+                        "percent": (base_percent + within as usize).min(99),
+                        "source": source_key,
+                        "message": format!(
+                            "{} 正在下载 {} / {}",
+                            source_label(source_key),
+                            done,
+                            total_files
+                        ),
+                    }))
+                };
                 match *name {
                     "cams" => sync_cams(context, &anchor, cycle, cancel),
-                    "gfs" => sync_gfs(context, &anchor, cycle, horizon, cancel),
-                    _ => sync_ec(context, cycle, horizon, &ecmwf_source, cancel),
+                    "gfs" => sync_gfs(context, &anchor, cycle, horizon, cancel, &file_progress),
+                    _ => sync_ec(context, cycle, horizon, &ecmwf_source, cancel, &file_progress),
                 }
             }
         };
@@ -2109,6 +2256,115 @@ mod tests {
         assert_eq!(
             committed.cams.last_cycle.as_deref(),
             Some("2026-11-13T12:00:00+00:00")
+        );
+    }
+
+    /// v1.9.6 欠账重试：真实下载失败 + 间隔已过 → 未核验也重试；
+    /// 探测失败（probe_only）与上轮成功不触发。
+    #[test]
+    fn due_retries_after_real_failure_even_when_publication_unverified() {
+        // 引擎 chrono 未开 clock feature，用固定时刻代替 Utc::now()。
+        let now = Utc.with_ymd_and_hms(2026, 11, 21, 12, 0, 0).unwrap();
+        let publication = Publication {
+            cycle: None,
+            verified: false,
+            label: "unverified".into(),
+        };
+        let mut state = SourceState::default();
+        state.last_attempt_utc = Some(time_contract::iso(now - Duration::minutes(61)));
+        state.last_result = Some(json!({"status": "failed", "errors": ["boom"]}));
+        let (due, reason) = due_for_source(&state, 60, Some(&publication), now, true);
+        assert!(due);
+        assert_eq!(reason, "retry_after_failure");
+
+        // 探测失败行不触发重试（60s tick 空转保护）。
+        state.last_result = Some(json!({"status": "failed", "probe_only": true}));
+        let (due, reason) = due_for_source(&state, 60, Some(&publication), now, true);
+        assert!(!due);
+        assert_eq!(reason, "publication_unverified");
+
+        // 上轮成功（无欠账）也不触发。
+        state.last_result = Some(json!({"status": "synced", "errors": []}));
+        let (due, reason) = due_for_source(&state, 60, Some(&publication), now, true);
+        assert!(!due);
+        assert_eq!(reason, "publication_unverified");
+
+        // 间隔未过不重试。
+        state.last_result = Some(json!({"status": "failed"}));
+        state.last_attempt_utc = Some(time_contract::iso(now - Duration::minutes(5)));
+        let (due, reason) = due_for_source(&state, 60, Some(&publication), now, true);
+        assert!(!due);
+        assert_eq!(reason, "interval_not_elapsed");
+    }
+
+    /// v1.9.6：逐文件下载线程池——顺序保序、首错即停、进度失败置取消位。
+    #[test]
+    fn download_pool_collects_all_in_order() {
+        let cancel = AtomicBool::new(false);
+        let rows = download_pool(
+            &(0..16_u32).collect::<Vec<_>>(),
+            &cancel,
+            &|_, _| Ok(()),
+            |hour| Ok(json!({"forecast_hour": hour})),
+        )
+        .unwrap();
+        let hours: Vec<u32> = rows
+            .iter()
+            .map(|row| row["forecast_hour"].as_u64().unwrap() as u32)
+            .collect();
+        assert_eq!(hours, (0..16).collect::<Vec<_>>());
+        assert!(!cancel.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn download_pool_stops_on_first_error() {
+        let cancel = AtomicBool::new(false);
+        let result = download_pool(
+            &(0..16_u32).collect::<Vec<_>>(),
+            &cancel,
+            &|_, _| Ok(()),
+            |hour| {
+                if *hour == 3 {
+                    Err("boom-3".into())
+                } else {
+                    Ok(json!({"forecast_hour": hour}))
+                }
+            },
+        );
+        assert_eq!(result.unwrap_err(), "boom-3");
+    }
+
+    #[test]
+    fn download_pool_progress_failure_cancels_the_round() {
+        let cancel = AtomicBool::new(false);
+        let result = download_pool(
+            &(0..16_u32).collect::<Vec<_>>(),
+            &cancel,
+            &|_, _| Err("progress wire down".into()),
+            |hour| Ok(json!({"forecast_hour": hour})),
+        );
+        assert!(result.is_err());
+        assert!(cancel.load(Ordering::Acquire));
+    }
+
+    /// ADS 资产总时限随体积放宽、被 remaining 封顶（v1.9.6 回归）。
+    #[test]
+    fn ads_asset_transfer_budget_scales_and_caps() {
+        let asset_transfer_budget = crate::ads::asset_transfer_budget;
+        let remaining = std::time::Duration::from_secs(7200);
+        // 小资产维持配置超时 120s。
+        assert_eq!(
+            asset_transfer_budget(remaining, 120.0, 1 << 20),
+            std::time::Duration::from_secs(120)
+        );
+        // 512 MiB / 256 KiB/s ≈ 2048s。
+        assert_eq!(
+            asset_transfer_budget(remaining, 120.0, 512 * 1024 * 1024),
+            std::time::Duration::from_secs(2048)
+        );
+        assert_eq!(
+            asset_transfer_budget(std::time::Duration::from_secs(10), 120.0, 512 * 1024 * 1024),
+            std::time::Duration::from_secs(10)
         );
     }
 }

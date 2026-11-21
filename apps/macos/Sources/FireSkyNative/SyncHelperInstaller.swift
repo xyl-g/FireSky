@@ -122,6 +122,37 @@ enum SyncHelperInstaller {
         for pid in pids where kill(pid, 0) == 0 { kill(pid, SIGKILL) }
     }
 
+    /// v1.9.6：清理其它工作区的杂散 helper 轮。陈旧 launchd plist 指向
+    /// 旧/临时 workspace（如 /tmp/fs-layout-ws）时，helper 会以全源设置
+    /// 在错误工作区长期同步，与真实工作区轮并行抢 NOMADS/ADS 带宽，且
+    /// 本工作区的 terminateHelperRounds 按 workspace 过滤杀不到它。
+    /// 应用启动时调用一次，把「不是当前 workspace」的 data_sync_tick 轮
+    /// 全部终结（SIGTERM→SIGKILL）。正式 helper 由 plist 拉起，被误杀时
+    /// 下个 tick 自动重启；只有杂散轮会真正消失。
+    static func terminateStaleHelpers(expectedWorkspace: String) {
+        guard !expectedWorkspace.isEmpty else { return }
+        let listing = run("/bin/ps", ["-axo", "pid=,command="])
+        guard listing.status == 0 else { return }
+        var pids: [pid_t] = []
+        for line in listing.output.split(separator: "\n") {
+            let text = String(line)
+            guard text.contains("firesky-engine"), text.contains("desktop-call"),
+                  text.contains("data_sync_tick"),
+                  !text.contains("--workspace \(expectedWorkspace) data_sync_tick") else { continue }
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            guard let token = trimmed.split(separator: " ").first,
+                  let pid = pid_t(token), pid > 1 else { continue }
+            pids.append(pid)
+        }
+        guard !pids.isEmpty else { return }
+        for pid in pids { kill(pid, SIGTERM) }
+        for _ in 0..<20 {
+            if !pids.contains(where: { kill($0, 0) == 0 }) { return }
+            usleep(100_000)
+        }
+        for pid in pids where kill(pid, 0) == 0 { kill(pid, SIGKILL) }
+    }
+
     private static func launchctl(_ arguments: [String]) -> (status: Int32, output: String) {
         run("/bin/launchctl", arguments)
     }

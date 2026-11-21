@@ -150,6 +150,22 @@ fn credentials(config: &Config) -> Result<(Url, HeaderValue), String> {
     Ok((url, header))
 }
 
+/// 资产下载的总时限（v1.9.6）：max(配置超时, 期望字节 / 保守吞吐)，受
+/// remaining 预算约束。旧实现固定 min(remaining, 120s) 覆盖整个响应体
+/// 读取，慢链路下几百 MB 的整周期资产必然读不完，三次重试全部撞同一
+/// 上限后熔断（"ADS asset response read failed"）。保守吞吐取 256 KiB/s
+/// ——512 MiB 资产 ≈ 34 min，慢链路可持续下载。
+const ASSET_MIN_BYTES_PER_SECOND: u64 = 256 * 1024;
+
+pub(crate) fn asset_transfer_budget(
+    remaining: Duration,
+    timeout_seconds: f64,
+    expected: u64,
+) -> Duration {
+    let transfer_budget = Duration::from_secs(expected / ASSET_MIN_BYTES_PER_SECOND);
+    remaining.min(Duration::from_secs_f64(timeout_seconds).max(transfer_budget))
+}
+
 pub(crate) struct Ads {
     api: Client,
     assets: Client,
@@ -424,9 +440,14 @@ impl Ads {
                 .seek(SeekFrom::Start(0))
                 .map_err(|_| "cannot seek ADS temporary file")?;
             let result = (|| {
-                let timeout = self
-                    .remaining()?
-                    .min(Duration::from_secs_f64(self.config.timeout_seconds));
+                // v1.9.6：总时限按资产大小自适应（asset_transfer_budget）——旧
+                // 实现固定 min(remaining, 120s) 覆盖整个响应体读取，慢链路下
+                // 几百 MB 的整周期资产必然读不完，三次重试全部撞同一上限后熔断。
+                let timeout = asset_transfer_budget(
+                    self.remaining()?,
+                    self.config.timeout_seconds,
+                    expected,
+                );
                 let mut response = self
                     .assets
                     .get(url.clone())
@@ -447,9 +468,9 @@ impl Ads {
                 let mut bytes = 0_u64;
                 loop {
                     self.check_cancelled()?;
-                    let count = response
-                        .read(&mut buffer)
-                        .map_err(|_| "ADS asset response read failed")?;
+                    let count = response.read(&mut buffer).map_err(|error| {
+                        format!("ADS asset response read failed ({error})")
+                    })?;
                     if count == 0 {
                         break;
                     }

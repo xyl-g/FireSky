@@ -104,6 +104,47 @@ ships release capability (self-contained zip, installer, CI publishing).
   breaking inventory/check before any download; normalized only real path
   levels and tolerated error 1, with a Windows regression test. The app
   assembly now embeds the engine version for in-app update comparison.
+## v1.9.6 (2026-11-21)
+
+数据同步专项修复：ADS 大资产自适应超时 + 失败欠账自动补齐 + GFS/EC 并发下载与逐文件进度 + 同步页实时刷新。来源为专项走查（CAM 撞 120s 总超时熔断、失败后 24h+ 不重试、GFS 串行 22 min、杂散 helper 抢带宽）。
+Data-sync hardening round: adaptive ADS asset timeouts, automatic retry
+after failed rounds, concurrent GFS/EC downloads with per-file progress,
+and live sync status refresh.
+
+**引擎 / Engine**
+
+- ADS 资产下载总时限按体积自适应（`asset_transfer_budget`）：旧实现固定
+  `min(remaining, 120s)` 覆盖整个响应体读取，慢链路下几百 MB 的整周期
+  CAMS 资产必然读不完，3 次重试全部撞同一上限后熔断（`ADS asset response
+  read failed`）。现按保守吞吐 256 KiB/s 折算下限（512 MiB ≈ 34 min），
+  仍受 remaining 预算封顶。
+- 失败欠账自动补齐：上一轮真实下载失败且间隔已过后，即使发布探测暂未
+  核验也再次尝试（`retry_after_failure`）；ADS 恢复可达后自动补齐失败
+  周期，无需手动干预。探测失败（未消耗间隔）带 `probe_only` 标记不触发
+  重试，避免上游不可达时 60s tick 空转放大；熔断语义不变。
+- GFS/EC 并发下载（4 worker）+ 源内逐文件进度：每目标文件已有独立
+  lock，并发安全；GFS 121 文件串行 ≈ 22 min → 4 并发 ≈ 6 min，EC
+  41 文件 ≈ 32 min → ≈ 8 min。轮进度把本源百分比区间细分到文件粒度，
+  长下载期间 UI 不再停在源起点不动。
+- 修复地形下载历史白名单不同步已在 v1.9.5 交付；本轮新增 download_pool
+  与超时预算的回归测试。
+  Engine: adaptive ADS asset budgets, retry-after-failure (probe failures
+  excluded via a probe_only marker), 4-worker concurrent GFS/EC downloads
+  with per-file progress blended into the round percent.
+
+**桌面（macOS）/ Desktop**
+
+- 同步状态每 15s 自动刷新（设置页可见且引擎空闲时）：后台轮次、CAMS
+  补齐、熔断状态变化不再依赖手动刷新；每源状态行新增上一轮实际耗时
+  （elapsed_ms）。
+- 应用启动时清理其它工作区的杂散 helper 轮：陈旧 launchd plist 指向旧
+  workspace（如 /tmp 测试目录）时，杂散轮会以全源设置在错误工作区长期
+  同步并与真实轮并行抢带宽；正式 helper 被终结后由 launchd 自动拉起。
+- 说明：引擎 reqwest 已启用 `macos-system-configuration`，原生跟随系统
+  代理（Clash 等），无需额外注入代理环境变量。
+  Desktop: 15s live refresh for sync/helper status, per-round elapsed
+  display, stale cross-workspace helper cleanup at startup.
+
 ## v1.9.5 (2026-11-21)
 
 界面多语言 i18n（三端）+ 任务历史可追溯预测详情 + 引擎修复 + Windows token 补齐。
