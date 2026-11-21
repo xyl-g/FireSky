@@ -70,9 +70,9 @@ internal static class L10n
         if (reverse == null)
         {
             reverse = new Dictionary<string, string>();
-            foreach (var (chinese, english) in Dictionary)
+            foreach (var (chineseKey, english) in Dictionary)
             {
-                reverse.TryAdd(english, chinese);
+                reverse.TryAdd(english, chineseKey);
             }
         }
         var chinese = reverse.TryGetValue(current, out var mapped) ? mapped : current;
