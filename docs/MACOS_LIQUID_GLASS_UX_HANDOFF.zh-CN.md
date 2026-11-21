@@ -792,7 +792,7 @@ GFS/EC 双摘要、0–2.5 指数、档位、最佳时刻、推荐窗口、天�
 
 ### 20.2 未在本轮实现
 
-- 未把根布局整体迁移到 `NavigationSplitView`；本轮保留自定义根布局，先建立正确的表面分工和选中反馈。
+- 第一轮未把根布局整体迁移到 `NavigationSplitView`；本轮先建立正确的表面分工和选中反馈，P1-1 的结论见 §20.10。
 - 未实现系统通知、提醒、原生分享或 Keychain 迁移；界面没有放置对应假按钮。
 - 未重排区域预测和卫星实况页的专用工具组；自适应网格与表面规范对它们生效，但专用摘要仍需单独验收。
 - 未做全链路 VoiceOver 和 Reduce Motion / Reduce Transparency / Increase Contrast 真机矩阵；代码路径已支持，仍需系统设置逐项走查。
@@ -852,3 +852,11 @@ GFS/EC 双摘要、0–2.5 指数、档位、最佳时刻、推荐窗口、天�
 - 仓库回放脚本的 `sandbox-exec` 在本机被策略拒绝，已用同一编译产物去掉沙箱包装重跑；数据仍全部来自本地夹具。
 - 历史冻结剖面因日期过期被引擎正确拒绝，测试夹具新增显式开关只容忍「过期」错误后继续截图，不绕过业务校验。细节见 `output/ui-polish-20261122/business-scenario-matrix.md`。
 - Gatekeeper、首次真实下载/取消/看门狗、离线缓存、更新与真实用户任务测试仍需真实环境验证。
+
+### 20.10 根布局与 NavigationSplitView 对齐（P1-1 已完成，采用对齐而非替换）
+
+- 曾以 `NavigationSplitView(columnVisibility:)` 直接替换 `WorkbenchRootView` 的自定义根布局，保留原侧栏与顶栏视图。1440×900 浅/深色下视觉正常，但 1120×720 下 FireSky 品牌行和顶栏被裁掉，窗口理想高度被撑到 1123pt。
+- 逐一验证过列宽修饰、固定侧栏宽度、detail 区弹性 frame、`safeAreaInset` 顶栏、忽略顶部安全区、调整根 frame 顺序和最小高度，均无法在本机 CommandLineTools / macOS 14 SwiftUI 实现下同时保住 1120×720 和原顶栏。为避免把系统容器适配变成可见性回归，**没有把该试验提交到交付代码**。试验截图保留在 `output/ui-polish-20261122/navigation-attempt/`，仅作决策证据。
+- 最终采用 §12.2「对齐而非一次替换」的路线：保留自定义根布局，但把侧栏显隐状态从裸 `Bool` 改为 `NavigationSplitViewVisibility`（`.all` / `.detailOnly`）语义；顶栏按钮切换的是列可见性，Reduce Motion 行为不变。这样后续真机确认 `NavigationSplitView` 行为后可以直接替换容器，不需要再改侧栏状态模型。
+- 最终截图：`output/ui-polish-20261122/navigation-aligned/{light-1440,dark-1440,light-1120}.png`。1120×720 下品牌行、侧栏、顶栏和首次引导完整可见，未引入横向溢出。
+- `swift build --disable-sandbox --package-path apps/macos`：Build complete；`git diff --check`：通过。

@@ -30,9 +30,12 @@ private let transmissionColor = Color(nsColor: NSColor(name: nil) { appearance i
         : NSColor(calibratedRed: 0.04, green: 0.36, blue: 0.56, alpha: 1)
 })
 
-/// 侧栏显示状态。本机工具链无 SwiftUIMacros，使用普通 ObservableObject。
+/// 侧栏显示状态。语义与 NavigationSplitViewVisibility 对齐；本机工具链下
+/// 直接替换根容器会让 1120×720 窗口裁掉品牌行和顶栏，因此继续由自定根布局消费。
 private final class SidebarVisibility: ObservableObject {
-    @Published var visible = true
+    @Published var column: NavigationSplitViewVisibility = .all
+
+    var visible: Bool { column != .detailOnly }
 }
 
 struct WorkbenchRootView: View {
@@ -205,7 +208,7 @@ struct WorkbenchRootView: View {
         HStack(alignment: .center, spacing: 12) {
             Button {
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
-                    sidebarState.visible.toggle()
+                    sidebarState.column = sidebarState.visible ? .detailOnly : .all
                 }
             } label: {
                 Image(systemName: "sidebar.left")
