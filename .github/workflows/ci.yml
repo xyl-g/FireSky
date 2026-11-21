@@ -168,6 +168,8 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
       # ubuntu runner 预装 Android SDK（ANDROID_HOME + licenses 已接受）；
       # FIRESKY_SKIP_NATIVE=1 跳过 JNI/交叉库链（CI 无 NDK + ecCodes 交叉库），
       # 只验证 Kotlin 编译与 MockTransport 全链单元测试。
@@ -191,10 +193,10 @@ jobs:
         run: |
           ROOT="$PWD/.cache/mm0-cross"
           mkdir -p "$ROOT" && cd "$ROOT"
-          curl -fL -sS -o eccodes.tar.gz             "https://codeload.github.com/ECMWF/eccodes/tar.gz/refs/tags/2.50.0"
+          curl -fL -sS --retry 5 --retry-all-errors --connect-timeout 15 -o eccodes.tar.gz             "https://codeload.github.com/ECMWF/eccodes/tar.gz/refs/tags/2.50.0"
           tar xzf eccodes.tar.gz
           mv "$(find . -maxdepth 1 -type d -name 'eccodes-*' | head -n 1)" eccodes-src
-          curl -fL -sS -o libaec.tar.gz             "https://github.com/Deutsches-Klimarechenzentrum/libaec/releases/download/v1.1.8/libaec-1.1.8.tar.gz"
+          curl -fL -sS --retry 5 --retry-all-errors --connect-timeout 15 -o libaec.tar.gz             "https://github.com/Deutsches-Klimarechenzentrum/libaec/releases/download/v1.1.8/libaec-1.1.8.tar.gz"
           tar xzf libaec.tar.gz
           mv "$(find . -maxdepth 1 -type d -name 'libaec-*' | head -n 1)" libaec-src
           DEV="$(xcode-select -p)"

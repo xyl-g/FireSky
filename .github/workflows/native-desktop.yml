@@ -54,7 +54,9 @@ jobs:
   linux-native:
     timeout-minutes: 30
     name: Linux GTK4 + Rust FFI
-    # 2026-11-20 临时停用：Linux 已降级为非发布目标，当前无法判断可用性（用户裁定）。
+    # 2026-11-20 临时停用：Linux 已降级为非发布目标（用户裁定）。if:false
+    # 不分配 runner；保留块以维持 needs 图与恢复上下文（审计 P2-19 曾建议
+    # 删除，2026-11-21 实删时误伤 macos-native 两次，改为保守保留）。
     if: false
     # Linux follows the macOS ABI and lifecycle baseline; do not fan out
     # platform UI builds before the macOS gate has passed.
@@ -319,6 +321,10 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      # Gradle wrapper + 依赖缓存：Maven Central 429 限流时命中缓存即过
+      # （2026-11-21 v1.9.8 首次发布即因 jsr305.pom 429 失败）。
+      - name: Setup Gradle cache
+        uses: gradle/actions/setup-gradle@v4
       # ubuntu-latest runner 预装 Android SDK（ANDROID_HOME 已设、licenses 已接受）。
       - name: Install NDK
         uses: nttld/setup-ndk@v1
@@ -334,11 +340,11 @@ jobs:
           set -euo pipefail
           ROOT="$PWD/.cache/mm0-cross"
           mkdir -p "$ROOT"
-          curl -fL -sS -o "$ROOT/eccodes.tar.gz" \
+          curl -fL -sS --retry 5 --retry-all-errors --connect-timeout 15 -o "$ROOT/eccodes.tar.gz" \
             "https://codeload.github.com/ECMWF/eccodes/tar.gz/refs/tags/2.50.0"
           tar xzf "$ROOT/eccodes.tar.gz" -C "$ROOT"
           mv "$(find "$ROOT" -maxdepth 1 -type d -name 'eccodes-*' | head -n 1)" "$ROOT/eccodes-src"
-          curl -fL -sS -o "$ROOT/libaec.tar.gz" \
+          curl -fL -sS --retry 5 --retry-all-errors --connect-timeout 15 -o "$ROOT/libaec.tar.gz" \
             "https://github.com/Deutsches-Klimarechenzentrum/libaec/releases/download/v1.1.8/libaec-1.1.8.tar.gz"
           tar xzf "$ROOT/libaec.tar.gz" -C "$ROOT"
           mv "$(find "$ROOT" -maxdepth 1 -type d -name 'libaec-*' | head -n 1)" "$ROOT/libaec-src"
