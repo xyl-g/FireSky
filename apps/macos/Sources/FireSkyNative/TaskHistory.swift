@@ -166,19 +166,22 @@ struct NativeTaskEvent: Identifiable {
     }
 }
 
+/// 历史页筛选状态。CommandLineTools 环境无 SwiftUIMacros，使用普通 ObservableObject。
+private final class HistoryFilterState: ObservableObject {
+    @Published var showSyncRounds = false
+    @Published var kindFilter = "all"
+}
+
 /// 任务历史独立侧栏页面：左侧列表 + 右侧详情区，支持类型/状态筛选。
 struct NativeTaskHistoryView: View {
     @EnvironmentObject private var store: Store
-    /// UX #13：后台同步轮次默认折叠。
-    @State private var showSyncRounds = false
-    /// 任务类型筛选：all / 主动任务 / 后台同步。
-    @State private var kindFilter = "all"
+    @StateObject private var filters = HistoryFilterState()
 
     private var visibleHistory: [NativeTaskHistoryItem] {
-        switch kindFilter {
+        switch filters.kindFilter {
         case "active": store.taskHistory.filter { !$0.isBackgroundSync }
         case "sync": store.taskHistory.filter(\.isBackgroundSync)
-        default: showSyncRounds ? store.taskHistory : store.taskHistory.filter { !$0.isBackgroundSync }
+        default: filters.showSyncRounds ? store.taskHistory : store.taskHistory.filter { !$0.isBackgroundSync }
         }
     }
 
@@ -234,7 +237,7 @@ struct NativeTaskHistoryView: View {
             }
             Spacer()
             // 筛选：主动任务 / 后台同步轮次。
-            Picker("", selection: $kindFilter) {
+            Picker("", selection: $filters.kindFilter) {
                 Text(L10n.text("全部", "All")).tag("all")
                 Text(L10n.text("主动任务", "Active")).tag("active")
                 Text(L10n.text("后台同步", "Sync")).tag("sync")

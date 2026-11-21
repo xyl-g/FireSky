@@ -27,15 +27,25 @@ private let transmissionColor = Color(nsColor: NSColor(name: nil) { appearance i
         : NSColor(calibratedRed: 0.04, green: 0.36, blue: 0.56, alpha: 1)
 })
 
+/// 侧栏显示状态。本机工具链无 SwiftUIMacros，使用普通 ObservableObject。
+private final class SidebarVisibility: ObservableObject {
+    @Published var visible = true
+}
+
 struct WorkbenchRootView: View {
     @EnvironmentObject private var store: Store
     @EnvironmentObject private var updater: Updater
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// 本机工具链无 SwiftUIMacros，使用普通 ObservableObject 代替 @State。
+    @StateObject private var sidebarState = SidebarVisibility()
 
     var body: some View {
         HStack(spacing: 0) {
-            sidebar
-            Divider()
+            if sidebarState.visible {
+                sidebar
+                Divider()
+            }
             VStack(spacing: 0) {
                 topbar
                 Group {
@@ -109,6 +119,7 @@ struct WorkbenchRootView: View {
             Text("观测工作台").font(.system(size: 10, weight: .semibold))
                 .foregroundStyle(.secondary).padding(.bottom, 9)
             ForEach([Page.point, .regional, .nowcast, .data, .history]) { page in
+                let selected = store.page == page
                 Button {
                     // UX #5：切页不再被全局 busy 锁死；运行中的任务继续，顶栏可见进度。
                     store.page = page
@@ -116,36 +127,87 @@ struct WorkbenchRootView: View {
                     HStack(spacing: 11) {
                         Image(systemName: page.symbol).symbolRenderingMode(.hierarchical)
                             .font(.system(size: 17, weight: .regular)).frame(width: 22, height: 22)
-                        Text(page.title).font(.system(size: 13, weight: store.page == page ? .semibold : .regular))
+                        Text(page.title).font(.system(size: 13, weight: selected ? .semibold : .regular))
                         Spacer(minLength: 0)
+                        if selected {
+                            Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                        }
                     }
-                    .padding(.horizontal, 12).frame(height: 46)
-                    .foregroundStyle(store.page == page ? warm : Color.primary.opacity(0.72))
-                    .background(store.page == page ? warm.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-                }.buttonStyle(.plain).padding(.bottom, 3)
-                    .accessibilityAddTraits(store.page == page ? .isSelected : [])
+                    .padding(.horizontal, 12).frame(height: 44)
+                    .foregroundStyle(selected ? Color.primary : Color.primary.opacity(0.76))
+                    .background {
+                        RoundedRectangle(cornerRadius: 8)
+                            .fill(selected ? Color.accentColor.opacity(0.14) : Color.clear)
+                    }
+                    .overlay(alignment: .leading) {
+                        if selected {
+                            RoundedRectangle(cornerRadius: 1.5)
+                                .fill(Color.accentColor)
+                                .frame(width: 3, height: 22)
+                                .padding(.leading, 2)
+                        }
+                    }
+                    .contentShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 3)
+                .accessibilityLabel(selected ? "\(page.title)，当前页面" : page.title)
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
             Spacer(minLength: 20)
-            Button("设置", systemImage: "gearshape") {
+            Button {
                 store.page = .settings
-            }.buttonStyle(.plain).frame(maxWidth: .infinity).padding(.vertical, 18)
-                .overlay(alignment: .topTrailing) {
-                    // 发现新版本时在设置入口显示绿色徽标（更新入口在设置 → 通用）。
-                    if updater.phase == .available {
-                        Circle().fill(Color.green).frame(width: 8, height: 8)
-                            .help("发现新版本 \(updater.info?.version ?? "")")
-                    }
+            } label: {
+                HStack(spacing: 11) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 17, weight: .regular)).frame(width: 22, height: 22)
+                    Text("设置").font(.system(size: 13, weight: store.page == .settings ? .semibold : .regular))
+                    Spacer(minLength: 0)
                 }
+                .padding(.horizontal, 12).frame(height: 44)
+                .foregroundStyle(store.page == .settings ? Color.primary : Color.primary.opacity(0.76))
+                .background {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(store.page == .settings ? Color.accentColor.opacity(0.14) : Color.clear)
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .padding(.bottom, 8)
+            .accessibilityLabel(store.page == .settings ? "设置，当前页面" : "设置")
+            .accessibilityAddTraits(store.page == .settings ? .isSelected : [])
+            .overlay(alignment: .topTrailing) {
+                // 发现新版本时在设置入口显示绿色徽标（更新入口在设置 → 通用）。
+                if updater.phase == .available {
+                    Circle().fill(Color.green).frame(width: 8, height: 8)
+                        .padding(.trailing, 10).padding(.top, 6)
+                        .accessibilityLabel("发现新版本 \(updater.info?.version ?? "")")
+                }
+            }
         }
         .padding(.horizontal, 15).padding(.top, 24).padding(.bottom, 16)
         .frame(width: 196)
-        .modifier(SidebarGlass())
+        .fireSkySurface(role: .navigation)
     }
 
     private var topbar: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(store.page.title).font(.system(size: 22, weight: .bold))
+        HStack(alignment: .center, spacing: 12) {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
+                    sidebarState.visible.toggle()
+                }
+            } label: {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .help(sidebarState.visible ? "隐藏侧栏" : "显示侧栏")
+            .accessibilityLabel(sidebarState.visible ? "隐藏侧栏" : "显示侧栏")
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(store.page.title).font(.system(size: 20, weight: .semibold))
                 // 副标题只在该页面有地点语义时显示；管理页不借用预测地点上下文。
                 if store.page.showsLocationSubtitle {
                     Text(store.page == .regional ? store.regionalTitle
@@ -153,18 +215,23 @@ struct WorkbenchRootView: View {
                         .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
-            Spacer()
+            Spacer(minLength: 8)
             // UX #5：任务运行中切页后，顶栏仍能看到进度与取消入口。
             if store.busy {
-                HStack(spacing: 7) {
+                HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text(store.status).font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text(store.status).font(.system(size: 11)).foregroundStyle(.secondary)
                         .lineLimit(1).frame(maxWidth: 220)
                     Button { store.cancel() } label: { Image(systemName: "xmark.circle") }
-                        .buttonStyle(.borderless).help("取消当前任务")
+                        .buttonStyle(.borderless)
+                        .help("取消当前任务")
+                        .accessibilityLabel("取消当前任务")
                 }.workChip()
             }
-        }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 10).frame(height: 72)
+        }
+        .padding(.horizontal, 20).padding(.vertical, 10)
+        .frame(height: 72)
+        .fireSkySurface(role: .navigation)
     }
 
     private var workbench: some View {
@@ -196,16 +263,18 @@ struct WorkbenchRootView: View {
                 if store.busy {
                     ProgressView(value: store.percent, total: 100)
                     HStack {
-                        Text(store.status).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(2)
+                        Text(store.status).font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
                         Spacer()
-                        Button { store.cancel() } label: { Image(systemName: "xmark") }.help("取消任务")
+                        Button { store.cancel() } label: { Image(systemName: "xmark") }
+                            .help("取消任务")
+                            .accessibilityLabel("取消任务")
                     }
                 }
                 if !store.online && !store.error.isEmpty {
                     Label("引擎未连接", systemImage: "exclamationmark.triangle")
                         .font(.system(size: 10)).foregroundStyle(.red)
                     Text(store.error)
-                        .font(.system(size: 9))
+                        .font(.system(size: 11))
                         .foregroundStyle(.red.opacity(0.9))
                         .lineLimit(3)
                         .textSelection(.enabled)
@@ -233,7 +302,30 @@ struct WorkLocationView: View {
                 Text(store.page == .regional ? "预测区域" : "观测点").font(.system(size: 13, weight: .semibold))
                 Spacer()
                 if store.page != .regional {
-                    WorkSegments(options: ["地图", "收藏"], selection: $store.locationTab).frame(width: 128)
+                    WorkSegments(options: ["地图", "收藏"], selection: $store.locationTab).frame(width: 112)
+                    if store.locationTab == "收藏" {
+                        Menu {
+                            if store.favorites.isEmpty {
+                                Text("还没有收藏位置")
+                            } else {
+                                ForEach(Array(store.favorites.enumerated()), id: \.offset) { _, item in
+                                    Button(role: .destructive) {
+                                        store.removeFavorite(item)
+                                    } label: {
+                                        Label("删除 \(item["name"] as? String ?? "收藏位置")", systemImage: "trash")
+                                    }
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                                .font(.system(size: 13))
+                                .frame(width: 22, height: 22)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .help("管理收藏位置")
+                        .accessibilityLabel("管理收藏位置")
+                    }
                 }
             }
             HStack(spacing: 6) {
@@ -269,7 +361,7 @@ struct WorkLocationView: View {
                             Image(systemName: "star").foregroundStyle(.secondary)
                             Text("还没有收藏位置").font(.system(size: 11, weight: .medium))
                             Text("搜索或在地图上选好地点后，点击下方「收藏当前点」。")
-                                .font(.system(size: 9)).foregroundStyle(.secondary)
+                                .font(.system(size: 11)).foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
                         }.frame(maxWidth: .infinity, minHeight: 160)
                     } else {
@@ -287,23 +379,31 @@ struct WorkLocationView: View {
                 }.frame(height: 176)
             }
             HStack(spacing: 9) {
-                Circle().fill(warm).frame(width: 8, height: 8)
+                Circle().fill(store.metadataReady ? Color.accentColor : Color.orange).frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(store.name).font(.system(size: 13, weight: .semibold))
                     Text(String(format: "%.4f° N, %.4f° E", store.lat, store.lon))
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
                 }
             }
-            HStack(spacing: 5) {
-                Text(store.metadataReady ? String(format: "海拔 %.0f m", store.elevation) : "海拔未确认").workChip()
-                    .help("海拔来源设置：\(store.elevationSourceLabel)；实际来源：\(store.elevationSourceActualLabel)")
-                Text(store.timezone).lineLimit(1).workChip()
-            }.font(.system(size: 9)).foregroundStyle(.secondary)
+            Text(store.metadataReady
+                 ? "位置已确认 · 海拔 \(Int(store.elevation)) m · \(store.timezone)"
+                 : "位置待确认 · 展开「编辑坐标」获取海拔与时区")
+                .font(.system(size: 11))
+                .foregroundStyle(store.metadataReady ? Color.secondary : Color.orange)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .help(store.metadataReady
+                      ? "海拔来源设置：\(store.elevationSourceLabel)；实际来源：\(store.elevationSourceActualLabel)"
+                      : "确认海拔与时区后才能收藏该点并开始预测。")
+                .accessibilityLabel(store.metadataReady
+                                    ? "位置已确认，海拔 \(Int(store.elevation)) 米，时区 \(store.timezone)"
+                                    : "位置待确认，请展开编辑坐标获取海拔与时区")
             HStack {
                 Button("收藏当前点", systemImage: "star") { store.starLocation() }
                 Spacer()
                 Button("大地图", systemImage: "arrow.up.left.and.arrow.down.right") { store.showMapPicker = true }
-            }.buttonStyle(.borderless).font(.system(size: 10))
+            }.buttonStyle(.borderless).font(.system(size: 11))
         }.padding(15).workSurface()
     }
     private func coordinate(_ title: String, _ value: Binding<Double>) -> some View {
@@ -324,19 +424,21 @@ struct WorkParametersView: View {
                 Text("观测参数").font(.system(size: 13, weight: .semibold))
                 Spacer()
                 Button("重置") { store.chooseDate("今天"); store.phenomenon = "dusk" }
-                    .buttonStyle(.borderless).font(.system(size: 10))
+                    .buttonStyle(.borderless).font(.system(size: 11))
             }
-            Text("目标日期").font(.system(size: 10)).foregroundStyle(.secondary)
+            Text("目标日期").font(.system(size: 11)).foregroundStyle(.secondary)
             WorkSegments(options: ["今天", "明天", "自定义"],
                          selection: Binding(get: { store.dateTab }, set: { store.chooseDate($0) }))
             if store.dateTab == "自定义" {
                 WorkDateButton()
             }
-            Text("观测现象").font(.system(size: 10)).foregroundStyle(.secondary)
+            Text("观测现象").font(.system(size: 11)).foregroundStyle(.secondary)
             WorkSegments(options: ["dawn", "dusk"], titles: ["朝霞", "晚霞"],
                          selection: $store.phenomenon, accented: true)
-            Button("编辑坐标", systemImage: "slider.horizontal.3") { store.editingCoordinates.toggle() }
-                .buttonStyle(.borderless).font(.system(size: 10)).frame(maxWidth: .infinity)
+            Button("编辑坐标", systemImage: "slider.horizontal.3") {
+                store.editingCoordinates.toggle()
+            }
+            .buttonStyle(.borderless).font(.system(size: 11)).frame(maxWidth: .infinity)
             if store.editingCoordinates {
                 VStack(spacing: 8) {
                     TextField("名称", text: $store.name)
@@ -348,13 +450,13 @@ struct WorkParametersView: View {
                         Spacer()
                         Text(store.timezone).monospaced()
                     }
-                    Text("时区按经纬度自动计算").font(.system(size: 9)).foregroundStyle(.secondary)
+                    Text("时区按经纬度自动计算").font(.system(size: 11)).foregroundStyle(.secondary)
                     Button("获取海拔与时区") { store.lookupMetadata() }.buttonStyle(.borderless)
-                    Toggle("已确认位置数据", isOn: $store.metadataReady).font(.system(size: 10))
+                    Toggle("已确认海拔与时区", isOn: $store.metadataReady).font(.system(size: 11))
                 }.textFieldStyle(.roundedBorder)
             }
             if !store.error.isEmpty {
-                Text(store.error).font(.system(size: 10)).foregroundStyle(.red).textSelection(.enabled)
+                Text(store.error).font(.system(size: 11)).foregroundStyle(.red).textSelection(.enabled)
             }
         }.padding(15).workSurface()
     }
@@ -467,11 +569,136 @@ struct WorkStaleResultBanner: View {
     }
 }
 
+/// 行动摘要（交接文档 P0-2）：只读取 Rust 报告字段，不在 SwiftUI 重算科学结果。
+/// 双模式并列展示，不平均、不互相填补；缺测与单模式失败都有独立文案。
+private struct WorkActionSummaryView: View {
+    @EnvironmentObject private var store: Store
+    let comparison: ForecastComparison
+
+    private struct ModelSnapshot {
+        let model: String
+        let level: String
+        let best: String
+        let window: String
+        let limit: String?
+    }
+
+    private var snapshots: [ModelSnapshot] {
+        ForecastComparison.models.compactMap { model in
+            guard let report = comparison.report(model) else { return nil }
+            let level = report["peak_quality_level"] as? String
+                ?? report["quality_level"] as? String
+                ?? "指数 \(format(comparison.peak(model), digits: 2)) / 2.5"
+            let rawLimit = (report["quality_components"] as? JSONObject)?["quality_limiting_factor"] as? String
+            return ModelSnapshot(model: model,
+                                 level: level,
+                                 best: timeLabel(report["best_time_local"] as? String),
+                                 window: windowLabel(report),
+                                 limit: rawLimit?.isEmpty == true ? nil : rawLimit)
+        }
+    }
+
+    private var failedModels: [String] {
+        ForecastComparison.models.filter { comparison.error($0) != nil }
+    }
+
+    private var levelsAgree: Bool {
+        snapshots.count == 2 && Set(snapshots.map(\.level)).count == 1
+    }
+
+    private var headline: String {
+        if snapshots.isEmpty {
+            return failedModels.isEmpty
+                ? "完成一次预测后，这里会给出是否值得外出、最佳时刻和主要限制。"
+                : "两个模式都未完成，暂不能给出观测建议。"
+        }
+        if snapshots.count == 1 {
+            return "仅 \(snapshots[0].model.uppercased()) 可用：\(snapshots[0].level)"
+        }
+        return levelsAgree
+            ? "两个模式结论一致：\(snapshots[0].level)"
+            : "两个模式结论不同：GFS \(snapshots[0].level) · EC \(snapshots[1].level)"
+    }
+
+    private var timingText: String {
+        guard let first = snapshots.first else { return "" }
+        if levelsAgree, snapshots.allSatisfy({ $0.best == first.best && $0.window == first.window }) {
+            return "最佳 \(first.best) · 推荐窗口 \(first.window)"
+        }
+        return snapshots.map { "\($0.model.uppercased()) 最佳 \($0.best) · 窗口 \($0.window)" }
+            .joined(separator: "   ·   ")
+    }
+
+    private var notes: [String] {
+        var result: [String] = []
+        for model in failedModels {
+            result.append("\(model.uppercased()) 未完成：\(comparison.error(model) ?? "未知原因")")
+        }
+        for snapshot in snapshots {
+            if let limit = snapshot.limit {
+                result.append("\(snapshot.model.uppercased()) 主要限制：\(limit)")
+            }
+        }
+        if store.resultParametersStale {
+            result.append("当前结果对应旧参数，可点「按新参数重算」更新。")
+        }
+        return result
+    }
+
+    private var statusSymbol: String {
+        if snapshots.isEmpty { return failedModels.isEmpty ? "sparkles" : "exclamationmark.triangle" }
+        return levelsAgree && failedModels.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: statusSymbol)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.accentColor)
+                Text("行动摘要").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
+                Spacer(minLength: 8)
+                if !snapshots.isEmpty {
+                    Button {
+                        store.starLocation()
+                    } label: {
+                        Label("收藏该地点", systemImage: "star")
+                    }
+                    .buttonStyle(.borderless)
+                    .font(.system(size: 11))
+                    .disabled(!store.metadataReady)
+                    .help(store.metadataReady ? "把当前观测点加入收藏" : "请先确认海拔与时区，再收藏该地点")
+                }
+            }
+            Text(headline)
+                .font(.system(size: 15, weight: .semibold))
+                .foregroundStyle(.primary)
+                .accessibilityLabel("结论：\(headline)")
+            if !timingText.isEmpty {
+                Text(timingText)
+                    .font(.system(size: 12)).monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("时间与窗口：\(timingText)")
+            }
+            ForEach(notes, id: \.self) { note in
+                Text(note)
+                    .font(.system(size: 11))
+                    .foregroundStyle(.orange)
+                    .accessibilityLabel(note)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fireSkySurface(role: .content, emphasized: !snapshots.isEmpty)
+    }
+}
+
 struct WorkHeroView: View {
     @EnvironmentObject private var store: Store
     private var comparison: ForecastComparison { store.pointComparison }
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
+            WorkActionSummaryView(comparison: comparison)
             // UX #1/#3：标题跟随结果原始参数，而不是当前表单。
             Text("\(store.resultTitle) \(store.resultPhenomenonLabel)")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
@@ -492,7 +719,7 @@ struct WorkHeroView: View {
                 Circle().fill(modelColor(model)).frame(width: 6, height: 6)
                 Text(model.uppercased()).font(.system(size: 12, weight: .semibold))
                 Spacer(minLength: 4)
-                Text(comparison.status(model)).font(.system(size: 9))
+                Text(comparison.status(model)).font(.system(size: 11))
                     .foregroundStyle(comparison.error(model) == nil ? Color.secondary : Color.red)
             }
             HStack(alignment: .top, spacing: 12) {
@@ -504,11 +731,11 @@ struct WorkHeroView: View {
                         Text("/ 2.5").font(.system(size: 10)).foregroundStyle(.secondary)
                     }
                     Text(report?["peak_quality_level"] as? String ?? report?["quality_level"] as? String ?? "峰值质量指数")
-                        .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(2)
+                        .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
                 }
                 Spacer(minLength: 0)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("最佳时刻").font(.system(size: 9)).foregroundStyle(.secondary)
+                    Text("最佳时刻").font(.system(size: 11)).foregroundStyle(.secondary)
                     Text(timeLabel(report?["best_time_local"] as? String))
                         .font(.system(size: 22, weight: .semibold)).monospacedDigit()
                 }
@@ -521,12 +748,12 @@ struct WorkHeroView: View {
                 Text(report == nil ? "未预测" : familyLabel(report?["dominant_burnable_pressure_family"])).workChip()
                     .help(report == nil ? "尚未运行预测；完成一次预测后显示主导可烧压力族。"
                           : "主导可烧压力族（来自本次预测结果）")
-            }.font(.system(size: 9)).foregroundStyle(.secondary)
+            }.font(.system(size: 11)).foregroundStyle(.secondary)
             Text(modelSourceNote(model))
-                .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(2)
+                .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
             if let message = comparison.error(model) {
-                Text(message).font(.system(size: 10)).foregroundStyle(.red).lineLimit(2)
+                Text(message).font(.system(size: 11)).foregroundStyle(.red).lineLimit(2)
                     .help(message).textSelection(.enabled)
             }
         }.frame(maxWidth: .infinity, minHeight: 124, alignment: .topLeading)
@@ -568,8 +795,10 @@ struct WorkResultsView: View {
                     if store.resultTab == "概览" {
                         ForEach(groups, id: \.0) { title, range in
                             VStack(alignment: .leading, spacing: 7) {
-                                Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
-                                HStack(alignment: .top, spacing: 10) {
+                                Text(title).font(.system(size: 11, weight: .medium)).foregroundStyle(.secondary)
+                                // 自适应列数：宽屏多列，窄窗口自动降列，不靠继续缩小字号。
+                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 165), spacing: 10)],
+                                          alignment: .leading, spacing: 10) {
                                     ForEach(Array(metricSpec[range]), id: \.0) { spec in
                                         VStack(alignment: .leading, spacing: 7) {
                                             Text(spec.1).font(.system(size: 12)).foregroundStyle(.primary.opacity(0.8))
@@ -579,7 +808,7 @@ struct WorkResultsView: View {
                                                 VStack(alignment: .leading, spacing: 4) {
                                                     ForEach(ForecastComparison.models, id: \.self) { model in
                                                         HStack(spacing: 5) {
-                                                            Text(model.uppercased()).font(.system(size: 9, weight: .medium))
+                                                            Text(model.uppercased()).font(.system(size: 10, weight: .medium))
                                                                 .foregroundStyle(modelColor(model)).frame(width: 25, alignment: .leading)
                                                             Text(metricValue(spec.0, comparison.report(model)))
                                                                 .font(.system(size: 14, weight: .semibold)).monospacedDigit()
@@ -591,7 +820,7 @@ struct WorkResultsView: View {
                                                 HStack(spacing: 10) {
                                                     ForEach(ForecastComparison.models, id: \.self) { model in
                                                         VStack(alignment: .leading, spacing: 3) {
-                                                            Text(model.uppercased()).font(.system(size: 9, weight: .medium))
+                                                            Text(model.uppercased()).font(.system(size: 10, weight: .medium))
                                                                 .foregroundStyle(modelColor(model))
                                                             Text(metricValue(spec.0, comparison.report(model)))
                                                                 .font(.system(size: 19, weight: .semibold)).monospacedDigit()
@@ -602,9 +831,9 @@ struct WorkResultsView: View {
                                                 }
                                             }
                                             Text(spec.0 == "aod" ? comparison.aod.caption : spec.2)
-                                                .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(2)
+                                                .font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(3)
                                         }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                                            .frame(height: 112).workSurface()
+                                            .frame(height: 120).workSurface()
                                     }
                                 }
                             }
@@ -3039,18 +3268,8 @@ private extension Dictionary where Key == String, Value == Any {
 private struct WorkSurface: ViewModifier {
     var emphasized = false
     func body(content: Content) -> some View {
-        // v1.10 设计 P3：毛玻璃材质 + 16px 圆角（GlassCard 同源）。
-        content.glassCard(emphasized: emphasized)
-    }
-}
-
-private struct SidebarGlass: ViewModifier {
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content.background { Color.clear.glassEffect(.regular, in: .rect(cornerRadius: 0)) }
-        } else {
-            content.background(.regularMaterial)
-        }
+        // 内容表面退出通用玻璃：正文、指标和图表保持稳定底色与清晰边界。
+        content.fireSkySurface(role: .content, emphasized: emphasized)
     }
 }
 
@@ -3060,25 +3279,39 @@ private struct WorkSegments: View {
     @Binding var selection: String
     var accented = false
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     var body: some View {
         HStack(spacing: 3) {
             ForEach(Array(options.enumerated()), id: \.element) { index, value in
                 let selected = selection == value
+                let label = titles?[index] ?? value
                 Button { selection = value } label: {
-                    Text(titles?[index] ?? value)
+                    Text(label)
                         .font(.system(size: 11, weight: selected ? .semibold : .regular))
-                        .foregroundStyle(selected && accented ? warm : selected ? Color.primary : Color.secondary)
-                        .frame(maxWidth: .infinity).frame(height: 26)
+                        .foregroundStyle(selected && accented ? Color.accentColor : selected ? Color.primary : Color.secondary)
+                        .frame(maxWidth: .infinity).frame(height: 28)
                         .background {
                             RoundedRectangle(cornerRadius: 6)
-                                .fill(selected ? (accented ? warm.opacity(0.16) : scheme == .dark ? Color.white.opacity(0.10) : .white.opacity(0.85)) : .clear)
+                                .fill(selected
+                                      ? (accented ? Color.accentColor.opacity(0.14)
+                                         : scheme == .dark ? Color.white.opacity(0.12) : Color.white.opacity(0.88))
+                                      : Color.clear)
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(
+                                    selected ? Color.accentColor.opacity(0.35)
+                                             : Color.secondary.opacity(contrast == .increased ? 0.45 : 0.16),
+                                    lineWidth: selected || contrast == .increased ? 1 : 0.5
+                                )
                         }
                         .contentShape(Rectangle())
                 }.buttonStyle(.plain)
+                    .accessibilityLabel("\(label)\(selected ? "，已选中" : "")")
                     .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }.padding(3)
-            .background(.black.opacity(scheme == .dark ? 0.12 : 0.035), in: RoundedRectangle(cornerRadius: 8))
+            .background(Color.black.opacity(scheme == .dark ? 0.12 : 0.035), in: RoundedRectangle(cornerRadius: 8))
             .overlay { RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.15), lineWidth: 1) }
     }
 }
@@ -3087,8 +3320,8 @@ extension View {
     fileprivate func workSurface(emphasized: Bool = false) -> some View { modifier(WorkSurface(emphasized: emphasized)) }
     fileprivate func workChip() -> some View {
         padding(.horizontal, 8).padding(.vertical, 5)
-            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
-            .overlay { RoundedRectangle(cornerRadius: 6).stroke(.secondary.opacity(0.16), lineWidth: 1) }
+            .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 6))
+            .overlay { RoundedRectangle(cornerRadius: 6).stroke(.secondary.opacity(0.22), lineWidth: 1) }
     }
 }
 
