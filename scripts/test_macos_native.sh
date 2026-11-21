@@ -143,8 +143,13 @@ if [ "${FIRESKY_APP_SMOKE:-0}" = "1" ]; then
         ps -o pid,stat,%cpu,etime -p "$APP_PID" >&2 || true
         sample "$APP_PID" 1 100 >&2 || true
         # 崩溃报告：BPT trap 时系统会写 DiagnosticReports，取出最新一份。
-        local crash
-        crash=$(ls -t ~/Library/Logs/DiagnosticReports/FireSky* 2>/dev/null | head -1)
+        local crash=""
+        for _ in $(seq 1 10); do
+            crash=$(ls -t "$HOME"/Library/Logs/DiagnosticReports/FireSky* \
+                2>/dev/null | head -1 || true)
+            if [ -n "$crash" ]; then break; fi
+            sleep 1
+        done
         if [ -n "$crash" ]; then
             echo "--- crash report: $crash ---" >&2
             head -c 8000 "$crash" >&2 || true

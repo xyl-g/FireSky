@@ -107,12 +107,23 @@ ships release capability (self-contained zip, installer, CI publishing).
 > 发布说明：v1.9.5 / v1.9.6 / v1.9.7 因 mobile-release CI 的 Android 交叉
 > 工具链问题未产出完整发布物（仓库 .cargo/config.toml 与 linkEngineJni
 > 携带 darwin NDK 绝对路径，ubuntu runner 失败；v1.9.7 tag 早于修复提交
-> 无法回补）；修复后四个版本随 **v1.9.8** 一并发布——即本版资产包含
+> 无法回补）；这些未发布的功能版本随 **v1.9.9** 一并发布——即本版资产包含
 > v1.9.5（i18n + 任务详情）、v1.9.6（数据同步专项）、v1.9.7（进度/吞吐/
-> 让路/退出守卫）的全部内容。
-> Release note: v1.9.5–v1.9.7 shipped inside **v1.9.8** after CI toolchain
-> fixes (portable Android cross paths); this release therefore contains
-> everything from all three.
+> 让路/退出守卫）和 v1.9.8（卡死治理与排队透明化）的全部内容。
+> Release note: the unreleased v1.9.5–v1.9.8 line ships in **v1.9.9** after CI
+> toolchain fixes (portable Android cross paths); this release contains all
+> four versions.
+
+## v1.9.9 (2026-11-22)
+
+Windows 插值文案修复与 macOS 冷启动 smoke 诊断加固。
+Windows interpolation repair and macOS cold-start smoke diagnostics.
+
+- Windows WinUI：修复动态本地化插值表达式，恢复 x64/ARM64 桌面构建。
+- macOS CI：在 `set -e` 下显式捕获启动尝试返回码，确保失败重试和崩溃诊断执行。
+  Windows WinUI: repair dynamic localization interpolation expressions and
+  restore x64/ARM64 builds. macOS CI: capture startup return codes under
+  `set -e` so retries and crash diagnostics run.
 
 ## v1.9.8 (2026-11-21)
 
