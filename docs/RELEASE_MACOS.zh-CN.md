@@ -4,7 +4,7 @@
 
 本文是 macOS 正式发布的 runbook 与 v1.0.0 的实际发布记录。2026-11-15 的
 预演（未 publish、未打 tag）见
-[RELEASE_V1_SIMULATION_2026-11-15.zh-CN.md](RELEASE_V1_SIMULATION_2026-11-15.zh-CN.md)；
+[RELEASE_V1_SIMULATION_2026-11-15.zh-CN.md](archive/RELEASE_V1_SIMULATION_2026-11-15.zh-CN.md)；
 本次是首次正式 publish：tag `v1.0.0` + GitHub Release 双架构 DMG。
 
 ## 1. 版本与载荷

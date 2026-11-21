@@ -7,13 +7,16 @@ native desktop clients**. The physics follows the methodology of the
 
 > 中文文档：[README.md](README.md)
 
-> Current release **v1.9.5** (see [Download & install](#download--install-releases)):
+> Current release **v1.9.8** (see [Download & install](#download--install-releases)):
 > macOS DMGs (dual arch) and Windows zip + installer (x64/ARM64) are built and
 > attached to GitHub Releases automatically on `v*` tags; Android APK
 > auto-publishing is wired in (mobile-release job builds on tags); iOS builds
-> from source with Xcode. Desktop/mobile clients include an in-app update
-> check (macOS / Windows); UI localization (system / Chinese / English) lands
-> starting v1.9.5 and expands to mobile in follow-ups; the UI design system v2
+> from source with Xcode. Highlights of v1.9.5–v1.9.8: UI localization across
+> all four clients, task history tracing to immutable forecast snapshots (with
+> full-report access), a data-sync hardening round (4-way concurrent GFS/EC
+> downloads, ADS range resume with adaptive timeouts, automatic retry after
+> failed rounds, manual-priority yield, an idle watchdog against stalls), and
+> live sync status with elapsed/missing-cycle visibility; the UI design system v2
 > (glass cards / status chips / accent gradient / night-blue dark theme) is
 > mirrored across all four clients — tokens in [DESIGN.md](DESIGN.md).
 > The UI reference is the [macOS product & UI baseline](docs/MACOS_UI_BASELINE.zh-CN.md);
@@ -79,7 +82,7 @@ native desktop clients**. The physics follows the methodology of the
 
 Official builds are published on
 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) (current:
-**v1.9.5**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
+**v1.9.8**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
 file names; run it in the directory holding the assets):
 
 ```bash
