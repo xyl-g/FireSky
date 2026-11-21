@@ -21,6 +21,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
@@ -30,6 +31,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.firesky.mobile.R
 import com.firesky.mobile.store.WorkbenchState
 import com.firesky.mobile.store.WorkbenchStore
 import org.json.JSONArray
@@ -46,13 +48,16 @@ fun ResultSection(store: WorkbenchStore, state: WorkbenchState) {
     WorkSurface(Modifier.fillMaxWidth(), emphasized = true) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(
-                "${loc.name} · ${state.targetDate} ${phenomenonLabel(state.phenomenon)}",
+                "${loc.name} · ${state.targetDate} " +
+                    stringResource(
+                        if (state.phenomenon == "dawn") R.string.phenomenon_dawn else R.string.phenomenon_dusk,
+                    ),
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
             )
             if (result == null) {
                 Text(
-                    "等待预测——填写参数并点「开始预测」。",
+                    stringResource(R.string.result_wait_hint),
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
                     modifier = Modifier.padding(vertical = 20.dp),
@@ -131,12 +136,13 @@ private fun HeroSummary(result: JSONObject, model: String, modifier: Modifier = 
             Text("/ 2.5", fontSize = 10.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
         }
         Text(
-            report?.optString("quality_level", "峰值质量指数") ?: "峰值质量指数",
+            report?.optString("quality_level", "")?.ifEmpty { stringResource(R.string.quality_index_fallback) }
+                ?: stringResource(R.string.quality_index_fallback),
             fontSize = 9.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
         )
         Column {
-            Text("最佳时刻", fontSize = 9.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
+            Text(stringResource(R.string.best_time), fontSize = 9.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
             Text(
                 timeLabel(report?.optString("best_time_local")),
                 fontSize = 20.sp,
@@ -144,7 +150,7 @@ private fun HeroSummary(result: JSONObject, model: String, modifier: Modifier = 
             )
         }
         Text(
-            "推荐窗口 ${windowLabel(report)}",
+            stringResource(R.string.recommended_window, windowLabel(report)),
             fontSize = 10.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
         )
@@ -152,6 +158,15 @@ private fun HeroSummary(result: JSONObject, model: String, modifier: Modifier = 
             Text(error, fontSize = 10.sp, color = MaterialTheme.colorScheme.error, maxLines = 2)
         }
     }
+}
+
+/** 页签键（中文，状态键）→ 当前语言标题。 */
+@Composable
+private fun tabTitle(tab: String): String = when (tab) {
+    "概览" -> stringResource(R.string.tab_overview)
+    "大气剖面" -> stringResource(R.string.tab_profile)
+    "诊断与时间窗" -> stringResource(R.string.tab_diagnostic)
+    else -> stringResource(R.string.tab_ledger)
 }
 
 @Composable
@@ -166,7 +181,7 @@ private fun AnalysisTabs(store: WorkbenchStore, state: WorkbenchState) {
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    tab,
+                    tabTitle(tab),
                     fontSize = 13.sp,
                     fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                     color = if (selected) MaterialTheme.colorScheme.primary
@@ -191,10 +206,10 @@ private fun AnalysisTabs(store: WorkbenchStore, state: WorkbenchState) {
 private fun OverviewContent(result: JSONObject) {
     val aod = aodSummary(result) { modelReport(result, it) }
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        for ((title, specs) in METRIC_GROUPS) {
+        for ((groupTitleRes, specs) in METRIC_GROUPS) {
             Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
                 Text(
-                    title,
+                    stringResource(groupTitleRes),
                     fontSize = 10.sp,
                     fontWeight = FontWeight.Medium,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
@@ -215,13 +230,21 @@ private fun MetricCard(spec: MetricSpec, result: JSONObject, modifier: Modifier 
     WorkSurface(modifier) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
             Text(
-                spec.title,
+                stringResource(spec.titleRes),
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
             )
             if (spec.key == "aod") {
                 val aod = aodSummary(result) { modelReport(result, it) }
-                Text(aod.source, fontSize = 9.sp, fontWeight = FontWeight.Medium, color = MaterialTheme.colorScheme.secondary)
+                Text(
+                    if (aod.sourceKind == "cams") "CAMS"
+                    else stringResource(
+                        if (aod.sourceKind == "mixed") R.string.aod_mixed_source else R.string.aod_other_source,
+                    ),
+                    fontSize = 9.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
                 Text(
                     aod.value,
                     fontSize = 19.sp,
@@ -253,7 +276,7 @@ private fun MetricCard(spec: MetricSpec, result: JSONObject, modifier: Modifier 
                 }
             }
             Text(
-                spec.caption,
+                stringResource(spec.captionRes),
                 fontSize = 9.sp,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
                 maxLines = 2,
@@ -270,7 +293,7 @@ private fun CurveCard(result: JSONObject) {
     val ecPoints = curvePoints(result, MODEL_EC)
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("霞光质量变化", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(stringResource(R.string.curve_title), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.weight(1f))
             for (model in COMPARISON_MODELS) {
                 val color = if (model == MODEL_EC) MaterialTheme.colorScheme.secondary else MaterialTheme.colorScheme.primary
@@ -302,7 +325,7 @@ private fun CurveCard(result: JSONObject) {
             }
             if (gfsPoints.isEmpty() && ecPoints.isEmpty()) {
                 Text(
-                    "暂无质量曲线",
+                    stringResource(R.string.no_curve),
                     fontSize = 10.sp,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
                     modifier = Modifier.align(Alignment.Center),
@@ -348,7 +371,7 @@ private fun LedgerContent(result: JSONObject, model: String) {
     val report = modelReport(result, model)
     if (modelError(result, model) != null) {
         Text(
-            "${model.uppercase()} 未完成：${modelError(result, model)}",
+            stringResource(R.string.model_incomplete, model.uppercase(), modelError(result, model) ?: ""),
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.error,
         )
@@ -356,7 +379,7 @@ private fun LedgerContent(result: JSONObject, model: String) {
     }
     if (report == null) {
         Text(
-            "${model.uppercase()} 暂无结果",
+            stringResource(R.string.model_no_result, model.uppercase()),
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
         )
@@ -364,11 +387,11 @@ private fun LedgerContent(result: JSONObject, model: String) {
     }
     Column {
         Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-            Text("时间", Modifier.weight(1f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+            Text(stringResource(R.string.col_time), Modifier.weight(1f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
-            Text("质量指数", Modifier.weight(1f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+            Text(stringResource(R.string.col_quality), Modifier.weight(1f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
-            Text("太阳高度", Modifier.weight(1f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
+            Text(stringResource(R.string.col_solar), Modifier.weight(1f), fontSize = 10.sp, fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.15f))
@@ -386,7 +409,7 @@ private fun LedgerContent(result: JSONObject, model: String) {
         }
         if (steps.isEmpty()) {
             Text(
-                "暂无台账数据",
+                stringResource(R.string.no_ledger),
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
                 modifier = Modifier.padding(vertical = 24.dp),
@@ -400,18 +423,19 @@ private fun LedgerContent(result: JSONObject, model: String) {
 private fun DiagnosticContent(result: JSONObject, model: String) {
     val report = modelReport(result, model)
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("诊断与时间窗", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(stringResource(R.string.tab_diagnostic), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         if (report == null) {
             Text(
-                if (modelError(result, model) != null) "${model.uppercase()} 未完成：${modelError(result, model)}"
-                else "等待预测",
+                if (modelError(result, model) != null)
+                    stringResource(R.string.model_incomplete, model.uppercase(), modelError(result, model) ?: "")
+                else stringResource(R.string.awaiting_forecast),
                 fontSize = 12.sp,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
             )
         } else {
             Text(report.optString("summary", ""), fontSize = 12.sp)
             Text(
-                "周期 ${report.optString("cycle_time_utc", "--")}",
+                stringResource(R.string.cycle_line, report.optString("cycle_time_utc", "--")),
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
             )
@@ -422,9 +446,9 @@ private fun DiagnosticContent(result: JSONObject, model: String) {
 @Composable
 private fun ProfilePlaceholder() {
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text("太阳方向大气剖面", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        Text(stringResource(R.string.profile_title), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
         Text(
-            "剖面数据依赖真实引擎的 profile 输出；当前 Mock 传输未合成该档位，MN2 接入 engine-mobile 后可用。",
+            stringResource(R.string.profile_note),
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
         )

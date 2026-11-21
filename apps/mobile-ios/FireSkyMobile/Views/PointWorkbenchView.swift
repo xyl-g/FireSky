@@ -34,7 +34,7 @@ struct PointWorkbenchView: View {
             WorkLocationView()
             WorkParametersView()
             Button { store.beginCheck() } label: {
-                Text("开始预测")
+                Text(L10n.start)
                     .font(.system(size: 14, weight: .semibold))
                     .foregroundStyle(Color.white.opacity(0.92))
                     .frame(maxWidth: .infinity).frame(height: 44)
@@ -54,9 +54,9 @@ struct PointWorkbenchView: View {
             }
             if !store.online && !store.error.isEmpty {
                 VStack(alignment: .leading, spacing: 6) {
-                    Label("引擎未连接", systemImage: "exclamationmark.triangle")
+                    Label(L10n.text("引擎未连接", "Engine offline"), systemImage: "exclamationmark.triangle")
                         .font(.system(size: 11)).foregroundStyle(.red)
-                    Button("重新连接") { Task { await store.connect() } }
+                    Button(L10n.reconnect) { Task { await store.connect() } }
                         .buttonStyle(.borderless).font(.system(size: 11))
                 }
             }
@@ -73,12 +73,12 @@ struct WorkLocationView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("观测点").font(.system(size: 13, weight: .semibold))
+                Text(L10n.text("观测点", "Observer")).font(.system(size: 13, weight: .semibold))
                 Spacer()
-                WorkSegments(options: ["地图", "收藏"], selection: $store.locationTab).frame(width: 128)
+                WorkSegments(options: ["地图", "收藏"], titles: [L10n.text("地图", "Map"), L10n.text("收藏", "Favorites")], selection: $store.locationTab).frame(width: 128)
             }
             HStack(spacing: 6) {
-                TextField("搜索地名，如「西湖」或「杭州」", text: $store.query) {
+                TextField(L10n.text("搜索地名，如「西湖」或「杭州」", "Search a place"), text: $store.query) {
                     store.search()
                 }
                 .textFieldStyle(.roundedBorder)
@@ -86,7 +86,7 @@ struct WorkLocationView: View {
                 Button { store.locate() } label: {
                     if store.locating { ProgressView().frame(width: 16, height: 16) }
                     else { Image(systemName: "location").frame(width: 16, height: 16) }
-                }.accessibilityLabel("获取当前位置")
+                }.accessibilityLabel(L10n.text("获取当前位置", "Use current location"))
                     .disabled(store.locating || store.busy)
             }.controlSize(.large)
             if store.locationTab == "地图" {
@@ -96,11 +96,11 @@ struct WorkLocationView: View {
                 ScrollView {
                     VStack(spacing: 6) {
                         ForEach(Array(store.favorites.enumerated()), id: \.offset) { _, item in
-                            Button(item["name"] as? String ?? "收藏位置") { store.applyLocation(item) }
+                            Button(item["name"] as? String ?? L10n.text("收藏位置", "Favorite")) { store.applyLocation(item) }
                                 .buttonStyle(.borderless).frame(maxWidth: .infinity, alignment: .leading)
                         }
                         if store.favorites.isEmpty {
-                            Text("暂无收藏，可在地图选点后收藏。")
+                            Text(L10n.text("暂无收藏，可在地图选点后收藏。", "No favorites yet; save one from the map."))
                                 .font(.system(size: 11)).foregroundStyle(.secondary)
                         }
                     }.padding(8)
@@ -115,13 +115,13 @@ struct WorkLocationView: View {
                 }
             }
             HStack(spacing: 5) {
-                Text(store.metadataReady ? String(format: "海拔 %.0f m", store.elevation) : "海拔未确认").workChip()
+                Text(store.metadataReady ? String(format: L10n.text("海拔 %.0f m", "Elevation %.0f m"), store.elevation) : L10n.text("海拔未确认", "Elevation unconfirmed")).workChip()
                 Text(store.timezone).lineLimit(1).workChip()
             }.font(.system(size: 9)).foregroundStyle(.secondary)
             HStack {
-                Button("收藏当前点", systemImage: "star") { store.starLocation() }
+                Button(L10n.text("收藏当前点", "Save current spot"), systemImage: "star") { store.starLocation() }
                 Spacer()
-                Button("大地图", systemImage: "arrow.up.left.and.arrow.down.right") { store.showMapPicker = true }
+                Button(L10n.text("大地图", "Full map"), systemImage: "arrow.up.left.and.arrow.down.right") { store.showMapPicker = true }
             }.buttonStyle(.borderless).font(.system(size: 11))
         }.padding(15).workSurface().disabled(store.busy)
     }
@@ -133,31 +133,32 @@ struct WorkParametersView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("观测参数").font(.system(size: 13, weight: .semibold))
+                Text(L10n.text("观测参数", "Parameters")).font(.system(size: 13, weight: .semibold))
                 Spacer()
-                Button("重置") { store.chooseDate("今天"); store.phenomenon = "dusk" }
+                Button(L10n.reset) { store.chooseDate("今天"); store.phenomenon = "dusk" }
                     .buttonStyle(.borderless).font(.system(size: 11))
             }
-            Text("目标日期").font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(L10n.text("目标日期", "Target date")).font(.system(size: 10)).foregroundStyle(.secondary)
             WorkSegments(options: ["今天", "明天", "自定义"],
+                         titles: [L10n.text("今天", "Today"), L10n.text("明天", "Tomorrow"), L10n.text("自定义", "Custom")],
                          selection: Binding(get: { store.dateTab }, set: { store.chooseDate($0) }))
             if store.dateTab == "自定义" {
                 WorkDateButton()
             }
-            Text("观测现象").font(.system(size: 10)).foregroundStyle(.secondary)
-            WorkSegments(options: ["dawn", "dusk"], titles: ["朝霞", "晚霞"],
+            Text(L10n.text("观测现象", "Phenomenon")).font(.system(size: 10)).foregroundStyle(.secondary)
+            WorkSegments(options: ["dawn", "dusk"], titles: [L10n.text("朝霞", "Dawn glow"), L10n.text("晚霞", "Dusk glow")],
                          selection: $store.phenomenon, accented: true)
-            Button("编辑坐标", systemImage: "slider.horizontal.3") { store.editingCoordinates.toggle() }
+            Button(L10n.text("编辑坐标", "Edit coordinates"), systemImage: "slider.horizontal.3") { store.editingCoordinates.toggle() }
                 .buttonStyle(.borderless).font(.system(size: 11)).frame(maxWidth: .infinity)
             if store.editingCoordinates {
                 VStack(spacing: 8) {
-                    TextField("名称", text: $store.name)
-                    number("纬度", $store.lat)
-                    number("经度", $store.lon)
-                    number("海拔 (m)", $store.elevation)
-                    TextField("时区", text: $store.timezone)
-                    Button("获取海拔与时区") { store.lookupMetadata() }.buttonStyle(.borderless)
-                    Toggle("已确认位置数据", isOn: $store.metadataReady).font(.system(size: 11))
+                    TextField(L10n.text("名称", "Name"), text: $store.name)
+                    number(L10n.text("纬度", "Latitude"), $store.lat)
+                    number(L10n.text("经度", "Longitude"), $store.lon)
+                    number(L10n.text("海拔 (m)", "Elevation (m)"), $store.elevation)
+                    TextField(L10n.text("时区", "Time zone"), text: $store.timezone)
+                    Button(L10n.text("获取海拔与时区", "Fetch elevation & timezone")) { store.lookupMetadata() }.buttonStyle(.borderless)
+                    Toggle(L10n.text("已确认位置数据", "Location data confirmed"), isOn: $store.metadataReady).font(.system(size: 11))
                 }.textFieldStyle(.roundedBorder)
             }
             if !store.error.isEmpty {
@@ -260,7 +261,7 @@ struct WorkHeroView: View {
     private var comparison: ForecastComparison { store.pointComparison }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("\(store.name) · \(store.targetDateLabel) \(store.phenomenon == "dawn" ? "朝霞" : "晚霞")")
+            Text("\(store.name) · \(store.targetDateLabel) \(store.phenomenon == "dawn" ? L10n.text("朝霞", "Dawn glow") : L10n.text("晚霞", "Dusk glow"))")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             HStack(alignment: .top, spacing: 14) {
                 summary("gfs")
@@ -289,17 +290,17 @@ struct WorkHeroView: View {
                             .lineLimit(1).minimumScaleFactor(0.8)
                         Text("/ 2.5").font(.system(size: 10)).foregroundStyle(.secondary)
                     }
-                    Text(report?["quality_level"] as? String ?? "峰值质量指数")
+                    Text(report?["quality_level"] as? String ?? L10n.text("峰值质量指数", "Peak quality index"))
                         .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(2)
                 }
                 Spacer(minLength: 0)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("最佳时刻").font(.system(size: 9)).foregroundStyle(.secondary)
+                    Text(L10n.text("最佳时刻", "Best time")).font(.system(size: 9)).foregroundStyle(.secondary)
                     Text(timeLabel(report?["best_time_local"] as? String))
                         .font(.system(size: 20, weight: .semibold)).monospacedDigit()
                 }
             }
-            Text("推荐窗口 \(windowLabel(report))").font(.system(size: 10)).foregroundStyle(.secondary)
+            Text("\(L10n.text("推荐窗口", "Recommended window")) \(windowLabel(report))").font(.system(size: 10)).foregroundStyle(.secondary)
             if let message = comparison.error(model) {
                 Text(message).font(.system(size: 10)).foregroundStyle(.red).lineLimit(2).textSelection(.enabled)
             }
@@ -308,6 +309,7 @@ struct WorkHeroView: View {
     }
 }
 
+/// 指标卡规格：键 + L10n 标题/说明（键与桌面 metricSpec 一致）。
 private let metricSpec: [(String, String, String)] = [
     ("burnable", "有效可烧云量", "前向可烧云占视野比例"),
     ("material", "云质厚度", "云体材质负载"),
@@ -320,13 +322,50 @@ private let metricSpec: [(String, String, String)] = [
     ("disagreement", "模式分歧", "多模式结论分歧度"),
 ]
 
+/// 指标标题/说明的 L10n 映射（key 与 Workbench.swift metricSpec 相同）。
+private func metricTitle(_ key: String) -> String {
+    switch key {
+    case "burnable": return L10n.text("有效可烧云量", "Effective burnable cloud")
+    case "material": return L10n.text("云质厚度", "Cloud material")
+    case "brightness": return L10n.text("亮度色彩", "Brightness & color")
+    case "aod": return "AOD 550"
+    case "incoming": return L10n.text("入射受光", "Incoming light")
+    case "contrast": return L10n.text("返程对比度", "Return contrast")
+    case "duration": return L10n.text("持续时长", "Duration")
+    case "confidence": return L10n.text("置信度", "Confidence")
+    default: return L10n.text("模式分歧", "Model disagreement")
+    }
+}
+
+private func metricCaption(_ key: String) -> String {
+    switch key {
+    case "burnable": return L10n.text("前向可烧云占视野比例", "Forward burnable cloud share of view")
+    case "material": return L10n.text("云体材质负载", "Cloud material load")
+    case "brightness": return L10n.text("霞光亮度与色彩评分", "Glow brightness and color score")
+    case "aod": return L10n.text("气溶胶光学厚度 · 通透度", "Aerosol optical depth · clarity")
+    case "incoming": return L10n.text("太阳入射照亮云体的因子", "Factor of sunlight illuminating clouds")
+    case "contrast": return L10n.text("观测者视线大气对比因子", "Atmospheric contrast on observer sight")
+    case "duration": return L10n.text("核心观赏窗口 · 分钟", "Core viewing window · minutes")
+    case "confidence": return L10n.text("引擎结果置信评分", "Engine result confidence score")
+    default: return L10n.text("多模式结论分歧度", "Disagreement across models")
+    }
+}
+
+private func groupTitle(_ key: String) -> String {
+    switch key {
+    case "cloud": return L10n.text("云况与色彩", "Cloud & color")
+    case "optics": return L10n.text("大气光学", "Atmospheric optics")
+    default: return L10n.text("时效与可靠性", "Timing & reliability")
+    }
+}
+
 /// 结果区：分析标签页 + 指标卡组 + 质量曲线（紧湊端指标卡自适应换行）。
 struct WorkResultsView: View {
     @EnvironmentObject private var store: Store
     @Environment(\.horizontalSizeClass) private var sizeClass
     private var comparison: ForecastComparison { store.pointComparison }
     private var report: JSONObject? { comparison.report(store.selectedModel) }
-    private let groups = [("云况与色彩", 0..<3), ("大气光学", 3..<6), ("时效与可靠性", 6..<9)]
+    private let groupKeys = [("cloud", 0..<3), ("optics", 3..<6), ("reliability", 6..<9)]
     var body: some View {
         VStack(spacing: 12) {
             WorkAnalysisTabs()
@@ -341,9 +380,9 @@ struct WorkResultsView: View {
             ScrollView {
                 VStack(spacing: 12) {
                     if store.resultTab == "概览" {
-                        ForEach(groups, id: \.0) { title, range in
+                        ForEach(groupKeys, id: \.0) { key, range in
                             VStack(alignment: .leading, spacing: 7) {
-                                Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                                Text(groupTitle(key)).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
                                 LazyVGrid(columns: columns, spacing: 10) {
                                     ForEach(Array(metricSpec[range]), id: \.0) { spec in
                                         metricCard(spec)
@@ -353,11 +392,11 @@ struct WorkResultsView: View {
                         }
                         WorkComparisonCurveView(comparison: comparison, timezone: store.timezone)
                     } else if let message = comparison.error(store.selectedModel) {
-                        Text("\(store.selectedModel.uppercased()) 未完成：\(message)")
+                        Text("\(store.selectedModel.uppercased()) \(L10n.text("未完成", "incomplete"))：\(message)")
                             .font(.system(size: 12)).foregroundStyle(.red).textSelection(.enabled)
                             .padding(18).frame(maxWidth: .infinity, alignment: .leading).workSurface()
                     } else if report == nil, comparison.result != nil {
-                        Text("\(store.selectedModel.uppercased()) 暂无结果")
+                        Text("\(store.selectedModel.uppercased()) \(L10n.text("暂无结果", "has no result"))")
                             .foregroundStyle(.secondary).padding(30)
                     } else if store.resultTab == "逐时台账" {
                         WorkLedgerView(report: report)
@@ -377,7 +416,7 @@ struct WorkResultsView: View {
 
     private func metricCard(_ spec: (String, String, String)) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text(spec.1).font(.system(size: 12)).foregroundStyle(.primary.opacity(0.8))
+            Text(metricTitle(spec.0)).font(.system(size: 12)).foregroundStyle(.primary.opacity(0.8))
             if spec.0 == "aod" {
                 WorkAODValue(summary: comparison.aod)
             } else {
@@ -394,7 +433,7 @@ struct WorkResultsView: View {
                     }
                 }
             }
-            Text(spec.0 == "aod" ? comparison.aod.caption : spec.2)
+            Text(spec.0 == "aod" ? comparison.aod.caption : metricCaption(spec.0))
                 .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(2)
         }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
             .frame(height: 112).workSurface()
@@ -411,7 +450,7 @@ private struct WorkAnalysisTabs: View {
                 Button {
                     withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { store.resultTab = tab }
                 } label: {
-                    Text(tab).font(.system(size: 13, weight: store.resultTab == tab ? .semibold : .regular))
+                    Text(Self.tabTitle(tab)).font(.system(size: 13, weight: store.resultTab == tab ? .semibold : .regular))
                         .foregroundStyle(store.resultTab == tab ? warm : Color.secondary)
                         .padding(.horizontal, 4).frame(height: 40)
                         .overlay(alignment: .bottom) {
@@ -424,6 +463,16 @@ private struct WorkAnalysisTabs: View {
             }
         }
     }
+
+    /// 页签键（中文，状态键）→ 当前语言标题。
+    static func tabTitle(_ tab: String) -> String {
+        switch tab {
+        case "概览": return L10n.text("概览", "Overview")
+        case "大气剖面": return L10n.text("大气剖面", "Profile")
+        case "诊断与时间窗": return L10n.text("诊断与时间窗", "Diagnostics & windows")
+        default: return L10n.text("逐时台账", "Hourly ledger")
+        }
+    }
 }
 
 struct WorkComparisonCurveView: View {
@@ -433,7 +482,7 @@ struct WorkComparisonCurveView: View {
         let points = comparison.curve(timezone: timezone)
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("霞光质量变化").font(.system(size: 13, weight: .semibold))
+                Text(L10n.text("霞光质量变化", "Glow quality curve")).font(.system(size: 13, weight: .semibold))
                 Spacer()
                 ForEach(ForecastComparison.models, id: \.self) { model in
                     HStack(spacing: 5) {
@@ -472,7 +521,7 @@ struct WorkComparisonCurveView: View {
             .frame(height: 184)
             .overlay {
                 if points.isEmpty {
-                    Text(comparison.result == nil ? "等待预测" : "暂无质量曲线")
+                    Text(comparison.result == nil ? L10n.text("等待预测", "Awaiting forecast") : L10n.text("暂无质量曲线", "No quality curve"))
                         .font(.system(size: 10)).foregroundStyle(.secondary)
                 }
             }
@@ -486,9 +535,9 @@ struct WorkLedgerView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("时间").frame(maxWidth: .infinity, alignment: .leading)
-                Text("质量指数").frame(maxWidth: .infinity)
-                Text("太阳高度").frame(maxWidth: .infinity)
+                Text(L10n.text("时间", "Time")).frame(maxWidth: .infinity, alignment: .leading)
+                Text(L10n.text("质量指数", "Quality index")).frame(maxWidth: .infinity)
+                Text(L10n.text("太阳高度", "Solar elevation")).frame(maxWidth: .infinity)
             }.font(.system(size: 10, weight: .semibold)).foregroundStyle(.secondary).padding(14)
             Divider()
             ForEach(Array((report?["steps"] as? [JSONObject] ?? []).enumerated()), id: \.offset) { _, item in
@@ -499,7 +548,7 @@ struct WorkLedgerView: View {
                 }.font(.system(size: 11)).monospacedDigit().padding(12)
                 Divider().opacity(0.5)
             }
-            if report == nil { Text("等待预测").foregroundStyle(.secondary).padding(40) }
+            if report == nil { Text(L10n.text("等待预测", "Awaiting forecast")).foregroundStyle(.secondary).padding(40) }
         }.workSurface()
     }
 }
@@ -509,13 +558,13 @@ struct WorkLedgerView: View {
 struct WorkDiagnosticView: View {
     let report: JSONObject?
     let profile: Bool
-    var waiting = "等待预测"
+    var waiting = L10n.text("等待预测", "Awaiting forecast")
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(profile ? "太阳方向大气剖面" : "诊断与时间窗").font(.system(size: 13, weight: .semibold))
+            Text(profile ? L10n.text("太阳方向大气剖面", "Sun-direction atmospheric profile") : L10n.text("诊断与时间窗", "Diagnostics & windows")).font(.system(size: 13, weight: .semibold))
             if let report {
                 Text(report["summary"] as? String ?? "").textSelection(.enabled)
-                Text("周期 \(report["cycle_time_utc"] as? String ?? "--")").foregroundStyle(.secondary)
+                Text("\(L10n.text("周期", "Cycle")) \(report["cycle_time_utc"] as? String ?? "--")").foregroundStyle(.secondary)
             } else {
                 Text(waiting).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 120)
             }

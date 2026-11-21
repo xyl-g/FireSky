@@ -36,6 +36,15 @@ enum Page: String, CaseIterable, Identifiable {
     }
 }
 
+/// 预测详情快照读取状态（v1.9.5 任务详情 → 预测详情）。
+enum TaskResultLoadState {
+    case idle
+    case loading
+    case loaded
+    /// 快照过期/被清理/校验失败——附带可读原因。
+    case unavailable(String)
+}
+
 /// 地形下载区域预设（用户口径：按区域下载而非单点；全球是其中一个预设）。
 /// bounds 为 1° 网格含边界的覆盖矩形，直接传给引擎 bulk 契约。
 enum TerrainRegion: String, CaseIterable, Identifiable {
@@ -333,6 +342,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var forgettingTaskHistoryID: String?
     @Published var restoringTaskHistoryID: String?
     @Published var pendingForgetTaskID: String?
+    /// v1.9.5 任务详情 → 预测详情：选中已完成的预测任务时读取结果快照。
+    @Published var taskResultTaskID: String?
+    @Published var taskResult: JSONObject?
+    @Published var taskResultState: TaskResultLoadState = .idle
+    private var taskResultTask: Task<Void, Never>?
+    private var taskResultCache: [String: JSONObject] = [:]
     private var engineConnection: AnyCancellable?
     private let location = CLLocationManager()
     private var operation: Task<Void, Never>?
@@ -1172,6 +1187,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         taskHistoryEventsError = ""
         taskHistoryEventsTruncated = false
         taskHistoryEventsLoading = true
+        // v1.9.5：预测任务详情随选中项加载（预测详情卡）。
+        if let item = taskHistory.first(where: { $0.taskID == taskID }) {
+            loadTaskResult(for: item)
+        } else {
+            resetTaskResult()
+        }
         taskHistoryEventsTask = Task { [weak self] in
             guard let self else { return }
             defer {
@@ -1224,6 +1245,53 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         taskHistoryEventsError = ""
         taskHistoryEventsLoading = false
         taskHistoryEventsTruncated = false
+        resetTaskResult()
+    }
+
+    /// v1.9.5 任务详情 → 预测详情：选中已完成的预测任务时经 result_restore
+    /// 读取不可变结果快照（引擎侧 SHA256 校验，fail-closed）。快照内容
+    /// 不可变，会话内按 task_id 缓存；读取失败（过期/清理）转为可读说明。
+    func loadTaskResult(for item: NativeTaskHistoryItem) {
+        guard item.method == "forecast", item.status == "done" else {
+            resetTaskResult()
+            return
+        }
+        guard taskResultTaskID != item.taskID else { return }
+        taskResultTask?.cancel()
+        taskResultTaskID = item.taskID
+        if let cached = taskResultCache[item.taskID] {
+            taskResult = cached
+            taskResultState = .loaded
+            return
+        }
+        taskResult = nil
+        taskResultState = .loading
+        taskResultTask = Task { [weak self] in
+            guard let self else { return }
+            defer { taskResultTask = nil }
+            do {
+                let response = try await engine.call("result_restore", ["task_id": item.taskID])
+                try Task.checkCancellation()
+                guard let results = response["model_results"] as? JSONObject,
+                      !results.isEmpty else {
+                    throw EngineError(message: "预测详情快照不完整。")
+                }
+                taskResultCache[item.taskID] = response
+                taskResult = response
+                taskResultState = .loaded
+            } catch is CancellationError {
+            } catch {
+                taskResultState = .unavailable(error.localizedDescription)
+            }
+        }
+    }
+
+    private func resetTaskResult() {
+        taskResultTask?.cancel()
+        taskResultTask = nil
+        taskResultTaskID = nil
+        taskResult = nil
+        taskResultState = .idle
     }
 
     func forgetTaskHistory(_ taskID: String) {

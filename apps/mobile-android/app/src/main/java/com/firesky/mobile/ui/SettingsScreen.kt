@@ -8,7 +8,6 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -33,14 +32,18 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.firesky.mobile.R
 import com.firesky.mobile.store.WorkbenchState
 import com.firesky.mobile.store.WorkbenchStore
 
-/** 设置分类（macOS SettingsCategory 同构）：通用 / 数据 / 位置与海拔 / 高级。 */
+/** 设置分类（macOS SettingsCategory 同构）：通用 / 数据 / 高级。
+ *  中文值同时是状态键（state.settingsCategory），标题经资源映射显示。 */
 private val SettingsCategories = listOf("通用", "数据", "高级")
 
 /** 设置页（DialogViews.swift SettingsView 同构，v1.6.0 拆分类）：切换分类保留
@@ -54,9 +57,14 @@ fun SettingsScreen(store: WorkbenchStore, state: WorkbenchState) {
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("设置", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text(stringResource(R.string.settings_title), fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Segmented(
             options = SettingsCategories,
+            titles = listOf(
+                stringResource(R.string.settings_general),
+                stringResource(R.string.settings_data),
+                stringResource(R.string.settings_advanced),
+            ),
             selection = state.settingsCategory,
             onSelect = { store.setSettingsCategory(it) },
         )
@@ -66,7 +74,7 @@ fun SettingsScreen(store: WorkbenchStore, state: WorkbenchState) {
                 CamsSection(store, state)
             }
             "高级" -> EngineSection(store, state)
-            else -> AppearanceSection(store, state)
+            else -> GeneralSection(store, state)
         }
         if (state.error.isNotEmpty()) {
             Text(state.error, fontSize = 11.sp, color = MaterialTheme.colorScheme.error)
@@ -96,23 +104,49 @@ private fun RadioRow(label: String, selected: Boolean, onSelect: () -> Unit) {
     }
 }
 
+/** 通用分类：外观（主题）+ 语言（v1.9.5 i18n）。 */
 @Composable
-private fun AppearanceSection(store: WorkbenchStore, state: WorkbenchState) {
-    Section("外观") {
-        RadioRow("跟随系统", state.appearance == "system") { store.setAppearance("system") }
-        RadioRow("浅色", state.appearance == "light") { store.setAppearance("light") }
-        RadioRow("深色", state.appearance == "dark") { store.setAppearance("dark") }
+private fun GeneralSection(store: WorkbenchStore, state: WorkbenchState) {
+    val context = LocalContext.current
+    Section(stringResource(R.string.section_appearance)) {
+        RadioRow(stringResource(R.string.theme_system), state.appearance == "system") {
+            store.setAppearance("system")
+        }
+        RadioRow(stringResource(R.string.theme_light), state.appearance == "light") {
+            store.setAppearance("light")
+        }
+        RadioRow(stringResource(R.string.theme_dark), state.appearance == "dark") {
+            store.setAppearance("dark")
+        }
+    }
+    Section(stringResource(R.string.language_label)) {
+        val current = L10n.language(context)
+        RadioRow(stringResource(R.string.lang_system), current == "system") {
+            L10n.setLanguage(context, "system")
+        }
+        RadioRow(stringResource(R.string.lang_chinese), current == "zh") {
+            L10n.setLanguage(context, "zh")
+        }
+        RadioRow(stringResource(R.string.lang_english), current == "en") {
+            L10n.setLanguage(context, "en")
+        }
     }
 }
 
 @Composable
 private fun DataSourceSection(store: WorkbenchStore, state: WorkbenchState) {
-    Section("数据源") {
-        RadioRow("ECMWF 官方", state.ecmwfSource == "ecmwf") { store.setEcmwfSource("ecmwf") }
-        RadioRow("AWS 欧洲镜像", state.ecmwfSource == "aws") { store.setEcmwfSource("aws") }
-        RadioRow("Google Cloud 镜像", state.ecmwfSource == "google") { store.setEcmwfSource("google") }
+    Section(stringResource(R.string.section_datasource)) {
+        RadioRow(stringResource(R.string.src_ecmwf), state.ecmwfSource == "ecmwf") {
+            store.setEcmwfSource("ecmwf")
+        }
+        RadioRow(stringResource(R.string.src_aws), state.ecmwfSource == "aws") {
+            store.setEcmwfSource("aws")
+        }
+        RadioRow(stringResource(R.string.src_google), state.ecmwfSource == "google") {
+            store.setEcmwfSource("google")
+        }
         Text(
-            "EC 下载源会同时用于数据准备和后续预测。GFS 使用 NOAA NOMADS，CAMS 使用 Copernicus ADS。",
+            stringResource(R.string.datasource_note),
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
         )
@@ -121,7 +155,7 @@ private fun DataSourceSection(store: WorkbenchStore, state: WorkbenchState) {
 
 @Composable
 private fun CamsSection(store: WorkbenchStore, state: WorkbenchState) {
-    Section("CAMS · Copernicus ADS") {
+    Section(stringResource(R.string.cams_section)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Icon(
                 Icons.Filled.CheckCircle,
@@ -132,14 +166,14 @@ private fun CamsSection(store: WorkbenchStore, state: WorkbenchState) {
             )
             Text(store.camsConfigurationDescription, fontSize = 12.sp, modifier = Modifier.weight(1f))
             TextButton(onClick = { store.refreshCAMSConfiguration() }, enabled = state.online) {
-                Text("重新检查", fontSize = 10.sp)
+                Text(stringResource(R.string.recheck), fontSize = 10.sp)
             }
         }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedTextField(
                 value = state.camsKeyDraft,
                 onValueChange = store::setCAMSKeyDraft,
-                label = { Text("粘贴 ADS Personal Access Token", fontSize = 11.sp) },
+                label = { Text(stringResource(R.string.cams_token_label), fontSize = 11.sp) },
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 textStyle = MaterialTheme.typography.bodySmall,
@@ -157,16 +191,16 @@ private fun CamsSection(store: WorkbenchStore, state: WorkbenchState) {
                     contentColor = Color.White,
                 ),
                 shape = RoundedCornerShape(8.dp),
-            ) { Text("保存 Key", fontSize = 11.sp) }
+            ) { Text(stringResource(R.string.save_key), fontSize = 11.sp) }
         }
         Text(
-            "Key 仅保存在本机 SharedPreferences（v1 骨架）；正式版写入沙箱私有配置文件（0600 权限，契约同桌面 ~/.cdsapirc）。",
+            stringResource(R.string.cams_note),
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
         )
         if (state.camsConfiguration != null && !store.canSaveCAMS) {
             Text(
-                "环境变量正在覆盖配置。修改 CDSAPI_KEY / CDSAPI_URL 后需重新启动应用。",
+                stringResource(R.string.cams_env_override),
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
             )
@@ -180,16 +214,20 @@ private fun CamsSection(store: WorkbenchStore, state: WorkbenchState) {
             )
         }
         TextButton(onClick = { store.setShowCAMSTutorial(!state.showCAMSTutorial) }) {
-            Text(if (state.showCAMSTutorial) "收起配置教程" else "配置教程", fontSize = 11.sp)
+            Text(
+                if (state.showCAMSTutorial) stringResource(R.string.cams_guide_hide)
+                else stringResource(R.string.cams_guide),
+                fontSize = 11.sp,
+            )
         }
         if (state.showCAMSTutorial) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                TutorialStep("1", "注册并登录 ADS", "使用 ECMWF 账号登录 Atmosphere Data Store。")
-                TutorialStep("2", "复制 Personal Access Token", "在官方 API 配置页复制 key 后面的 Token。")
-                TutorialStep("3", "接受 CAMS 数据集条款", "在数据集 Download 页底部接受 Terms of Use。")
-                TutorialStep("4", "返回 FireSky 保存 Key", "粘贴到上方输入框并保存，再到准备面板下载数据。")
+                TutorialStep("1", stringResource(R.string.cams_tut1_title), stringResource(R.string.cams_tut1_detail))
+                TutorialStep("2", stringResource(R.string.cams_tut2_title), stringResource(R.string.cams_tut2_detail))
+                TutorialStep("3", stringResource(R.string.cams_tut3_title), stringResource(R.string.cams_tut3_detail))
+                TutorialStep("4", stringResource(R.string.cams_tut4_title), stringResource(R.string.cams_tut4_detail))
                 Text(
-                    "这里只检查本地配置是否完整；Token 是否有效在实际下载时验证。",
+                    stringResource(R.string.cams_check_note),
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                 )
@@ -216,29 +254,39 @@ private fun TutorialStep(number: String, title: String, detail: String) {
 
 @Composable
 private fun EngineSection(store: WorkbenchStore, state: WorkbenchState) {
-    Section("本地引擎") {
+    Section(stringResource(R.string.section_engine)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Box(Modifier.size(8.dp).background(onlineColor(state), CircleShape))
-            Text(if (state.online) "引擎已连接" else "引擎未连接", fontSize = 12.sp)
+            Text(
+                if (state.online) stringResource(R.string.engine_connected)
+                else stringResource(R.string.engine_offline),
+                fontSize = 12.sp,
+            )
             Spacer(Modifier.weight(1f))
-            OutlinedButton(onClick = { store.connect() }, enabled = !state.busy) { Text("重新连接", fontSize = 11.sp) }
+            OutlinedButton(onClick = { store.connect() }, enabled = !state.busy) {
+                Text(stringResource(R.string.reconnect), fontSize = 11.sp)
+            }
         }
-        Text("传输通道", fontSize = 11.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
+        Text(
+            stringResource(R.string.transport_label),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+        )
         Segmented(
             options = listOf("mock", "ffi"),
-            titles = listOf("Mock（进程内模拟）", "FFI engine-mobile（预留）"),
+            titles = listOf(stringResource(R.string.transport_mock), stringResource(R.string.transport_ffi)),
             selection = state.transportMode,
             onSelect = { store.setTransportMode(it) },
         )
         Text(
-            "Mock：桌面 JSON-lines 协议在进程内模拟，供骨架全链路演示；FFI：经 engine-mobile（MN2）的 libengine_mobile.so 调用进程内引擎，当前未接入，选择后连接会显式失败。",
+            stringResource(R.string.engine_note),
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
         )
         HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
-        Text("数据目录：App 沙箱 filesDir（Android 不共享桌面工作区路径）", fontSize = 11.sp)
+        Text(stringResource(R.string.data_dir_note), fontSize = 11.sp)
         Text(
-            "协议：desktop JSON-lines v1（protocol=1），帧契约与桌面 firesky-engine serve 一致。",
+            stringResource(R.string.protocol_note),
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
         )

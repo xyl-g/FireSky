@@ -13,7 +13,7 @@ struct FireSkyMobileApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(store)
-                .environment(\.locale, Locale(identifier: "zh_CN"))
+                .environment(\.locale, Locale(identifier: L10n.effective == .english ? "en_US" : "zh_CN"))
                 .tint(warm)
                 .preferredColorScheme(store.appearance == "dark" ? .dark : store.appearance == "light" ? .light : nil)
         }
@@ -30,20 +30,22 @@ struct FireSkyMobileApp: App {
 struct RootView: View {
     @EnvironmentObject private var store: Store
     @State private var tab: Page = .point
+    /// v1.9.5 i18n：观察语言偏好变化——改动触发整棵树重建，L10n 文案随之刷新。
+    @AppStorage("appLanguage") private var appLanguage = "system"
 
     var body: some View {
         TabView(selection: $tab) {
             PointWorkbenchView()
-                .tabItem { Label("单点预测", systemImage: "location.circle") }
+                .tabItem { Label(L10n.navPoint, systemImage: "location.circle") }
                 .tag(Page.point)
             InventoryView()
-                .tabItem { Label("数据管理", systemImage: "externaldrive") }
+                .tabItem { Label(L10n.navData, systemImage: "externaldrive") }
                 .tag(Page.data)
             HistoryView()
-                .tabItem { Label("任务历史", systemImage: "clock.arrow.circlepath") }
+                .tabItem { Label(L10n.navHistory, systemImage: "clock.arrow.circlepath") }
                 .tag(Page.history)
             SettingsView()
-                .tabItem { Label("设置", systemImage: "gearshape") }
+                .tabItem { Label(L10n.navSettings, systemImage: "gearshape") }
                 .tag(Page.settings)
         }
         .environment(\.timeZone, TimeZone(identifier: store.timezone) ?? .current)

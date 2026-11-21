@@ -11,7 +11,7 @@ struct SettingsView: View {
         Form {
             Picker("分类", selection: $store.settingsCategory) {
                 ForEach(SettingsCategories, id: \.self) { category in
-                    Text(category).tag(category)
+                    Text(categoryTitle(category)).tag(category)
                 }
             }.pickerStyle(.segmented)
                 .listRowBackground(Color.clear)
@@ -24,6 +24,18 @@ struct SettingsView: View {
                         Text("浅色").tag("light")
                         Text("深色").tag("dark")
                     }.onChange(of: store.appearance) { _ in store.saveAppearance() }
+                }
+                // v1.9.5 i18n：语言偏好（跟随系统/中文/English）。
+                // 写 UserDefaults 后由 RootView 的 @AppStorage 触发整树刷新。
+                Section(L10n.text("语言", "Language")) {
+                    Picker(L10n.text("界面语言", "Interface language"), selection: Binding(
+                        get: { L10n.language.rawValue },
+                        set: { L10n.language = L10n.Language(rawValue: $0) ?? .system }
+                    )) {
+                        Text("跟随系统 / System").tag(L10n.Language.system.rawValue)
+                        Text("中文").tag(L10n.Language.chinese.rawValue)
+                        Text("English").tag(L10n.Language.english.rawValue)
+                    }
                 }
             }
 
@@ -123,6 +135,15 @@ struct SettingsView: View {
         .scrollContentBackground(.hidden)
         .workPageBackground()
         .disabled(store.busy)
+    }
+
+    /// 分类显示名（状态键保持中文，标题随语言切换）。
+    private func categoryTitle(_ key: String) -> String {
+        switch key {
+        case "通用": return L10n.catGeneral
+        case "数据": return L10n.catData
+        default: return L10n.catAdvanced
+        }
     }
 
     private func tutorialStep<Content: View>(_ number: String, _ title: String, detail: String,

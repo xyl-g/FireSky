@@ -315,7 +315,17 @@ impl TaskHistory {
         }
         if !matches!(
             method,
-            "check" | "prepare" | "forecast" | "publications" | "network_probe" | "data_sync"
+            "check"
+                | "prepare"
+                | "forecast"
+                | "publications"
+                | "network_probe"
+                | "data_sync"
+                // v1.9.5：与 desktop_runtime::begin_task 白名单同步——地形区域
+                // 下载也是可取消的长时间任务，必须记入任务历史（此前 runtime
+                // 侧放行、本侧拒绝，GUI 报 "method does not create workflow
+                // history"）。
+                | "terrain_download"
         ) {
             return Err("method does not create workflow history".into());
         }

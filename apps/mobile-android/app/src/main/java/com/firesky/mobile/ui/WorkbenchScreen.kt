@@ -159,7 +159,7 @@ fun WorkbenchScreen(store: WorkbenchStore, state: WorkbenchState) {
 private fun HeaderLine(state: WorkbenchState) {
     val loc = state.location
     Column {
-        Text("单点预测", fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Text(stringResource(R.string.point_title), fontSize = 22.sp, fontWeight = FontWeight.Bold)
         Text(
             "%s · %.4f° N, %.4f° E".format(loc.name, loc.lat, loc.lon),
             fontSize = 11.sp,
@@ -175,12 +175,12 @@ private fun OfflineBanner(state: WorkbenchState, onReconnect: () -> Unit) {
             Text("⚠", color = MaterialTheme.colorScheme.error)
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
-                Text("引擎未连接", fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+                Text(stringResource(R.string.engine_offline), fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
                 if (state.error.isNotEmpty()) {
                     Text(state.error, fontSize = 10.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
                 }
             }
-            TextButton(onClick = onReconnect) { Text("重新连接") }
+            TextButton(onClick = onReconnect) { Text(stringResource(R.string.reconnect)) }
         }
     }
 }
@@ -193,23 +193,23 @@ private fun LocationCard(store: WorkbenchStore, state: WorkbenchState) {
     val loc = state.location
     WorkSurface(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text("观测点", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+            Text(stringResource(R.string.obs_point), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedTextField(
                     value = state.query,
                     onValueChange = store::setQuery,
                     modifier = Modifier.weight(1f),
                     singleLine = true,
-                    placeholder = { Text("搜索地名，如「西湖」或「杭州」", fontSize = 12.sp) },
+                    placeholder = { Text(stringResource(R.string.search_placeholder), fontSize = 12.sp) },
                     textStyle = MaterialTheme.typography.bodySmall,
                     trailingIcon = {
                         IconButton(onClick = { store.search() }) {
-                            Icon(Icons.Filled.Search, contentDescription = "搜索位置")
+                            Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.cd_search))
                         }
                     },
                 )
                 IconButton(onClick = { store.locate() }, enabled = !state.busy) {
-                    Icon(Icons.Filled.LocationOn, contentDescription = "获取当前位置")
+                    Icon(Icons.Filled.LocationOn, contentDescription = stringResource(R.string.cd_locate))
                 }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
@@ -224,14 +224,17 @@ private fun LocationCard(store: WorkbenchStore, state: WorkbenchState) {
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                ChipText(if (loc.metadataReady) "海拔 %.0f m".format(loc.elevation) else "海拔未确认")
+                ChipText(
+                    if (loc.metadataReady) stringResource(R.string.elevation_m, loc.elevation)
+                    else stringResource(R.string.elevation_unconfirmed),
+                )
                 ChipText(loc.timezone, modifier = Modifier.weight(1f, fill = false))
             }
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                 TextButton(onClick = { store.starLocation() }) {
                     Icon(Icons.Filled.Star, contentDescription = null, Modifier.size(14.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text("收藏当前点", fontSize = 10.sp)
+                    Text(stringResource(R.string.star_location), fontSize = 10.sp)
                 }
             }
             if (state.favorites.isNotEmpty()) {
@@ -252,7 +255,7 @@ private fun LocationCard(store: WorkbenchStore, state: WorkbenchState) {
                         )
                         Spacer(Modifier.width(6.dp))
                         Text(
-                            favorite.optString("name", "收藏位置"),
+                            favorite.optString("name", stringResource(R.string.favorite_name)),
                             fontSize = 12.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -281,12 +284,17 @@ private fun ParametersCard(store: WorkbenchStore, state: WorkbenchState) {
     WorkSurface(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text("观测参数", fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                TextButton(onClick = { store.resetParameters() }) { Text("重置", fontSize = 10.sp) }
+                Text(stringResource(R.string.obs_params), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                TextButton(onClick = { store.resetParameters() }) { Text(stringResource(R.string.reset), fontSize = 10.sp) }
             }
-            Text("目标日期", fontSize = 10.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
+            Text(stringResource(R.string.target_date), fontSize = 10.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
             Segmented(
                 options = listOf("今天", "明天", "自定义"),
+                titles = listOf(
+                    stringResource(R.string.date_today),
+                    stringResource(R.string.date_tomorrow),
+                    stringResource(R.string.date_custom),
+                ),
                 selection = state.dateTab,
                 onSelect = { store.chooseDate(it) },
             )
@@ -298,10 +306,13 @@ private fun ParametersCard(store: WorkbenchStore, state: WorkbenchState) {
                     Text("📅 ${state.targetDate}", fontSize = 12.sp)
                 }
             }
-            Text("观测现象", fontSize = 10.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
+            Text(stringResource(R.string.phenomenon_label), fontSize = 10.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
             Segmented(
                 options = listOf("dawn", "dusk"),
-                titles = listOf("朝霞", "晚霞"),
+                titles = listOf(
+                    stringResource(R.string.phenomenon_dawn),
+                    stringResource(R.string.phenomenon_dusk),
+                ),
                 selection = state.phenomenon,
                 onSelect = { store.setPhenomenon(it) },
                 accent = true,
@@ -309,41 +320,47 @@ private fun ParametersCard(store: WorkbenchStore, state: WorkbenchState) {
             TextButton(
                 onClick = { store.setEditingCoordinates(!state.editingCoordinates) },
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text(if (state.editingCoordinates) "收起坐标编辑" else "编辑坐标", fontSize = 10.sp) }
+            ) {
+                Text(
+                    if (state.editingCoordinates) stringResource(R.string.collapse_coordinates)
+                    else stringResource(R.string.edit_coordinates),
+                    fontSize = 10.sp,
+                )
+            }
             AnimatedVisibility(visible = state.editingCoordinates) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = state.location.name,
                         onValueChange = { value -> store.editLocation { it.copy(name = value) } },
-                        label = { Text("名称") },
+                        label = { Text(stringResource(R.string.name_label)) },
                         singleLine = true,
                         textStyle = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    NumberField("纬度", state.location.lat) { value ->
+                    NumberField(stringResource(R.string.lat_label), state.location.lat) { value ->
                         store.editLocation { it.copy(lat = value, metadataReady = false) }
                     }
-                    NumberField("经度", state.location.lon) { value ->
+                    NumberField(stringResource(R.string.lon_label), state.location.lon) { value ->
                         store.editLocation { it.copy(lon = value, metadataReady = false) }
                     }
-                    NumberField("海拔 (m)", state.location.elevation) { value ->
+                    NumberField(stringResource(R.string.elevation_label), state.location.elevation) { value ->
                         store.editLocation { it.copy(elevation = value) }
                     }
                     OutlinedTextField(
                         value = state.location.timezone,
                         onValueChange = { value -> store.editLocation { it.copy(timezone = value) } },
-                        label = { Text("时区") },
+                        label = { Text(stringResource(R.string.tz_label)) },
                         singleLine = true,
                         textStyle = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    TextButton(onClick = { store.lookupMetadata() }) { Text("获取海拔与时区", fontSize = 11.sp) }
+                    TextButton(onClick = { store.lookupMetadata() }) { Text(stringResource(R.string.fetch_metadata), fontSize = 11.sp) }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         androidx.compose.material3.Checkbox(
                             checked = state.location.metadataReady,
                             onCheckedChange = { store.setMetadataReady(it) },
                         )
-                        Text("已确认位置数据", fontSize = 10.sp)
+                        Text(stringResource(R.string.location_confirmed), fontSize = 10.sp)
                     }
                 }
             }
@@ -366,9 +383,9 @@ private fun ParametersCard(store: WorkbenchStore, state: WorkbenchState) {
                         store.setCustomDate(Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate())
                     }
                     showDatePicker = false
-                }) { Text("确定") }
+                }) { Text(stringResource(R.string.ok)) }
             },
-            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text("取消") } },
+            dismissButton = { TextButton(onClick = { showDatePicker = false }) { Text(stringResource(R.string.cancel)) } },
         ) {
             DatePicker(state = pickerState)
         }
@@ -431,7 +448,7 @@ private fun ProgressRow(store: WorkbenchStore, state: WorkbenchState) {
                 overflow = TextOverflow.Ellipsis,
             )
             IconButton(onClick = { store.cancel() }, modifier = Modifier.size(28.dp)) {
-                Icon(Icons.Filled.Close, contentDescription = "取消任务", Modifier.size(14.dp))
+                Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.cd_cancel_task), Modifier.size(14.dp))
             }
         }
     }
@@ -507,10 +524,12 @@ fun ChipText(text: String, modifier: Modifier = Modifier) {
 }
 
 /** 模型结果状态行（comparison.status 同构）。 */
+@Composable
 fun comparisonStatus(result: JSONObject?, model: String): String {
-    if (result == null) return "等待预测"
-    if (modelError(result, model) != null) return "未完成"
-    return if (modelReport(result, model) != null) "预测完成" else "暂无结果"
+    if (result == null) return stringResource(R.string.awaiting_forecast)
+    if (modelError(result, model) != null) return stringResource(R.string.status_incomplete)
+    return if (modelReport(result, model) != null) stringResource(R.string.status_complete)
+    else stringResource(R.string.status_no_result)
 }
 
 // ---------------------------------------------------------------- 准备面板（preflight）
@@ -520,7 +539,7 @@ fun PreflightSheet(store: WorkbenchStore, state: WorkbenchState) {
     Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp).padding(bottom = 24.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("预测准备", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.preflight_title), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
                 Text(
                     state.location.name,
                     fontSize = 13.sp,
@@ -529,7 +548,7 @@ fun PreflightSheet(store: WorkbenchStore, state: WorkbenchState) {
             }
             if (!state.busy) {
                 IconButton(onClick = { store.refreshCheck() }) {
-                    Icon(Icons.Filled.Refresh, contentDescription = "重新检查")
+                    Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.cd_recheck))
                 }
             }
         }
@@ -542,7 +561,7 @@ fun PreflightSheet(store: WorkbenchStore, state: WorkbenchState) {
             ) {
                 CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                 Spacer(Modifier.width(12.dp))
-                Text("正在检查本地数据", fontSize = 13.sp)
+                Text(stringResource(R.string.checking_data), fontSize = 13.sp)
             }
         } else {
             state.rows.forEach { row ->
@@ -564,7 +583,7 @@ fun PreflightSheet(store: WorkbenchStore, state: WorkbenchState) {
                         )
                     }
                     Text(
-                        row.status,
+                        statusText(row.status),
                         fontSize = 12.sp,
                         color = if (!row.ready || row.old) MaterialTheme.colorScheme.onBackground
                         else Color(0xFF3B9C57),
@@ -595,7 +614,7 @@ fun PreflightSheet(store: WorkbenchStore, state: WorkbenchState) {
                 )
                 else -> Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        preflightSummary(state),
+                        preflightSummary(state, state.status),
                         fontSize = 13.sp,
                         fontWeight = FontWeight.Medium,
                         modifier = Modifier.weight(1f),
@@ -608,18 +627,18 @@ fun PreflightSheet(store: WorkbenchStore, state: WorkbenchState) {
         }
         Spacer(Modifier.height(14.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { store.closePreflight() }) { Text("取消") }
+            TextButton(onClick = { store.closePreflight() }) { Text(stringResource(R.string.cancel)) }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 if (!state.ready) {
                     Button(onClick = { store.prepare() }, enabled = state.session != null && !state.busy) {
-                        Text("下载缺失数据")
+                        Text(stringResource(R.string.download_missing))
                     }
                     OutlinedButton(onClick = {}, enabled = false, border = BorderStroke(1.dp, Color.Transparent)) {
-                        Text("确定预测")
+                        Text(stringResource(R.string.confirm_forecast))
                     }
                 } else {
                     OutlinedButton(onClick = { store.prepare() }, enabled = state.session != null && !state.busy) {
-                        Text("更新数据")
+                        Text(stringResource(R.string.update_data))
                     }
                     Button(
                         onClick = { store.confirm() },
@@ -628,18 +647,20 @@ fun PreflightSheet(store: WorkbenchStore, state: WorkbenchState) {
                             containerColor = MaterialTheme.colorScheme.primary,
                             contentColor = Color.White,
                         ),
-                    ) { Text("确定预测") }
+                    ) { Text(stringResource(R.string.confirm_forecast)) }
                 }
             }
         }
     }
 }
 
-private fun preflightSummary(state: WorkbenchState): String {
-    val missing = state.rows.filter { !it.ready }.joinToString("、") { it.title }
+@Composable
+private fun preflightSummary(state: WorkbenchState, status: String): String {
+    // map（inline）内调用 @Composable statusText 合法；joinToString 非内联不行。
+    val missing = state.rows.filter { !it.ready }.map { statusText(it.title) }.joinToString("、")
     return if (!state.ready) {
-        if (missing.isEmpty()) state.status else "需下载 $missing"
+        if (missing.isEmpty()) status else stringResource(R.string.preflight_need_download, missing)
     } else {
-        "数据已齐，可开始预测"
+        stringResource(R.string.preflight_ready)
     }
 }

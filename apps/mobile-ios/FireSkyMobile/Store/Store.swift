@@ -261,6 +261,13 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var taskEvents: [MobileTaskEventRow] = []
     @Published var taskEventsLoading = false
     @Published var taskEventsError = ""
+    /// v1.9.5 任务详情 → 预测详情：选中已完成的预测任务时读取结果快照。
+    @Published var taskResultTaskID: String?
+    @Published var taskResult: JSONObject?
+    @Published var taskResultLoading = false
+    @Published var taskResultError = ""
+    /// 快照不可变，会话内按 task_id 缓存（同 macOS Store）。
+    private var taskResultCache: [String: JSONObject] = [:]
     @Published var pendingForgetTaskID: String?
     @Published var restoringTaskID: String?
     // 数据管理（手动删除 + 地形区域下载）
@@ -816,6 +823,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         taskEvents = []
         taskEventsError = ""
         taskEventsLoading = true
+        // v1.9.5：已完成的预测任务随选中项加载预测详情（结果快照）。
+        if let item = taskHistory.first(where: { $0.taskID == taskID }) {
+            loadTaskResult(for: item)
+        } else {
+            resetTaskResult()
+        }
         Task { [weak self] in
             guard let self else { return }
             defer { taskEventsLoading = false }
@@ -853,6 +866,49 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         taskEvents = []
         taskEventsError = ""
         taskEventsLoading = false
+        resetTaskResult()
+    }
+
+    /// v1.9.5 任务详情 → 预测详情：经 result_restore 读取不可变结果快照
+    /// （引擎 SHA256 校验，fail-closed）；读取失败转为可读说明。
+    private func loadTaskResult(for item: MobileTaskHistoryItem) {
+        guard item.method == "forecast", item.status == "done" else {
+            resetTaskResult()
+            return
+        }
+        guard taskResultTaskID != item.taskID else { return }
+        taskResultTaskID = item.taskID
+        if let cached = taskResultCache[item.taskID] {
+            taskResult = cached
+            taskResultLoading = false
+            taskResultError = ""
+            return
+        }
+        taskResult = nil
+        taskResultLoading = true
+        taskResultError = ""
+        Task { [weak self] in
+            guard let self else { return }
+            defer { taskResultLoading = false }
+            do {
+                let response = try await engine.call("result_restore", ["task_id": item.taskID])
+                guard let results = response["model_results"] as? JSONObject,
+                      !results.isEmpty else {
+                    throw EngineError(message: "预测详情快照不完整。")
+                }
+                taskResultCache[item.taskID] = response
+                taskResult = response
+            } catch {
+                taskResultError = error.localizedDescription
+            }
+        }
+    }
+
+    private func resetTaskResult() {
+        taskResultTaskID = nil
+        taskResult = nil
+        taskResultLoading = false
+        taskResultError = ""
     }
 
     func setPendingForgetTask(_ taskID: String?) {

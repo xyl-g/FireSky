@@ -106,23 +106,49 @@ ships release capability (self-contained zip, installer, CI publishing).
   assembly now embeds the engine version for in-app update comparison.
 ## v1.9.5 (2026-11-21)
 
-界面多语言 i18n 基础设施（macOS + Android 起步）+ Windows token 补齐（B2 收尾）。
-UI i18n infrastructure (macOS and Android start) and Windows token
-completion (B2 wrap-up).
+界面多语言 i18n（三端）+ 任务历史可追溯预测详情 + 引擎修复 + Windows token 补齐。
+UI i18n across three platforms, task history tracing to forecast details,
+engine fixes, and Windows token completion.
 
 **界面多语言 / UI i18n**
 
 - macOS 新增 L10n 轻量键值查找：语言偏好（跟随系统/中文/English）持久化
-  到 UserDefaults，未覆盖的 key 回落中文原文；导航标题、开始预测/开始
-  实况分析等高频字符串已接入（覆盖范围渐进扩展）。
-- Android 导航与主按钮改用 `stringResource`：`values/strings.xml`（中文
-  默认）+ `values-en/strings.xml`（English），系统语言切换自动生效。
-  macOS gains a lightweight L10n lookup (language preference
-  system/Chinese/English persisted to UserDefaults, fallback to Chinese);
-  navigation titles and primary CTA strings are wired. Android navigation
-  and CTA strings moved to string resources with an English variant.
-- iOS/Windows 界面文案接入在后续版本跟进；本版新增 key 口径与
-  DESIGN.md「跨端文案逐字一致」一致。
+  到 UserDefaults，未覆盖的 key 回落中文原文；导航、任务历史整页、
+  开始预测等高频字符串已接入（覆盖渐进扩展）。
+- Android 全量接入 `stringResource`：`values/strings.xml`（中文默认）+
+  `values-en/strings.xml`，覆盖工作台/结果卡片/历史/数据管理/设置全部
+  页面（含引擎中文状态映射）；设置 → 通用新增「语言」选择，切换后重建
+  立即生效。
+- iOS L10n 同构接入：底部导航/工作台/准备面板/历史页/设置分类 +
+  「语言」选择（`@AppStorage` 驱动整树刷新）。
+- Windows 文案接入在后续版本跟进；新增 key 口径与 DESIGN.md
+  「跨端文案逐字一致」一致。
+  macOS gains a lightweight L10n lookup with task-history wiring; Android
+  adopts string resources across all four pages with an English variant
+  and a language picker; iOS mirrors the same L10n with an app-storage
+  driven language picker. Windows follows in a later release.
+
+**任务详情 → 预测详情 / Task history traces forecast details**
+
+- 任务历史页选中已完成的预测任务时，经 `result_restore` 读取不可变结果
+  快照（引擎侧 SHA256 校验，fail-closed），直接呈现该次预测的关键信息：
+  双模型峰值指数/档位/最佳时刻/推荐窗口 + 结果摘要；快照过期或清理时
+  给出可读说明。macOS 详情区、Android/iOS 任务详情卡同构实现；快照内容
+  不可变，会话内按 task_id 缓存。
+  Selecting a completed forecast task now reads its immutable result
+  snapshot (SHA256-verified) and shows the key numbers and summary inline;
+  expired snapshots render a readable notice.
+
+**引擎修复 / Engine fixes**
+
+- 修复地形区域下载被任务历史白名单拒绝（`method does not create
+  workflow history`）：`desktop_runtime::begin_task` 与
+  `TaskHistory::begin` 两份白名单不同步——runtime 侧已放行
+  `terrain_download`、历史侧仍拒绝，GUI 地形卡报错且任务历史缺失该类
+  任务；已同步白名单并加回归测试。
+  Terrain region downloads were rejected by the task-history whitelist
+  (the runtime side allowed `terrain_download` while the history side did
+  not); the whitelists are now in sync with a regression test.
 
 **Windows token 补齐 / Windows token completion**
 

@@ -2657,6 +2657,30 @@ mod tests {
     }
 
     #[test]
+    fn terrain_download_records_workflow_history() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::new(dir.path()).unwrap();
+        // v1.9.5 回归：runtime 与 TaskHistory 两份白名单必须同步——此前
+        // runtime 侧放行 terrain_download、TaskHistory::begin 侧拒绝，
+        // GUI 地形下载报 "method does not create workflow history"。
+        let task = runtime
+            .begin_task("terrain-req-1", "terrain_download", &json!({"region":"中国"}))
+            .unwrap()
+            .unwrap();
+        task.finish(&Ok(json!({"tile_count": 1})), false).unwrap();
+        let list = runtime
+            .dispatch("task_history", json!({"limit":10}))
+            .unwrap();
+        assert_eq!(list["tasks"][0]["method"], "terrain_download");
+        assert_eq!(list["tasks"][0]["status"], "done");
+        // 读取类地形方法不产生历史。
+        assert!(runtime
+            .begin_task("terrain-req-2", "terrain_inventory", &json!({}))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
     fn data_sync_wire_method_records_history_under_design_label() {
         let dir = tempfile::tempdir().unwrap();
         let runtime = Runtime::new(dir.path()).unwrap();

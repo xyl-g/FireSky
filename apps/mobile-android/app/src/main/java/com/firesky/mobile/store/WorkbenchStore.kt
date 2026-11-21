@@ -278,6 +278,11 @@ data class WorkbenchState(
     val taskEventsError: String = "",
     val pendingForgetTaskId: String? = null,
     val restoringTaskId: String? = null,
+    // v1.9.5 任务详情 → 预测详情：已完成的预测任务读取结果快照。
+    val taskResultTaskId: String? = null,
+    val taskResult: JSONObject? = null,
+    val taskResultLoading: Boolean = false,
+    val taskResultError: String = "",
     // 数据管理（库存 / 手动删除 / 地形区域下载）
     val pendingDataDelete: JSONObject? = null,
     val dataDeletePreview: JSONObject? = null,
@@ -1109,7 +1114,12 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
     fun selectTask(taskId: String) {
         if (_state.value.selectedTaskId == taskId) {
             _state.update {
-                it.copy(selectedTaskId = null, taskEvents = emptyList(), taskEventsError = "")
+                it.copy(
+                    selectedTaskId = null, taskEvents = emptyList(), taskEventsError = "",
+                    // v1.9.5：取消选中时同步清预测详情。
+                    taskResultTaskId = null, taskResult = null,
+                    taskResultLoading = false, taskResultError = "",
+                )
             }
             return
         }
@@ -1122,6 +1132,8 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
                 taskEventsLoading = true,
             )
         }
+        // v1.9.5：已完成的预测任务随选中项加载预测详情（结果快照）。
+        _state.value.taskHistory.firstOrNull { it.taskId == taskId }?.let { loadTaskResult(it) }
         viewModelScope.launch {
             try {
                 val response = engine.call(
@@ -1153,6 +1165,39 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
     /** 「删除记录」语义同 macOS：只删除状态与事件，不删除报告与数据。 */
     fun setPendingForgetTask(taskId: String?) {
         _state.update { it.copy(pendingForgetTaskId = taskId) }
+    }
+
+    // v1.9.5 任务详情 → 预测详情：快照不可变，会话内按 task_id 缓存。
+    private val taskResultCache = mutableMapOf<String, JSONObject>()
+
+    /** 已完成的预测任务经 result_restore 读取不可变结果快照（引擎 SHA256 校验）。 */
+    private fun loadTaskResult(item: TaskHistoryItem) {
+        if (item.method != "forecast" || item.status != "done") return
+        if (_state.value.taskResultTaskId == item.taskId) return
+        _state.update { it.copy(taskResultTaskId = item.taskId) }
+        taskResultCache[item.taskId]?.let { cached ->
+            _state.update { it.copy(taskResult = cached, taskResultLoading = false, taskResultError = "") }
+            return
+        }
+        _state.update { it.copy(taskResult = null, taskResultLoading = true, taskResultError = "") }
+        viewModelScope.launch {
+            try {
+                val response = engine.call(
+                    "result_restore",
+                    JSONObject().put("task_id", item.taskId),
+                )
+                val results = response.optJSONObject("model_results")
+                if (results == null || results.length() == 0) {
+                    throw IllegalStateException("预测详情快照不完整")
+                }
+                taskResultCache[item.taskId] = response
+                _state.update { it.copy(taskResult = response, taskResultLoading = false) }
+            } catch (error: Exception) {
+                _state.update {
+                    it.copy(taskResultError = error.message ?: "预测详情读取失败", taskResultLoading = false)
+                }
+            }
+        }
     }
 
     fun forgetPendingTask() {

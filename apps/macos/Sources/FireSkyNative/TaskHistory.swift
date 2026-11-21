@@ -65,23 +65,23 @@ struct NativeTaskHistoryItem: Identifiable {
 
     var kindTitle: String {
         switch retryRequest?.kind {
-        case .point: "单点"
-        case .regional: "区域"
-        case .nowcast: "实况"
+        case .point: L10n.text("单点", "Point")
+        case .regional: L10n.text("区域", "Regional")
+        case .nowcast: L10n.text("实况", "Nowcast")
         default: methodTitle
         }
     }
 
     var methodTitle: String {
         switch method {
-        case "check": "数据检查"
-        case "prepare": "数据准备"
-        case "forecast": "预测计算"
-        case "publications": "发布核验"
-        case "network_probe": "下载探测"
-        case "data_sync": "后台同步"
-        case "terrain_download": "地形下载"
-        default: "任务"
+        case "check": L10n.text("数据检查", "Data check")
+        case "prepare": L10n.text("数据准备", "Data preparation")
+        case "forecast": L10n.text("预测计算", "Forecast")
+        case "publications": L10n.text("发布核验", "Publication check")
+        case "network_probe": L10n.text("下载探测", "Download probe")
+        case "data_sync": L10n.text("后台同步", "Background sync")
+        case "terrain_download": L10n.text("地形下载", "Terrain download")
+        default: L10n.text("任务", "Task")
         }
     }
 
@@ -195,19 +195,19 @@ struct NativeTaskHistoryView: View {
             }
         }
         .task { store.loadTaskHistory() }
-        .confirmationDialog("删除任务记录？", isPresented: Binding(
+        .confirmationDialog(L10n.text("删除任务记录？", "Delete task record?"), isPresented: Binding(
             get: { store.pendingForgetTaskID != nil },
             set: { if !$0 { store.pendingForgetTaskID = nil } }
         )) {
-            Button("删除记录", role: .destructive) {
+            Button(L10n.text("删除记录", "Delete record"), role: .destructive) {
                 if let taskID = store.pendingForgetTaskID {
                     store.forgetTaskHistory(taskID)
                 }
                 store.pendingForgetTaskID = nil
             }
-            Button("保留记录", role: .cancel) { store.pendingForgetTaskID = nil }
+            Button(L10n.text("保留记录", "Keep record"), role: .cancel) { store.pendingForgetTaskID = nil }
         } message: {
-            Text("只删除状态和事件，不删除已发布报告或天气数据。")
+            Text(L10n.text("只删除状态和事件，不删除已发布报告或天气数据。", "Only status and events are removed; published reports and weather data are kept."))
         }
     }
 
@@ -225,8 +225,8 @@ struct NativeTaskHistoryView: View {
     private var header: some View {
         HStack(spacing: 10) {
             Text(store.taskHistoryLoaded
-                 ? "最近 \(store.taskHistory.count) 项 · 共 \(store.taskHistoryTotal) 项"
-                 : "记录数据检查、准备、预测和下载探测任务")
+                 ? L10n.text("最近 \(store.taskHistory.count) 项 · 共 \(store.taskHistoryTotal) 项", "Recent \(store.taskHistory.count) · total \(store.taskHistoryTotal)")
+                 : L10n.text("记录数据检查、准备、预测和下载探测任务", "Records of checks, preparations, forecasts and probes"))
                 .font(.caption).foregroundStyle(.secondary)
             if store.taskHistoryIssues > 0 {
                 Text("\(store.taskHistoryIssues) 项无法核验")
@@ -235,15 +235,15 @@ struct NativeTaskHistoryView: View {
             Spacer()
             // 筛选：主动任务 / 后台同步轮次。
             Picker("", selection: $kindFilter) {
-                Text("全部").tag("all")
-                Text("主动任务").tag("active")
-                Text("后台同步").tag("sync")
+                Text(L10n.text("全部", "All")).tag("all")
+                Text(L10n.text("主动任务", "Active")).tag("active")
+                Text(L10n.text("后台同步", "Sync")).tag("sync")
             }.pickerStyle(.segmented).frame(width: 220)
                 .controlSize(.small)
                 .accessibilityLabel("任务类型筛选")
             Button { store.loadTaskHistory() } label: {
                 Image(systemName: "arrow.clockwise")
-            }.help("刷新任务历史")
+            }.help(L10n.text("刷新任务历史", "Refresh task history"))
                 .disabled(!store.online || store.taskHistoryLoading)
         }.padding(.horizontal, 20).padding(.vertical, 10)
     }
@@ -255,14 +255,14 @@ struct NativeTaskHistoryView: View {
                     .textSelection(.enabled).padding(20)
             }
             if store.taskHistoryLoading && store.taskHistory.isEmpty {
-                ProgressView("正在读取任务记录…").frame(maxWidth: .infinity, minHeight: 140)
+                ProgressView(L10n.text("正在读取任务记录…", "Loading task records…")).frame(maxWidth: .infinity, minHeight: 140)
             } else if visibleHistory.isEmpty {
                 ContentUnavailableView(
-                    store.taskHistory.isEmpty ? "暂无任务记录" : "没有符合筛选的任务",
+                    store.taskHistory.isEmpty ? L10n.text("暂无任务记录", "No task records") : L10n.text("没有符合筛选的任务", "No tasks match the filter"),
                     systemImage: "clock.arrow.circlepath",
                     description: Text(store.online
-                        ? (store.taskHistory.isEmpty ? "完成一次检查或预测后会显示在这里。" : "换个筛选条件试试。")
-                        : "引擎未连接。"))
+                        ? (store.taskHistory.isEmpty ? L10n.text("完成一次检查或预测后会显示在这里。", "Shown after a check or forecast completes.") : L10n.text("换个筛选条件试试。", "Try a different filter."))
+                        : L10n.text("引擎未连接。", "Engine is offline.")))
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -280,7 +280,7 @@ struct NativeTaskHistoryView: View {
                                         if store.taskHistoryLoading {
                                             ProgressView().controlSize(.small)
                                         }
-                                        Text("加载更早任务").font(.callout)
+                                        Text(L10n.loadOlder).font(.callout)
                                     }
                                 }
                                 .buttonStyle(.borderless)
@@ -296,7 +296,7 @@ struct NativeTaskHistoryView: View {
                 }
             }
             if !store.online && store.taskHistoryError.isEmpty {
-                Label("引擎未连接，显示的是上次读取的记录。", systemImage: "wifi.slash")
+                Label(L10n.text("引擎未连接，显示的是上次读取的记录。", "Engine offline; showing previously loaded records."), systemImage: "wifi.slash")
                     .font(.caption).foregroundStyle(.secondary).padding(20)
             }
         }.frame(minWidth: 420)
@@ -317,9 +317,13 @@ struct NativeTaskHistoryView: View {
                         Spacer()
                         Button { store.clearTaskHistorySelection() } label: {
                             Image(systemName: "xmark")
-                        }.help("关闭详情").buttonStyle(.borderless)
+                        }.help(L10n.text("关闭详情", "Close details")).buttonStyle(.borderless)
                     }
                     summaryCard(selected)
+                    if selected.method == "forecast", selected.status == "done" {
+                        Divider()
+                        forecastResultCard(selected)
+                    }
                     Divider()
                     eventsCard(selected)
                 }.padding(20).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -331,26 +335,26 @@ struct NativeTaskHistoryView: View {
     /// 摘要卡：状态、原始 UTC、进度、恢复说明；动作按钮集中在列表行。
     private func summaryCard(_ item: NativeTaskHistoryItem) -> some View {
         VStack(alignment: .leading, spacing: 7) {
-            summaryRow("状态", item.statusTitle + (item.status == "interrupted" ? "（不会自动重跑）" : ""))
-            summaryRow("创建时间", historyTimeText(item.createdAtUTC),
+            summaryRow(L10n.text("状态", "Status"), L10n.status(item.statusTitle) + (item.status == "interrupted" ? L10n.text("（不会自动重跑）", " (will not re-run)") : ""))
+            summaryRow(L10n.text("创建时间", "Created"), historyTimeText(item.createdAtUTC),
                        help: "UTC：\(item.createdAtUTC)")
-            summaryRow("更新时间", historyTimeText(item.updatedAtUTC),
+            summaryRow(L10n.text("更新时间", "Updated"), historyTimeText(item.updatedAtUTC),
                        help: "UTC：\(item.updatedAtUTC)")
             if item.status == "running",
                let percent = (item.progress["percent"] as? NSNumber)?.doubleValue {
                 ProgressView(value: percent, total: 100)
-                summaryRow("进度", String(format: "%.0f%%", percent))
+                summaryRow(L10n.text("进度", "Progress"), String(format: "%.0f%%", percent))
             }
             if item.cancelRequested {
-                summaryRow("取消", "已请求取消，等待任务停止")
+                summaryRow(L10n.text("取消", "Cancel"), L10n.text("已请求取消，等待任务停止", "Cancellation requested; waiting for the task to stop"))
             }
             if item.canRestoreResult {
-                summaryRow("恢复", "可从已发布快照恢复本任务结果")
+                summaryRow(L10n.text("恢复", "Restore"), L10n.text("可从已发布快照恢复本任务结果", "Result can be restored from the published snapshot"))
             }
             if item.retryRequest != nil {
-                summaryRow("重试", "可恢复参数并重新检查数据")
+                summaryRow(L10n.text("重试", "Retry"), L10n.text("可恢复参数并重新检查数据", "Parameters can be restored and re-checked"))
             }
-            summaryRow("删除记录", "只删除状态和事件，不影响报告与天气数据")
+            summaryRow(L10n.text("删除记录", "Delete record"), L10n.text("只删除状态和事件，不影响报告与天气数据", "Only status and events are removed; reports and weather data are unaffected"))
         }.padding(12)
             .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
     }
@@ -363,19 +367,107 @@ struct NativeTaskHistoryView: View {
         }.help(help ?? value)
     }
 
+    /// v1.9.5 预测详情卡：选中已完成的预测任务时读取不可变结果快照，
+    /// 呈现该次预测的关键信息（双模型指数/档位/最佳时刻/窗口 + 摘要）；
+    /// 快照过期或清理时给出可读说明而不是空白。
+    @ViewBuilder
+    private func forecastResultCard(_ item: NativeTaskHistoryItem) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(L10n.text("预测详情", "Forecast details")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            if store.taskResultTaskID != item.taskID {
+                Text("—").font(.caption).foregroundStyle(.secondary)
+            } else {
+                switch store.taskResultState {
+                case .idle, .loading:
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(L10n.text("正在读取预测详情…", "Loading forecast details…")).font(.caption).foregroundStyle(.secondary)
+                    }
+                case .unavailable(let message):
+                    Text(L10n.text("预测详情不可用", "Forecast details unavailable") + "：\(message)")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                case .loaded:
+                    if let result = store.taskResult {
+                        forecastResultContent(result)
+                    }
+                }
+            }
+        }.padding(12)
+            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    @ViewBuilder
+    private func forecastResultContent(_ result: JSONObject) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(["gfs", "ec"], id: \.self) { model in
+                forecastModelRow(result, model)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func forecastModelRow(_ result: JSONObject, _ model: String) -> some View {
+        let errors = result["model_errors"] as? JSONObject
+        let error = errors?[model] as? String
+        let report = (result["model_results"] as? JSONObject)?[model] as? JSONObject
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text(model.uppercased()).font(.caption.weight(.semibold))
+                    .foregroundStyle(model == "ec" ? Color.teal : Color.orange)
+                if let error, !error.isEmpty {
+                    Text(L10n.text("未完成", "Incomplete") + "：\(error)").font(.caption2).foregroundStyle(.red)
+                        .textSelection(.enabled).lineLimit(2)
+                } else if report == nil {
+                    Text(L10n.status("暂无结果")).font(.caption2).foregroundStyle(.secondary)
+                } else {
+                    Text("\(historyFormat(report?["peak_quality_index"] ?? report?["quality_index"])) / 2.5")
+                        .font(.caption.weight(.medium)).monospacedDigit()
+                    Text(report?["quality_level"] as? String ?? "")
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    Spacer(minLength: 0)
+                    Text(L10n.text("最佳", "Best") + " \(historyTime(report?["best_time_local"] as? String))")
+                        .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+                    Text(L10n.text("窗口", "Window") + " \(historyWindow(report))")
+                        .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+                }
+            }
+            if let summary = report?["summary"] as? String, !summary.isEmpty {
+                Text(summary).font(.caption2).foregroundStyle(.secondary)
+                    .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    // 快照格式化助手（Workbench.swift 的 format/timeLabel 为文件私有，此处同义复制）。
+    private func historyFormat(_ value: Any?, digits: Int = 2) -> String {
+        guard let number = value as? NSNumber, number.doubleValue.isFinite else { return "—" }
+        return String(format: "%.\(digits)f", number.doubleValue)
+    }
+
+    private func historyTime(_ value: String?) -> String {
+        guard let value, value.count >= 16 else { return "—" }
+        return String(value.dropFirst(11).prefix(5))
+    }
+
+    private func historyWindow(_ report: JSONObject?) -> String {
+        guard let window = report?["timing_window"] as? JSONObject else { return "--" }
+        return "\(historyTime(window["start_time_local"] as? String)) – \(historyTime(window["end_time_local"] as? String))"
+    }
+
     /// 事件时间线：与旧版一致，带截断提示与逐条 UTC help。
     private func eventsCard(_ item: NativeTaskHistoryItem) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("事件").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Text(L10n.text("事件", "Events")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             if store.taskHistoryEventsLoading {
                 ProgressView().controlSize(.small)
             } else if !store.taskHistoryEventsError.isEmpty {
                 Text(store.taskHistoryEventsError).font(.caption).foregroundStyle(.red)
             } else if store.taskHistoryEvents.isEmpty {
-                Text("没有已记录的事件。").font(.caption).foregroundStyle(.secondary)
+                Text(L10n.text("没有已记录的事件。", "No recorded events.")).font(.caption).foregroundStyle(.secondary)
             } else {
                 if store.taskHistoryEventsTruncated {
-                    Text("较早事件已超出保留上限。").font(.caption).foregroundStyle(.secondary)
+                    Text(L10n.text("较早事件已超出保留上限。", "Older events exceed the retention limit.")).font(.caption).foregroundStyle(.secondary)
                 }
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
@@ -407,7 +499,7 @@ struct NativeTaskHistoryView: View {
                     HStack(spacing: 7) {
                         Text(item.rowTitle)
                             .font(.callout.weight(.medium))
-                        StatusChip(status: item.status, title: item.statusTitle)
+                        StatusChip(status: item.status, title: L10n.status(item.statusTitle))
                     }
                     if !item.contextTitle.isEmpty {
                         Text(item.contextTitle).font(.caption).foregroundStyle(.secondary)
@@ -420,23 +512,23 @@ struct NativeTaskHistoryView: View {
                            let percent = (item.progress["percent"] as? NSNumber)?.doubleValue {
                             Text(String(format: "%.0f%%", percent)).monospacedDigit()
                         }
-                        if item.status == "interrupted" { Text("不会自动重跑") }
+                        if item.status == "interrupted" { Text(L10n.text("不会自动重跑", "Will not re-run")) }
                     }.font(.caption2).foregroundStyle(.secondary)
                 }
                 Spacer(minLength: 8)
                 // 方案 D9：动作收进「…」菜单，命中区 36、危险项红字隔离。
                 Menu {
                     if item.canRestoreResult {
-                        Button("恢复已发布结果") { store.restoreTaskResult(item) }
+                        Button(L10n.text("恢复已发布结果", "Restore published result")) { store.restoreTaskResult(item) }
                             .disabled(store.busy || store.restoringTaskHistoryID != nil)
                     }
                     if item.retryRequest != nil {
-                        Button("恢复参数并重新检查数据") { store.restoreTaskParameters(item) }
+                        Button(L10n.text("恢复参数并重新检查数据", "Restore parameters & re-check")) { store.restoreTaskParameters(item) }
                             .disabled(store.busy || item.status == "running" || store.restoringTaskHistoryID != nil)
                     }
                     Divider()
                     Button(role: .destructive) { store.pendingForgetTaskID = item.taskID } label: {
-                        Label("删除任务记录", systemImage: "trash")
+                        Label(L10n.text("删除任务记录", "Delete task record"), systemImage: "trash")
                     }
                     .disabled(store.busy || item.status == "running" || store.forgettingTaskHistoryID != nil)
                 } label: {
@@ -445,7 +537,7 @@ struct NativeTaskHistoryView: View {
                 .menuStyle(.borderlessButton)
                 .menuIndicator(.hidden)
                 .fixedSize()
-                .help("任务动作")
+                .help(L10n.text("任务动作", "Task actions"))
                 .disabled(store.forgettingTaskHistoryID != nil)
             }
             .padding(.horizontal, 16).padding(.vertical, 12)

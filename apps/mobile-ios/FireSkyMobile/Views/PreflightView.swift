@@ -11,16 +11,16 @@ struct PreflightView: View {
     private var summary: String {
         if !store.ready {
             let missing = store.rows.filter { !$0.ready }.map(\.title).joined(separator: "、")
-            return missing.isEmpty ? store.status : "需下载 \(missing)"
+            return missing.isEmpty ? store.status : L10n.text("需下载", "Download needed") + " \(missing)"
         }
         let updates = store.rows.filter(\.old).map(\.title).joined(separator: "、")
-        return updates.isEmpty ? "数据已齐，可开始预测" : "数据已齐，可更新 \(updates)"
+        return updates.isEmpty ? L10n.text("数据已齐，可开始预测", "Data ready — start the forecast") : L10n.text("数据已齐，可更新", "Data ready, can update") + " \(updates)"
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("预测准备").font(.title2.weight(.semibold))
+                    Text(L10n.text("预测准备", "Forecast preparation")).font(.title2.weight(.semibold))
                     Text(store.name).font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -28,7 +28,7 @@ struct PreflightView: View {
                     .disabled(store.busy)
             }.padding(.bottom, 16)
             if store.rows.isEmpty {
-                HStack { ProgressView(); Text("正在检查本地数据") }
+                HStack { ProgressView(); Text(L10n.text("正在检查本地数据", "Checking local data")) }
                     .frame(maxWidth: .infinity, minHeight: 140)
             } else {
                 ForEach(store.rows) { row in
@@ -40,7 +40,7 @@ struct PreflightView: View {
                             Text(row.detail).font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Label(row.status, systemImage: !row.ready ? "arrow.down.circle" : row.old ? "arrow.clockwise" : "checkmark.circle.fill")
+                        Label(L10n.status(row.status), systemImage: !row.ready ? "arrow.down.circle" : row.old ? "arrow.clockwise" : "checkmark.circle.fill")
                             .font(.callout).foregroundStyle(!row.ready || row.old ? Color.primary : Color.green)
                     }.frame(height: 64)
                     if row.id != store.rows.last?.id { Divider() }
@@ -61,17 +61,17 @@ struct PreflightView: View {
                 }
             }.frame(minHeight: 38, alignment: .leading).padding(.top, 12)
             HStack {
-                Button("取消") { store.closePreflight() }
+                Button(L10n.cancel) { store.closePreflight() }
                 Spacer()
                 if actions.primary == .download {
-                    Button("下载缺失数据", systemImage: "arrow.down.to.line") { store.prepare() }
+                    Button(L10n.text("下载缺失数据", "Download missing data"), systemImage: "arrow.down.to.line") { store.prepare() }
                         .buttonStyle(.borderedProminent).disabled(!actions.canDownload)
                         .foregroundStyle(scheme == .dark ? Color.black : Color.white)
-                    Button("确定预测") {}.disabled(true)
+                    Button(L10n.text("确定预测", "Confirm forecast")) {}.disabled(true)
                 } else {
-                    Button("更新数据", systemImage: "arrow.down.to.line") { store.prepare() }
+                    Button(L10n.text("更新数据", "Update data"), systemImage: "arrow.down.to.line") { store.prepare() }
                         .disabled(!actions.canDownload)
-                    Button("确定预测") { store.confirm() }
+                    Button(L10n.text("确定预测", "Confirm forecast")) { store.confirm() }
                         .buttonStyle(.borderedProminent).disabled(!actions.canForecast)
                         .foregroundStyle(scheme == .dark ? Color.black : Color.white)
                 }

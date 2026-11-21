@@ -1,5 +1,7 @@
 package com.firesky.mobile.ui
 
+import androidx.annotation.StringRes
+import com.firesky.mobile.R
 import org.json.JSONObject
 import java.time.LocalDateTime
 import java.time.format.DateTimeFormatter
@@ -38,32 +40,30 @@ fun parseLocalTime(value: String?): LocalDateTime? = runCatching {
     LocalDateTime.parse(value, DateTimeFormatter.ISO_LOCAL_DATE_TIME)
 }.getOrNull()
 
-/** 现象中文名。 */
-fun phenomenonLabel(phenomenon: String): String = if (phenomenon == "dawn") "朝霞" else "晚霞"
-
 /** 模型展示色标记：ec → teal，gfs → warm。 */
 const val MODEL_GFS = "gfs"
 const val MODEL_EC = "ec"
 val COMPARISON_MODELS = listOf(MODEL_GFS, MODEL_EC)
 
-/** 指标卡规格（同 Workbench.swift metricSpec：key/标题/说明）。 */
-data class MetricSpec(val key: String, val title: String, val caption: String)
+/** 指标卡规格（同 Workbench.swift metricSpec：key/标题/说明）。
+ *  标题与说明为字符串资源引用（v1.9.5 i18n），显示处 stringResource 解析。 */
+data class MetricSpec(val key: String, @StringRes val titleRes: Int, @StringRes val captionRes: Int)
 
-val METRIC_GROUPS: List<Pair<String, List<MetricSpec>>> = listOf(
-    "云况与色彩" to listOf(
-        MetricSpec("burnable", "有效可烧云量", "前向可烧云占视野比例"),
-        MetricSpec("material", "云质厚度", "云体材质负载"),
-        MetricSpec("brightness", "亮度色彩", "霞光亮度与色彩评分"),
+val METRIC_GROUPS: List<Pair<Int, List<MetricSpec>>> = listOf(
+    R.string.metric_group_cloud to listOf(
+        MetricSpec("burnable", R.string.metric_burnable, R.string.metric_burnable_caption),
+        MetricSpec("material", R.string.metric_material, R.string.metric_material_caption),
+        MetricSpec("brightness", R.string.metric_brightness, R.string.metric_brightness_caption),
     ),
-    "大气光学" to listOf(
-        MetricSpec("aod", "AOD 550", "气溶胶光学厚度 · 通透度"),
-        MetricSpec("incoming", "入射受光", "太阳入射照亮云体的因子"),
-        MetricSpec("contrast", "返程对比度", "观测者视线大气对比因子"),
+    R.string.metric_group_optics to listOf(
+        MetricSpec("aod", R.string.metric_aod, R.string.metric_aod_caption),
+        MetricSpec("incoming", R.string.metric_incoming, R.string.metric_incoming_caption),
+        MetricSpec("contrast", R.string.metric_contrast, R.string.metric_contrast_caption),
     ),
-    "时效与可靠性" to listOf(
-        MetricSpec("duration", "持续时长", "核心观赏窗口 · 分钟"),
-        MetricSpec("confidence", "置信度", "引擎结果置信评分"),
-        MetricSpec("disagreement", "模式分歧", "多模式结论分歧度"),
+    R.string.metric_group_reliability to listOf(
+        MetricSpec("duration", R.string.metric_duration, R.string.metric_duration_caption),
+        MetricSpec("confidence", R.string.metric_confidence, R.string.metric_confidence_caption),
+        MetricSpec("disagreement", R.string.metric_disagreement, R.string.metric_disagreement_caption),
     ),
 )
 
@@ -89,11 +89,12 @@ fun metricValue(key: String, report: JSONObject?): String {
 /** AOD 汇总（同 ForecastComparison.AODSummary 的最小闭包：取两模型 aerosol.aod550）。 */
 data class AodSummary(val values: List<Double>, val sources: List<String>, val detail: String) {
     val available: Boolean get() = values.isNotEmpty()
-    val source: String
+    /** 来源类别：cams / other / mixed（显示处经资源映射）。 */
+    val sourceKind: String
         get() = when {
-            sources.isEmpty() || sources.all { it == "CAMS" } -> "CAMS"
-            sources.all { it != "CAMS" } -> "其他来源"
-            else -> "混合来源"
+            sources.isEmpty() || sources.all { it == "CAMS" } -> "cams"
+            sources.all { it != "CAMS" } -> "other"
+            else -> "mixed"
         }
     val value: String
         get() {
