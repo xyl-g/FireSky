@@ -8,7 +8,7 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
-## Unreleased（feat/windows-release）
+## v1.5.1 (2026-11-21)
 
 Windows 成正式发布目标：UI 对齐至 v1.5.0 macOS 基准（v1.2.0 信息架构 +
 v1.3.0 手动删除/地形下载 + v1.5.0 应用内更新）+ 发布能力（zip + 安装器 +
