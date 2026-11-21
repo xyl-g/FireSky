@@ -306,7 +306,7 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
+      # ubuntu-latest runner 预装 Android SDK（ANDROID_HOME 已设、licenses 已接受）。
       - name: Install NDK
         uses: nttld/setup-ndk@v1
         id: setup-ndk
