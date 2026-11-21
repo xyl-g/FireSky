@@ -7,7 +7,7 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 
 > English documentation: [README.en.md](README.en.md)
 
-> 当前版本 **v1.5.0**：macOS / Android / iOS / Docker 正式发布（见[下载安装](#下载安装releases)）；
+> 当前版本 **v1.5.1**：macOS / Android / iOS / Docker / **Windows** 正式发布（见[下载安装](#下载安装releases)）；
 > Windows 已在 `feat/windows-release` 对齐 v1.5.0 基准（含 v1.3.0 手动删除/
 > 地形下载与 v1.5.0 应用内更新）——自包含 zip + 安装器已产出并本机验收，
 > CI `v*` tag 自动把 Windows 资产与 macOS DMG 一起直发，首个 Windows 正式包
@@ -169,7 +169,7 @@ docker exec firesky cat /data/state/http-token
 
 ### 平台策略
 
-- **macOS / Android / iOS / Docker**：v1.5.0 正式发布目标。
+- **macOS / Android / iOS / Docker / Windows**：v1.5.1 正式发布目标。
 - **Windows**：自 `feat/windows-release`（2026-11-21）起为正式发布目标——UI 对齐
   v1.5.0 基准、真实机器构建/运行/三源 GRIB 解码验收通过，CI `v*` tag 自动
   构建 x64/ARM64 zip + 安装器并直发 Release；首个 Windows 正式包随下一个

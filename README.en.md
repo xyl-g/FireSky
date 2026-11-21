@@ -7,9 +7,9 @@ native desktop clients**. The physics follows the methodology of the
 
 > 中文文档：[README.md](README.md)
 
-> Current release **v1.5.0**: macOS / Android / iOS / Docker are officially
+> Current release **v1.5.1**: macOS / Android / iOS / Docker are officially
 > released (see [Download & install](#download--install-releases)).
-> Windows matches the v1.5.0 baseline on `feat/windows-release` (including
+> Windows matches the v1.5.0 baseline and ships with this release (including
 > the v1.3.0 manual deletion and terrain download and the v1.5.0 in-app
 > update) — the self-contained zip and installer are built and validated on
 > a real Windows machine, and CI attaches the Windows assets to GitHub
@@ -199,7 +199,7 @@ docker exec firesky cat /data/state/http-token
 
 ### Platform strategy
 
-- **macOS / Android / iOS / Docker**: official release targets of v1.5.0.
+- **macOS / Android / iOS / Docker**: official release targets of v1.5.1.
 - **Windows**: an official release target since `feat/windows-release`
   (2026-11-21) — UI aligned to the v1.5.0 baseline, build/run/three-source
   GRIB decode validated on a real Windows machine; CI builds x64/ARM64 zip +
