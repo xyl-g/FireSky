@@ -151,7 +151,19 @@ if [ "${FIRESKY_BUILD_DMG:-1}" = "1" ]; then
     DMG_STAGING="$(mktemp -d "${TMPDIR:-/tmp}/firesky-dmg.XXXXXX")"
     cp -R "$APP" "$DMG_STAGING/FireSky.app"
     ln -s /Applications "$DMG_STAGING/Applications"
-    hdiutil create -volname "FireSky $VERSION" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG"
+    # hdiutil create 偶发 "Resource busy"（runner 后台服务占用映像服务），
+    # 间隔重试三次再放弃——构建本身是确定性的，重试只覆盖瞬时冲突。
+    created=0
+    for attempt in 1 2 3; do
+        if hdiutil create -volname "FireSky $VERSION" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG"; then
+            created=1
+            break
+        fi
+        echo "hdiutil create attempt $attempt failed; retrying in 15s" >&2
+        rm -f "$DMG"
+        sleep 15
+    done
+    [ "$created" = "1" ] || { echo "DMG creation failed after retries" >&2; exit 1; }
     hdiutil verify "$DMG"
     printf '%s\n' "$DMG"
 fi
