@@ -4,8 +4,8 @@ struct FireSkyMark: View {
     var body: some View {
         Canvas { context, size in
             context.scaleBy(x: size.width / 64, y: size.height / 64)
-            let ink = Color(red: 0.13, green: 0.17, blue: 0.18)
-            let glow = Color(red: 1, green: 0.58, blue: 0.40)
+            let ink = Color(0x16, 0x20, 0x33)
+            let glow = Color(0xF4, 0x9B, 0x6A)
             context.fill(Path(roundedRect: CGRect(x: 1, y: 1, width: 62, height: 62), cornerRadius: 14),
                          with: .color(ink))
             var sky = context
@@ -46,7 +46,7 @@ struct FireSkyMarkScene: View {
                 .rotationEffect(.degrees(-120))
             Circle()
                 .trim(from: 0.0, to: 0.45)
-                .stroke(Color(red: 1, green: 0.58, blue: 0.40).opacity(0.35),
+                .stroke(Color(0xF4, 0x9B, 0x6A).opacity(0.35),
                         style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
                 .rotationEffect(.degrees(140))
             // 三颗星点（暖橙/白交替）。
@@ -54,7 +54,7 @@ struct FireSkyMarkScene: View {
                 let angle = (-120 + Double(index) * 55) * .pi / 180
                 let radius = size * 0.46
                 Circle()
-                    .fill(index == 1 ? Color(red: 1, green: 0.58, blue: 0.40) : Color.white.opacity(0.55))
+                    .fill(index == 1 ? Color(0xF4, 0x9B, 0x6A) : Color.white.opacity(0.55))
                     .frame(width: index == 2 ? 3 : 4.5, height: index == 2 ? 3 : 4.5)
                     .offset(x: cos(angle) * radius, y: sin(angle) * radius)
             }

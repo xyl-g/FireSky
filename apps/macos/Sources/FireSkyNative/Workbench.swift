@@ -5,25 +5,28 @@ import SwiftUI
 // Shared brand accent; used by the workbench and the settings category rail.
 let warm = Color(nsColor: NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        ? NSColor(calibratedRed: 1, green: 0.55, blue: 0.38, alpha: 1)
-        : NSColor(calibratedRed: 0.74, green: 0.32, blue: 0.24, alpha: 1)
+        ? NSColor(calibratedRed: 1.00, green: 0.61, blue: 0.42, alpha: 1)
+        : NSColor(calibratedRed: 0.82, green: 0.35, blue: 0.21, alpha: 1)
 })
-private let teal = Color(red: 0.26, green: 0.56, blue: 0.54)
-// Trend ratio series colors, following the Web chart tokens in frontend/src/app.css
-// (--chart-coverage / --chart-illumination / --chart-transmission, light & dark pairs).
+private let coolAccent = Color(nsColor: NSColor(name: nil) { appearance in
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        ? NSColor(calibratedRed: 0.56, green: 0.72, blue: 1.00, alpha: 1)
+        : NSColor(calibratedRed: 0.31, green: 0.46, blue: 0.72, alpha: 1)
+})
+// Trend ratio series colors: same semantics as the Web chart tokens, with macOS palette calibration.
 private let coverageColor = Color(nsColor: NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        ? NSColor(calibratedRed: 0.20, green: 0.83, blue: 0.60, alpha: 1)
-        : NSColor(calibratedRed: 0.02, green: 0.40, blue: 0.29, alpha: 1)
+        ? NSColor(calibratedRed: 0.28, green: 0.84, blue: 0.68, alpha: 1)
+        : NSColor(calibratedRed: 0.04, green: 0.44, blue: 0.34, alpha: 1)
 })
 private let illuminationColor = Color(nsColor: NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        ? NSColor(calibratedRed: 0.98, green: 0.75, blue: 0.14, alpha: 1)
-        : NSColor(calibratedRed: 0.56, green: 0.33, blue: 0.02, alpha: 1)
+        ? NSColor(calibratedRed: 1.00, green: 0.76, blue: 0.45, alpha: 1)
+        : NSColor(calibratedRed: 0.62, green: 0.40, blue: 0.12, alpha: 1)
 })
 private let transmissionColor = Color(nsColor: NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        ? NSColor(calibratedRed: 0.22, green: 0.74, blue: 0.97, alpha: 1)
+        ? NSColor(calibratedRed: 0.25, green: 0.74, blue: 0.97, alpha: 1)
         : NSColor(calibratedRed: 0.04, green: 0.36, blue: 0.56, alpha: 1)
 })
 
@@ -60,9 +63,17 @@ struct WorkbenchRootView: View {
         .font(.system(size: 12))
         .environment(\.timeZone, TimeZone(identifier: store.timezone) ?? .current)
         .background {
-            LinearGradient(
-                colors: FSDesign.pageBackground(dark: scheme == .dark),
-                startPoint: .topLeading, endPoint: .bottomTrailing)
+            ZStack {
+                LinearGradient(
+                    colors: FSDesign.pageBackground(dark: scheme == .dark),
+                    startPoint: .topLeading, endPoint: .bottomTrailing)
+                RadialGradient(
+                    colors: [FSDesign.ambientGlow(dark: scheme == .dark), Color.clear],
+                    center: .topTrailing, startRadius: 120, endRadius: 820)
+                RadialGradient(
+                    colors: [FSDesign.coolGlow(dark: scheme == .dark), Color.clear],
+                    center: .bottomLeading, startRadius: 80, endRadius: 720)
+            }
         }
         .tint(warm)
         .frame(minWidth: 1120, minHeight: 720)
@@ -137,12 +148,12 @@ struct WorkbenchRootView: View {
                     .foregroundStyle(selected ? Color.primary : Color.primary.opacity(0.76))
                     .background {
                         RoundedRectangle(cornerRadius: 8)
-                            .fill(selected ? Color.accentColor.opacity(0.14) : Color.clear)
+                            .fill(selected ? warm.opacity(0.14) : Color.clear)
                     }
                     .overlay(alignment: .leading) {
                         if selected {
                             RoundedRectangle(cornerRadius: 1.5)
-                                .fill(Color.accentColor)
+                                .fill(warm)
                                 .frame(width: 3, height: 22)
                                 .padding(.leading, 2)
                         }
@@ -168,7 +179,7 @@ struct WorkbenchRootView: View {
                 .foregroundStyle(store.page == .settings ? Color.primary : Color.primary.opacity(0.76))
                 .background {
                     RoundedRectangle(cornerRadius: 8)
-                        .fill(store.page == .settings ? Color.accentColor.opacity(0.14) : Color.clear)
+                        .fill(store.page == .settings ? warm.opacity(0.14) : Color.clear)
                 }
                 .contentShape(RoundedRectangle(cornerRadius: 8))
             }
@@ -379,7 +390,7 @@ struct WorkLocationView: View {
                 }.frame(height: 176)
             }
             HStack(spacing: 9) {
-                Circle().fill(store.metadataReady ? Color.accentColor : Color.orange).frame(width: 8, height: 8)
+                Circle().fill(store.metadataReady ? warm : Color.orange).frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(store.name).font(.system(size: 13, weight: .semibold))
                     Text(String(format: "%.4f° N, %.4f° E", store.lat, store.lon))
@@ -655,7 +666,7 @@ private struct WorkActionSummaryView: View {
             HStack(spacing: 8) {
                 Image(systemName: statusSymbol)
                     .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(warm)
                 Text("行动摘要").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                 Spacer(minLength: 8)
                 if !snapshots.isEmpty {
@@ -891,7 +902,7 @@ private struct WorkAODValue: View {
     let summary: AODSummary
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(summary.source).font(.system(size: 9, weight: .medium)).foregroundStyle(teal)
+            Text(summary.source).font(.system(size: 9, weight: .medium)).foregroundStyle(coolAccent)
             Text(summary.value).font(.system(size: 19, weight: .semibold)).monospacedDigit()
                 .foregroundStyle(summary.available ? Color.primary : Color.secondary)
                 .lineLimit(1).minimumScaleFactor(0.8)
@@ -1068,7 +1079,7 @@ struct WorkComparisonCurveView: View {
                 Spacer()
                 HStack(spacing: 10) {
                     lineSwatch("GFS", warm, dashed: false)
-                    lineSwatch("EC", teal, dashed: true)
+                    lineSwatch("EC", coolAccent, dashed: true)
                 }.font(.system(size: 10)).foregroundStyle(.secondary)
             }
             summaryChips(points: points, peak: peak)
@@ -1675,7 +1686,7 @@ struct WorkLedgerView: View {
                     .frame(width: 92, alignment: .leading)
                 Image(systemName: !valid || burnable == nil ? "minus"
                       : burnable == true ? "checkmark" : "xmark")
-                    .foregroundStyle(!valid || burnable == nil ? Color.secondary : burnable == true ? teal : Color.orange)
+                    .foregroundStyle(!valid || burnable == nil ? Color.secondary : burnable == true ? coolAccent : Color.orange)
                     .frame(width: 52, alignment: .leading)
                     .accessibilityLabel(!valid ? "缺测" : burnable == true ? "可烧" : burnable == false ? "不可烧" : "未提供")
                 Text(valid ? percent(item["burnable_cloud_coverage"]) : "—")
@@ -2072,7 +2083,7 @@ struct CrossSectionFigureView: View {
             if let top = number(target["cloud_top_asl_m"]) {
                 let topPoint = CGPoint(x: x(distance), y: y(top))
                 context.fill(Path(ellipseIn: CGRect(x: topPoint.x - 4, y: topPoint.y - 4, width: 8, height: 8)),
-                             with: .color(teal))
+                             with: .color(coolAccent))
             }
         }
     }
@@ -2117,7 +2128,7 @@ struct CrossSectionFigureView: View {
             }
             HStack(spacing: 12) {
                 legendDot("云底", warm)
-                legendDot("云顶", teal)
+                legendDot("云顶", coolAccent)
                 legendLine("理论照明基准（ASL）", Color(red: 0.83, green: 0.55, blue: 0.22), dashed: true)
                 legendFrame("受光且可见候选（未评估云遮挡）", Color(red: 0.94, green: 0.42, blue: 0.21), dashed: false)
                 legendFrame("达到受光阈值但不可见", Color(red: 0.83, green: 0.55, blue: 0.22), dashed: true)
@@ -2433,7 +2444,7 @@ struct WorkRegionPage: View {
                 store.editingRegionOnMap.toggle()
             } label: {
                 Label(store.editingRegionOnMap ? "取消绘制" : "绘制范围", systemImage: "rectangle.dashed")
-                    .foregroundStyle(store.editingRegionOnMap ? teal : Color.primary)
+                    .foregroundStyle(store.editingRegionOnMap ? coolAccent : Color.primary)
             }.help("在地图上拖拽绘制范围，Esc 取消")
             Button { store.showRegionBounds.toggle() } label: { Image(systemName: "slider.horizontal.3") }
                 .help("编辑区域坐标").accessibilityLabel("编辑区域坐标")
@@ -2471,7 +2482,7 @@ struct WorkRegionPage: View {
         return HStack(alignment: .center, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(model.uppercased()).font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(model == "gfs" ? warm : teal)
+                    .foregroundStyle(model == "gfs" ? warm : coolAccent)
                 Text(report.status).font(.system(size: 10)).foregroundStyle(report.error == nil ? Color.secondary : Color.red)
             }.frame(width: 60, alignment: .leading)
             VStack(alignment: .leading, spacing: 4) {
@@ -2527,7 +2538,7 @@ struct WorkRegionPage: View {
         VStack(spacing: 0) {
             HStack {
                 Text(model.uppercased()).font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(model == "gfs" ? warm : teal)
+                    .foregroundStyle(model == "gfs" ? warm : coolAccent)
                 Spacer()
                 if let cycle = store.regionalForecast.model(model).cycle {
                     Text(cycle.replacingOccurrences(of: "T", with: " ").replacingOccurrences(of: "+00:00", with: "Z"))
@@ -2594,7 +2605,7 @@ struct WorkRegionPage: View {
                     let cityCell = store.regionalForecast.model(model).cityRanking.first { $0.coordinate == coordinate }
                     let display = cell ?? cityCell
                     HStack(spacing: 6) {
-                        Text(model.uppercased()).foregroundStyle(model == "gfs" ? warm : teal).frame(width: 34, alignment: .leading)
+                        Text(model.uppercased()).foregroundStyle(model == "gfs" ? warm : coolAccent).frame(width: 34, alignment: .leading)
                         Text(display?.quality.map { String(format: "%.2f", $0) } ?? "—").monospacedDigit().bold()
                         Spacer()
                         Text(display?.quality == nil ? "缺测" : timeLabel(display?.bestTime)).foregroundStyle(.secondary)
@@ -2647,7 +2658,7 @@ struct WorkRegionPage: View {
                                         .font(.system(size: 12, weight: .semibold)).monospacedDigit()
                                 }
                                 .padding(.horizontal, 7).padding(.vertical, 9).contentShape(Rectangle())
-                                .background(store.selectedRegionalCoordinate == cell.coordinate ? teal.opacity(0.12) : Color.clear,
+                                .background(store.selectedRegionalCoordinate == cell.coordinate ? coolAccent.opacity(0.12) : Color.clear,
                                             in: RoundedRectangle(cornerRadius: 5))
                             }.buttonStyle(.plain)
                             Divider().opacity(0.35)
@@ -2679,7 +2690,7 @@ struct WorkRegionPage: View {
                                         .monospacedDigit()
                                 }
                                 .padding(.horizontal, 7).padding(.vertical, 9).contentShape(Rectangle())
-                                .background(store.selectedRegionalCoordinate == cell.coordinate ? teal.opacity(0.12) : Color.clear,
+                                .background(store.selectedRegionalCoordinate == cell.coordinate ? coolAccent.opacity(0.12) : Color.clear,
                                             in: RoundedRectangle(cornerRadius: 5))
                             }.buttonStyle(.plain)
                             Divider().opacity(0.35)
@@ -2804,7 +2815,7 @@ private struct WorkNowcastHeroView: View {
             HStack(alignment: .top, spacing: 18) {
                 VStack(alignment: .leading, spacing: 9) {
                     HStack(spacing: 6) {
-                        Circle().fill(teal).frame(width: 6, height: 6)
+                        Circle().fill(coolAccent).frame(width: 6, height: 6)
                         Text("卫星实况").font(.system(size: 12, weight: .semibold))
                         Spacer(minLength: 4)
                         Text(report == nil ? "等待分析" : "分析完成")
@@ -3002,7 +3013,7 @@ private struct WorkNowcastResultsView: View {
 }
 
 /// Satellite posterior probability profile (plan rows nowcast-1/2/3, Web parity with
-/// SatelliteVerticalProfile.svelte): header coverage stats, teal retrieved-alpha scale,
+/// SatelliteVerticalProfile.svelte): header coverage stats, coolAccent retrieved-alpha scale,
 /// amber dashed unknown cells, pressure-level row lines with hPa labels on a trailing
 /// axis anchored to the same height scale, and the HSD posterior / GFS prior source legend.
 private struct WorkSatelliteProfileView: View {
@@ -3219,7 +3230,7 @@ private struct WorkNowcastLedgerView: View {
                             .frame(width: 92, alignment: .leading)
                         Image(systemName: !valid || burnable == nil ? "minus"
                               : burnable == true ? "checkmark" : "xmark")
-                            .foregroundStyle(!valid || burnable == nil ? Color.secondary : burnable == true ? teal : Color.orange)
+                            .foregroundStyle(!valid || burnable == nil ? Color.secondary : burnable == true ? coolAccent : Color.orange)
                             .frame(width: 52, alignment: .leading)
                             .accessibilityLabel(!valid ? "缺测" : burnable == true ? "可烧" : burnable == false ? "不可烧" : "未提供")
                         Text(valid ? percent(step["burnable_cloud_coverage"]) : "—")
@@ -3288,19 +3299,21 @@ private struct WorkSegments: View {
                 Button { selection = value } label: {
                     Text(label)
                         .font(.system(size: 11, weight: selected ? .semibold : .regular))
-                        .foregroundStyle(selected && accented ? Color.accentColor : selected ? Color.primary : Color.secondary)
+                        .foregroundStyle(selected && accented
+                                          ? (scheme == .dark ? warm : Color(0xB3, 0x3F, 0x23))
+                                          : selected ? Color.primary : Color.secondary)
                         .frame(maxWidth: .infinity).frame(height: 28)
                         .background {
                             RoundedRectangle(cornerRadius: 6)
                                 .fill(selected
-                                      ? (accented ? Color.accentColor.opacity(0.14)
+                                      ? (accented ? warm.opacity(0.14)
                                          : scheme == .dark ? Color.white.opacity(0.12) : Color.white.opacity(0.88))
                                       : Color.clear)
                         }
                         .overlay {
                             RoundedRectangle(cornerRadius: 6)
                                 .strokeBorder(
-                                    selected ? Color.accentColor.opacity(0.35)
+                                    selected ? warm.opacity(0.35)
                                              : Color.secondary.opacity(contrast == .increased ? 0.45 : 0.16),
                                     lineWidth: selected || contrast == .increased ? 1 : 0.5
                                 )
@@ -3384,7 +3397,7 @@ private func sceneLabel(_ value: Any?) -> String {
     }
 }
 
-private func modelColor(_ model: String) -> Color { model == "ec" ? teal : warm }
+private func modelColor(_ model: String) -> Color { model == "ec" ? coolAccent : warm }
 
 private func timeLabel(_ value: String?) -> String {
     guard let value, value.count >= 16 else { return "—" }

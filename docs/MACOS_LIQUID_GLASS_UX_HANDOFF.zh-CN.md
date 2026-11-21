@@ -780,6 +780,7 @@ GFS/EC 双摘要、0–2.5 指数、档位、最佳时刻、推荐窗口、天�
 | 文档条目 | 本分支实现 |
 | --- | --- |
 | §4.2 / §6 材质层级 | 新增 `FireSkySurfaceRole`（`content` / `grouped` / `navigation` / `overlay`）。正文、指标卡、诊断卡不再调用 `.glassEffect`，改为稳定内容表面；侧栏和顶栏保留系统材质；Reduce Transparency 或增强对比时统一降级为稳定表面。 |
+| §6 / §10 色调 | 新增 `FSDesign.accent` / `accentGradient` / `coolAccent` / `pageBackground` / `ambientGlow` / `coolGlow` / `surfaceFill` / `surfaceBorder` / `cardShadow` 令牌。浅色由青绿渐变改为冷瓷白 + 暖杏环境光，深色改为带靛蓝的夜空底；强调色收敛为铜橙 → 琥珀，EC 模型色由灰绿改为冷静蓝，状态色、品牌标与趋势图色同步校准。内容卡增加蓝灰边界和柔和阴影，强调卡加入极轻暖色洗光。 |
 | §6.3 同心圆角与边界 | 内容表面 16pt、分组/浮层 12pt、导航 0pt；hairline 边框随明暗与高对比设置调整，去掉深色玻璃 tint 叠加。 |
 | §7.1–7.3 侧栏与工具栏 | 侧栏选中态改为稳定底色 + 主色指示条 + 字重 + `chevron`，不再只靠橙色文字；设置入口与页面行同构，更新徽标有 VoiceOver 文案；顶栏增加可隐藏侧栏按钮，窗口变宽时内容自动占位；Reduce Motion 下取消布局动画。 |
 | §8.3 状态徽标 | `StatusChip` 图标与文字增大，加入状态边界和辅助功能标签，状态不只依赖颜色。 |
@@ -801,10 +802,11 @@ GFS/EC 双摘要、0–2.5 指数、档位、最佳时刻、推荐窗口、天�
 
 - `swift build --disable-sandbox --package-path apps/macos`：Build complete。
 - 冷启动快照（真实引擎 FFI、无业务模拟）：
-  - `output/ui-polish-20261122/light-1440.png`
-  - `output/ui-polish-20261122/dark-1440.png`
-  - `output/ui-polish-20261122/light-1120.png`
-- 截图已确认：浅/深色内容表面稳定，侧栏选中态明确，1120×720 无横向溢出，指标卡自动降列。行动摘要的带结果分支仍需用真实报告夹具复核。
+  - `output/ui-polish-20261122/palette/light-1440.png`
+  - `output/ui-polish-20261122/palette/dark-1440.png`
+  - `output/ui-polish-20261122/palette/light-1120.png`
+- 第一轮表面规范截图保留在 `output/ui-polish-20261122/*.png`，便于对比色调迭代前后。
+- 截图已确认：浅/深色内容表面稳定，蓝灰边界与夜空底分离清楚；右上角暖光收敛后不再抢内容；1120×720 无横向溢出，指标卡自动降列。行动摘要的带结果分支仍需用真实报告夹具复核。
 - 构建警告来自既存 `L10n.swift` 未提交改动（重复字典键）和 `FireSkyApp.swift` 的 `guard let self` 提示；本分支未处理这些与本轮 UI 改造无关的问题。
 
 ### 20.4 下一步建议
