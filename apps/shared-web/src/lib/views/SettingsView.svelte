@@ -160,14 +160,7 @@
         <option value="ecmwf">ECMWF 官方</option><option value="aws">AWS 欧洲镜像</option><option value="google">Google Cloud 镜像</option>
       </select>
     </div>
-    <div class="setting-row">
-      <label for="elevation-source">海拔来源</label>
-      <select id="elevation-source" bind:value={elevationSource}>
-        <option value="auto">自动（在线优先）</option><option value="http">HTTP 在线查询</option><option value="srtm">SRTM 本地地形</option>
-      </select>
-    </div>
-    <p class="muted">{elevationSourceDescription(elevationSource)}</p>
-    <p class="muted">海拔来源作用于「获取海拔与时区」和地名搜索；获取成功后观测点信息会显示实际来源。</p>
+    <p class="muted">海拔默认使用本地 SRTM 瓦片，未下载时自动走 open-meteo 在线查询；地形瓦片可在数据页按区域预下载。来源作用于「获取海拔与时区」和地名搜索，观测点会显示实际来源。</p>
     <p class="muted">GFS · NOAA NOMADS；CAMS · Copernicus ADS</p>
   </section>
   <section aria-labelledby="retention-settings">

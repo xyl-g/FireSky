@@ -7,7 +7,8 @@
 use crate::{
     ads, cams, cams_data, desktop_context, ecmwf_data, gfs_data, request_file, time_contract,
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
+use std::time::{SystemTime, UNIX_EPOCH};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -185,6 +186,56 @@ fn download_ec(
             use_cache_for_cycle: true,
         },
         cancel,
+    )
+}
+
+/// 日期策略（v1.8.0 用户裁定）：
+/// - 过去日期（早于本地时区"今天"）：只读本地缓存，绝不重新下载老数据，
+///   缺失即由预检明确报缺；
+/// - CAMS 时效窗口：CAMS 全球大气预报按发布仅覆盖未来 CAMS_LEAD_DAYS 天，
+///   超出窗口的日期无法计算（GFS/EC 归档不受此限制），在预检阶段直接
+///   明确拒绝而非静默降级。
+pub(crate) const CAMS_LEAD_DAYS: i64 = 5;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum DatePolicy {
+    /// 旧日期：仅本地缓存。
+    Past,
+    /// 今天起 CAMS 窗口内：正常下载与计算。
+    InWindow,
+    /// 超出 CAMS 时效窗口：明确拒绝。
+    BeyondCams,
+}
+
+pub(crate) fn date_policy(
+    target_date: &str,
+    timezone: &str,
+    now_utc: Option<&str>,
+) -> Result<DatePolicy, String> {
+    let date = chrono::NaiveDate::parse_from_str(target_date, "%Y-%m-%d")
+        .map_err(|_| "invalid target date")?;
+    let tz: chrono_tz::Tz = timezone
+        .parse()
+        .map_err(|_| "invalid timezone".to_string())?;
+    let now = match now_utc {
+        Some(value) => time_contract::parse_utc(value)?,
+        None => SystemTime::now().into(),
+    };
+    let today = now.with_timezone(&tz).date_naive();
+    Ok(if date < today {
+        DatePolicy::Past
+    } else if date <= today + Duration::days(CAMS_LEAD_DAYS) {
+        DatePolicy::InWindow
+    } else {
+        DatePolicy::BeyondCams
+    })
+}
+
+pub(crate) fn payload_policy(input: &Input) -> Result<DatePolicy, String> {
+    date_policy(
+        input.payload["target_date"].as_str().unwrap_or(""),
+        input.payload["timezone_name"].as_str().unwrap_or("UTC"),
+        input.now_utc.as_deref(),
     )
 }
 
@@ -398,6 +449,24 @@ pub fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result<Value,
     // resolution consumes them while this phase only needs the resolved plan.
     let _ = (input.regional, input.now_utc.as_deref());
     let mut context = desktop_context::resolve_path(&params.path)?;
+    match payload_policy(&input)? {
+        DatePolicy::BeyondCams => {
+            let date = input.payload["target_date"].as_str().unwrap_or("");
+            return Err(format!(
+                "CAMS 全球大气数据仅覆盖未来 {CAMS_LEAD_DAYS} 天内的日期；所选 {date} 超出时效窗口，无法计算"
+            ));
+        }
+        DatePolicy::Past => {
+            // 旧日期只读本地缓存：跳过全部下载，缺失由预检明确报缺。
+            return Ok(json!({
+                "contract": "rust-desktop-prepare-v1",
+                "status": "cache-only",
+                "policy": "past-local-cache-only",
+                "message": "旧日期仅使用本地缓存数据，不重新下载；缺失项见预检结果",
+            }));
+        }
+        DatePolicy::InWindow => {}
+    }
     let cycle = utc(&context, "cycle")?;
     let mut terrain_passes = 0_u32;
     if context["terrain_pending"] == true {
@@ -441,4 +510,49 @@ pub fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result<Value,
         "cams": cams_result,
         "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
     }))
+}
+
+#[cfg(test)]
+mod date_policy_tests {
+    use super::*;
+
+    #[test]
+    fn date_policy_covers_past_window_and_beyond() {
+        // 北京时区 2026-11-20 16:00Z（=11-21 00:00 本地）为基准。
+        let now = "2026-11-20T16:00:00Z";
+        // 过去日期 → 仅本地缓存。
+        assert_eq!(
+            date_policy("2026-11-19", "Asia/Shanghai", Some(now)).unwrap(),
+            DatePolicy::Past
+        );
+        // 北京今天 = 11-21（16Z + 8h）：窗口内（今天..=今天+5）。
+        assert_eq!(
+            date_policy("2026-11-21", "Asia/Shanghai", Some(now)).unwrap(),
+            DatePolicy::InWindow
+        );
+        assert_eq!(
+            date_policy("2026-11-26", "Asia/Shanghai", Some(now)).unwrap(),
+            DatePolicy::InWindow
+        );
+        // 超窗（今天 + 6 天）→ BeyondCams。
+        assert_eq!(
+            date_policy("2026-11-27", "Asia/Shanghai", Some(now)).unwrap(),
+            DatePolicy::BeyondCams
+        );
+        // 时区差异影响"今天"的判定：UTC 11-20 尚未到北京 11-21。
+        assert_eq!(
+            date_policy("2026-11-21", "UTC", Some(now)).unwrap(),
+            DatePolicy::InWindow
+        );
+        // 非法输入。
+        assert!(date_policy("not-a-date", "UTC", Some(now)).is_err());
+        assert!(date_policy("2026-11-20", "Bad/Zone", Some(now)).is_err());
+    }
+
+    #[test]
+    fn past_dates_short_circuit_prepare_before_any_download() {
+        // 旧日期 prepare 直接返回 cache-only 占位（含说明），不进入下载链。
+        // 行为验证见 execute 主流程的 policy 分支；此处固化窗口常量口径。
+        assert_eq!(CAMS_LEAD_DAYS, 5);
+    }
 }

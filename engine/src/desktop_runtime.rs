@@ -232,6 +232,26 @@ impl Runtime {
         publications: &Value,
         cancel: &AtomicBool,
     ) -> Result<Value, String> {
+        // 日期策略（v1.8.0 用户裁定）：BeyondCams 在预检入口即明确拒绝；
+        // Past 标注 cache-only（旧日期仅本地缓存，不重新下载）。
+        let now_utc = std::env::var("FIRESKY_CONTEXT_NOW_UTC").ok();
+        let policy = crate::desktop_prepare::date_policy(
+            payload["target_date"].as_str().unwrap_or(""),
+            payload["timezone_name"].as_str().unwrap_or("UTC"),
+            now_utc.as_deref(),
+        )?;
+        if policy == crate::desktop_prepare::DatePolicy::BeyondCams {
+            let date = payload["target_date"].as_str().unwrap_or("");
+            return Err(format!(
+                "CAMS 全球大气数据仅覆盖未来 {} 天内的日期；所选 {date} 超出时效窗口，无法计算",
+                crate::desktop_prepare::CAMS_LEAD_DAYS
+            ));
+        }
+        let policy_label = match policy {
+            crate::desktop_prepare::DatePolicy::Past => "past",
+            crate::desktop_prepare::DatePolicy::InWindow => "in-window",
+            crate::desktop_prepare::DatePolicy::BeyondCams => unreachable!(),
+        };
         let mut plans = Vec::new();
         for model in Self::models(payload)? {
             check(cancel)?;
@@ -242,6 +262,7 @@ impl Runtime {
         let result = desktop_preflight::execute_cancellable(
             decode(json!({
                 "plans":plans,"fast":fast,"publications":publications,
+                "date_policy":policy_label,
                 "config":{
                     "gfs_cache_dir":self.inventory.gfs_cache_dir,
                     "ecmwf_cache_dir":self.inventory.ecmwf_cache_dir,

@@ -104,6 +104,48 @@ ships release capability (self-contained zip, installer, CI publishing).
   breaking inventory/check before any download; normalized only real path
   levels and tolerated error 1, with a Windows regression test. The app
   assembly now embeds the engine version for in-app update comparison.
+## v1.8.0 (2026-11-21)
+
+海拔来源简化（本地 SRTM 优先）与预测日期限制（用户裁定）。
+Elevation-source simplification (local SRTM first) and forecast date
+limits (user ruling).
+
+**海拔来源 / Elevation source**
+
+- `auto` 语义反转为**本地 SRTM 瓦片优先**（离线命中、毫秒级、不联网），
+  未下载瓦片时走 open-meteo，HTTP 失败且允许下载时落回 SRTM 下载发布；
+  命中即返回 `local-timezone+srtm`，与 `metadata` 响应 source 一致。
+  `auto` now prefers the locally cached SRTM tile, falls back to
+  open-meteo, and downloads the tile only when the provider fails and
+  downloads are allowed.
+- 四端设置页移除「海拔来源」三档选择（默认逻辑即所需行为，无需设置）；
+  契约 `auto/http/srtm` 保留（payload 仍透传 `elevation_source=auto`，
+  高级用户可继续用环境/请求级覆盖）。设置分类从四类简化为三类
+  （通用/数据/高级）。
+  The three-mode picker is removed from all four platform settings pages
+  (three categories now); the contract stays and still forwards
+  `elevation_source=auto`.
+- 引擎测试重写覆盖新语义（本地命中优先 / provider 兜底 / HTTP 失败下载
+  SRTM / 禁止下载明确报错不冒充）。
+  Engine tests rewritten for the new semantics.
+
+**预测日期限制 / Forecast date limits**
+
+- 旧日期（早于本地时区"今天"）**仅使用本地缓存**：prepare 链跳过全部
+  下载并返回 `cache-only`，预检 datasets 标注 `past-local-cache-only`
+  （UI 缺数提示加"旧日期仅本地缓存"前缀）；绝不重新下载老数据。
+  Past dates use local cache only: the prepare chain skips every
+  download, preflight rows are annotated, and old data is never
+  re-downloaded.
+- CAMS 时效窗口（**5 天**，本地时区口径）：超出窗口的日期在预检入口
+  明确拒绝（"CAMS 全球大气数据仅覆盖未来 5 天内的日期"），不进入任何
+  下载或计算路径；GFS/EC 归档不受此限制。
+  CAMS coverage window (5 local-timezone days): beyond-window dates are
+  rejected explicitly at preflight entry and never enter download or
+  compute paths; GFS/EC archives are unaffected.
+- 新增 `date_policy` 契约函数（Past/InWindow/BeyondCams，时区感知，
+  `FIRESKY_CONTEXT_NOW_UTC` 可注入基准）与单元测试。
+
 ## v1.7.0 (2026-11-21)
 
 数据布局可见化与迁移（方案 §8 阶段 B）：工作区直接使用可见分类目录。

@@ -683,7 +683,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                     old: !latest,
                     verified: verified,
                     latest: latest,
-                    missing: $0["missing_count"] as? Int ?? 0)
+                    missing: $0["missing_count"] as? Int ?? 0,
+                    policy: $0["policy"] as? String ?? "")
         }
         status = ready ? "本次数据已下载" : "缺少 " + rows.filter { !$0.ready }.map(\.title).joined(separator: "、")
     }

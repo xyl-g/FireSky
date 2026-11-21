@@ -30,6 +30,8 @@ data class DataRow(
     val old: Boolean,
     val verified: Boolean,
     val missing: Int,
+    /** 日期策略（v1.8.0）：past-local-cache-only 表示旧日期仅本地缓存。 */
+    val policy: String = "",
 ) {
     val id: String get() = source
     val title: String get() = when (source) {
@@ -42,11 +44,14 @@ data class DataRow(
         old -> "可更新"
         else -> "已下载"
     }
-    val detail: String get() = when {
-        !ready -> if (missing > 0) "本次预测数据不完整" else "尚未下载本次预测数据"
-        old -> "有新发布的数据可更新"
-        verified -> "发布周期已核验"
-        else -> "更新待核验"
+    val detail: String get() {
+        val base = when {
+            !ready -> if (missing > 0) "本次预测数据不完整" else "尚未下载本次预测数据"
+            old -> "有新发布的数据可更新"
+            verified -> "发布周期已核验"
+            else -> "更新待核验"
+        }
+        return if (policy == "past-local-cache-only") "旧日期仅本地缓存 · $base" else base
     }
 }
 
@@ -791,6 +796,7 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
                     old = item.optBoolean("verified", false) && !item.optBoolean("is_latest", false),
                     verified = item.optBoolean("verified", false),
                     missing = item.optInt("missing_count", 0),
+                    policy = item.optString("policy", ""),
                 )
             }
         }
@@ -959,7 +965,7 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
 
     /** 设置分类；CAMS 提醒等外部跳转可直接落位（macOS settingsCategory 同构）。 */
     fun setSettingsCategory(value: String) {
-        if (value in listOf("通用", "数据", "位置与海拔", "高级")) {
+        if (value in listOf("通用", "数据", "高级")) {
             _state.update { it.copy(settingsCategory = value) }
         }
     }

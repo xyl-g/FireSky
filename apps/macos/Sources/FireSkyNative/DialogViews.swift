@@ -395,13 +395,12 @@ struct TerrainPanelView: View {
 /// 设置分类：通用 / 数据 / 位置与海拔 / 高级。
 /// 数据相关（下载源、CAMS、连通性、同步、保留、目录）统一归「数据」。
 enum SettingsCategory: String, CaseIterable, Identifiable {
-    case general, data, location, advanced
+    case general, data, advanced
     var id: String { rawValue }
     var title: String {
         switch self {
         case .general: "通用"
         case .data: "数据"
-        case .location: "位置与海拔"
         case .advanced: "高级"
         }
     }
@@ -409,7 +408,6 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
         switch self {
         case .general: "paintpalette"
         case .data: "externaldrive"
-        case .location: "mountain.2"
         case .advanced: "wrench.and.screwdriver"
         }
     }
@@ -454,7 +452,6 @@ struct SettingsView: View {
                     switch category.wrappedValue {
                     case .general: generalSection
                     case .data: dataSection
-                    case .location: locationSection
                     case .advanced: advancedSection
                     }
                 }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
@@ -875,27 +872,6 @@ struct SettingsView: View {
         let names = pending.prefix(4).compactMap { $0["from"] as? String }.joined(separator: "、")
         let more = pending.count > 4 ? " 等 \(pending.count) 项" : ""
         return String(format: "将迁移 \(files) 个文件（共 %.1f MB）：\(names)\(more)。迁移使用同卷移动，失败自动回滚；迁移完成后引擎将按新布局重连。", bytes / 1_048_576)
-    }
-
-    // MARK: - 位置与海拔
-
-    private var locationSection: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            settingsHeader("位置与海拔")
-            VStack(alignment: .leading, spacing: 10) {
-                Text("海拔来源").font(.callout.weight(.medium))
-                Picker("", selection: $store.elevationSource) {
-                    Text("自动（HTTP 优先，SRTM 兜底）").tag("auto")
-                    Text("仅 HTTP（open-meteo）").tag("http")
-                    Text("SRTM 下载（本地时区 + 瓦片）").tag("srtm")
-                }.pickerStyle(.radioGroup).accessibilityLabel("海拔来源")
-                Text("「自动」先尝试 open-meteo 海拔接口，失败时回退本地时区 + SRTM 瓦片；「仅 HTTP」不下载瓦片；「SRTM 下载」首次使用会按需下载地形瓦片（每块约数 MB）。设置对之后的海拔获取与预测生效。")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("地形数据可在「数据管理 → SRTM 地形」查看与管理。")
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
     }
 
     // MARK: - 高级

@@ -93,9 +93,14 @@ test("workbench call sites, settings panel and app persistence wire the elevatio
   assert.match(workbench, /"search", withElevationSource\(\{ query: input \}, elevationSource\)/);
   assert.match(workbench, /"metadata", withElevationSource\(\{ lat, lon \}, elevationSource\)/);
   assert.match(workbench, /metadataSourceTitle\(spot\.metadataSource\)/);
+  // v1.8.0 用户裁定：海拔来源不再暴露三档设置（默认本地 SRTM 优先，
+  // 未下载走 open-meteo）；设置面板改为说明文案，透传保持 auto。
   const settings = await read("./views/SettingsView.svelte");
-  assert.match(settings, /bind:value=\{elevationSource\}/);
-  for (const value of ELEVATION_SOURCE_CHOICES) assert.match(settings, new RegExp(`<option value="${value}">`));
+  assert.doesNotMatch(settings, /bind:value=\{elevationSource\}/);
+  assert.match(settings, /海拔默认使用本地 SRTM 瓦片/);
+  for (const value of ELEVATION_SOURCE_CHOICES) {
+    assert.doesNotMatch(settings, new RegExp(`<option value="${value}">`));
+  }
   const app = await read("../App.svelte");
   assert.match(app, /loadElevationSource\(localStorage\)/);
   assert.match(app, /saveElevationSource\(localStorage, elevationSource\)/);

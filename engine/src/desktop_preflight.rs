@@ -50,6 +50,10 @@ pub struct Params {
     publications: BTreeMap<String, Publication>,
     #[serde(default)]
     fast: bool,
+    /// 日期策略（v1.8.0）：runtime 在入口计算并传入；"past" 时 datasets
+    /// 标注 cache-only（旧日期仅本地缓存），"in-window" 正常。
+    #[serde(default)]
+    date_policy: Option<String>,
 }
 
 fn check(cancel: &AtomicBool) -> Result<(), String> {
@@ -372,7 +376,9 @@ fn report(
     publications: &BTreeMap<String, Publication>,
     fast: bool,
     cancel: &AtomicBool,
+    date_policy: Option<&str>,
 ) -> Result<Value, String> {
+    let past = date_policy == Some("past");
     let source = if plan.input.model_source == "ec" {
         "ecmwf"
     } else {
@@ -467,6 +473,7 @@ fn report(
             };
         datasets.push(json!({
             "source":key,"local_files":local[key]["file_count"],
+            "policy":if past {"past-local-cache-only"} else {"in-window"},
             "request_cycle":requested,"latest_local_cycle":local[key]["latest_cycle"],
             "latest_available_cycle":label,
             "latest_available_cycle_utc":publication.and_then(|p|p.cycle.as_deref()),
@@ -614,6 +621,7 @@ pub(crate) fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result
                 &params.publications,
                 params.fast,
                 cancel,
+                params.date_policy.as_deref(),
             )
         })
         .collect::<Result<Vec<_>, _>>()?;
@@ -725,7 +733,8 @@ mod tests {
             },
             publications: BTreeMap::new(),
             fast: true,
-        };
+                date_policy: None,
+    };
         let result = execute_cancellable(params, &AtomicBool::new(false)).expect("preflight");
         let report = &result["report"];
         let cams_row = report["datasets"]

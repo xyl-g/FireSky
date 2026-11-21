@@ -1,6 +1,6 @@
 import SwiftUI
 
-private let SettingsCategories = ["通用", "数据", "位置与海拔", "高级"]
+private let SettingsCategories = ["通用", "数据", "高级"]
 
 /// 设置页（v1.6.0 分类拆分，macOS SettingsCategory 同构）：通用 / 数据
 /// （下载源 + CAMS + 下载连通性）/ 位置与海拔 / 高级（引擎通道 + 沙箱路径）。
@@ -91,22 +91,6 @@ struct SettingsView: View {
                 }
                 Section("下载连通性") {
                     DownloadProbeView()
-                }
-            }
-
-            if store.settingsCategory == "位置与海拔" {
-                Section("海拔来源") {
-                    Picker("海拔来源", selection: Binding(
-                        get: { store.elevationSource },
-                        set: { store.setElevationSource($0) }
-                    )) {
-                        Text("自动（HTTP 优先，SRTM 兜底）").tag("auto")
-                        Text("仅 HTTP（open-meteo）").tag("http")
-                        Text("SRTM 瓦片（本地时区 + 缓存/下载）").tag("srtm")
-                    }
-                    Text("自动：open-meteo 优先，失败落本地时区+SRTM；仅 HTTP：失败直接报错，不落 SRTM；SRTM：跳过 HTTP，缓存瓦片命中毫秒级。地形瓦片可在「数据管理」页按区域下载。切换后对下一次位置搜索/海拔获取生效。")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 

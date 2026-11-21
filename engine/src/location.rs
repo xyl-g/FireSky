@@ -358,46 +358,16 @@ impl Config {
     ) -> Result<Value, String> {
         self.check_cancelled()?;
         let (lat, lon) = (rounded(lat), rounded(lon));
-        let online = if source == ElevationSource::Srtm {
-            None
-        } else {
-            Some(
-                self.get_json(
-                    &self.metadata_url,
-                    &[
-                        ("latitude", lat.to_string()),
-                        ("longitude", lon.to_string()),
-                        ("timezone", "auto".into()),
-                        ("forecast_days", "1".into()),
-                    ],
-                    timeout,
-                    1,
-                    allow,
+        match source {
+            ElevationSource::Http => {
+                // http 档失败必须把错误透传给调用方，不得静默落 SRTM。
+                let (elevation_m, timezone_name) = self.http_metadata(lat, lon, timeout, allow)?;
+                Ok(
+                    json!({"timezone_name":timezone_name,"elevation_m":elevation_m,
+                    "queried_lat":lat,"queried_lon":lon,"source":"open-meteo-point-metadata"}),
                 )
-                .and_then(|payload| {
-                    Ok((
-                        zone(
-                            payload["timezone"]
-                                .as_str()
-                                .ok_or("missing provider timezone")?,
-                        )?,
-                        elevation(
-                            payload["elevation"]
-                                .as_f64()
-                                .ok_or("missing provider elevation")?,
-                        )?,
-                    ))
-                }),
-            )
-        };
-        match online {
-            Some(Ok((timezone_name, elevation_m))) => Ok(
-                json!({"timezone_name":timezone_name,"elevation_m":elevation_m,
-                "queried_lat":lat,"queried_lon":lon,"source":"open-meteo-point-metadata"}),
-            ),
-            // http 档失败必须把错误透传给调用方，不得静默落 SRTM。
-            Some(Err(error)) if source == ElevationSource::Http => Err(error),
-            _ => {
+            }
+            ElevationSource::Srtm => {
                 let (timezone_name, proof) = self.local_timezone(lat, lon)?;
                 let (elevation_m, path) = self.local_elevation(lat, lon, timeout, allow)?;
                 Ok(
@@ -405,7 +375,68 @@ impl Config {
                     "queried_lon":lon,"source":"local-timezone+srtm","timezone_data":proof,"srtm_path":path}),
                 )
             }
+            // v1.8.0 用户裁定：auto 改为本地 SRTM 瓦片优先（离线命中、毫秒级），
+            // 未命中走 open-meteo，HTTP 失败且允许下载时落回 SRTM 下载
+            // （瓦片可在数据管理页按区域预下载）。
+            ElevationSource::Auto => {
+                let (timezone_name, proof) = self.local_timezone(lat, lon)?;
+                let name = tile(lat, lon)?;
+                let local = self.srtm_cache_dir.join(format!("{name}.hgt"));
+                if regular(&local)? {
+                    let elevation_m = read_srtm(&local, lat, lon)?;
+                    return Ok(
+                        json!({"timezone_name":timezone_name,"elevation_m":elevation_m,"queried_lat":lat,
+                        "queried_lon":lon,"source":"local-timezone+srtm","timezone_data":proof,
+                        "srtm_path":local.display().to_string()}),
+                    );
+                }
+                match self.http_metadata(lat, lon, timeout, allow) {
+                    Ok((elevation_m, timezone_name)) => Ok(
+                        json!({"timezone_name":timezone_name,"elevation_m":elevation_m,
+                        "queried_lat":lat,"queried_lon":lon,"source":"open-meteo-point-metadata"}),
+                    ),
+                    Err(_) if allow => {
+                        let (elevation_m, path) = self.local_elevation(lat, lon, timeout, allow)?;
+                        Ok(
+                            json!({"timezone_name":timezone_name,"elevation_m":elevation_m,"queried_lat":lat,
+                            "queried_lon":lon,"source":"local-timezone+srtm","timezone_data":proof,
+                            "srtm_path":path.display().to_string()}),
+                        )
+                    }
+                    Err(_) => Err(
+                        "local SRTM tile is not downloaded and the elevation provider is unavailable; \
+                         pre-download the tile from the data page"
+                            .into(),
+                    ),
+                }
+            }
         }
+    }
+
+    /// open-meteo 单点海拔与时区（auto 兜底 / http 档主路径共用）。
+    fn http_metadata(
+        &self,
+        lat: f64,
+        lon: f64,
+        timeout: f64,
+        allow: bool,
+    ) -> Result<(f64, String), String> {
+        let payload = self.get_json(
+            &self.metadata_url,
+            &[
+                ("latitude", lat.to_string()),
+                ("longitude", lon.to_string()),
+                ("timezone", "auto".into()),
+                ("forecast_days", "1".into()),
+            ],
+            timeout,
+            1,
+            allow,
+        )?;
+        Ok((
+            elevation(payload["elevation"].as_f64().ok_or("missing provider elevation")?)?,
+            zone(payload["timezone"].as_str().ok_or("missing provider timezone")?)?,
+        ))
     }
     fn meteo(&self, query: &str, timeout: f64, allow: bool) -> Result<Option<Located>, String> {
         let payload = self.get_json(
@@ -1611,18 +1642,49 @@ mod tests {
     }
 
     #[test]
-    fn auto_and_http_prefer_provider_when_available() {
+    fn auto_prefers_local_srtm_http_is_fallback_only() {
         let dir = tempfile::tempdir().unwrap();
         fake_tile(dir.path());
         let base = spawn_json_server(json!({"timezone":"UTC","elevation":9999.0}));
         let mut config = offline_config(dir.path());
         config.metadata_url = format!("{base}/v1/forecast");
-        for source in [ElevationSource::Auto, ElevationSource::Http] {
-            let value = config.point_metadata(LAT, LON, 2.0, true, source).unwrap();
-            assert_eq!(value["source"], "open-meteo-point-metadata");
-            assert_eq!(value["elevation_m"].as_f64().unwrap(), 9999.0);
-            assert_eq!(value["timezone_name"], "UTC");
-        }
+        // auto：本地瓦片命中 → 直接用 SRTM，不再访问 provider。
+        let value = config.point_metadata(LAT, LON, 2.0, true, ElevationSource::Auto).unwrap();
+        assert_eq!(value["source"], "local-timezone+srtm");
+        assert_eq!(value["elevation_m"].as_f64().unwrap(), f64::from(TILE_ELEVATION));
+        assert_eq!(value["timezone_name"], "Asia/Shanghai");
+        // http 档不受 auto 语义影响：仍走 provider。
+        let value = config.point_metadata(LAT, LON, 2.0, true, ElevationSource::Http).unwrap();
+        assert_eq!(value["source"], "open-meteo-point-metadata");
+        assert_eq!(value["elevation_m"], json!(9999.0));
+        assert_eq!(value["timezone_name"], json!("UTC"));
+    }
+
+    #[test]
+    fn auto_without_local_tile_uses_provider_and_downloads_on_http_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        // 本地瓦片缺失：auto → provider 成功即用（不下载）。
+        let base = spawn_json_server(json!({"timezone":"UTC","elevation":9999.0}));
+        let mut config = offline_config(dir.path());
+        config.metadata_url = format!("{base}/v1/forecast");
+        let value = config.point_metadata(LAT, LON, 2.0, true, ElevationSource::Auto).unwrap();
+        assert_eq!(value["source"], "open-meteo-point-metadata");
+        assert_eq!(value["elevation_m"].as_f64().unwrap(), 9999.0);
+        assert!(!dir.path().join("srtm").join(format!("{TILE_NAME}.hgt")).exists());
+        // provider 失败且允许下载 → 落回 SRTM 下载发布。
+        let tile_base = spawn_tile_server(dir.path());
+        config.srtm_base_url = format!("{tile_base}/skadi");
+        config.metadata_url = "http://127.0.0.1:1/v1/forecast".into();
+        let value = config.point_metadata(LAT, LON, 2.0, true, ElevationSource::Auto).unwrap();
+        assert_eq!(value["source"], "local-timezone+srtm");
+        assert_eq!(value["elevation_m"], json!(f64::from(TILE_ELEVATION)));
+        assert!(dir.path().join("srtm").join(format!("{TILE_NAME}.hgt")).is_file());
+        // 不允许下载且本地瓦片已删、provider 失败 → 明确报错（不冒充）。
+        fs::remove_file(dir.path().join("srtm").join(format!("{TILE_NAME}.hgt"))).unwrap();
+        let error = config
+            .point_metadata(LAT, LON, 2.0, false, ElevationSource::Auto)
+            .unwrap_err();
+        assert!(error.contains("SRTM tile is not downloaded"), "{error}");
     }
 
     #[test]
