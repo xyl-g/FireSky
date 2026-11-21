@@ -55,6 +55,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -62,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.firesky.mobile.R
 import com.firesky.mobile.store.WorkbenchState
 import com.firesky.mobile.store.WorkbenchStore
 import org.json.JSONObject
@@ -78,16 +80,16 @@ fun WorkbenchApp(store: WorkbenchStore) {
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
                 androidx.compose.material3.NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceVariant) {
-                    NavigationItem("workbench", "工作台", Icons.Filled.Place, state.page) {
+                    NavigationItem("workbench", stringResource(R.string.nav_point), Icons.Filled.Place, state.page) {
                         store.setPage("workbench")
                     }
-                    NavigationItem("data", "数据管理", Icons.Filled.Storage, state.page) {
+                    NavigationItem("data", stringResource(R.string.nav_data), Icons.Filled.Storage, state.page) {
                         store.setPage("data")
                     }
-                    NavigationItem("history", "任务历史", Icons.Filled.History, state.page) {
+                    NavigationItem("history", stringResource(R.string.nav_history), Icons.Filled.History, state.page) {
                         store.setPage("history")
                     }
-                    NavigationItem("settings", "设置", Icons.Filled.Settings, state.page) {
+                    NavigationItem("settings", stringResource(R.string.nav_settings), Icons.Filled.Settings, state.page) {
                         store.setPage("settings")
                     }
                 }
@@ -407,7 +409,7 @@ private fun RunButton(store: WorkbenchStore, state: WorkbenchState) {
                 .background(com.firesky.mobile.ui.accentGradientBrush(), RoundedCornerShape(8.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            Text("开始预测", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Text(stringResource(R.string.start_forecast), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
         }
     }
 }

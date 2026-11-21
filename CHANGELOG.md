@@ -104,6 +104,36 @@ ships release capability (self-contained zip, installer, CI publishing).
   breaking inventory/check before any download; normalized only real path
   levels and tolerated error 1, with a Windows regression test. The app
   assembly now embeds the engine version for in-app update comparison.
+## v1.9.5 (2026-11-21)
+
+界面多语言 i18n 基础设施（macOS + Android 起步）+ Windows token 补齐（B2 收尾）。
+UI i18n infrastructure (macOS and Android start) and Windows token
+completion (B2 wrap-up).
+
+**界面多语言 / UI i18n**
+
+- macOS 新增 L10n 轻量键值查找：语言偏好（跟随系统/中文/English）持久化
+  到 UserDefaults，未覆盖的 key 回落中文原文；导航标题、开始预测/开始
+  实况分析等高频字符串已接入（覆盖范围渐进扩展）。
+- Android 导航与主按钮改用 `stringResource`：`values/strings.xml`（中文
+  默认）+ `values-en/strings.xml`（English），系统语言切换自动生效。
+  macOS gains a lightweight L10n lookup (language preference
+  system/Chinese/English persisted to UserDefaults, fallback to Chinese);
+  navigation titles and primary CTA strings are wired. Android navigation
+  and CTA strings moved to string resources with an English variant.
+- iOS/Windows 界面文案接入在后续版本跟进；本版新增 key 口径与
+  DESIGN.md「跨端文案逐字一致」一致。
+
+**Windows token 补齐 / Windows token completion**
+
+- App.xaml 补齐 DESIGN.md v2 dark token：夜空蓝底三段（#080D17/#0D1423/
+  #0A0F1C）、hairline 卡片边框（dark 白 8% / light 黑 6%）、状态徽标底色
+  （success/danger 14%）、accent/渐变按主题拆分 Light/Dark 资源、
+  卡片圆角 24（glass 视觉半径折算）与 chip 圆角 6。
+  App.xaml completes the DESIGN.md v2 dark tokens: night-blue background
+  triple, hairline card borders, 14% chip backgrounds, theme-split
+  accent/gradient resources, card radius 24 and chip radius 6.
+
 ## v1.9.4 (2026-11-21)
 
 UI 设计 B 批全量落地（B1 天空语义时段条 / B2 Windows token 对齐 / B3 品牌插画空态）+ 暗色夜空蓝修正。

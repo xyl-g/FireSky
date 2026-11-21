@@ -119,8 +119,8 @@ android {
         applicationId = "com.firesky.mobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 17
-        versionName = "1.9.4"
+        versionCode = 18
+        versionName = "1.9.5"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // 真引擎 .so 仅 arm64-v8a（AVD firesky34 同架构）。
         ndk {

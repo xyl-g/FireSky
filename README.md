@@ -7,12 +7,13 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 
 > English documentation: [README.en.md](README.en.md)
 
-> 当前版本 **v1.7.0**：macOS / Android / iOS / Docker 正式发布（见[下载安装](#下载安装releases)）；
-> Windows 已在主干对齐 v1.5.0→v1.7.0 全部基准（信息架构、v1.3.0 手动删除/
-> 地形下载、v1.5.0 应用内更新、数据布局迁移）——自包含 zip + 安装器已产出
-> 并本机验收，CI `v*` tag 自动把 Windows 资产与 macOS DMG 一起直发，首个
-> Windows 正式包随下一个 tag 发布（详见 [Windows 发布文档](docs/RELEASE_WINDOWS.zh-CN.md)
-> 与 [UI 对齐矩阵](docs/WINDOWS_UI_PARITY.zh-CN.md)）。
+> 当前版本 **v1.9.5**（见[下载安装](#下载安装releases)）：macOS DMG（双架构）
+> 与 Windows zip + 安装器（x64/ARM64）随 CI `v*` tag 自动直发 Release，
+> Android APK 自动发布已接入（mobile-release job，随 tag 构建），iOS 从源码
+> 构建（Xcode）。桌面/移动端含应用内更新检查（macOS / Windows）；界面多语言
+> （跟随系统 / 中文 / English）自 v1.9.5 起落地并向移动端推进；UI 设计系统 v2
+> （毛玻璃卡片 / 状态徽标 / 强调渐变 / 夜空蓝暗色）四端同构，token 见
+> [DESIGN.md](DESIGN.md)。
 > UI 以 [macOS 产品与 UI 基准](docs/MACOS_UI_BASELINE.zh-CN.md)为参照，移动端蓝图与验收状态见
 > [移动端双原生计划](docs/MOBILE_NATIVE_PLAN.md)。
 
@@ -55,38 +56,38 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 - **后端服务**：Rust/Axum 异步 job + SSE + gzip + 严格输入身份缓存
 - **最小前端**：`/forecast`（点/区域预测）、`/now`（实况）、`/outlook`（形势图）、`/admin`（管理控制台）
 - **原生桌面**：macOS SwiftUI/AppKit + Rust FFI 为产品与 UI 基准；Windows WinUI 3
-  已对齐 v1.2.0 信息架构（历史独立页/设置四分类/双摘要/剖面图层等）并在真实
+  对齐同基准信息架构（历史独立页/设置分类/数据管理/应用内更新等）并在真实
   Windows 机器完成构建与运行验收，发布形态为自包含 zip + Inno Setup 安装器；
   Linux 原生 UI 代码保留（不再作为发布目标，见[平台策略](#平台策略)）；
   [构建与迁移状态](apps/README.md)。
 - **移动应用**：iOS SwiftUI + Android Kotlin/Compose 双原生，预测引擎内嵌进程内
-  （`engine-mobile`，与桌面同源）；v1 单点预测，见[移动应用（v1 范围）](#移动应用v1-范围)。
+  （`engine-mobile`，与桌面同源）；单点预测/数据管理/任务历史对齐桌面基准，
+  Android APK 随 Release 自动发布，见[移动应用（v1 范围）](#移动应用v1-范围)。
 
 ## 下载安装（Releases）
 
 正式版统一从 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) 下载
-（当前 **v1.1.1**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
+（当前 **v1.9.5**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
 与各资产放在同一目录执行）：
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
-v1.1.1 资产清单：
+标准资产清单（`<版本>` 通配，全部由 CI `v*` tag 自动构建直发）：
 
 | 资产 | 平台 | 说明 |
 |---|---|---|
-| `FireSky-1.1.1-macos-arm64.dmg` | macOS 14+（Apple Silicon） | 原生桌面 `.app`，ad-hoc 签名 |
-| `FireSky-1.1.1-macos-x86_64.dmg` | macOS 14+（Intel） | CI Intel 构建 + 冒烟；Apple Silicon 可经 Rosetta 2 运行 |
-| `FireSky-1.1.1-android-arm64.apk` | Android 8.0+（arm64-v8a） | 自签签名 release APK（1.1.1 包待构建） |
-| `FireSky-1.1.1-ios-unsigned.ipa` | iOS 16+（真机） | **无签名** IPA，需自签后侧载（见下；1.1.1 包待构建） |
+| `FireSky-<版本>-macos-arm64.dmg` | macOS 14+（Apple Silicon） | 原生桌面 `.app`，ad-hoc 签名 |
+| `FireSky-<版本>-macos-x86_64.dmg` | macOS 14+（Intel） | CI Intel 构建 + 冒烟；Apple Silicon 可经 Rosetta 2 运行 |
+| `FireSky-<版本>-windows-x64.zip` / `-x64-setup.exe` | Windows 10 19041+（x64） | 绿色 zip / Inno Setup 安装器 |
+| `FireSky-<版本>-windows-arm64.zip` / `-arm64-setup.exe` | Windows（ARM64） | 同上 |
+| `FireSky-<版本>-android-arm64.apk` | Android 8.0+（arm64-v8a） | 自签 release APK（mobile-release job 随 tag 构建） |
 | `SHA256SUMS.txt` | — | 全部资产 SHA256 清单 |
-| `FireSky-1.1.1-docker-arm64.tar.gz` | Docker（linux/arm64） | 官方镜像 tarball（`docker load` 导入；1.1.1 包待构建，本版暂未发布 GHCR） |
 
-> v1.1.1 先发布 macOS 双架构资产（GitHub Actions 构建 + 冒烟）；Android / iOS /
-> Docker 的 1.1.1 包待构建，期间可继续使用
-> [v1.1.0](https://github.com/xyl-g/FireSky/releases/tag/v1.1.0) 对应资产
-> （不含本版海拔来源设置与同步助手修复）。
+> Android APK 自 mobile-release job 首个跑通的 tag 起随 Release 提供；iOS IPA
+> 暂不随 Release 分发（见 [iOS](#ios) 从源码构建）；Docker 镜像请从源码构建
+> （见 [Docker 自托管](#docker-自托管)）。
 
 ### macOS
 
@@ -130,7 +131,7 @@ Gatekeeper 默认拦截首次打开：
 1. 下载 APK 后点击安装，按提示允许浏览器/文件管理器「安装未知应用」。
 2. **覆盖更新必须使用同一签名 key 的官方 APK**：直接安装新版本即可保留应用
    数据；请勿混装其他来源的重新签名包（签名不一致会被系统拒绝）。
-3. 命令行安装/更新：`adb install -r FireSky-1.1.1-android-arm64.apk`。
+3. 命令行安装/更新：`adb install -r FireSky-<版本>-android-arm64.apk`。
 
 ### iOS
 
@@ -145,11 +146,11 @@ Gatekeeper 默认拦截首次打开：
 
 ### Docker 自托管
 
-官方镜像以 Release 资产 tarball 分发（**linux/arm64**，本地构建 + 冒烟通过；
-amd64 请从源码构建；本版暂未发布 GHCR）。先导入镜像再运行，容器内服务监听 8765：
+镜像从源码构建（CI 仅做构建冒烟，不随 Release 分发 tarball）。构建后运行，
+容器内服务监听 8765：
 
 ```bash
-docker load -i FireSky-1.1.1-docker-arm64.tar.gz   # 得到本地镜像 firesky:1.1.1-local
+docker build -f docker/Dockerfile -t firesky:local .
 docker run -d --name firesky \
   -p 127.0.0.1:8765:8765 \
   -v firesky-cache:/data/cache \
@@ -157,23 +158,23 @@ docker run -d --name firesky \
   -v firesky-reports:/data/reports \
   -v firesky-logs:/data/logs \
   -v firesky-state:/data/state \
-  firesky:1.1.1-local
+  firesky:local
 # 首次启动生成访问令牌（用户名 firesky，密码为下面命令的输出，勿公开粘贴）：
 docker exec firesky cat /data/state/http-token
 # 浏览器打开 http://127.0.0.1:8765
 ```
 
-- 源码构建：`docker build -f docker/Dockerfile -t firesky:1.1.1 .`，或
-  `docker compose up -d --build`（compose 默认同样仅绑定 `127.0.0.1:8765`）。
+- 也可用 compose：`docker compose up -d --build`（compose 默认同样仅绑定
+  `127.0.0.1:8765`）。
 - 持久卷、鉴权与局域网发布注意见[部署文档](docs/DEPLOY.md)。
 
 ### 平台策略
 
-- **macOS / Android / iOS / Docker**：v1.7.0 正式发布目标。
-- **Windows**：自 `feat/windows-release`（2026-11-21）起为正式发布目标——UI 对齐
-  v1.5.0→v1.7.0 全部基准、真实机器构建/运行/三源 GRIB 解码验收通过，CI `v*` tag 自动
-  构建 x64/ARM64 zip + 安装器并直发 Release；首个 Windows 正式包随下一个
-  tag 发布。
+- **macOS / Windows**：正式发布目标，CI `v*` tag 自动构建直发 Release
+  （macOS DMG 双架构；Windows zip + 安装器 x64/ARM64）。
+- **Android**：正式发布目标，mobile-release job 随 tag 构建 APK 直发。
+- **iOS**：源码构建（Xcode），IPA 分发后续接入。
+- **Docker**：自托管方案，镜像从源码构建（不再随 Release 分发 tarball）。
 - **Linux**：自 2026-11-20 起**不再作为发布目标**（用户裁定）；GTK4 客户端与
   FFI 代码保留，可自行源码构建；服务器部署推荐 Docker。
 
@@ -382,8 +383,8 @@ firesky/
 ├── native/                # Rust 光线追踪评分器（cdylib）
 ├── apps/
 │   ├── macos/             # SwiftUI/AppKit + Rust FFI（正式桌面主线）
-│   ├── mobile-android/    # Kotlin/Compose + JNI（v1.1.0 起正式发布）
-│   ├── mobile-ios/        # SwiftUI + 静态链接引擎（v1.1.0 起正式发布）
+│   ├── mobile-android/    # Kotlin/Compose + JNI（APK 随 Release 自动发布）
+│   ├── mobile-ios/        # SwiftUI + 静态链接引擎（Xcode 源码构建）
 │   ├── windows/           # WinUI 3 + Rust FFI（正式包后续在 Windows 机器构建）
 │   ├── linux/             # GTK4/C++ + Rust FFI（代码保留，不再作为发布目标）
 │   └── shared-web/        # 共享 Web SPA（Rust HTTP 与 Docker 同源托管）

@@ -7,15 +7,15 @@ native desktop clients**. The physics follows the methodology of the
 
 > 中文文档：[README.md](README.md)
 
-> Current release **v1.5.1**: macOS / Android / iOS / Docker are officially
-> released (see [Download & install](#download--install-releases)).
-> Windows matches the v1.5.0 baseline and ships with this release (including
-> the v1.3.0 manual deletion and terrain download and the v1.5.0 in-app
-> update) — the self-contained zip and installer are built and validated on
-> a real Windows machine, and CI attaches the Windows assets to GitHub
-> Releases on `v*` tags; the first official Windows package follows with the
-> next tag (see the [Windows release doc](docs/RELEASE_WINDOWS.zh-CN.md)
-> and the [UI parity matrix](docs/WINDOWS_UI_PARITY.zh-CN.md)).
+> Current release **v1.9.5** (see [Download & install](#download--install-releases)):
+> macOS DMGs (dual arch) and Windows zip + installer (x64/ARM64) are built and
+> attached to GitHub Releases automatically on `v*` tags; Android APK
+> auto-publishing is wired in (mobile-release job builds on tags); iOS builds
+> from source with Xcode. Desktop/mobile clients include an in-app update
+> check (macOS / Windows); UI localization (system / Chinese / English) lands
+> starting v1.9.5 and expands to mobile in follow-ups; the UI design system v2
+> (glass cards / status chips / accent gradient / night-blue dark theme) is
+> mirrored across all four clients — tokens in [DESIGN.md](DESIGN.md).
 > The UI reference is the [macOS product & UI baseline](docs/MACOS_UI_BASELINE.zh-CN.md);
 > mobile blueprint and acceptance status:
 > [mobile native plan](docs/MOBILE_NATIVE_PLAN.md).
@@ -62,45 +62,46 @@ native desktop clients**. The physics follows the methodology of the
 - **Backend service**: Rust/Axum jobs + SSE + gzip + checked input caches.
 - **Minimal frontend**: `/forecast`, `/now`, `/outlook`, `/admin`.
 - **Native desktop**: macOS SwiftUI/AppKit + Rust FFI is the product & UI
-  baseline; the Windows WinUI 3 client now matches the v1.2.0 information
-  architecture (standalone history page, categorized settings, dual-model
-  summaries, cross-section layers) and was build/run validated on a real
+  baseline; the Windows WinUI 3 client matches the same information
+  architecture (standalone history page, categorized settings, data
+  management, in-app update) and was build/run validated on a real
   Windows machine, shipping as a self-contained zip plus an Inno Setup
-  installer. The Linux native UI code is kept but no longer a release target
-  (see [Platform strategy](#platform-strategy)). See
+  installer attached to Releases. The Linux native UI code is kept but no
+  longer a release target (see [Platform strategy](#platform-strategy)). See
   [build instructions and migration status](apps/README.md). The old PySide6 app was retired (2026-11-13); user data (~/.firesky-desktop favorites and current spot) imports automatically into the native app.
 - **Mobile apps**: dual-native iOS SwiftUI + Android Kotlin/Compose with the
   prediction engine embedded in-process (`engine-mobile`, same source as the
-  desktop runtime); v1 covers point forecasts — see
+  desktop runtime); point forecasts / data management / task history mirror
+  the desktop baseline, and the Android APK is published with Releases — see
   [Mobile apps (v1 scope)](#mobile-apps-v1-scope).
 
 ## Download & install (Releases)
 
 Official builds are published on
 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) (current:
-**v1.1.1**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
+**v1.9.5**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
 file names; run it in the directory holding the assets):
 
 ```bash
 shasum -a 256 -c SHA256SUMS.txt
 ```
 
-v1.1.1 assets:
+Standard assets (`<version>` is a wildcard; all built and published
+automatically by CI on `v*` tags):
 
 | Asset | Platform | Notes |
 |---|---|---|
-| `FireSky-1.1.1-macos-arm64.dmg` | macOS 14+ (Apple Silicon) | native desktop `.app`, ad-hoc signed |
-| `FireSky-1.1.1-macos-x86_64.dmg` | macOS 14+ (Intel) | CI Intel build + smoke; runs via Rosetta 2 on Apple Silicon |
-| `FireSky-1.1.1-android-arm64.apk` | Android 8.0+ (arm64-v8a) | self-signed release APK (1.1.1 build pending) |
-| `FireSky-1.1.1-ios-unsigned.ipa` | iOS 16+ (device) | **unsigned** IPA; re-sign before sideloading (below; 1.1.1 build pending) |
+| `FireSky-<version>-macos-arm64.dmg` | macOS 14+ (Apple Silicon) | native desktop `.app`, ad-hoc signed |
+| `FireSky-<version>-macos-x86_64.dmg` | macOS 14+ (Intel) | CI Intel build + smoke; runs via Rosetta 2 on Apple Silicon |
+| `FireSky-<version>-windows-x64.zip` / `-x64-setup.exe` | Windows 10 19041+ (x64) | portable zip / Inno Setup installer |
+| `FireSky-<version>-windows-arm64.zip` / `-arm64-setup.exe` | Windows (ARM64) | same |
+| `FireSky-<version>-android-arm64.apk` | Android 8.0+ (arm64-v8a) | self-signed release APK (built by the mobile-release job on tags) |
 | `SHA256SUMS.txt` | — | SHA256 manifest for all assets |
-| `FireSky-1.1.1-docker-arm64.tar.gz` | Docker (linux/arm64) | official image tarball (`docker load`; 1.1.1 build pending, GHCR not published for this release) |
 
-> v1.1.1 ships the macOS assets first (built + smoke-tested on GitHub
-> Actions). Android / iOS / Docker 1.1.1 packages are pending; until then
-> the [v1.1.0](https://github.com/xyl-g/FireSky/releases/tag/v1.1.0) assets
-> remain usable (they lack this release's elevation-source setting and
-> sync-helper fix).
+> The Android APK ships with Releases from the first tag where the
+> mobile-release job goes green; the iOS IPA is not distributed via Releases
+> for now (build from source, see [iOS](#ios)); Docker images are built from
+> source (see [Docker (self-hosting)](#docker-self-hosting)).
 
 ### macOS
 
@@ -152,7 +153,7 @@ minSdk 26 / Android 8.0+):
 2. **Updates must come from the official APK signed with the same key**:
    install the new version over the old one to keep app data; do not mix in
    re-signed builds from other sources (signature mismatch is rejected).
-3. Command line: `adb install -r FireSky-1.1.1-android-arm64.apk`.
+3. Command line: `adb install -r FireSky-<version>-android-arm64.apk`.
 
 ### iOS
 
@@ -170,13 +171,12 @@ Re-sign it with a free Apple ID via [AltStore](https://altstore.io) or
 
 ### Docker (self-hosting)
 
-The official image ships as a Release-asset tarball (**linux/arm64**, built
-locally and smoke-tested; build from source for amd64; GHCR is not published
-for this release). Load the image first, then run — the service listens on
-8765 inside the container:
+Images are built from source (CI only runs a build smoke test; no Release
+tarballs are attached). Build, then run — the service listens on 8765 inside
+the container:
 
 ```bash
-docker load -i FireSky-1.1.1-docker-arm64.tar.gz   # yields firesky:1.1.1-local
+docker build -f docker/Dockerfile -t firesky:local .
 docker run -d --name firesky \
   -p 127.0.0.1:8765:8765 \
   -v firesky-cache:/data/cache \
@@ -184,27 +184,28 @@ docker run -d --name firesky \
   -v firesky-reports:/data/reports \
   -v firesky-logs:/data/logs \
   -v firesky-state:/data/state \
-  firesky:1.1.1-local
+  firesky:local
 # First start generates the access token (user: firesky; password is the
 # output below — do not paste it into logs or public discussions):
 docker exec firesky cat /data/state/http-token
 # open http://127.0.0.1:8765
 ```
 
-- Build from source: `docker build -f docker/Dockerfile -t firesky:1.1.1 .`,
-  or `docker compose up -d --build` (compose also binds `127.0.0.1:8765` only
-  by default).
+- Compose alternative: `docker compose up -d --build` (compose also binds
+  `127.0.0.1:8765` only by default).
 - Persistent volumes, authentication and LAN-exposure notes:
   [deployment guide](docs/DEPLOY.en.md).
 
 ### Platform strategy
 
-- **macOS / Android / iOS / Docker**: official release targets of v1.5.1.
-- **Windows**: an official release target since `feat/windows-release`
-  (2026-11-21) — UI aligned to the v1.5.0 baseline, build/run/three-source
-  GRIB decode validated on a real Windows machine; CI builds x64/ARM64 zip +
-  installer on `v*` tags and attaches them to Releases. The first official
-  Windows package follows with the next tag.
+- **macOS / Windows**: official release targets; CI builds and publishes
+  assets on `v*` tags (macOS dual-arch DMGs; Windows x64/ARM64 zip +
+  installer).
+- **Android**: official release target; the mobile-release job builds the
+  APK on tags and attaches it to Releases.
+- **iOS**: build from source (Xcode); IPA distribution to follow.
+- **Docker**: self-hosting option; images are built from source (no Release
+  tarballs).
 - **Linux**: **no longer a release target since 2026-11-20** (user decision);
   the GTK4 client and FFI code are kept and can be built from source. For
   servers, use Docker.
@@ -433,8 +434,8 @@ firesky/
 ├── native/                # Rust ray-traced scorer (cdylib)
 ├── apps/
 │   ├── macos/             # SwiftUI/AppKit + Rust FFI (primary desktop)
-│   ├── mobile-android/    # Kotlin/Compose + JNI (officially released since v1.1.0)
-│   ├── mobile-ios/        # SwiftUI + statically linked engine (officially released since v1.1.0)
+│   ├── mobile-android/    # Kotlin/Compose + JNI (APK published with Releases)
+│   ├── mobile-ios/        # SwiftUI + statically linked engine (build from Xcode source)
 │   ├── windows/           # WinUI 3 + Rust FFI (official installer built on a Windows machine later)
 │   ├── linux/             # GTK4/C++ + Rust FFI (code kept, no longer a release target)
 │   └── shared-web/        # shared web SPA (served by Rust HTTP and Docker)

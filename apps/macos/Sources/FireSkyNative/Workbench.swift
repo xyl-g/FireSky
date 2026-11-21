@@ -177,7 +177,7 @@ struct WorkbenchRootView: View {
                     }.padding(.trailing, 2)
                 }.defaultScrollAnchor(.top).scrollIndicators(.hidden)
                 Button { store.beginCheck() } label: {
-                    Text(store.page == .nowcast ? "开始实况分析" : "开始预测")
+                    Text(L10n.text(store.page == .nowcast ? "开始实况分析" : "开始预测", store.page == .nowcast ? "Start Nowcast" : "Start Forecast"))
                         .font(.system(size: 12, weight: .semibold))
                         .foregroundStyle(scheme == .dark ? Color(0x14, 0x14, 0x14) : Color.white)
                         .frame(maxWidth: .infinity).frame(height: 41)

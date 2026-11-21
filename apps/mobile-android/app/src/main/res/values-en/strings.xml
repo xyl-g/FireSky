@@ -1,0 +1,17 @@
+<resources>
+    <string name="app_name">FireSky</string>
+    <string name="nav_point">Point Forecast</string>
+    <string name="nav_data">Data Management</string>
+    <string name="nav_history">Task History</string>
+    <string name="nav_settings">Settings</string>
+    <string name="start_forecast">Start Forecast</string>
+    <string name="cancel">Cancel</string>
+    <string name="delete">Delete</string>
+    <string name="refresh">Refresh</string>
+    <string name="load_older">Load older tasks</string>
+    <string name="no_tasks">No task records</string>
+    <string name="settings_general">General</string>
+    <string name="settings_data">Data</string>
+    <string name="settings_advanced">Advanced</string>
+    <string name="theme_label">Theme</string>
+</resources>

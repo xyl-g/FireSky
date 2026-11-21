@@ -8,12 +8,12 @@ enum Page: String, CaseIterable, Identifiable {
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .point: "单点预测"
-        case .regional: "区域预测"
-        case .nowcast: "实况观测"
-        case .data: "数据管理"
-        case .history: "任务历史"
-        case .settings: "设置"
+        case .point: L10n.text("单点预测", "Point Forecast")
+        case .regional: L10n.text("区域预测", "Regional Forecast")
+        case .nowcast: L10n.text("实况观测", "Nowcast")
+        case .data: L10n.text("数据管理", "Data Management")
+        case .history: L10n.text("任务历史", "Task History")
+        case .settings: L10n.text("设置", "Settings")
         }
     }
     var symbol: String {

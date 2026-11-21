@@ -8,13 +8,24 @@
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls"/>
             </ResourceDictionary.MergedDictionaries>
             <!-- v1.9.3 DESIGN.md v2 token 对齐：FireSky 暖橙 accent（替换默认 #E63D5C）。 -->
+            <!-- DESIGN.md v2 token 对齐（暖橙 accent + 夜空蓝底 + hairline） -->
             <Color x:Key="SystemAccentColor">#BD523D</Color>
-            <Color x:Key="FireSkyAccent">#BD523D</Color>
+            <Color x:Key="FireSkyAccentLight">#BD523D</Color>
             <Color x:Key="FireSkyAccentDark">#FF8C61</Color>
-            <Color x:Key="FireSkyGradientStart">#E06A3C</Color>
-            <Color x:Key="FireSkyGradientEnd">#D98A2E</Color>
+            <Color x:Key="FireSkyGradientStartLight">#E06A3C</Color>
+            <Color x:Key="FireSkyGradientEndLight">#D98A2E</Color>
+            <Color x:Key="FireSkyGradientStartDark">#FF8C61</Color>
+            <Color x:Key="FireSkyGradientEndDark">#FABF24</Color>
             <Color x:Key="FireSkyTeal">#428F8A</Color>
-            <x:Double x:Key="FireSkyCardRadius">16</x:Double>
+            <Color x:Key="FireSkyBgDarkStart">#080D17</Color>
+            <Color x:Key="FireSkyBgDarkMid">#0D1423</Color>
+            <Color x:Key="FireSkyBgDarkEnd">#0A0F1C</Color>
+            <Color x:Key="FireSkyCardBorderDark">#FFFFFF14</Color>
+            <Color x:Key="FireSkyCardBorderLight">#1B22240F</Color>
+            <Color x:Key="FireSkyChipSuccessDark">#33CC7024</Color>
+            <Color x:Key="FireSkyChipDangerDark">#FF6B5224</Color>
+            <x:Double x:Key="FireSkyCardRadius">24</x:Double>
+            <x:Double x:Key="FireSkyChipRadius">6</x:Double>
         </ResourceDictionary>
     </Application.Resources>
 </Application>
