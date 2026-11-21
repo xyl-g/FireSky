@@ -59,6 +59,18 @@ struct HistoryView: View {
             ForEach(store.taskHistory) { item in
                 HistoryRow(item: item)
             }
+            if store.taskHistoryHasMore {
+                Button {
+                    store.loadTaskHistory(older: true)
+                } label: {
+                    HStack(spacing: 8) {
+                        if store.taskHistoryLoading { ProgressView() }
+                        Text("加载更早任务").font(.callout)
+                    }
+                }
+                .disabled(store.taskHistoryLoading)
+                .frame(maxWidth: .infinity, alignment: .center)
+            }
         }
         .listStyle(.plain)
     }

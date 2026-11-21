@@ -382,8 +382,13 @@ impl Config {
                 let (timezone_name, proof) = self.local_timezone(lat, lon)?;
                 let name = tile(lat, lon)?;
                 let local = self.srtm_cache_dir.join(format!("{name}.hgt"));
+                // 本地命中（文件存在且采样成功）直接用；损坏/尺寸异常的瓦片
+                // 视为未命中继续兜底，不能因坏瓦片让整个 metadata 失败。
+                let mut cached_elevation = None;
                 if regular(&local)? {
-                    let elevation_m = read_srtm(&local, lat, lon)?;
+                    cached_elevation = read_srtm(&local, lat, lon).ok();
+                }
+                if let Some(elevation_m) = cached_elevation {
                     return Ok(
                         json!({"timezone_name":timezone_name,"elevation_m":elevation_m,"queried_lat":lat,
                         "queried_lon":lon,"source":"local-timezone+srtm","timezone_data":proof,

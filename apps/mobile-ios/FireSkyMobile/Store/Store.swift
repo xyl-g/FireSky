@@ -254,6 +254,9 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var taskHistoryLoaded = false
     @Published var taskHistoryLoading = false
     @Published var taskHistoryError = ""
+    /// 分页（v1.8.1 可用性）：has_more 时提供「加载更早任务」。
+    @Published var taskHistoryHasMore = false
+    @Published var taskHistoryCursor: String?
     @Published var selectedTaskID: String?
     @Published var taskEvents: [MobileTaskEventRow] = []
     @Published var taskEventsLoading = false
@@ -765,15 +768,20 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
 
     // MARK: - 任务历史（v1.6.0 与 macOS 历史页对齐）
 
-    func loadTaskHistory() {
+    func loadTaskHistory(older: Bool = false) {
         guard online, !taskHistoryLoading else { return }
+        if older && (taskHistoryCursor == nil || !taskHistoryHasMore) { return }
         Task { [weak self] in
             guard let self else { return }
             taskHistoryLoading = true
             taskHistoryError = ""
             defer { taskHistoryLoading = false }
             do {
-                let response = try await engine.call("task_history", ["limit": 100])
+                var params: JSONObject = ["limit": 100]
+                if older, let cursor = taskHistoryCursor {
+                    params["before"] = cursor
+                }
+                let response = try await engine.call("task_history", params)
                 guard response["schema"] as? String == "firesky-task-history-v1",
                       let tasks = response["tasks"] as? [JSONObject] else {
                     throw EngineError(message: "任务历史协议不匹配，请重新连接引擎。")
@@ -782,8 +790,11 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 if Set(parsed.map(\.taskID)).count != parsed.count {
                     throw EngineError(message: "任务历史包含重复记录。")
                 }
-                taskHistory = parsed
+                // 加载更早 = 追加；首页 = 替换。
+                taskHistory = older ? taskHistory + parsed : parsed
                 taskHistoryTotal = (response["total"] as? NSNumber)?.intValue ?? parsed.count
+                taskHistoryHasMore = response["has_more"] as? Bool ?? false
+                taskHistoryCursor = response["next_cursor"] as? String
                 taskHistoryLoaded = true
                 if let selectedTaskID, !parsed.contains(where: { $0.taskID == selectedTaskID }) {
                     clearTaskSelection()

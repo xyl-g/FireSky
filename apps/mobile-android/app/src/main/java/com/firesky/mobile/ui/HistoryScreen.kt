@@ -106,6 +106,28 @@ fun HistoryScreen(store: WorkbenchStore, state: WorkbenchState) {
                         HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
                     }
                 }
+                if (state.taskHistoryHasMore) {
+                    item("load-more") {
+                        Row(
+                            Modifier.fillMaxWidth().clickable {
+                                store.loadTaskHistory(older = true)
+                            }.padding(vertical = 14.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            if (state.taskHistoryLoading) {
+                                CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
+                                Spacer(Modifier.width(8.dp))
+                            }
+                            Text(
+                                "加载更早任务",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Medium,
+                            )
+                        }
+                    }
+                }
             }
         }
     }

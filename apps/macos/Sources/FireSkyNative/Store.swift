@@ -322,6 +322,9 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var taskHistoryLoaded = false
     @Published var taskHistoryLoading = false
     @Published var taskHistoryError = ""
+    /// 分页（v1.8.1 可用性）：has_more 时提供「加载更早任务」。
+    @Published var taskHistoryHasMore = false
+    @Published var taskHistoryCursor: String?
     @Published var selectedTaskHistoryID: String?
     @Published var taskHistoryEvents: [NativeTaskEvent] = []
     @Published var taskHistoryEventsLoading = false
@@ -366,27 +369,16 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             .appendingPathComponent("FireSky/Data", isDirectory: true)
         let defaultWorkspace = isBundled ? dataDirectory.path : FileManager.default.currentDirectoryPath
         let explicitWorkspace = env["FIRESKY_WORKSPACE"]
-        let savedWorkspace = defaults.string(forKey: "workspace")
-        let bundleWorkspace = Bundle.main.object(forInfoDictionaryKey: "FireSkyWorkspace") as? String
-        let directoryExists: (String) -> Bool = { path in
-            var isDirectory: ObjCBool = false
-            return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory)
-                && isDirectory.boolValue
-        }
-        // An explicitly supplied workspace is a developer/operator choice and
-        // should fail visibly when invalid. A stale persisted workspace is
-        // recoverable, so bundled apps fall back to their private data root.
+        // v1.8.1 用户裁定：数据目录固定在系统默认位置，UI 不再提供设置。
+        // UserDefaults 里旧版本遗留的 workspace 值一律忽略（旧行为会把
+        // 走查/临时目录写进 defaults 并长期覆盖系统默认）。
         let root: String
         if let explicitWorkspace {
             root = explicitWorkspace
-        } else if let savedWorkspace, directoryExists(savedWorkspace) {
-            root = savedWorkspace
-        } else if let bundleWorkspace, directoryExists(bundleWorkspace) {
-            root = bundleWorkspace
         } else {
             root = defaultWorkspace
         }
-        if isBundled && !directoryExists(root) {
+        if isBundled && !FileManager.default.fileExists(atPath: root) {
             try? FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
         }
         workspace = root
@@ -454,8 +446,6 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             startSyncTick()
             refreshHelperStatus()
             status = "引擎已连接"
-            UserDefaults.standard.set(workspace, forKey: "workspace")
-            UserDefaults.standard.set(engineBinary, forKey: "engineBinary")
             if page == .data {
                 await loadInventory()
                 loadTerrain()
@@ -1115,8 +1105,9 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         showLayoutConfirm = false
     }
 
-    func loadTaskHistory() {
+    func loadTaskHistory(older: Bool = false) {
         guard online, !taskHistoryLoading else { return }
+        if older && (taskHistoryCursor == nil || !taskHistoryHasMore) { return }
         taskHistoryTask?.cancel()
         taskHistoryTask = Task { [weak self] in
             guard let self else { return }
@@ -1127,7 +1118,11 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 taskHistoryTask = nil
             }
             do {
-                let response = try await engine.call("task_history", ["limit": 100])
+                var params: JSONObject = ["limit": 100]
+                if older, let cursor = taskHistoryCursor {
+                    params["before"] = cursor
+                }
+                let response = try await engine.call("task_history", params)
                 try Task.checkCancellation()
                 guard response["schema"] as? String == "firesky-task-history-v1",
                       response["automatic_restart"] as? Bool == false,
@@ -1147,8 +1142,11 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 guard Set(parsed.map(\.taskID)).count == parsed.count else {
                     throw EngineError(message: "任务历史包含重复记录，请重新连接引擎。")
                 }
-                taskHistory = parsed
+                // 加载更早 = 追加；首页 = 替换。
+                taskHistory = older ? taskHistory + parsed : parsed
                 taskHistoryTotal = total
+                taskHistoryHasMore = response["has_more"] as? Bool ?? false
+                taskHistoryCursor = response["next_cursor"] as? String
                 taskHistoryIssues = (response["issues"] as? [Any])?.count ?? 0
                 taskHistoryLoaded = true
                 if let selectedTaskHistoryID,

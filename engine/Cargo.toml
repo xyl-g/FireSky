@@ -1,6 +1,6 @@
 [package]
 name = "firesky-engine"
-version = "1.8.0"
+version = "1.8.1"
 edition = "2021"
 license = "GPL-3.0-only"
 
@@ -22,7 +22,11 @@ fs2 = "0.4"
 futures-util = "0.3"
 flate2 = "1.1"
 geo = { version = "0.33", default-features = false }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+# macOS 系统代理（GUI 启动无环境变量时，reqwest 遵循 SystemConfiguration）：
+# macos-system-configuration 仅在 macOS 目标生效，其余平台无副作用。
+reqwest = { version = "0.12", default-features = false, features = [
+    "blocking", "rustls-tls", "macos-system-configuration",
+] }
 regex = "1"
 quick-xml = "0.42"
 rayon = "1.10"

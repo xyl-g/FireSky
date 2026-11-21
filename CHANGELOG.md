@@ -104,6 +104,49 @@ ships release capability (self-contained zip, installer, CI publishing).
   breaking inventory/check before any download; normalized only real path
   levels and tolerated error 1, with a Windows regression test. The app
   assembly now embeds the engine version for in-app update comparison.
+## v1.8.1 (2026-11-21)
+
+瓦片下载可用性修复与数据目录口径（走查实测发现）。
+Tile download usability fixes and the data-directory ruling (found by
+hands-on walkthrough).
+
+**瓦片下载 / Tile download**
+
+- 修复 GUI 启动场景下瓦片下载挂起/失败：engine 的 reqwest 关闭了默认
+  features 导致 macOS SystemConfiguration 系统代理不可用——GUI 启动
+  （Launchpad/Finder，无环境变量代理）时直连瓦片 CDN 直到超时。开启
+  `macos-system-configuration` 特性后，GUI 场景遵循系统代理（Clash 等
+  自动设置），实测无环境变量下 N30E120 下载成功。
+  Fixed tile downloads hanging when launched from GUI: the engine's
+  reqwest disabled default features, losing macOS SystemConfiguration
+  proxy support. With `macos-system-configuration` enabled, GUI launches
+  follow the system proxy; verified downloading N30E120 without any env
+  proxy.
+- 海拔 `auto` 本地命中增加坏瓦片容错：瓦片文件存在但采样失败（损坏/
+  尺寸异常）时视为未命中继续 open-meteo 兜底，不再让整个 metadata 失败。
+  `auto` local-hit now tolerates a corrupt tile (read failure counts as a
+  miss and falls through to the provider) instead of failing metadata.
+
+**数据目录口径 / Data directory ruling**
+
+- 数据目录固定在系统默认位置（用户裁定：不再支持设置）：macOS 设置页
+  移除路径输入框与「选择目录」，改为只读展示 +「在访达中打开」；旧版本
+  遗留在 UserDefaults 的 workspace 覆盖一律忽略（该残留曾让临时目录
+  长期覆盖系统默认）；开发/运维仍可用 FIRESKY_WORKSPACE 环境变量覆盖。
+  The data directory is fixed at the system default (user ruling): the
+  macOS settings page drops the path editor in favor of a read-only
+  display plus "Reveal in Finder"; stale UserDefaults workspace overrides
+  are ignored; FIRESKY_WORKSPACE remains for developers.
+
+**任务历史分页 / Task history pagination**
+
+- 引擎 `task_history` 支持 `before` 游标（RFC3339 校验），响应新增
+  `has_more`/`next_cursor`；三端历史页底部新增「加载更早任务」，超过
+  单页上限的记录不再不可见（此前 macOS 实测 117 条中 17 条不可达）。
+  `task_history` gains a `before` cursor with `has_more`/`next_cursor`;
+  all three platforms offer "load older tasks" so records beyond the
+  first page are reachable again (17 of 117 were unreachable).
+
 ## v1.8.0 (2026-11-21)
 
 海拔来源简化（本地 SRTM 优先）与预测日期限制（用户裁定）。

@@ -780,24 +780,27 @@ struct SettingsView: View {
         }
     }
 
-    /// 数据目录独立分区：选择目录 + 数据布局迁移入口（方案 §8 阶段 B）。
+    /// 数据目录独立分区（v1.8.1 用户裁定）：目录固定在系统默认位置
+    /// （Application Support），不再提供选择/编辑；保留迁移入口与重连。
     private var dataDirectoryBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
             settingsBlockTitle("数据目录")
-            TextField("数据目录", text: $store.workspace)
+            Text(store.workspace)
+                .font(.caption).foregroundStyle(.secondary)
+                .textSelection(.enabled)
+                .lineLimit(2)
+                .truncationMode(.middle)
+            Text("数据固定保存在 macOS 系统数据目录（可在访达中前往）。开发/运维可用 FIRESKY_WORKSPACE 环境变量覆盖。")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack {
-                Button("选择目录", systemImage: "folder") {
-                    let panel = NSOpenPanel()
-                    panel.canChooseFiles = false
-                    panel.canChooseDirectories = true
-                    if panel.runModal() == .OK, let url = panel.url {
-                        store.workspace = url.path
-                    }
+                Button("在访达中打开", systemImage: "folder") {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: store.workspace))
                 }
                 Spacer()
                 Button("重新连接", systemImage: "arrow.clockwise") { Task { await store.connect() } }
                     .disabled(store.busy || store.probingDownloads)
-                    .help("应用新目录或引擎路径后重新连接引擎")
+                    .help("重新连接引擎")
             }
             Divider()
             layoutStatusBlock

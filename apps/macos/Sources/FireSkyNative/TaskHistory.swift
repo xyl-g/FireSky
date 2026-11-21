@@ -261,6 +261,22 @@ struct NativeTaskHistoryView: View {
                                     .id(item.taskID)
                                 Divider().padding(.leading, 52)
                             }
+                            if store.taskHistoryHasMore {
+                                Button {
+                                    store.loadTaskHistory(older: true)
+                                } label: {
+                                    HStack(spacing: 8) {
+                                        if store.taskHistoryLoading {
+                                            ProgressView().controlSize(.small)
+                                        }
+                                        Text("加载更早任务").font(.callout)
+                                    }
+                                }
+                                .buttonStyle(.borderless)
+                                .disabled(store.taskHistoryLoading)
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.vertical, 12)
+                            }
                         }
                     }
                     .onChange(of: store.selectedTaskHistoryID) { _, selected in

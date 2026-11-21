@@ -269,6 +269,9 @@ data class WorkbenchState(
     val taskHistoryLoaded: Boolean = false,
     val taskHistoryLoading: Boolean = false,
     val taskHistoryError: String = "",
+    /** 分页（v1.8.1 可用性）：has_more 时提供「加载更早任务」。 */
+    val taskHistoryHasMore: Boolean = false,
+    val taskHistoryCursor: String? = null,
     val selectedTaskId: String? = null,
     val taskEvents: List<TaskEventRow> = emptyList(),
     val taskEventsLoading: Boolean = false,
@@ -1061,13 +1064,18 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
 
     // ---------------------------------------------------------------- 任务历史（v1.6.0）
 
-    fun loadTaskHistory() {
+    fun loadTaskHistory(older: Boolean = false) {
         val current = _state.value
         if (!current.online || current.taskHistoryLoading) return
+        if (older && (current.taskHistoryCursor == null || !current.taskHistoryHasMore)) return
         viewModelScope.launch {
             _state.update { it.copy(taskHistoryLoading = true, taskHistoryError = "") }
             try {
-                val response = engine.call("task_history", JSONObject().put("limit", 100))
+                val params = JSONObject().put("limit", 100)
+                if (older) {
+                    current.taskHistoryCursor?.let { params.put("before", it) }
+                }
+                val response = engine.call("task_history", params)
                 if (response.optString("schema") != "firesky-task-history-v1") {
                     throw EngineError("任务历史协议不匹配，请重新连接引擎。")
                 }
@@ -1077,11 +1085,14 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
                     }
                 }
                 val total = response.optInt("total", tasks.size)
-                _state.update {
-                    it.copy(
-                        taskHistory = tasks,
+                _state.update { state ->
+                    state.copy(
+                        // 加载更早 = 追加；首页 = 替换。
+                        taskHistory = if (older) state.taskHistory + tasks else tasks,
                         taskHistoryTotal = total,
                         taskHistoryLoaded = true,
+                        taskHistoryHasMore = response.optBoolean("has_more", false),
+                        taskHistoryCursor = response.optString("next_cursor", "").ifEmpty { null },
                         taskHistoryError = "",
                     )
                 }
