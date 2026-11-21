@@ -53,10 +53,12 @@ enum FSDesign {
 
     /// 深色页面底渐变修正（方案 D5）：去掉紫色相，青绿同族。
     static func pageBackground(dark: Bool) -> [Color] {
+        // v1.9.3 暗色修正：夜空蓝黑体系（深夜蓝渐变，与暖橙 accent 呼应），
+        // 替换旧灰绿底（用户反馈"暗色丑"）。
         dark
-            ? [Color(red: 0.07, green: 0.10, blue: 0.11),
-               Color(red: 0.09, green: 0.14, blue: 0.13),
-               Color(red: 0.08, green: 0.13, blue: 0.12)]
+            ? [Color(red: 0.03, green: 0.05, blue: 0.09),
+               Color(red: 0.05, green: 0.08, blue: 0.14),
+               Color(red: 0.04, green: 0.06, blue: 0.11)]
             : [Color(red: 0.89, green: 0.93, blue: 0.94),
                Color(red: 0.96, green: 0.92, blue: 0.90),
                Color(red: 0.89, green: 0.94, blue: 0.92)]
@@ -150,7 +152,8 @@ struct GlassCard: ViewModifier {
                     Color.clear
                         .glassEffect(.regular, in: .rect(cornerRadius: 24))
                         .background(
-                            dark ? Color.white.opacity(0.06) : Color.clear,
+                            // dark tint：夜蓝色玻璃面板，与夜空底色形成 +8~14 lum 层次。
+                            dark ? Color(0x22, 0x32, 0x4E).opacity(0.65) : Color.clear,
                             in: .rect(cornerRadius: 24)
                         )
                 } else {
@@ -163,7 +166,7 @@ struct GlassCard: ViewModifier {
                     .strokeBorder(
                         emphasized
                             ? Color(red: 1.00, green: 0.55, blue: 0.38).opacity(0.55)
-                            : dark ? Color.white.opacity(0.14) : Color.black.opacity(0.08),
+                            : dark ? Color(0x5B, 0x7A, 0xB0).opacity(0.35) : Color.black.opacity(0.08),
                         lineWidth: 1
                     )
             }

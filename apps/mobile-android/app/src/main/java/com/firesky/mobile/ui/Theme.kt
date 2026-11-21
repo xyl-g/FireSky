@@ -62,9 +62,10 @@ fun chipColors(state: ChipState): Pair<Color, Color> {
 private val DarkScheme = darkColorScheme(
     primary = WarmDark,
     secondary = Teal,
-    background = Color(0xFF121A1C),
-    surface = Color(0xFF121A1C),
-    surfaceVariant = Color(0xFF1A2526),
+    // v1.9.3 暗色修正：夜空蓝黑体系。
+    background = Color(0xFF0D1420),
+    surface = Color(0xFF0D1420),
+    surfaceVariant = Color(0xFF16202E),
     onBackground = Color(0xFFE6EDF0),
     onSurface = Color(0xFFE6EDF0),
 )

@@ -104,6 +104,81 @@ ships release capability (self-contained zip, installer, CI publishing).
   breaking inventory/check before any download; normalized only real path
   levels and tolerated error 1, with a Windows regression test. The app
   assembly now embeds the engine version for in-app update comparison.
+## v1.9.4 (2026-11-21)
+
+UI 设计 B 批全量落地（B1 天空语义时段条 / B2 Windows token 对齐 / B3 品牌插画空态）+ 暗色夜空蓝修正。
+Design batch B (sky-semantics timeline, Windows token alignment, branded
+empty states) and dark theme night-blue correction.
+
+**B1 天空语义时段条 / Sky timeline**
+
+- 结果概览 hero 卡新增 SkyTimeline：渐变窗口区间条 + 最佳时刻圆点 +
+  观测点时区倒计时（"最佳时刻 HH:mm · X 小时 Y 分后"）；跨午夜窗口
+  自动归一化；无窗口数据时回退推荐窗口文字。
+  Result hero card gains a SkyTimeline: gradient window bar + best-time
+  dot + timezone-aware countdown; midnight-crossing windows normalised.
+
+**B2 Windows token / Windows token alignment**
+
+- Windows App.xaml accent 对齐 DESIGN.md v2：暖橙 #BD523D 替换默认
+  #E63D5C，新增 FireSky token 资源（渐变端点/青绿/卡片圆角）。
+  Windows App.xaml accent aligned to DESIGN.md v2 tokens.
+
+**B3 品牌插画空态 / Branded empty states**
+
+- 历史页与数据管理页空态统一为 BrandMarkScene：品牌标 + 双弧线轨道 +
+  三颗星点（macOS/iOS Canvas 同构，Android CircularProgress+图标等效）。
+  Empty states unified with BrandMarkScene across platforms.
+
+**暗色主题修正 / Dark theme correction**
+
+- 暗色底色从灰绿体系改为**夜空蓝黑**（hue 220-224°，暗环境下与暖橙
+  accent 形成"夜空+暖光"叙事）；玻璃卡 dark tint 调整为夜蓝面板
+  （层间 Δ+19 lum，上轮 Δ<1）；Android/iOS dark scheme 同步修正。
+  Dark background switched from grey-green to deep night-blue
+  (hue 220-224°); glass card dark tint adjusted to night-blue panel
+  (Δ+19 lum, up from <1).
+
+## v1.9.3 (2026-11-21)
+
+UI 设计 B 批（B1 天空语义可视化 / B2 Windows token 对齐 / B3 品牌插画空态）+ 暗色主题夜空蓝修正。
+Design batch B (sky-semantics timeline, Windows token alignment, branded
+empty states) and dark theme night-blue correction.
+
+**B1 天空语义时段条 / Sky timeline**
+
+- 结果概览 hero 卡新增 SkyTimeline：渐变窗口区间条 + 最佳时刻圆点 +
+  观测点时区倒计时（"最佳时刻 HH:mm · X 小时 Y 分后"）；跨午夜窗口自动
+  归一化；无窗口数据时回退推荐窗口文字。
+  Result hero card gains a SkyTimeline: gradient window bar + best-time
+  dot + timezone-aware countdown; midnight-crossing windows are
+  normalised; falls back to text when no window data exists.
+
+**B3 品牌插画空态 / Branded empty states**
+
+- 历史页与数据管理页空态统一为 BrandMarkScene：品牌标 + 双弧线轨道 +
+  三颗星点（macOS/iOS Canvas 同构，Android CircularProgress 等效）。
+  Empty states across history and data pages are unified with a
+  BrandMarkScene (brand mark + dual orbit arcs + three star points).
+
+**暗色主题修正 / Dark theme correction**
+
+- 暗色底色从灰绿体系改为**夜空蓝黑**（hue 220-224°，暗环境下与暖橙
+  accent 形成"夜空+暖光"叙事）；玻璃卡 dark tint 调整为夜蓝面板
+  （层间 Δ+19 lum，上轮 Δ<1）；Android/iOS dark scheme 同步修正。
+  Dark background switched from grey-green to deep night-blue
+  (hue 220-224°), paired with the warm-orange accent; glass card dark
+  tint adjusted to night-blue panel (Δ+19 lum, up from <1).
+- Windows App.xaml accent 对齐 DESIGN.md v2（暖橙替换默认 #E63D5C）。
+  Windows App.xaml accent aligned to DESIGN.md v2 tokens.
+
+**其他 / Other**
+
+- retention_lifecycle 并发 restore 测试放宽时序断言（慢 runner 上 cleanup
+  先完成属合理语义），修复 CI flaky。
+  retention_lifecycle concurrent restore test assertion relaxed for slow
+  runners, fixing CI flakiness.
+
 ## v1.9.2 (2026-11-21)
 
 数据管理类目扩展（A1）+ 毛玻璃卡片视觉（P3，QiuChenly AppStore 风格借鉴）。

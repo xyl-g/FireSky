@@ -7,7 +7,14 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls"/>
             </ResourceDictionary.MergedDictionaries>
-            <Color x:Key="SystemAccentColor">#E63D5C</Color>
+            <!-- v1.9.3 DESIGN.md v2 token 对齐：FireSky 暖橙 accent（替换默认 #E63D5C）。 -->
+            <Color x:Key="SystemAccentColor">#BD523D</Color>
+            <Color x:Key="FireSkyAccent">#BD523D</Color>
+            <Color x:Key="FireSkyAccentDark">#FF8C61</Color>
+            <Color x:Key="FireSkyGradientStart">#E06A3C</Color>
+            <Color x:Key="FireSkyGradientEnd">#D98A2E</Color>
+            <Color x:Key="FireSkyTeal">#428F8A</Color>
+            <x:Double x:Key="FireSkyCardRadius">16</x:Double>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

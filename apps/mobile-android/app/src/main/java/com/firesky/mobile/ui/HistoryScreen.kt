@@ -97,12 +97,29 @@ fun HistoryScreen(store: WorkbenchStore, state: WorkbenchState) {
             state.taskHistory.isEmpty() -> {
                 WorkSurface(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                        Icon(
-                    Icons.Filled.WbTwilight,
-                    contentDescription = null,
-                    Modifier.size(32.dp).alpha(0.24f),
-                    tint = MaterialTheme.colorScheme.primary,
-                )
+                        // 品牌插画空态（B3）：日落标 + 弧线轨道 + 星点（与四端同构）。
+                Box(Modifier.size(64.dp)) {
+                    CircularProgressIndicator(
+                        progress = { 0.72f },
+                        modifier = Modifier.size(64.dp).alpha(0.35f),
+                        color = Color.White.copy(alpha = 0.35f),
+                        strokeWidth = 1.5.dp,
+                        trackColor = Color.Transparent,
+                    )
+                    CircularProgressIndicator(
+                        progress = { 0.45f },
+                        modifier = Modifier.size(64.dp).alpha(0.35f),
+                        color = Color(1f, 0.58f, 0.40f, 0.35f),
+                        strokeWidth = 1.5.dp,
+                        trackColor = Color.Transparent,
+                    )
+                    Icon(
+                        Icons.Filled.WbTwilight,
+                        contentDescription = null,
+                        Modifier.align(Alignment.Center).size(36.dp).alpha(0.9f),
+                        tint = MaterialTheme.colorScheme.primary,
+                    )
+                }
                         Text("暂无任务记录", fontSize = 14.sp, fontWeight = FontWeight.Medium)
                         Text(
                             if (state.online) "完成一次检查或预测后会显示在这里。" else "引擎未连接。",
@@ -170,6 +187,11 @@ private fun HistoryRow(store: WorkbenchStore, state: WorkbenchState, item: TaskH
         Modifier
             .fillMaxWidth()
             .background(if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f) else Color.Transparent)
+            .background(
+                if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.10f)
+                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+                RoundedCornerShape(10.dp),
+            )
             .clickable { store.selectTask(item.taskId) }
             .padding(horizontal = 8.dp, vertical = 12.dp),
     ) {

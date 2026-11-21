@@ -31,3 +31,33 @@ struct FireSkyMark: View {
         .accessibilityHidden(true)
     }
 }
+
+/// 品牌插画空态（方案 B3）：品牌标 + 弧线轨道 + 三颗星点（与 macOS 同构）。
+struct FireSkyMarkScene: View {
+    var size: CGFloat = 96
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .trim(from: 0.0, to: 0.72)
+                .stroke(Color.white.opacity(0.14), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                .rotationEffect(.degrees(-120))
+            Circle()
+                .trim(from: 0.0, to: 0.45)
+                .stroke(Color(red: 1, green: 0.58, blue: 0.40).opacity(0.35),
+                        style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                .rotationEffect(.degrees(140))
+            ForEach(0..<3, id: \.self) { index in
+                let angle = (-120 + Double(index) * 55) * .pi / 180
+                let radius = size * 0.46
+                Circle()
+                    .fill(index == 1 ? Color(red: 1, green: 0.58, blue: 0.40) : Color.white.opacity(0.55))
+                    .frame(width: index == 2 ? 3 : 4.5, height: index == 2 ? 3 : 4.5)
+                    .offset(x: cos(angle) * radius, y: sin(angle) * radius)
+            }
+            FireSkyMark().frame(width: size * 0.62, height: size * 0.62)
+        }
+        .frame(width: size, height: size)
+        .accessibilityHidden(true)
+    }
+}

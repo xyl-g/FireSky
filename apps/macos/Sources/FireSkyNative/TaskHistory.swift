@@ -214,9 +214,7 @@ struct NativeTaskHistoryView: View {
     /// 统一空态（方案 4.6）：品牌小图 24% + 标题 + 说明，四端同构。
     private func emptyState(title: String, message: String) -> some View {
         VStack(spacing: 10) {
-            FireSkyMark()
-                .frame(width: 32, height: 32)
-                .opacity(0.24)
+            FireSkyMarkScene(size: 64)
             Text(title).font(.system(size: 13, weight: .medium))
             Text(message).font(.caption).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

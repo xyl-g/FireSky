@@ -513,7 +513,7 @@ struct WorkHeroView: View {
                         .font(.system(size: 22, weight: .semibold)).monospacedDigit()
                 }
             }
-            Text("推荐窗口 \(windowLabel(report))").font(.system(size: 10)).foregroundStyle(.secondary)
+            SkyTimeline(report: report, timezone: store.timezone)
             HStack(spacing: 5) {
                 if let cycle = cycleLabel(model, report) {
                     Text("起报 \(cycle)").workChip()
@@ -3161,6 +3161,92 @@ private func timeLabel(_ value: String?) -> String {
 private func windowLabel(_ report: JSONObject?) -> String {
     guard let value = report?["timing_window"] as? JSONObject else { return "—" }
     return "\(timeLabel(value["start_time_local"] as? String)) – \(timeLabel(value["end_time_local"] as? String))"
+}
+
+/// B1 天空语义：观测窗口时段条（方案 UI_REFRESH B1）——渐变窗口区间 +
+/// 最佳时刻点 + 观测点时区倒计时；无窗口数据时回退文字行。
+struct SkyTimeline: View {
+    let report: JSONObject?
+    let timezone: String
+    @Environment(\.colorScheme) private var scheme
+
+    private func minutes(_ hhmm: String) -> Int? {
+        let parts = hhmm.split(separator: ":")
+        guard parts.count == 2, let h = Int(parts[0]), let m = Int(parts[1]),
+              (0...23).contains(h), (0...59).contains(m) else { return nil }
+        return h * 60 + m
+    }
+
+    /// 观测点时区下 HH:mm 对应的时刻；早于窗口起点视为次日凌晨（跨午夜）。
+    private func pointDate(_ minutesValue: Int, start: Int) -> Date {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: timezone) ?? .current
+        var components = calendar.dateComponents([.year, .month, .day], from: Date())
+        components.hour = minutesValue / 60
+        components.minute = minutesValue % 60
+        let today = calendar.date(from: components) ?? Date()
+        if minutesValue >= start { return today }
+        return calendar.date(byAdding: .day, value: 1, to: today) ?? today
+    }
+
+    private func countdown(_ interval: TimeInterval) -> String {
+        let total = max(Int(interval) / 60, 0)
+        let hours = total / 60
+        let minutesValue = total % 60
+        return hours > 0 ? "\(hours) 小时 \(minutesValue) 分" : "\(minutesValue) 分钟"
+    }
+
+    var body: some View {
+        if let window = report?["timing_window"] as? JSONObject,
+           let startRaw = window["start_time_local"] as? String,
+           let endRaw = window["end_time_local"] as? String,
+           let start = minutes(startRaw), let end = minutes(endRaw) {
+            let bestRaw = report?["best_time_local"] as? String
+            let best = bestRaw.flatMap(minutes)
+            let span = (end - start <= 0) ? end - start + 1440 : end - start
+            let now = Date()
+            let startDate = pointDate(start, start: start)
+            let endDate = pointDate(end % 1440, start: start)
+            let inWindow = now >= startDate && now <= endDate
+            let bestDate = best.map { pointDate($0, start: start) }
+            VStack(alignment: .leading, spacing: 5) {
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(.quaternary.opacity(0.5))
+                        // 窗口区间：按窗口跨度在轴上定位（跨午夜已归一化）。
+                        Capsule()
+                            .fill(FSDesign.accentGradient(dark: scheme == .dark))
+                            .frame(width: geo.size.width * CGFloat(span) / CGFloat(max(span, 1)))
+                        if let best {
+                            Circle()
+                                .fill(Color.white)
+                                .frame(width: 9, height: 9)
+                                .overlay { Circle().strokeBorder(FSDesign.chipForeground("done", dark: scheme == .dark), lineWidth: 1.5) }
+                                .offset(x: geo.size.width * CGFloat((best - start <= 0 ? best + 1440 : best) - start) / CGFloat(span) - 4.5)
+                        }
+                    }
+                }
+                .frame(height: 10)
+                HStack {
+                    Text(startRaw).monospacedDigit()
+                    Spacer()
+                    if let bestRaw, let bestDate {
+                        Text(inWindow
+                             ? "最佳时刻 \(bestRaw) · \(countdown(bestDate.timeIntervalSinceNow))后"
+                             : "最佳时刻 \(bestRaw)")
+                            .foregroundStyle(FSDesign.chipForeground("done", dark: scheme == .dark))
+                    }
+                    Spacer()
+                    Text(endRaw).monospacedDigit()
+                }
+                .font(.system(size: 9)).monospacedDigit().foregroundStyle(.secondary)
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("观测窗口 \(startRaw) 至 \(endRaw)\(bestRaw.map { "，最佳时刻 \($0)" } ?? "")")
+            }
+        } else {
+            Text("推荐窗口 \(windowLabel(report))").font(.system(size: 10)).foregroundStyle(.secondary)
+        }
+    }
 }
 
 private func metricValue(_ key: String, _ report: JSONObject?) -> String {

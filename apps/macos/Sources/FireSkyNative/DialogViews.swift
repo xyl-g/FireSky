@@ -183,7 +183,7 @@ struct InventoryView: View {
                 }
                 if store.inventory.isEmpty && store.error.isEmpty && !store.layoutLoading {
                     VStack(spacing: 10) {
-                        FireSkyMark().frame(width: 32, height: 32).opacity(0.24)
+                        FireSkyMarkScene(size: 64)
                         Text("本地缓存为空").font(.system(size: 13, weight: .medium))
                         Text("完成一次预测或在设置中配置数据源后，这里会显示库存。")
                             .font(.caption).foregroundStyle(.secondary)

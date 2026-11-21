@@ -15,7 +15,7 @@ struct WorkBackground: View {
     var body: some View {
         LinearGradient(
             colors: scheme == .dark
-                ? [Color(red: 0.07, green: 0.10, blue: 0.11), Color(red: 0.13, green: 0.12, blue: 0.14), Color(red: 0.08, green: 0.13, blue: 0.12)]
+                ? [Color(red: 0.03, green: 0.05, blue: 0.09), Color(red: 0.05, green: 0.08, blue: 0.14), Color(red: 0.04, green: 0.06, blue: 0.11)]
                 : [Color(red: 0.89, green: 0.93, blue: 0.94), Color(red: 0.96, green: 0.92, blue: 0.90), Color(red: 0.89, green: 0.94, blue: 0.92)],
             startPoint: .topLeading, endPoint: .bottomTrailing)
     }
