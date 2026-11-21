@@ -814,3 +814,10 @@ GFS/EC 双摘要、0–2.5 指数、档位、最佳时刻、推荐窗口、天�
 1. 用真实点预测报告夹具补拍「双模式一致 / 分歧 / 单模式失败 / 旧参数」的行动摘要。
 2. 在 macOS 26 真机复核系统材质与 Reduce Transparency / Increase Contrast 组合。
 3. 再决定是否需要把根布局迁移到 `NavigationSplitView`；那应是独立 PR，不与本轮表面规范混合。
+
+### 20.5 行动摘要真实报告回放（P0-1 已完成）
+
+- 从 `output/release-v1-20261115/replay-point/evidence/forecast.json`（SHA-256 `4f6894d2eb7998fe06eb0c887567ecc6b08e2377d41d92b7a89a6c016f2bb0fa`）派生 5 组夹具，来源与变换见 `output/ui-polish-20261122/action-summary-fixtures/manifest.md`。
+- `apps/macos/Tests/WorkbenchSnapshot.swift` 补齐 `Updater` 环境对象，使回放夹具能启动 `WorkbenchRootView`。
+- 回放截图：`output/ui-polish-20261122/action-summary-fixtures/screenshots/{agree,disagree,partial,missing,stale}.png`。
+- 已确认五种分支文案、时间与限制因素均按预期显示；旧参数分支同时保留结果与重算提示。该证据属于派生夹具回放，不等同于真实上游验收。

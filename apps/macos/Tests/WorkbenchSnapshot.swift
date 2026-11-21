@@ -6,10 +6,12 @@ import SwiftUI
 struct WorkbenchSnapshot: App {
     @NSApplicationDelegateAdaptor(WorkbenchSnapshotDelegate.self) private var delegate
     @StateObject private var store = Store()
+    @StateObject private var updater = Updater()
 
     var body: some Scene {
         WindowGroup("FireSky · UI Test Fixture") {
             WorkbenchRootView().environmentObject(store)
+                .environmentObject(updater)
                 .environment(\.locale, Locale(identifier: "zh_CN"))
                 .onAppear { delegate.capture(store) }
         }.defaultSize(width: 1440, height: 1040)
