@@ -33,21 +33,21 @@ public sealed partial class MainWindow
 
     private static readonly (string Key, string Key1, string Title, string Caption)[] NowcastMetrics =
     [
-        ("near_cloud_ratio", "near_cloud_ratio", "近场云量", "观测点附近卫星云覆盖"),
-        ("far_cloud_ratio", "far_cloud_ratio", "远场云量", "太阳方向远场云覆盖"),
-        ("cloud_blanket_score", "cloud_blanket_score", "云幕", "光学观测 · 卫星云幕评分"),
-        ("cloud_texture_score", "cloud_texture_score", "纹理", "光学观测 · 卫星云顶纹理"),
-        ("horizon_clearance_score", "horizon_clearance_score", "地平线通透", "光学观测 · 地平线通透度"),
-        ("satellite_low_cloud_state", "satellite_low_cloud_state", "低云状态", "卫星校准与垂直先验"),
-        ("cloud_type_label", "cloud_type_label", "多光谱云类", "桌面实况未计算 · HSD 通道不产生云类概率"),
-        ("satellite_motion_quality", "satellite_motion_quality", "运动质量", "卫星云体运动状态"),
-        ("geometric_path_blocking_risk", "geometric_path_blocking_risk", "光路阻塞风险", "太阳入射路径"),
-        ("calibrated_sample_coverage_ratio", "calibrated_sample_coverage_ratio", "采样覆盖率", "卫星有效采样比例"),
-        ("confidence", "confidence", "实况支持度", "卫星反演支持 · 非命中概率"),
-        ("effective_convective_risk", "effective_convective_risk", "区域对流风险", "雷达有效值 · 非事件概率"),
-        ("effective_path_blocking_risk", "effective_path_blocking_risk", "光路阻塞风险", "雷达有效值 · 光路约束风险"),
-        ("convective_score_ceiling", "convective_score_ceiling", "对流顶棚", "评分顶棚 · 约束封顶上限"),
-        ("aod", "aod", "AOD 550", "气溶胶光学厚度"),
+        ("near_cloud_ratio", "near_cloud_ratio", L10n.T("近场云量"), L10n.T("观测点附近卫星云覆盖")),
+        ("far_cloud_ratio", "far_cloud_ratio", L10n.T("远场云量"), L10n.T("太阳方向远场云覆盖")),
+        ("cloud_blanket_score", "cloud_blanket_score", L10n.T("云幕"), L10n.T("光学观测 · 卫星云幕评分")),
+        ("cloud_texture_score", "cloud_texture_score", L10n.T("纹理"), L10n.T("光学观测 · 卫星云顶纹理")),
+        ("horizon_clearance_score", "horizon_clearance_score", L10n.T("地平线通透"), L10n.T("光学观测 · 地平线通透度")),
+        ("satellite_low_cloud_state", "satellite_low_cloud_state", L10n.T("低云状态"), L10n.T("卫星校准与垂直先验")),
+        ("cloud_type_label", "cloud_type_label", L10n.T("多光谱云类"), L10n.T("桌面实况未计算 · HSD 通道不产生云类概率")),
+        ("satellite_motion_quality", "satellite_motion_quality", L10n.T("运动质量"), L10n.T("卫星云体运动状态")),
+        ("geometric_path_blocking_risk", "geometric_path_blocking_risk", L10n.T("光路阻塞风险"), L10n.T("太阳入射路径")),
+        ("calibrated_sample_coverage_ratio", "calibrated_sample_coverage_ratio", L10n.T("采样覆盖率"), L10n.T("卫星有效采样比例")),
+        ("confidence", "confidence", L10n.T("实况支持度"), L10n.T("卫星反演支持 · 非命中概率")),
+        ("effective_convective_risk", "effective_convective_risk", L10n.T("区域对流风险"), L10n.T("雷达有效值 · 非事件概率")),
+        ("effective_path_blocking_risk", "effective_path_blocking_risk", L10n.T("光路阻塞风险"), L10n.T("雷达有效值 · 光路约束风险")),
+        ("convective_score_ceiling", "convective_score_ceiling", L10n.T("对流顶棚"), L10n.T("评分顶棚 · 约束封顶上限")),
+        ("aod", "aod", "AOD 550", L10n.T("气溶胶光学厚度")),
     ];
 
     internal JsonObject? SelectedReport()
@@ -65,7 +65,7 @@ public sealed partial class MainWindow
             ? value.GetValue<string>() : null;
 
     private static string ModelStatus(string? error, JsonObject? report, bool hasResult) =>
-        error != null ? "未完成" : report != null ? "预测完成" : hasResult ? "暂无结果" : "等待预测";
+        error != null ? L10n.T("未完成") : report != null ? L10n.T("预测完成") : hasResult ? L10n.T("暂无结果") : L10n.T("等待预测");
 
     private static Brush ModelBrush(string model) => new SolidColorBrush(
         model == "ec" ? ColorFrom(0x14, 0x8A, 0x9C) : ColorFrom(0xE3, 0x66, 0x4A));
@@ -127,7 +127,7 @@ public sealed partial class MainWindow
                 },
             },
         });
-        var status = new TextBlock { Text = "等待预测", FontSize = 9, Opacity = .7 };
+        var status = new TextBlock { Text = L10n.T("等待预测"), FontSize = 9, Opacity = .7 };
         Grid.SetColumn(status, 2);
         top.Children.Add(status);
         panel.Children.Add(top);
@@ -140,11 +140,11 @@ public sealed partial class MainWindow
             Text = "--", FontSize = 30, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
             Foreground = ModelBrush(model),
         };
-        var level = new TextBlock { Text = "峰值质量指数", FontSize = 9, Opacity = .65 };
+        var level = new TextBlock { Text = L10n.T("峰值质量指数"), FontSize = 9, Opacity = .65 };
         scoreStack.Children.Add(score);
         scoreStack.Children.Add(level);
         var bestStack = new StackPanel { Spacing = 3 };
-        bestStack.Children.Add(new TextBlock { Text = "最佳时刻", FontSize = 9, Opacity = .65 });
+        bestStack.Children.Add(new TextBlock { Text = L10n.T("最佳时刻"), FontSize = 9, Opacity = .65 });
         var best = new TextBlock
         {
             Text = "--", FontSize = 21, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
@@ -155,7 +155,7 @@ public sealed partial class MainWindow
         middle.Children.Add(scoreStack);
         middle.Children.Add(bestStack);
         panel.Children.Add(middle);
-        var window = new TextBlock { Text = "推荐窗口 --", FontSize = 10, Opacity = .7 };
+        var window = new TextBlock { Text = L10n.T("推荐窗口 --"), FontSize = 10, Opacity = .7 };
         panel.Children.Add(window);
         var chips = new TextBlock { Text = "", FontSize = 9, Opacity = .7, TextWrapping = TextWrapping.Wrap };
         panel.Children.Add(chips);
@@ -186,7 +186,7 @@ public sealed partial class MainWindow
         var family = StringOrNull(value);
         return family switch
         {
-            "high" => "高云族", "middle" => "中云族", "low" => "低云族",
+            "high" => L10n.T("高云族"), "middle" => L10n.T("中云族"), "low" => L10n.T("低云族"),
             null => "", _ => family,
         };
     }
@@ -194,12 +194,12 @@ public sealed partial class MainWindow
     private string ModelSourceNote(string model)
     {
         var report = ModelReport(model);
-        if (report == null) return model == "ec" ? "EC：未预测" : "GFS：未预测";
+        if (report == null) return model == "ec" ? L10n.T("EC：未预测") : L10n.T("GFS：未预测");
         var source = Text(report, "model_source");
         return source switch
         {
-            "ec" => "EC：TCC 总云 + PL-RH 云柱代理；气溶胶来自 CAMS 环境读数",
-            _ => "GFS：全量云场与可烧量来源；气溶胶来自 CAMS 环境读数",
+            "ec" => L10n.T("EC：TCC 总云 + PL-RH 云柱代理；气溶胶来自 CAMS 环境读数"),
+            _ => L10n.T("GFS：全量云场与可烧量来源；气溶胶来自 CAMS 环境读数"),
         };
     }
 
@@ -208,15 +208,15 @@ public sealed partial class MainWindow
     internal sealed record AodSummary(double[] Values, string[] Sources, string Detail)
     {
         public bool Available => Values.Length > 0;
-        public string Source => Sources.Length == 0 ? "暂无来源"
+        public string Source => Sources.Length == 0 ? L10n.T("暂无来源")
             : Sources.All(source => source == "CAMS") ? "CAMS"
-            : Sources.All(source => source != "CAMS") ? "其他来源" : "混合来源";
+            : Sources.All(source => source != "CAMS") ? L10n.T("其他来源") : L10n.T("混合来源");
         public string Value => !Available ? "—"
             : Values.Min().ToString("0.00", CultureInfo.InvariantCulture) == Values.Max().ToString("0.00", CultureInfo.InvariantCulture)
                 ? Values.Min().ToString("0.00", CultureInfo.InvariantCulture)
                 : $"{Values.Min():0.00} – {Values.Max():0.00}";
-        public string Caption => Values.Length == 0 ? "暂无可用 AOD 观测"
-            : Values.Distinct().Count() > 1 ? "事件时刻取值范围 · 未取平均" : "事件时刻 · 气溶胶光学厚度";
+        public string Caption => Values.Length == 0 ? L10n.T("暂无可用 AOD 观测")
+            : Values.Distinct().Count() > 1 ? L10n.T("事件时刻取值范围 · 未取平均") : L10n.T("事件时刻 · 气溶胶光学厚度");
     }
 
     internal static AodSummary AodReading(JsonObject?[] reports)
@@ -232,12 +232,12 @@ public sealed partial class MainWindow
             var cams = rawSource.StartsWith("cams", StringComparison.OrdinalIgnoreCase)
                 || Text(aerosol, "quality") == "cams";
             values.Add(number);
-            sources.Add(cams ? "CAMS" : "其他来源");
-            var time = Text(report, "anchor_local") is { Length: > 0 } anchor ? anchor : "时刻未提供";
+            sources.Add(cams ? "CAMS" : L10n.T("其他来源"));
+            var time = Text(report, "anchor_local") is { Length: > 0 } anchor ? anchor : L10n.T("时刻未提供");
             details.Add($"{time} · {number:0.0000} · {rawSource}");
         }
         return new AodSummary([.. values], [.. sources],
-            details.Count == 0 ? "等待 CAMS 环境读取" : string.Join("\n", details.Distinct().OrderBy(v => v)));
+            details.Count == 0 ? L10n.T("等待 CAMS 环境读取") : string.Join("\n", details.Distinct().OrderBy(v => v)));
     }
 
     private AodSummary PointAod => AodReading([ModelReport("gfs"), ModelReport("ec")]);
@@ -270,7 +270,7 @@ public sealed partial class MainWindow
             ChartLegend.Text = "";
             LedgerHost.Children.Clear();
             DiagnosticPanel.Children.Clear();
-            ProfileStatus.Text = "等待预测";
+            ProfileStatus.Text = L10n.T("等待预测");
             FrozenProfileButton.Visibility = Visibility.Collapsed;
             PointCrossSection.Visibility = Visibility.Collapsed;
             PointProfileNote.Text = "";
@@ -308,12 +308,12 @@ public sealed partial class MainWindow
         heroCards["ec"].Panel.Visibility = Visibility.Visible;
         foreach (var (model, card) in heroCards)
         {
-            card.Status.Text = "等待预测";
+            card.Status.Text = L10n.T("等待预测");
             card.Status.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
             card.Score.Text = "--";
-            card.Level.Text = "峰值质量指数";
+            card.Level.Text = L10n.T("峰值质量指数");
             card.Best.Text = "--";
-            card.Window.Text = "推荐窗口 --";
+            card.Window.Text = L10n.T("推荐窗口 --");
             card.Chips.Text = "";
             card.Source.Text = "";
             card.Error.Text = "";
@@ -341,18 +341,18 @@ public sealed partial class MainWindow
                 ? ModelBrush(model)
                 : (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
             card.Level.Text = Text(report, "peak_quality_level") is { Length: > 0 } level ? level
-                : Text(report, "quality_level") is { Length: > 0 } fallback ? fallback : "峰值质量指数";
+                : Text(report, "quality_level") is { Length: > 0 } fallback ? fallback : L10n.T("峰值质量指数");
             card.Best.Text = TimeLabel(Text(report, "best_time_local"));
             card.Window.Text =
                 $"推荐窗口 {TimeLabel(Text(report?["timing_window"], "start_time_local"))} – {TimeLabel(Text(report?["timing_window"], "end_time_local"))}";
             var cycle = CycleLabel(model, report);
             var family = FamilyLabel(report?["dominant_burnable_pressure_family"]);
             card.Chips.Text = string.Join("   ",
-                new[] { cycle.Length > 0 ? $"起报 {cycle}" : "", report == null ? "未预测" : family.Length > 0 ? family : "压力族未提供" }
+                new[] { cycle.Length > 0 ? $"起报 {cycle}" : "", report == null ? L10n.T("未预测") : family.Length > 0 ? family : L10n.T("压力族未提供") }
                 .Where(part => part.Length > 0));
             ToolTipService.SetToolTip(card.Chips, report == null
-                ? "尚未运行预测；完成一次预测后显示主导可烧压力族。"
-                : "主导可烧压力族（来自本次预测结果）");
+                ? L10n.T("尚未运行预测；完成一次预测后显示主导可烧压力族。")
+                : L10n.T("主导可烧压力族（来自本次预测结果）"));
             card.Source.Text = ModelSourceNote(model);
             card.Error.Text = error ?? "";
             card.Error.Visibility = error != null ? Visibility.Visible : Visibility.Collapsed;
@@ -528,7 +528,7 @@ public sealed partial class MainWindow
             card.Gfs.Text = MetricValue(spec.Key, ModelReport("gfs"), aod);
             card.Ec.Text = MetricValue(spec.Key, ModelReport("ec"), aod);
             if (spec.Key == "cloud_layer")
-                card.Caption.Text = "云底–云顶为海拔 ASL 口径，「云层 AGL」为离地口径";
+                card.Caption.Text = L10n.T("云底–云顶为海拔 ASL 口径，「云层 AGL」为离地口径");
         }
     }
 
@@ -656,20 +656,20 @@ public sealed partial class MainWindow
             row.Children.Add(deltaText);
             panel.Children.Add(row);
         }
-        AdjustmentRow("云量基础分",
-            $"有效可烧 {RatioText(components["burnable_cloud_coverage_effective"])} · 可烧载荷 {QualityText(components["forward_burnable_cloud_load_effective"] ?? components["forward_burnable_cloud_load_peak"], 2)} · 前方总云场 {RatioText(components["forward_view_cloud_field_amount_peak"])}",
+        AdjustmentRow(L10n.T("云量基础分"),
+            $"有效可烧 {RatioText(components["burnable_cloud_coverage_effectiveL10n.T("])} · 可烧载荷 {QualityText(components[")forward_burnable_cloud_load_effective"] ?? components["forward_burnable_cloud_load_peakL10n.T("], 2)} · 前方总云场 {RatioText(components[")forward_view_cloud_field_amount_peak"])}",
             SignedDelta(components["coverage_base_score"] ?? components["coverage_score"]));
-        AdjustmentRow("可烧云比例",
-            $"可烧/总云量 {RatioText(components["forward_burnable_cloud_ratio_peak"])} · 前方可烧云量 {RatioText(components["forward_burnable_cloud_field_amount_peak"])}", null);
-        AdjustmentRow("几何遮挡（已计入可烧量）",
-            $"最佳云入射遮挡 {RatioText(components["solar_incoming_block_risk_at_best_cloud"] ?? components["solar_incoming_block_risk_mean"])} · 不重复扣分", null);
-        AdjustmentRow("持续时间修正",
-            $"{QualityText(report["duration_minutes"] ?? components["duration_minutes"], 0)} 分钟 · ×{QualityText(components["duration_factor"], 3)}",
+        AdjustmentRow(L10n.T("可烧云比例"),
+            $"可烧/总云量 {RatioText(components["forward_burnable_cloud_ratio_peakL10n.T("])} · 前方可烧云量 {RatioText(components[")forward_burnable_cloud_field_amount_peak"])}", null);
+        AdjustmentRow(L10n.T("几何遮挡（已计入可烧量）"),
+            $"最佳云入射遮挡 {RatioText(components["solar_incoming_block_risk_at_best_cloud"] ?? components["solar_incoming_block_risk_meanL10n.T("])} · 不重复扣分"), null);
+        AdjustmentRow(L10n.T("持续时间修正"),
+            $"{QualityText(report["duration_minutes"] ?? components["duration_minutesL10n.T("], 0)} 分钟 · ×{QualityText(components[")duration_factor"], 3)}",
             SignedDelta(components["duration_adjustment"]));
-        AdjustmentRow("入射 AOD 修正",
-            $"本地 AOD {QualityText(components["quality_aod550"], 3)} · 入射因子 ×{QualityText(components["incoming_aod_illumination_factor"], 3)}",
+        AdjustmentRow(L10n.T("入射 AOD 修正"),
+            $"本地 AOD {QualityText(components["quality_aod550L10n.T("], 3)} · 入射因子 ×{QualityText(components[")incoming_aod_illumination_factor"], 3)}",
             SignedDelta(components["incoming_aod_adjustment"]));
-        AdjustmentRow("观测 AOD 修正",
+        AdjustmentRow(L10n.T("观测 AOD 修正"),
             $"观测对比因子 ×{QualityText(components["observer_aod_contrast_factor"], 3)}",
             SignedDelta(components["observer_aod_adjustment"]));
         void CapRow(string title, string value)
@@ -686,21 +686,21 @@ public sealed partial class MainWindow
             Grid.SetColumn((FrameworkElement)row.Children[1], 1);
             panel.Children.Add(row);
         }
-        CapRow("修正后原始分", QualityText(components["raw_quality_index"], 3));
-        CapRow("云量基础分", QualityText(components["coverage_base_score"] ?? components["coverage_score"], 3));
-        CapRow("分析范围", NumText(components["forward_field_radius_km"] ?? report["analysis_radius_km"], 0, " km"));
-        CapRow("太阳方向扇区", NumText(components["forward_sector_half_angle_deg"], 0, "°", "±"));
-        CapRow("总云场来源", modelSource == "ec" ? "EC TCC + PL-RH 云柱代理" : "GFS 全量云场");
-        CapRow("可烧量来源", StringOf(components["quality_coverage_source"]) is { Length: > 0 } coverageSource
-            ? coverageSource : "前方全量云场");
-        CapRow("持续时间修正系数", $"×{QualityText(components["duration_factor"], 3)}");
-        CapRow("入射 / 观测回程因子",
+        CapRow(L10n.T("修正后原始分"), QualityText(components["raw_quality_index"], 3));
+        CapRow(L10n.T("云量基础分"), QualityText(components["coverage_base_score"] ?? components["coverage_score"], 3));
+        CapRow(L10n.T("分析范围"), NumText(components["forward_field_radius_km"] ?? report["analysis_radius_km"], 0, " km"));
+        CapRow(L10n.T("太阳方向扇区"), NumText(components["forward_sector_half_angle_deg"], 0, "°", "±"));
+        CapRow(L10n.T("总云场来源"), modelSource == "ec" ? L10n.T("EC TCC + PL-RH 云柱代理") : L10n.T("GFS 全量云场"));
+        CapRow(L10n.T("可烧量来源"), StringOf(components["quality_coverage_source"]) is { Length: > 0 } coverageSource
+            ? coverageSource : L10n.T("前方全量云场"));
+        CapRow(L10n.T("持续时间修正系数"), $"×{QualityText(components["duration_factor"], 3)}");
+        CapRow(L10n.T("入射 / 观测回程因子"),
             $"×{QualityText(components["incoming_aod_illumination_factor"], 3)} / ×{QualityText(components["observer_aod_contrast_factor"], 3)}");
-        CapRow("观测回程光学量",
+        CapRow(L10n.T("观测回程光学量"),
             $"τ {QualityText(components["observer_return_optical_depth_mean"], 3)} · T {QualityText(components["observer_return_transmission_mean"], 3)}");
         panel.Children.Add(new TextBlock
         {
-            Text = "几何遮挡已包含在可烧云量中，不再重复扣分；持续时间和 AOD 各修正一次。低 AOD 小幅加分，高 AOD 有符号扣分。可烧量只包含既受太阳入射照亮、又能被地面观测者看到的云底面积。摄影焦段、Top-K、代表云和云边界不进入主评分。",
+            Text = L10n.T("几何遮挡已包含在可烧云量中，不再重复扣分；持续时间和 AOD 各修正一次。低 AOD 小幅加分，高 AOD 有符号扣分。可烧量只包含既受太阳入射照亮、又能被地面观测者看到的云底面积。摄影焦段、Top-K、代表云和云边界不进入主评分。"),
             FontSize = 9, Opacity = .6, TextWrapping = TextWrapping.Wrap,
         });
         return new Border
@@ -772,7 +772,7 @@ public sealed partial class MainWindow
         BuildChartPoints();
         var points = chartPoints ?? [];
         ChartEmpty.Visibility = points.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        ChartLegend.Text = "质量轴固定 0–2.5 · 缺测断线不补零    — GFS  - - EC";
+        ChartLegend.Text = L10n.T("质量轴固定 0–2.5 · 缺测断线不补零    — GFS  - - EC");
         if (points.Count == 0) return;
         var width = Math.Max(1, ((FrameworkElement)QualityChart.Parent).ActualWidth);
         var height = 200.0;
@@ -895,39 +895,39 @@ public sealed partial class MainWindow
         var bestTime = Text(report, "best_time_local");
         LedgerColumn[] columns =
         [
-            new("时间", 88, item => TimeLabel(Text(item, "valid_time_local"))),
-            new("质量", 68, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("时间"), 88, item => TimeLabel(Text(item, "valid_time_local"))),
+            new(L10n.T("质量"), 68, item => BoolValue(item, "valid") == false ? "—"
                 : QualityText(item["instant_quality_index"], 3)),
-            new("档位", 92, item => BoolValue(item, "valid") == false ? "缺测"
+            new(L10n.T("档位"), 92, item => BoolValue(item, "valid") == false ? L10n.T("缺测")
                 : Text(item, "instant_quality_level") is { Length: > 0 } level ? level : "—"),
-            new("可烧", 52, item =>
+            new(L10n.T("可烧"), 52, item =>
             {
                 var burnable = BoolValue(item, "physically_burnable");
                 return BoolValue(item, "valid") == false || burnable == null ? "—"
                     : burnable == true ? "✓" : "×";
             }),
-            new("可烧云量", 84, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("可烧云量"), 84, item => BoolValue(item, "valid") == false ? "—"
                 : RatioText(item["burnable_cloud_coverage"])),
-            new("主导压力族", 96, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("主导压力族"), 96, item => BoolValue(item, "valid") == false ? "—"
                 : FamilyLabel(item["dominant_burnable_pressure_family"]) is { Length: > 0 } family
                     ? family : "—"),
-            new("云底–云顶 ASL", 120, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("云底–云顶 ASL"), 120, item => BoolValue(item, "valid") == false ? "—"
                 : AslRangeLabel(item)),
-            new("云层 AGL", 112, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("云层 AGL"), 112, item => BoolValue(item, "valid") == false ? "—"
                 : CloudLayerAgl(item)),
-            new("亮度颜色", 68, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("亮度颜色"), 68, item => BoolValue(item, "valid") == false ? "—"
                 : RatioText(item["brightness_color"])),
-            new("可烧比例", 68, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("可烧比例"), 68, item => BoolValue(item, "valid") == false ? "—"
                 : RatioText(item["forward_burnable_cloud_ratio"])),
-            new("回程透过率", 76, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("回程透过率"), 76, item => BoolValue(item, "valid") == false ? "—"
                 : RatioText(item["observer_return_transmission"])),
-            new("入射阻挡", 72, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("入射阻挡"), 72, item => BoolValue(item, "valid") == false ? "—"
                 : RatioText(item["solar_incoming_block_risk"])),
             new("AOD 550", 72, item => BoolValue(item, "valid") == false ? "—"
                 : QualityText(item["quality_aod550"], 2)),
-            new("太阳仰角", 78, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("太阳仰角"), 78, item => BoolValue(item, "valid") == false ? "—"
                 : QualityText(item["solar_elevation_deg"], 1) + "°"),
-            new("场景", 138, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("场景"), 138, item => BoolValue(item, "valid") == false ? "—"
                 : Text(item, "selected_regime") is { Length: > 0 } scene ? scene : "—"),
         ];
         var header = BuildLedgerRow(null, columns, -1, "", false);
@@ -957,13 +957,13 @@ public sealed partial class MainWindow
         {
             LedgerHost.Children.Add(new TextBlock
             {
-                Text = report == null ? "等待预测" : "本结果没有逐时台账。",
+                Text = report == null ? L10n.T("等待预测") : L10n.T("本结果没有逐时台账。"),
                 Opacity = .65, Padding = new Thickness(0, 24, 0, 24),
             });
         }
         LedgerHost.Children.Add(new TextBlock
         {
-            Text = "云底–云顶为海拔 ASL 口径，「云层 AGL」为离地口径；— 表示缺测，无效时次不展示数值；点击行仅切换本地选中时刻，不驱动地图。",
+            Text = L10n.T("云底–云顶为海拔 ASL 口径，「云层 AGL」为离地口径；— 表示缺测，无效时次不展示数值；点击行仅切换本地选中时刻，不驱动地图。"),
             FontSize = 9, Opacity = .6, TextWrapping = TextWrapping.Wrap,
             Padding = new Thickness(0, 8, 0, 8),
         });
@@ -1078,7 +1078,7 @@ public sealed partial class MainWindow
         {
             DiagnosticPanel.Children.Add(new TextBlock
             {
-                Text = "等待预测", Opacity = .65, Padding = new Thickness(0, 24, 0, 24),
+                Text = L10n.T("等待预测"), Opacity = .65, Padding = new Thickness(0, 24, 0, 24),
             });
             return;
         }
@@ -1118,66 +1118,66 @@ public sealed partial class MainWindow
                 BorderThickness = new Thickness(1),
             });
         }
-        Group("运行与时间",
-            ("预测周期", DiagnosticText(report["cycle_time_utc"])),
-            ("本地锚点", DiagnosticText(report["anchor_local"])),
-            ("时区", DiagnosticText(report["timezone_name"])),
-            ("模式", DiagnosticText(report["forecast_mode"])),
-            ("计算后端", DiagnosticText(report["compute_backend"])),
-            ("分析半径", DiagnosticText(report["analysis_radius_km"], 0, " km")),
-            ("选中场景", Text(report, "selected_regime") is { Length: > 0 } regime ? regime : "—"),
-            ("持续时长", DiagnosticText(report["duration_minutes"], 0, " 分钟")),
-            ("跨模式分歧", "当前后端未计算，GFS/EC 请并列比较"));
+        Group(L10n.T("运行与时间"),
+            (L10n.T("预测周期"), DiagnosticText(report["cycle_time_utc"])),
+            (L10n.T("本地锚点"), DiagnosticText(report["anchor_local"])),
+            (L10n.T("时区"), DiagnosticText(report["timezone_name"])),
+            (L10n.T("模式"), DiagnosticText(report["forecast_mode"])),
+            (L10n.T("计算后端"), DiagnosticText(report["compute_backend"])),
+            (L10n.T("分析半径"), DiagnosticText(report["analysis_radius_km"], 0, " km")),
+            (L10n.T("选中场景"), Text(report, "selected_regime") is { Length: > 0 } regime ? regime : "—"),
+            (L10n.T("持续时长"), DiagnosticText(report["duration_minutes"], 0, L10n.T(" 分钟"))),
+            (L10n.T("跨模式分歧"), L10n.T("当前后端未计算，GFS/EC 请并列比较")));
         if (report["cache"] is JsonObject cache)
-            Group("缓存状态",
-                ("状态", DiagnosticText(cache["status"])),
-                ("生成时间（UTC）", DiagnosticText(cache["generated_at_utc"])));
-        Group("云体几何与可解释性",
-            ("几何代理", DiagnosticText(report["cloud_geometry_proxy_source"])),
-            ("几何支持样本", DiagnosticText(report["cloud_geometry_support_count"], 0)),
-            ("几何不确定度", DiagnosticText(report["cloud_geometry_uncertainty_m"], 0, " m")),
-            ("几何支持度", DiagnosticText(report["cloud_geometry_confidence"], percent: true)),
-            ("置信度语义", DiagnosticText(report["confidence_kind"] ?? report["confidence_score_semantics"])),
-            ("质量指数语义", DiagnosticText(report["quality_index_semantics"])),
-            ("主压力族", FamilyLabel(report["dominant_burnable_pressure_family"]) is { Length: > 0 } family
+            Group(L10n.T("缓存状态"),
+                (L10n.T("状态"), DiagnosticText(cache["status"])),
+                (L10n.T("生成时间（UTC）"), DiagnosticText(cache["generated_at_utc"])));
+        Group(L10n.T("云体几何与可解释性"),
+            (L10n.T("几何代理"), DiagnosticText(report["cloud_geometry_proxy_source"])),
+            (L10n.T("几何支持样本"), DiagnosticText(report["cloud_geometry_support_count"], 0)),
+            (L10n.T("几何不确定度"), DiagnosticText(report["cloud_geometry_uncertainty_m"], 0, " m")),
+            (L10n.T("几何支持度"), DiagnosticText(report["cloud_geometry_confidence"], percent: true)),
+            (L10n.T("置信度语义"), DiagnosticText(report["confidence_kind"] ?? report["confidence_score_semantics"])),
+            (L10n.T("质量指数语义"), DiagnosticText(report["quality_index_semantics"])),
+            (L10n.T("主压力族"), FamilyLabel(report["dominant_burnable_pressure_family"]) is { Length: > 0 } family
                 ? family : "—"));
-        Group("云相与云族诊断",
-            ("云相", DiagnosticText(report["cloud_phase_diagnosis"])),
-            ("云族说明", DiagnosticText(report["cloud_family_diagnosis"])));
+        Group(L10n.T("云相与云族诊断"),
+            (L10n.T("云相"), DiagnosticText(report["cloud_phase_diagnosis"])),
+            (L10n.T("云族说明"), DiagnosticText(report["cloud_family_diagnosis"])));
         if (report["scene_scores"] is JsonObject scores && (scores as IDictionary<string, JsonNode?>).Count > 0)
         {
-            Group("场景分数", scores.OrderBy(pair => pair.Key)
+            Group(L10n.T("场景分数"), scores.OrderBy(pair => pair.Key)
                 .Select(pair => (pair.Key, DiagnosticText(pair.Value, percent: true))).ToArray());
         }
         if (report["nowcast"] == null)
         {
-            Group("共享诊断",
-                ("AOD 修正语义", DiagnosticText(report["aod_adjustment_semantics"])),
-                ("模型身份", DiagnosticText(report["model_identity"])));
+            Group(L10n.T("共享诊断"),
+                (L10n.T("AOD 修正语义"), DiagnosticText(report["aod_adjustment_semantics"])),
+                (L10n.T("模型身份"), DiagnosticText(report["model_identity"])));
         }
         if (report["aerosol"] is JsonObject aerosol)
-            Group("气溶胶来源",
+            Group(L10n.T("气溶胶来源"),
                 ("AOD 550", DiagnosticText(aerosol["aod550"], 3)),
-                ("来源", DiagnosticText(aerosol["source"])),
-                ("数据质量", DiagnosticText(aerosol["quality"])));
+                (L10n.T("来源"), DiagnosticText(aerosol["source"])),
+                (L10n.T("数据质量"), DiagnosticText(aerosol["quality"])));
         if (report["profile_source"] is JsonObject profileSource)
         {
             var available = BoolValue(profileSource, "available") == true;
-            Group("剖面能力",
-                ("冻结剖面", available ? "可查询" : "不可用"),
-                ("原因", available ? "—" : DiagnosticText(profileSource["reason"])),
-                ("冻结源有效期", DiagnosticText(profileSource["expires_at_utc"])));
+            Group(L10n.T("剖面能力"),
+                (L10n.T("冻结剖面"), available ? L10n.T("可查询") : L10n.T("不可用")),
+                (L10n.T("原因"), available ? "—" : DiagnosticText(profileSource["reason"])),
+                (L10n.T("冻结源有效期"), DiagnosticText(profileSource["expires_at_utc"])));
         }
         if (report["data_provenance"] is JsonObject provenance
             && (provenance as IDictionary<string, JsonNode?>).Count > 0)
         {
-            Group("数据来源", provenance.OrderBy(pair => pair.Key)
+            Group(L10n.T("数据来源"), provenance.OrderBy(pair => pair.Key)
                 .Select(pair => (pair.Key, DiagnosticText(pair.Value))).ToArray());
         }
         var actions = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
         if (Text(report, "html_report_path") is { Length: > 0 } htmlPath)
         {
-            var open = new Button { Content = "完整报告", Padding = new Thickness(10, 4, 10, 4) };
+            var open = new Button { Content = L10n.T("完整报告"), Padding = new Thickness(10, 4, 10, 4) };
             open.Click += (_, _) => System.Diagnostics.Process.Start(
                 new System.Diagnostics.ProcessStartInfo(htmlPath) { UseShellExecute = true });
             actions.Children.Add(open);
@@ -1200,7 +1200,7 @@ public sealed partial class MainWindow
     private void RenderPointProfileTab()
     {
         var report = SelectedReport();
-        ProfileStatus.Text = "周期 " + Text(report, "cycle_time_utc");
+        ProfileStatus.Text = L10n.T("周期 ") + Text(report, "cycle_time_utc");
         var source = report?["profile_source"] as JsonObject;
         var available = source != null && BoolValue(source, "available") == true;
         FrozenProfileButton.Visibility = available && resultKind == "point"
@@ -1208,8 +1208,8 @@ public sealed partial class MainWindow
         if (frozenProfileState == "idle")
         {
             PointProfileNote.Text = available
-                ? "点击「读取冻结剖面」查看该结果的太阳方向诊断。"
-                : "该结果没有可查询的冻结剖面。";
+                ? L10n.T("点击「读取冻结剖面」查看该结果的太阳方向诊断。")
+                : L10n.T("该结果没有可查询的冻结剖面。");
             PointCrossSection.Visibility = Visibility.Collapsed;
         }
         RenderFrozenProfile();
@@ -1227,7 +1227,7 @@ public sealed partial class MainWindow
         if (resultKind != "point" || ModelReport(selectedModel) is not { } report)
         {
             frozenProfileState = "unavailable";
-            frozenProfileError = "该结果没有可读取的冻结剖面时次。";
+            frozenProfileError = L10n.T("该结果没有可读取的冻结剖面时次。");
             RenderFrozenProfile();
             return;
         }
@@ -1266,7 +1266,7 @@ public sealed partial class MainWindow
         if (request == null)
         {
             frozenProfileState = "unavailable";
-            frozenProfileError = "该结果没有可读取的冻结剖面时次。";
+            frozenProfileError = L10n.T("该结果没有可读取的冻结剖面时次。");
             RenderFrozenProfile();
             return;
         }
@@ -1281,15 +1281,15 @@ public sealed partial class MainWindow
             var response = await engine.Call("profile_query", request.Payload, cancellation: token);
             token.ThrowIfCancellationRequested();
             if (!ProfileResponseMatches(response, request))
-                throw new InvalidOperationException("剖面响应与当前结果、模式、坐标或时次不匹配。");
+                throw new InvalidOperationException(L10n.T("剖面响应与当前结果、模式、坐标或时次不匹配。"));
             if (!SameUtc(Text(response, "cycle_utc"), request.CycleUtc))
-                throw new InvalidOperationException("剖面响应的模式周期与已发布结果不匹配。");
+                throw new InvalidOperationException(L10n.T("剖面响应的模式周期与已发布结果不匹配。"));
             var status = Text(response, "status");
             if (status != "ready" || response["cross_section"] is not JsonObject section)
             {
                 frozenProfileState = string.IsNullOrWhiteSpace(status) ? "unavailable" : status;
                 frozenProfileError = Text(response, "reason") is { Length: > 0 } reason
-                    ? reason : "所选时次没有可用剖面。";
+                    ? reason : L10n.T("所选时次没有可用剖面。");
             }
             else
             {
@@ -1300,7 +1300,7 @@ public sealed partial class MainWindow
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             frozenProfileState = "cancelled";
-            frozenProfileError = "剖面读取已取消。";
+            frozenProfileError = L10n.T("剖面读取已取消。");
         }
         catch (Exception error)
         {
@@ -1316,11 +1316,11 @@ public sealed partial class MainWindow
         {
             var message = frozenProfileState switch
             {
-                "loading" => "正在读取冻结剖面…",
-                "idle" => "点击「读取冻结剖面」查看该结果的太阳方向诊断。",
+                "loading" => L10n.T("正在读取冻结剖面…"),
+                "idle" => L10n.T("点击「读取冻结剖面」查看该结果的太阳方向诊断。"),
                 "cancelled" => frozenProfileError,
                 "unavailable" => frozenProfileError,
-                _ => frozenProfileError.Length > 0 ? frozenProfileError : "该结果没有可用剖面。",
+                _ => frozenProfileError.Length > 0 ? frozenProfileError : L10n.T("该结果没有可用剖面。"),
             };
             PointProfileNote.Text = message;
             PointProfileNote.Foreground = frozenProfileState is "error" or "unavailable"
@@ -1450,7 +1450,7 @@ public sealed partial class MainWindow
             });
             canvas.Children.Add(new TextBlock
             {
-                Text = "观测点", FontSize = 8, Opacity = .7,
+                Text = L10n.T("观测点"), FontSize = 8, Opacity = .7,
                 RenderTransform = new TranslateTransform
                 {
                     X = X(distances[0]) + 10, Y = Y(terrain[0]) - 16,

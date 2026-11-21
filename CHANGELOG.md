@@ -112,6 +112,33 @@ ships release capability (self-contained zip, installer, CI publishing).
 > toolchain fix (portable Android cross paths); this release therefore
 > contains everything from both.
 
+## v1.9.8 (2026-11-21)
+
+卡死治理 + 排队透明化 + helper 一致性校验 + Windows 动态文案 i18n。
+Stall governance, queue transparency, helper consistency check, and
+Windows dynamic-string i18n.
+
+**引擎 / Engine**
+
+- 空闲看门狗：check/prepare/forecast/terrain_download/data_sync 等长任务
+  超过 15 分钟没有任何进度事件即自动取消并转明确可重试错误——引擎或
+  网络真卡死时 UI 不再永久 busy（退出守卫反复弹窗与界面假死的根因）。
+- ADS 队列/读取事件化：排队等待（状态 + 已等待分钟数）与资产分片读取
+  （每 32 MiB）持续外发进度，CAMS 排队与慢链路大资产不再是无事件黑箱，
+  同时维持看门狗心跳；「慢而活跃」不会被误杀。
+  Engine: idle watchdog converts true stalls into retryable failures;
+  ADS queue-wait and chunked-read events keep long phases observable.
+
+**桌面 / 客户端**
+
+- macOS 后台助手一致性校验：已安装 plist 烘焙的工作区与当前数据目录
+  不一致时在设置页显示警示并引导重装（历史 bug：陈旧路径在别的目录
+  全源同步）。
+- Windows 动态文案 i18n：553 处界面字符串接入 L10n.T()（状态键与引擎
+  参数保持中文原文，仅显示位翻译）；语言切换经视觉树遍历双向幂等。
+  macOS helper workspace-mismatch warning; 553 Windows UI strings
+  localized while state keys and engine parameters stay untouched.
+
 ## v1.9.7 (2026-11-21)
 
 进度与吞吐透明化（prepare 逐文件进度 / ADS 断点续传 / 欠账可视化 / MB/s 吞吐 / EC index 复用 / 手动优先让路）+ 三端 i18n 收尾 + 任务详情打开报告 + web uPlot 试点合并。

@@ -745,6 +745,13 @@ struct SettingsView: View {
             Divider()
             VStack(alignment: .leading, spacing: 8) {
                 settingsBlockTitle(L10n.t("后台助手（关闭应用后仍同步）"))
+
+                        // v1.9.8 一致性校验：plist 工作区与当前数据目录不一致。
+                        if store.helperWorkspaceMismatch {
+                            Text("后台助手配置的工作区与当前数据目录不一致，请重新安装助手（上次同步可能写入了别的目录）。")
+                                .font(.caption).foregroundStyle(.orange)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                 Text(L10n.t("安装为系统 launchd 代理，按同步间隔在后台自动拉齐最新已发布周期。"))
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

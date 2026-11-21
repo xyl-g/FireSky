@@ -86,8 +86,8 @@ public sealed partial class MainWindow
         CityRankingRows.Items.Clear();
         if (report == null)
         {
-            RegionalGridSummary.Text = "当前模式没有可用区域结果。";
-            RegionalProfileStatus.Text = "当前模式没有可读取的冻结剖面。";
+            RegionalGridSummary.Text = L10n.T("当前模式没有可用区域结果。");
+            RegionalProfileStatus.Text = L10n.T("当前模式没有可读取的冻结剖面。");
             RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
             return;
         }
@@ -116,19 +116,19 @@ public sealed partial class MainWindow
         if (points.Count == 0)
             RegionalGridRows.Items.Add(new TextBlock
             {
-                Text = "暂无可用网格结果。", Opacity = .65, Margin = new Thickness(4),
+                Text = L10n.T("暂无可用网格结果。"), Opacity = .65, Margin = new Thickness(4),
             });
         if (cities.Count == 0)
         {
             var reason = Text(cityReport, "reason");
             CityRankingRows.Items.Add(new TextBlock
             {
-                Text = string.IsNullOrWhiteSpace(reason) ? "该区域暂无城市排名。" : reason,
+                Text = string.IsNullOrWhiteSpace(reason) ? L10n.T("该区域暂无城市排名。") : reason,
                 Opacity = .65, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(4),
             });
         }
         RegionalProfileSelection.Text = string.IsNullOrWhiteSpace(regionalProfileModel)
-            ? "选择网格后读取冻结剖面"
+            ? L10n.T("选择网格后读取冻结剖面")
             : $"{regionalProfileModel.ToUpperInvariant()} · {regionalProfileLat:0.00}°, {regionalProfileLon:0.00}°";
         RenderProfileSection();
     }
@@ -151,8 +151,8 @@ public sealed partial class MainWindow
         var snapshot = row.DeepClone() as JsonObject ?? row;
         button.Click += (_, _) => _ = FocusRegionalPoint(snapshot);
         ToolTipService.SetToolTip(button, city
-            ? "点击查看城市详情与冻结剖面"
-            : "点击查看网格详情与冻结剖面");
+            ? L10n.T("点击查看城市详情与冻结剖面")
+            : L10n.T("点击查看网格详情与冻结剖面"));
         return button;
     }
 
@@ -182,7 +182,7 @@ public sealed partial class MainWindow
             .FirstOrDefault();
         if (nearest == null)
         {
-            RegionalProfileStatus.Text = "地图选点未命中当前结果网格。";
+            RegionalProfileStatus.Text = L10n.T("地图选点未命中当前结果网格。");
             return;
         }
         await FocusRegionalPoint(nearest);
@@ -229,24 +229,24 @@ public sealed partial class MainWindow
             detail.Children.Add(grid);
         }
         var quality = DoubleValue(row["peak_quality_index"] ?? row["quality_index"]);
-        Line("峰值质量", quality is { } value ? $"{value:0.000} / 2.5" : "未计算");
-        Line("峰值档位", Text(row, "peak_quality_level") is { Length: > 0 } level ? level : "—");
-        Line("最佳时刻", Text(row, "best_time_local") is { Length: > 0 } best ? TimeLabel(best) : "—");
-        Line("事件窗质量", DoubleValue(row["event_window_quality"]) is { } window
-            ? $"{window:0.000} / 2.5" : "未计算");
-        Line("主导压力族", FamilyLabel(row["pressure_family"]) is { Length: > 0 } family
-            ? family : "未提供");
-        Line("高/中/低云",
+        Line(L10n.T("峰值质量"), quality is { } value ? $"{value:0.000} / 2.5" : L10n.T("未计算"));
+        Line(L10n.T("峰值档位"), Text(row, "peak_quality_level") is { Length: > 0 } level ? level : "—");
+        Line(L10n.T("最佳时刻"), Text(row, "best_time_local") is { Length: > 0 } best ? TimeLabel(best) : "—");
+        Line(L10n.T("事件窗质量"), DoubleValue(row["event_window_quality"]) is { } window
+            ? $"{window:0.000} / 2.5" : L10n.T("未计算"));
+        Line(L10n.T("主导压力族"), FamilyLabel(row["pressure_family"]) is { Length: > 0 } family
+            ? family : L10n.T("未提供"));
+        Line(L10n.T("高/中/低云"),
             $"{PercentText(row["high_cloud_fraction"])} / {PercentText(row["mid_cloud_fraction"])} / {PercentText(row["low_cloud_fraction"])}");
-        Line("AOD 修正", DoubleValue(row["aod550"]) is { } aod ? aod.ToString("0.000") : "未提供");
-        Line("置信度", "未提供（区域格点不发布置信度）");
+        Line(L10n.T("AOD 修正"), DoubleValue(row["aod550"]) is { } aod ? aod.ToString("0.000") : L10n.T("未提供"));
+        Line(L10n.T("置信度"), L10n.T("未提供（区域格点不发布置信度）"));
         if (Text(row, "reason") is { Length: > 0 } reason)
             detail.Children.Add(new TextBlock
             {
                 Text = reason, FontSize = 11, Foreground = new SolidColorBrush(Colors.Orange),
                 TextWrapping = TextWrapping.Wrap,
             });
-        var open = new Button { Content = "在单点模式打开", Padding = new Thickness(10, 4, 10, 4) };
+        var open = new Button { Content = L10n.T("在单点模式打开"), Padding = new Thickness(10, 4, 10, 4) };
         open.Click += (_, _) => OpenRegionalCellInPointForecast(row);
         detail.Children.Add(open);
         RegionalProfileRows.Items.Clear();
@@ -263,7 +263,7 @@ public sealed partial class MainWindow
         try
         {
             if (Text(row, "name") is { Length: > 0 } name) LocationName.Text = name;
-            else LocationName.Text = "地图选点";
+            else LocationName.Text = L10n.T("地图选点");
             Latitude.Value = Number(row, "lat");
             Longitude.Value = Number(row, "lon");
             Timezone.Text = Text(row, "timezone_name") is { Length: > 0 } timezone
@@ -292,7 +292,7 @@ public sealed partial class MainWindow
         if (request == null)
         {
             regionalProfileState = "unavailable";
-            RegionalProfileStatus.Text = "该网格没有可读取的冻结剖面时次。";
+            RegionalProfileStatus.Text = L10n.T("该网格没有可读取的冻结剖面时次。");
             RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
             return;
         }
@@ -301,15 +301,15 @@ public sealed partial class MainWindow
             var response = await engine.Call("profile_query", request.Payload, cancellation: token);
             token.ThrowIfCancellationRequested();
             if (!ProfileResponseMatches(response, request))
-                throw new InvalidOperationException("剖面响应与当前结果、模式、坐标或时次不匹配。");
+                throw new InvalidOperationException(L10n.T("剖面响应与当前结果、模式、坐标或时次不匹配。"));
             if (!SameUtc(Text(response, "cycle_utc"), request.CycleUtc))
-                throw new InvalidOperationException("剖面响应的模式周期与区域结果不匹配。");
+                throw new InvalidOperationException(L10n.T("剖面响应的模式周期与区域结果不匹配。"));
             var status = Text(response, "status");
             if (status != "ready" || response["cross_section"] is not JsonObject section)
             {
                 regionalProfileState = string.IsNullOrWhiteSpace(status) ? "unavailable" : status;
                 RegionalProfileStatus.Text = string.IsNullOrWhiteSpace(Text(response, "reason"))
-                    ? "所选时次没有可用剖面。" : Text(response, "reason");
+                    ? L10n.T("所选时次没有可用剖面。") : Text(response, "reason");
                 RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
                 return;
             }
@@ -320,7 +320,7 @@ public sealed partial class MainWindow
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             regionalProfileState = "cancelled";
-            RegionalProfileStatus.Text = "剖面读取已取消。";
+            RegionalProfileStatus.Text = L10n.T("剖面读取已取消。");
         }
         catch (Exception error)
         {
@@ -335,14 +335,14 @@ public sealed partial class MainWindow
         RegionalCrossSection.Visibility = Visibility.Collapsed;
         if (regionalProfileState == "loading")
         {
-            RegionalProfileStatus.Text = "正在读取所选网格的冻结剖面…";
+            RegionalProfileStatus.Text = L10n.T("正在读取所选网格的冻结剖面…");
             RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
             return;
         }
         if (regionalProfileState != "ready" || regionalProfile == null)
         {
             if (regionalProfileState == "idle")
-                RegionalProfileStatus.Text = "未选择网格。";
+                RegionalProfileStatus.Text = L10n.T("未选择网格。");
             RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
             return;
         }
@@ -356,8 +356,8 @@ public sealed partial class MainWindow
         var summary = new StackPanel { Spacing = 3, Padding = new Thickness(0, 4, 0, 0) };
         summary.Children.Add(new TextBlock
         {
-            Text = $"云量样本 {NestedArrayCount(fields?["cloud_fraction_percent"])} · 温度样本 {NestedArrayCount(fields?["temperature_c"])}"
-                   + $" · 湿度样本 {NestedArrayCount(fields?["relative_humidity_percent"])} · 消光样本 {NestedArrayCount(fields?["extinction_coefficient"])}",
+            Text = $"云量样本 {NestedArrayCount(fields?["cloud_fraction_percentL10n.T("])} · 温度样本 {NestedArrayCount(fields?[")temperature_c"])}"
+                   + $" · 湿度样本 {NestedArrayCount(fields?["relative_humidity_percentL10n.T("])} · 消光样本 {NestedArrayCount(fields?[")extinction_coefficient"])}",
             FontSize = 11, Opacity = .8,
         });
         RegionalProfileRows.Items.Add(summary);
@@ -381,9 +381,9 @@ public sealed partial class MainWindow
         regionalProfileState = "idle";
         regionalProfileLat = regionalProfileLon = 0;
         if (RegionalProfileSelection != null)
-            RegionalProfileSelection.Text = "选择网格后读取冻结剖面";
+            RegionalProfileSelection.Text = L10n.T("选择网格后读取冻结剖面");
         if (RegionalProfileStatus != null)
-            RegionalProfileStatus.Text = "未选择网格";
+            RegionalProfileStatus.Text = L10n.T("未选择网格");
         if (RegionalProfileRows != null)
             RegionalProfileRows.Items.Clear();
         if (RegionalCrossSection != null)

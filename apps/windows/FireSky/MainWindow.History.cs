@@ -31,16 +31,16 @@ public sealed partial class MainWindow
                 || values.Any(node => node is not JsonObject)
                 || Integer(response, "total") is not { } total
                 || total < values.Count || values.Count > 100)
-                throw new InvalidOperationException("任务历史协议不匹配，请重新连接引擎。");
+                throw new InvalidOperationException(L10n.T("任务历史协议不匹配，请重新连接引擎。"));
             var parsed = new List<TaskHistoryItem>();
             foreach (var node in values.OfType<JsonObject>())
             {
                 if (TaskHistoryItem.Parse(node) is not { } item)
-                    throw new InvalidOperationException("任务历史包含无效记录，请检查引擎版本。");
+                    throw new InvalidOperationException(L10n.T("任务历史包含无效记录，请检查引擎版本。"));
                 parsed.Add(item);
             }
             if (parsed.Select(row => row.TaskId).Distinct().Count() != parsed.Count)
-                throw new InvalidOperationException("任务历史包含重复记录，请重新连接引擎。");
+                throw new InvalidOperationException(L10n.T("任务历史包含重复记录，请重新连接引擎。"));
             taskHistory.Clear();
             taskHistory.AddRange(parsed);
             taskHistoryTotal = (int)total;
@@ -80,7 +80,7 @@ public sealed partial class MainWindow
     {
         HistoryCaption.Text = taskHistoryLoaded
             ? $"最近 {taskHistory.Count} 项 · 共 {taskHistoryTotal} 项"
-            : "记录数据检查、准备、预测和下载探测任务";
+            : L10n.T("记录数据检查、准备、预测和下载探测任务");
         HistoryIssues.Text = taskHistoryIssues > 0 ? $"{taskHistoryIssues} 项无法核验" : "";
         HistoryIssues.Visibility = taskHistoryIssues > 0 ? Visibility.Visible : Visibility.Collapsed;
         HistoryLoadingPanel.Visibility = taskHistoryLoading && taskHistory.Count == 0
@@ -88,8 +88,8 @@ public sealed partial class MainWindow
         HistoryEmpty.Visibility = !taskHistoryLoading && !VisibleHistory().Any()
             ? Visibility.Visible : Visibility.Collapsed;
         HistoryEmptyText.Text = !taskHistoryLoaded ? (online
-            ? "完成一次检查或预测后会显示在这里。" : "引擎未连接。")
-            : taskHistory.Count > 0 ? "换个筛选条件试试。" : "";
+            ? L10n.T("完成一次检查或预测后会显示在这里。") : L10n.T("引擎未连接。"))
+            : taskHistory.Count > 0 ? L10n.T("换个筛选条件试试。") : "";
         RenderTaskHistoryRows();
         UpdateTaskHistoryControls();
     }
@@ -111,7 +111,7 @@ public sealed partial class MainWindow
         if (!online && taskHistoryError.Length == 0 && taskHistory.Count > 0)
             HistoryListHost.Children.Add(new TextBlock
             {
-                Text = "引擎未连接，显示的是上次读取的记录。",
+                Text = L10n.T("引擎未连接，显示的是上次读取的记录。"),
                 FontSize = 11, Opacity = .65, Margin = new Thickness(0, 10, 0, 0),
             });
     }
@@ -160,7 +160,7 @@ public sealed partial class MainWindow
         if (item.Status == "interrupted")
             metaLine.Children.Add(new TextBlock
             {
-                Text = "不会自动重跑", FontSize = 10, Opacity = .6,
+                Text = L10n.T("不会自动重跑"), FontSize = 10, Opacity = .6,
                 VerticalAlignment = VerticalAlignment.Center,
             });
         info.Children.Add(metaLine);
@@ -170,19 +170,19 @@ public sealed partial class MainWindow
             Orientation = Orientation.Horizontal, Spacing = 8,
             VerticalAlignment = VerticalAlignment.Top,
         };
-        var restoreResult = new Button { Content = "恢复结果", Padding = new Thickness(8, 3, 8, 3) };
-        ToolTipService.SetToolTip(restoreResult, "恢复已发布结果");
+        var restoreResult = new Button { Content = L10n.T("恢复结果"), Padding = new Thickness(8, 3, 8, 3) };
+        ToolTipService.SetToolTip(restoreResult, L10n.T("恢复已发布结果"));
         restoreResult.Visibility = item.CanRestoreResult ? Visibility.Visible : Visibility.Collapsed;
         restoreResult.Click += (_, _) => _ = RestoreTaskResult(item);
         actions.Children.Add(restoreResult);
-        var restoreParameters = new Button { Content = "恢复参数并重新检查", Padding = new Thickness(8, 3, 8, 3) };
-        ToolTipService.SetToolTip(restoreParameters, "恢复参数并重新检查数据");
+        var restoreParameters = new Button { Content = L10n.T("恢复参数并重新检查"), Padding = new Thickness(8, 3, 8, 3) };
+        ToolTipService.SetToolTip(restoreParameters, L10n.T("恢复参数并重新检查数据"));
         restoreParameters.Visibility = item.RetryPayload != null
             ? Visibility.Visible : Visibility.Collapsed;
         restoreParameters.Click += (_, _) => RestoreTaskParameters(item);
         actions.Children.Add(restoreParameters);
-        var forget = new Button { Content = "删除记录", Padding = new Thickness(8, 3, 8, 3) };
-        ToolTipService.SetToolTip(forget, "删除任务记录");
+        var forget = new Button { Content = L10n.T("删除记录"), Padding = new Thickness(8, 3, 8, 3) };
+        ToolTipService.SetToolTip(forget, L10n.T("删除任务记录"));
         forget.Click += (_, _) => _ = ConfirmForgetTask(item.TaskId);
         actions.Children.Add(forget);
 
@@ -302,7 +302,7 @@ public sealed partial class MainWindow
                 || values.Any(node => node is not JsonObject)
                 || Integer(response, "next_seq") is not { } next || next < 0
                 || BoolValue(response, "truncated") is null)
-                throw new InvalidOperationException("任务事件协议不匹配。");
+                throw new InvalidOperationException(L10n.T("任务事件协议不匹配。"));
             var parsed = new List<TaskEvent>();
             var previous = 0L;
             foreach (var node in values.OfType<JsonObject>())
@@ -311,7 +311,7 @@ public sealed partial class MainWindow
                     || sequence <= previous || sequence > next
                     || StringOrNull(node["at_utc"]) is not { } atUtc || !IsTaskTimestamp(atUtc)
                     || StringOrNull(node["event"]) is not { } title)
-                    throw new InvalidOperationException("任务事件顺序或时间无效。");
+                    throw new InvalidOperationException(L10n.T("任务事件顺序或时间无效。"));
                 previous = sequence;
                 parsed.Add(new TaskEvent
                 {
@@ -366,7 +366,7 @@ public sealed partial class MainWindow
         {
             HistoryEventsPanel.Children.Add(new TextBlock
             {
-                Text = "没有已记录的事件。", FontSize = 11, Opacity = .65,
+                Text = L10n.T("没有已记录的事件。"), FontSize = 11, Opacity = .65,
             });
             return;
         }
@@ -424,15 +424,15 @@ public sealed partial class MainWindow
             line.Children.Add(text);
             HistorySummaryPanel.Children.Add(line);
         }
-        Row("状态", item.StatusTitle + (item.Status == "interrupted" ? "（不会自动重跑）" : ""));
-        Row("创建时间", HistoryTime.Text(item.CreatedAtUtc), $"UTC：{item.CreatedAtUtc}");
-        Row("更新时间", HistoryTime.Text(item.UpdatedAtUtc), $"UTC：{item.UpdatedAtUtc}");
+        Row(L10n.T("状态"), item.StatusTitle + (item.Status == "interrupted" ? L10n.T("（不会自动重跑）") : ""));
+        Row(L10n.T("创建时间"), HistoryTime.Text(item.CreatedAtUtc), $"UTC：{item.CreatedAtUtc}");
+        Row(L10n.T("更新时间"), HistoryTime.Text(item.UpdatedAtUtc), $"UTC：{item.UpdatedAtUtc}");
         if (item.Status == "running" && DoubleValue(item.Progress["percent"]) is { } percent)
-            Row("进度", $"{percent:0}%");
-        if (item.CancelRequested) Row("取消", "已请求取消，等待任务停止");
-        if (item.CanRestoreResult) Row("恢复", "可从已发布快照恢复本任务结果");
-        if (item.RetryPayload != null) Row("重试", "可恢复参数并重新检查数据");
-        Row("删除记录", "只删除状态和事件，不影响报告与天气数据");
+            Row(L10n.T("进度"), $"{percent:0}%");
+        if (item.CancelRequested) Row(L10n.T("取消"), L10n.T("已请求取消，等待任务停止"));
+        if (item.CanRestoreResult) Row(L10n.T("恢复"), L10n.T("可从已发布快照恢复本任务结果"));
+        if (item.RetryPayload != null) Row(L10n.T("重试"), L10n.T("可恢复参数并重新检查数据"));
+        Row(L10n.T("删除记录"), L10n.T("只删除状态和事件，不影响报告与天气数据"));
     }
 
     private async Task ConfirmForgetTask(string taskId)
@@ -442,14 +442,14 @@ public sealed partial class MainWindow
         if (item == null || item.Status == "running") return;
         var dialog = new ContentDialog
         {
-            Title = "删除任务记录？",
+            Title = L10n.T("删除任务记录？"),
             Content = new TextBlock
             {
-                Text = "只删除状态和事件，不删除已发布报告或天气数据。释放磁盘空间请到「数据管理」操作。",
+                Text = L10n.T("只删除状态和事件，不删除已发布报告或天气数据。释放磁盘空间请到「数据管理」操作。"),
                 TextWrapping = TextWrapping.Wrap,
             },
-            PrimaryButtonText = "删除记录",
-            CloseButtonText = "保留记录",
+            PrimaryButtonText = L10n.T("删除记录"),
+            CloseButtonText = L10n.T("保留记录"),
             DefaultButton = ContentDialogButton.Close,
             XamlRoot = Root.XamlRoot,
         };
@@ -468,7 +468,7 @@ public sealed partial class MainWindow
         {
             var response = await engine.Call("task_forget", new() { ["task_id"] = taskId });
             if (BoolValue(response, "forgotten") != true)
-                throw new InvalidOperationException("任务记录没有被删除。");
+                throw new InvalidOperationException(L10n.T("任务记录没有被删除。"));
             if (selectedTaskHistoryId == taskId) ClearTaskHistorySelection();
             _ = LoadTaskHistory();
         }
@@ -494,7 +494,7 @@ public sealed partial class MainWindow
         {
             var response = await engine.Call("result_restore", new() { ["task_id"] = item.TaskId });
             if (kind != "nowcast" && response["model_results"] is not JsonObject)
-                throw new InvalidOperationException("已发布结果格式无效。");
+                throw new InvalidOperationException(L10n.T("已发布结果格式无效。"));
             // UX #1：恢复结果时先回填结果的原始参数，标题/表单与结果本体不再错位。
             if (item.RetryPayload != null) ApplyRetryPayload(item.RetryPayload, kind);
             AdoptResult(response, kind, item.RetryPayload);
@@ -508,7 +508,7 @@ public sealed partial class MainWindow
             }
             RenderResult();
             await UpdateMap();
-            Status.Text = "已恢复历史结果";
+            Status.Text = L10n.T("已恢复历史结果");
             ErrorBar.IsOpen = false;
         }
         catch (Exception error)
@@ -654,14 +654,14 @@ public sealed partial class MainWindow
 
         internal string KindTitle => RetryKind switch
         {
-            "point" => "单点", "regional" => "区域", "nowcast" => "实况", _ => MethodTitle,
+            "point" => L10n.T("单点"), "regional" => L10n.T("区域"), "nowcast" => L10n.T("实况"), _ => MethodTitle,
         };
 
         internal string MethodTitle => Method switch
         {
-            "check" => "数据检查", "prepare" => "数据准备", "forecast" => "预测计算",
-            "publications" => "发布核验", "network_probe" => "下载探测",
-            "data_sync" => "后台同步", _ => "任务",
+            "check" => L10n.T("数据检查"), "prepare" => L10n.T("数据准备"), "forecast" => L10n.T("预测计算"),
+            "publications" => L10n.T("发布核验"), "network_probe" => L10n.T("下载探测"),
+            "data_sync" => L10n.T("后台同步"), _ => L10n.T("任务"),
         };
 
         /// <summary>UX #13：行标题去重（无重试类别时 kindTitle 与 methodTitle 相同）。</summary>
@@ -672,16 +672,16 @@ public sealed partial class MainWindow
 
         internal string StatusTitle => Status switch
         {
-            "running" => CancelRequested ? "取消中" : "运行中",
-            "done" => "已完成", "failed" => "失败",
-            "cancelled" => "已取消", "interrupted" => "已中断", _ => Status,
+            "running" => CancelRequested ? L10n.T("取消中") : L10n.T("运行中"),
+            "done" => L10n.T("已完成"), "failed" => L10n.T("失败"),
+            "cancelled" => L10n.T("已取消"), "interrupted" => L10n.T("已中断"), _ => Status,
         };
 
         internal string ContextTitle
         {
             get
             {
-                if (RetryPayload == null) return IsBackgroundSync ? "后台数据同步轮次" : "";
+                if (RetryPayload == null) return IsBackgroundSync ? L10n.T("后台数据同步轮次") : "";
                 var name = StringOrNull(RetryPayload["name"]);
                 if (name == null && RetryPayload["regions"] is JsonArray regions
                     && regions.All(node => node is JsonValue value
@@ -691,11 +691,11 @@ public sealed partial class MainWindow
                 var date = StringOf(RetryPayload["target_date"]);
                 var phenomenon = StringOf(RetryPayload["phenomenon"]) switch
                 {
-                    "dawn" => "朝霞", "dusk" => "晚霞", _ => "",
+                    "dawn" => L10n.T("朝霞"), "dusk" => L10n.T("晚霞"), _ => "",
                 };
                 var text = string.Join(" · ", new[] { name ?? "", date, phenomenon }
                     .Where(part => part.Length > 0));
-                if (text.Length == 0 && IsBackgroundSync) return "后台数据同步轮次";
+                if (text.Length == 0 && IsBackgroundSync) return L10n.T("后台数据同步轮次");
                 return text;
             }
         }
@@ -717,9 +717,9 @@ public sealed partial class MainWindow
 
         internal string Title => Event switch
         {
-            "running" => "开始", "progress" => "进度", "cancel_requested" => "请求取消",
-            "done" => "完成", "failed" => "失败", "cancelled" => "已取消",
-            "interrupted" => "已中断", _ => "状态更新",
+            "running" => L10n.T("开始"), "progress" => L10n.T("进度"), "cancel_requested" => L10n.T("请求取消"),
+            "done" => L10n.T("完成"), "failed" => L10n.T("失败"), "cancelled" => L10n.T("已取消"),
+            "interrupted" => L10n.T("已中断"), _ => L10n.T("状态更新"),
         };
 
         internal string Detail

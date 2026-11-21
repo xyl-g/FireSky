@@ -45,19 +45,19 @@ public sealed class PreflightDialog : ContentDialog
         this.kind = kind;
         this.payload = payload;
         isNowcast = kind == "nowcast";
-        var confirmTitle = isNowcast ? "确定分析" : "确定预测";
-        Title = isNowcast ? "实况准备" : "预测准备";
-        PrimaryButtonText = "下载缺失数据";
+        var confirmTitle = isNowcast ? L10n.T("确定分析") : L10n.T("确定预测");
+        Title = isNowcast ? L10n.T("实况准备") : L10n.T("预测准备");
+        PrimaryButtonText = L10n.T("下载缺失数据");
         SecondaryButtonText = confirmTitle;
         IsSecondaryButtonEnabled = false;
-        CloseButtonText = "取消";
+        CloseButtonText = L10n.T("取消");
         IsPrimaryButtonEnabled = false;
         DefaultButton = ContentDialogButton.Primary;
         var content = new StackPanel { Spacing = 16, MinWidth = 460 };
         var header = new StackPanel { Spacing = 6 };
         header.Children.Add(new TextBlock
         {
-            Text = payload["name"]?.GetValue<string>() ?? "本次区域",
+            Text = payload["name"]?.GetValue<string>() ?? L10n.T("本次区域"),
             FontSize = 16, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
         });
         header.Children.Add(headerSubtitle);
@@ -65,7 +65,7 @@ public sealed class PreflightDialog : ContentDialog
         headerGrid.Children.Add(header);
         refresh.HorizontalAlignment = HorizontalAlignment.Right;
         refresh.VerticalAlignment = VerticalAlignment.Center;
-        ToolTipService.SetToolTip(refresh, "重新检查");
+        ToolTipService.SetToolTip(refresh, L10n.T("重新检查"));
         Grid.SetColumn(refresh, 1);
         headerGrid.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
         headerGrid.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
@@ -124,7 +124,7 @@ public sealed class PreflightDialog : ContentDialog
         };
     }
 
-    private string ConfirmTitle => isNowcast ? "确定分析" : "确定预测";
+    private string ConfirmTitle => isNowcast ? L10n.T("确定分析") : L10n.T("确定预测");
 
     /// <summary>镜像引擎 needs_cycle_age_confirmation：就绪数据中存在未核验或非最新发布。</summary>
     private bool NeedsCycleAgeConfirmation =>
@@ -136,7 +136,7 @@ public sealed class PreflightDialog : ContentDialog
         {
             var titles = checkRows.Where(row => row.Ready && (!row.Verified || !row.Latest))
                 .Select(row => row.Title).ToList();
-            return titles.Count == 0 ? "部分数据" : string.Join("、", titles);
+            return titles.Count == 0 ? L10n.T("部分数据") : string.Join("、", titles);
         }
     }
 
@@ -145,12 +145,12 @@ public sealed class PreflightDialog : ContentDialog
     private void ShowCycleAgeConfirm()
     {
         mode = "cycleage";
-        Title = "数据周期确认";
+        Title = L10n.T("数据周期确认");
         IsPrimaryButtonEnabled = true;
         IsSecondaryButtonEnabled = false;
-        PrimaryButtonText = "继续预测";
+        PrimaryButtonText = L10n.T("继续预测");
         SecondaryButtonText = "";
-        CloseButtonText = "返回更新数据";
+        CloseButtonText = L10n.T("返回更新数据");
         DefaultButton = ContentDialogButton.Primary;
         refresh.IsEnabled = false;
         dialogContent.Children.Clear();
@@ -164,10 +164,10 @@ public sealed class PreflightDialog : ContentDialog
     private void RestorePreflightMode()
     {
         mode = "preflight";
-        Title = isNowcast ? "实况准备" : "预测准备";
-        PrimaryButtonText = ready ? ConfirmTitle : "下载缺失数据";
-        SecondaryButtonText = ready ? "更新数据" : ConfirmTitle;
-        CloseButtonText = "取消";
+        Title = isNowcast ? L10n.T("实况准备") : L10n.T("预测准备");
+        PrimaryButtonText = ready ? ConfirmTitle : L10n.T("下载缺失数据");
+        SecondaryButtonText = ready ? L10n.T("更新数据") : ConfirmTitle;
+        CloseButtonText = L10n.T("取消");
         IsPrimaryButtonEnabled = !working && session != null;
         IsSecondaryButtonEnabled = !working && ready && session != null;
         DefaultButton = ContentDialogButton.Primary;
@@ -183,7 +183,7 @@ public sealed class PreflightDialog : ContentDialog
         var header = new StackPanel { Spacing = 6 };
         header.Children.Add(new TextBlock
         {
-            Text = payload["name"]?.GetValue<string>() ?? "本次区域",
+            Text = payload["name"]?.GetValue<string>() ?? L10n.T("本次区域"),
             FontSize = 16, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
         });
         header.Children.Add(headerSubtitle);
@@ -217,17 +217,17 @@ public sealed class PreflightDialog : ContentDialog
     {
         working = value;
         refresh.IsEnabled = !value && mode == "preflight";
-        PrimaryButtonText = mode == "cycleage" ? "继续预测"
-            : ready ? ConfirmTitle : "下载缺失数据";
+        PrimaryButtonText = mode == "cycleage" ? L10n.T("继续预测")
+            : ready ? ConfirmTitle : L10n.T("下载缺失数据");
         SecondaryButtonText = mode == "cycleage" ? ""
-            : ready ? "更新数据" : ConfirmTitle;
+            : ready ? L10n.T("更新数据") : ConfirmTitle;
         IsPrimaryButtonEnabled = !value && session != null && mode == "preflight";
         IsSecondaryButtonEnabled = !value && ready && session != null && mode == "preflight";
         if (GetTemplateChild("SecondaryButton") is Button secondary)
         {
-            ToolTipService.SetToolTip(secondary, ready ? "更新本次预测所需数据" : "需先下载数据方可预测");
+            ToolTipService.SetToolTip(secondary, ready ? L10n.T("更新本次预测所需数据") : L10n.T("需先下载数据方可预测"));
             Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(
-                secondary, ready ? "更新本次预测所需数据" : "需先下载数据方可预测");
+                secondary, ready ? L10n.T("更新本次预测所需数据") : L10n.T("需先下载数据方可预测"));
         }
         bar.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
         bar.IsIndeterminate = value;
@@ -239,7 +239,7 @@ public sealed class PreflightDialog : ContentDialog
         var current = ++revision;
         var old = session; session = null; ready = false;
         if (old != null) _ = engine.Call("dismiss", new() { ["session"] = old });
-        operation = new(); Busy(true); state.Text = "正在检查本地数据";
+        operation = new(); Busy(true); state.Text = L10n.T("正在检查本地数据");
         headerSubtitle.Text = "";
         try
         {
@@ -276,7 +276,7 @@ public sealed class PreflightDialog : ContentDialog
     private async Task Prepare()
     {
         if (session == null || working || mode != "preflight") return;
-        revision++; ready = false; operation = new(); Busy(true); state.Text = "正在准备数据";
+        revision++; ready = false; operation = new(); Busy(true); state.Text = L10n.T("正在准备数据");
         try
         {
             var response = await engine.Call("prepare", new() { ["session"] = session },
@@ -313,7 +313,7 @@ public sealed class PreflightDialog : ContentDialog
         {
             var item = datasetRows[index];
             var source = item["source"]?.GetValue<string>() ?? "";
-            var title = source == "ecmwf" ? "EC" : source == "hsd" ? "卫星帧" : source.ToUpperInvariant();
+            var title = source == "ecmwf" ? "EC" : source == "hsd" ? L10n.T("卫星帧") : source.ToUpperInvariant();
             var available = item["ready"]?.GetValue<bool>() ?? false;
             var verified = item["verified"]?.GetValue<bool>() ?? false;
             var latest = item["is_latest"]?.GetValue<bool>() ?? false;
@@ -337,8 +337,8 @@ public sealed class PreflightDialog : ContentDialog
             });
             labels.Children.Add(new TextBlock
             {
-                Text = !available ? (count > 0 ? "本次预测数据不完整" : "尚未下载本次预测数据")
-                    : old ? "有新发布的数据可更新" : verified ? "发布周期已核验" : "更新待核验",
+                Text = !available ? (count > 0 ? L10n.T("本次预测数据不完整") : L10n.T("尚未下载本次预测数据"))
+                    : old ? L10n.T("有新发布的数据可更新") : verified ? L10n.T("发布周期已核验") : L10n.T("更新待核验"),
                 FontSize = 12, Opacity = .8,
             });
             Grid.SetColumn(labels, 1);
@@ -359,7 +359,7 @@ public sealed class PreflightDialog : ContentDialog
             badge.Children.Add(glyph);
             badge.Children.Add(new TextBlock
             {
-                Text = !available ? "需下载" : old ? "可更新" : "已下载",
+                Text = !available ? L10n.T("需下载") : old ? L10n.T("可更新") : L10n.T("已下载"),
                 VerticalAlignment = VerticalAlignment.Center,
             });
             Grid.SetColumn(badge, 2);
@@ -373,9 +373,9 @@ public sealed class PreflightDialog : ContentDialog
                         ["CardStrokeColorDefaultBrush"],
                 });
         }
-        state.Text = !ready ? "需下载 " + string.Join("、", missing)
-            : updates.Count > 0 ? "数据已齐，可更新 " + string.Join("、", updates)
-            : isNowcast ? "数据已齐，可开始分析" : "数据已齐，可开始预测";
+        state.Text = !ready ? L10n.T("需下载 ") + string.Join("、", missing)
+            : updates.Count > 0 ? L10n.T("数据已齐，可更新 ") + string.Join("、", updates)
+            : isNowcast ? L10n.T("数据已齐，可开始分析") : L10n.T("数据已齐，可开始预测");
         headerSubtitle.Text = state.Text;
         Busy(false);
     }

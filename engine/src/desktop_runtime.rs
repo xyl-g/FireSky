@@ -21,6 +21,7 @@ use std::{
         mpsc, Arc, Mutex,
     },
     thread,
+    time::Instant,
 };
 
 static OWNERS: AtomicU64 = AtomicU64::new(0);
@@ -390,7 +391,12 @@ impl Runtime {
         Ok(report)
     }
 
-    fn prepare_nowcast(&self, payload: &Value, cancel: &AtomicBool) -> Result<Value, String> {
+    fn prepare_nowcast(
+        &self,
+        payload: &Value,
+        cancel: &AtomicBool,
+        progress: Option<&(dyn Fn(Value) -> Result<(), String> + Sync)>,
+    ) -> Result<Value, String> {
         let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
         let path = dir.path().join("nowcast-prepare.json");
         json_file(
@@ -407,6 +413,7 @@ impl Runtime {
         let mut result = desktop_nowcast_prepare::execute_cancellable(
             desktop_nowcast_prepare::Params { path },
             cancel,
+            progress,
         )?;
         if let Some(retention) = crate::retention_settings::apply_configured(&self.workspace)? {
             result["retention"] = retention;
@@ -505,6 +512,21 @@ impl Runtime {
         self.history.events(task_id, after_seq)
     }
 
+    /// v1.9.8 卡死治理：这些长方法在空闲看门狗监管下执行——超过
+    /// STALL_SECONDS 没有任何进度事件（含 ADS 排队/读取心跳）即取消并
+    /// 转明确错误。引擎/网络真卡死时 UI 不再永久 busy（退出守卫误报
+    /// 与假死的根因），任务以可重试失败收场。
+    const STALL_METHODS: [&str; 7] = [
+        "check",
+        "prepare",
+        "forecast",
+        "terrain_download",
+        "data_sync_run",
+        "data_sync_tick",
+        "network_probe",
+    ];
+    const STALL_SECONDS: u64 = 900;
+
     pub(crate) fn dispatch_cancellable(
         &self,
         method: &str,
@@ -517,7 +539,38 @@ impl Runtime {
         if !params.is_object() {
             return Err("desktop params must be an object".into());
         }
-        match method {
+        // 看门狗：progress 包装更新最近事件时间；独立线程每 30s 检查。
+        let last_event = Arc::new(Mutex::new(Instant::now()));
+        let stalled = Arc::new(AtomicBool::new(false));
+        let watchdog_stop = Arc::new(AtomicBool::new(false));
+        let watchdog = if Self::STALL_METHODS.contains(&method) {
+            let last = Arc::clone(&last_event);
+            let stalled = Arc::clone(&stalled);
+            let cancel = Arc::clone(&cancel);
+            let stop = Arc::clone(&watchdog_stop);
+            Some(std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(30));
+                if stop.load(Ordering::Acquire) {
+                    return;
+                }
+                let idle = last.lock().map(|t| t.elapsed()).unwrap_or_default();
+                if idle >= std::time::Duration::from_secs(Self::STALL_SECONDS) {
+                    stalled.store(true, Ordering::Release);
+                    cancel.store(true, Ordering::Release);
+                    return;
+                }
+            }))
+        } else {
+            None
+        };
+        let last_for_progress = Arc::clone(&last_event);
+        let progress = move |event: Value| -> Result<(), String> {
+            if let Ok(mut stamp) = last_for_progress.lock() {
+                *stamp = Instant::now();
+            }
+            progress(event)
+        };
+        let outcome = match method {
             "hello" => Ok(json!({
                 "protocol":1,"engine":"firesky-rust","workspace":self.workspace,
                 "source_id":env!("FIRESKY_ENGINE_SOURCE_ID"),
@@ -608,7 +661,7 @@ impl Runtime {
                     params,
                     task_id,
                     &cancel,
-                    progress,
+                    &progress,
                 )
             }
             "data_sync_tick" => {
@@ -659,7 +712,7 @@ impl Runtime {
                     json!({ "sources": sources }),
                     task_id,
                     &cancel,
-                    progress,
+                    &progress,
                 )?;
                 Ok(json!({
                     "contract": "rust-data-sync-tick-v1",
@@ -741,7 +794,7 @@ impl Runtime {
                     // readers, and inventory/delete detect the live locks.
                     let mut config = self.location.clone();
                     config.cancellation = Some(cancel);
-                    config.terrain_download(&params, progress)
+                    config.terrain_download(&params, &progress)
                 } else {
                     let _operation = self
                         .operation
@@ -749,7 +802,7 @@ impl Runtime {
                         .map_err(|_| "another prepare/forecast is active")?;
                     let mut config = self.location.clone();
                     config.cancellation = Some(cancel);
-                    config.terrain_download(&params, progress)
+                    config.terrain_download(&params, &progress)
                 }
             }
             "profile_query" => {
@@ -861,7 +914,7 @@ impl Runtime {
                     if nowcast {
                         progress(json!({"stage":"prepare","percent":10,"source":"satellite",
                             "message":"正在准备卫星、GFS 与 CAMS 数据"}))?;
-                        self.prepare_nowcast(&payload, &cancel)?;
+                        self.prepare_nowcast(&payload, &cancel, Some(&progress))?;
                     } else {
                         for model in Self::models(&payload)? {
                             check(&cancel)?;
@@ -869,7 +922,7 @@ impl Runtime {
                             "message":format!("正在准备 {} 模式与 CAMS 数据", model.to_uppercase())}))?;
                             let mut request = payload.clone();
                             request["model_source"] = json!(model);
-                            self.prepare_one(&request, regional, &cancel, Some(progress))?;
+                            self.prepare_one(&request, regional, &cancel, Some(&progress))?;
                         }
                     }
                     let report = if nowcast {
@@ -911,11 +964,24 @@ impl Runtime {
                     payload["allow_download"] = json!(false);
                     self.compute_nowcast(payload, &cancel)
                 } else {
-                    self.forecast_models(&payload, regional, &cancel, progress)
+                    self.forecast_models(&payload, regional, &cancel, &progress)
                 }
             }
             _ => Err(format!("unsupported Rust desktop method: {method}")),
+        };
+        // 停看门狗并检查空转触发：Err 结果若由看门狗取消所致，替换为
+        // 明确的可重试错误（成功结果不受影响）。
+        watchdog_stop.store(true, Ordering::Release);
+        if let Some(handle) = watchdog {
+            let _ = handle.join();
         }
+        if stalled.load(Ordering::Acquire) {
+            return Err(format!(
+                "任务超过 {} 分钟没有任何进展（网络或数据源无响应），已自动中断；可重试或稍后再试",
+                Self::STALL_SECONDS / 60
+            ));
+        }
+        outcome
     }
 
     /// Direct non-interactive API/CLI entry; unlike desktop IPC no confirmation token is required.

@@ -184,6 +184,7 @@ fn cams_result(
     context: &Value,
     payload: &Value,
     cancel: &AtomicBool,
+    progress: Option<&(dyn Fn(Value) -> Result<(), String> + Sync)>,
 ) -> Result<Value, String> {
     let areas = desktop_nowcast::cams_areas(context)?;
     let targets = context["cams_valid_times"]
@@ -223,6 +224,7 @@ fn cams_result(
                 model_bbox: None,
             },
             cancel,
+            progress,
         )?;
         let missing = result["missing_valid_times"]
             .as_array()
@@ -276,7 +278,7 @@ fn cams_result(
 }
 
 pub fn execute(params: Params) -> Result<Value, String> {
-    execute_cancellable(params, &AtomicBool::new(false))
+    execute_cancellable(params, &AtomicBool::new(false), None)
 }
 
 fn check(cancel: &AtomicBool) -> Result<(), String> {
@@ -287,7 +289,11 @@ fn check(cancel: &AtomicBool) -> Result<(), String> {
     }
 }
 
-pub fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result<Value, String> {
+pub fn execute_cancellable(
+    params: Params,
+    cancel: &AtomicBool,
+    progress: Option<&(dyn Fn(Value) -> Result<(), String> + Sync)>,
+) -> Result<Value, String> {
     let started = Instant::now();
     check(cancel)?;
     let (input, _) = request_file::read::<Input>(&params.path, MAX_JSON)?;
@@ -320,7 +326,7 @@ pub fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result<Value,
     let hours = model_hours(&context, &frame_times)?;
     let gfs = gfs_files(&input, &context, cycle, &hours, cancel)?;
     check(cancel)?;
-    let cams = cams_result(&input, &context, &input.payload, cancel)?;
+    let cams = cams_result(&input, &context, &input.payload, cancel, progress)?;
     check(cancel)?;
     Ok(json!({
         "contract": "rust-desktop-nowcast-prepare-v1",

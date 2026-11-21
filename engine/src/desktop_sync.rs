@@ -1034,6 +1034,7 @@ fn gfs_cache_complete(
 
 fn sync_cams(
     context: &RunContext<'_>,
+    progress: &(dyn Fn(Value) -> Result<(), String> + Sync),
     anchor: &str,
     cycle: DateTime<Utc>,
     cancel: &AtomicBool,
@@ -1057,6 +1058,7 @@ fn sync_cams(
             model_bbox: None,
         },
         cancel,
+        Some(progress),
     )?;
     // Fail-closed: a partial continent cycle must not advance last_cycle.
     let group_errors = &result["group_errors"];
@@ -1563,7 +1565,7 @@ pub fn run(
                     }))
                 };
                 match *name {
-                    "cams" => sync_cams(context, &anchor, cycle, cancel),
+                    "cams" => sync_cams(context, progress, &anchor, cycle, cancel),
                     "gfs" => sync_gfs(context, &anchor, cycle, horizon, cancel, &file_progress),
                     _ => sync_ec(context, cycle, horizon, &ecmwf_source, cancel, &file_progress),
                 }

@@ -27,8 +27,8 @@ public sealed partial class MainWindow
             var value = Text(observation, "satellite_motion_quality");
             return value switch
             {
-                "observation" => "原始观测", "strong" => "可靠", "decayed" => "已衰减",
-                "unknown" => "未知", "diagnostic-only" => "仅供诊断",
+                "observation" => L10n.T("原始观测"), "strong" => L10n.T("可靠"), "decayed" => L10n.T("已衰减"),
+                "unknown" => L10n.T("未知"), "diagnostic-only" => L10n.T("仅供诊断"),
                 "" => "—", _ => value,
             };
         }
@@ -37,14 +37,14 @@ public sealed partial class MainWindow
             var value = Text(observation, "satellite_low_cloud_state");
             return value switch
             {
-                "detected" => "检测到低云", "clear" => "无低云", "unknown" => "未知",
+                "detected" => L10n.T("检测到低云"), "clear" => L10n.T("无低云"), "unknown" => L10n.T("未知"),
                 "" => "—", _ => value,
             };
         }
         if (key == "cloud_type_label")
         {
             if ((observation as IDictionary<string, JsonNode?>).Count == 0) return "—";
-            return Text(observation, "cloud_type_label") is { Length: > 0 } label ? label : "未计算";
+            return Text(observation, "cloud_type_label") is { Length: > 0 } label ? label : L10n.T("未计算");
         }
         if (DoubleValue(observation[key]) is not { } number) return "—";
         return key switch
@@ -79,12 +79,12 @@ public sealed partial class MainWindow
         var observation = report?["nowcast"] as JsonObject ?? new JsonObject();
         var quality = report != null && DoubleValue(report["peak_quality_index"] ?? report["quality_index"]) is { } q
             ? q : (double?)null;
-        card.Status.Text = report == null ? "暂无结果" : "分析完成";
+        card.Status.Text = report == null ? L10n.T("暂无结果") : L10n.T("分析完成");
         card.Score.Text = quality is { } value ? value.ToString("0.00") : "--";
         card.Score.Foreground = quality is { }
             ? ModelBrush("gfs")
             : (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
-        card.Level.Text = Text(report, "quality_level") is { Length: > 0 } level ? level : "峰值质量指数";
+        card.Level.Text = Text(report, "quality_level") is { Length: > 0 } level ? level : L10n.T("峰值质量指数");
         card.Best.Text = TimeLabel(Text(report, "best_time_local"));
         card.Window.Text =
             $"推荐窗口 {TimeLabel(Text(report?["timing_window"], "start_time_local"))} – {TimeLabel(Text(report?["timing_window"], "end_time_local"))}";
@@ -98,8 +98,8 @@ public sealed partial class MainWindow
                 bands is { Length: > 0 } ? bands : "",
                 source is { Length: > 0 } ? $"来源 {source}" : "",
             }.Where(part => part.Length > 0));
-        ToolTipService.SetToolTip(card.Chips, "卫星帧时次与通道来自真实观测载荷；缺项如实显示。");
-        card.Source.Text = "HSD B07/B13/B15 云概率代理（posterior）；HSD 分支不发布 COT、云相或官方云高真值。";
+        ToolTipService.SetToolTip(card.Chips, L10n.T("卫星帧时次与通道来自真实观测载荷；缺项如实显示。"));
+        card.Source.Text = L10n.T("HSD B07/B13/B15 云概率代理（posterior）；HSD 分支不发布 COT、云相或官方云高真值。");
         card.Error.Text = "";
         card.Error.Visibility = Visibility.Collapsed;
         // EC 卡隐藏（实况为单来源）。
@@ -113,7 +113,7 @@ public sealed partial class MainWindow
         // 复用指标卡布局：按实况指标重建。
         MetricHost.Children.Clear();
         var groups = new[] { (0, 5), (5, 10), (10, 15) };
-        var titles = new[] { "卫星云况", "运动采样与光学", "雷达与可靠性" };
+        var titles = new[] { L10n.T("卫星云况"), L10n.T("运动采样与光学"), L10n.T("雷达与可靠性") };
         for (var group = 0; group < groups.Length; group++)
         {
             var (start, end) = groups[group];
@@ -161,7 +161,7 @@ public sealed partial class MainWindow
         if (report == null)
             MetricHost.Children.Add(new TextBlock
             {
-                Text = "暂无实况结果", Opacity = .65,
+                Text = L10n.T("暂无实况结果"), Opacity = .65,
             });
     }
 
@@ -169,11 +169,11 @@ public sealed partial class MainWindow
     {
         var report = SelectedReport();
         var observation = report?["nowcast"] as JsonObject ?? new JsonObject();
-        ProfileStatus.Text = "周期 " + Text(report, "cycle_time_utc");
+        ProfileStatus.Text = L10n.T("周期 ") + Text(report, "cycle_time_utc");
         var profile = observation["satellite_vertical_profile"] as JsonObject;
         if (profile == null)
         {
-            PointProfileNote.Text = "该实况结果没有卫星后验概率剖面。";
+            PointProfileNote.Text = L10n.T("该实况结果没有卫星后验概率剖面。");
             PointProfileNote.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
             PointCrossSection.Visibility = Visibility.Collapsed;
             FrozenProfileButton.Visibility = Visibility.Collapsed;
@@ -186,7 +186,7 @@ public sealed partial class MainWindow
         var coverage = DoubleValue(profile["coverage"]);
         var statusLabel = status switch
         {
-            "available" => "完整覆盖", "partial_unknown" => "部分未知", _ => "不可用",
+            "available" => L10n.T("完整覆盖"), "partial_unknown" => L10n.T("部分未知"), _ => L10n.T("不可用"),
         };
         PointProfileNote.Text = $"后验概率剖面 {statusLabel} · 有效采样 {usable}/{sampleCount}"
             + (coverage is { } value ? $" · 覆盖 {value * 100:0}%" : "")
@@ -292,7 +292,7 @@ public sealed partial class MainWindow
         }
         PointCrossSection.Children.Add(new TextBlock
         {
-            Text = "色块：HSD 后验云概率（0–100%，暖色强）· 琥珀虚线：unknown 采样 · 高度轴海拔口径",
+            Text = L10n.T("色块：HSD 后验云概率（0–100%，暖色强）· 琥珀虚线：unknown 采样 · 高度轴海拔口径"),
             FontSize = 9, Opacity = .65,
             RenderTransform = new TranslateTransform { X = left, Y = bottom + 4 },
         });
@@ -303,7 +303,7 @@ public sealed partial class MainWindow
         if (resultKind != "nowcast" || SelectedReport() is not { } report)
         {
             frozenProfileState = "unavailable";
-            frozenProfileError = "该结果没有可查询的冻结卫星剖面。";
+            frozenProfileError = L10n.T("该结果没有可查询的冻结卫星剖面。");
             RenderFrozenProfile();
             return;
         }

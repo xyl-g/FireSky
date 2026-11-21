@@ -292,6 +292,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var helperAvailable = false
     @Published var helperInstalled = false
     @Published var helperLoaded = false
+    /// v1.9.8 一致性校验：已安装 plist 的工作区与当前数据目录不一致。
+    @Published var helperWorkspaceMismatch = false
     @Published var helperBusy = false
     @Published var helperMessage = ""
     @Published var helperMessageFailed = false
@@ -1945,6 +1947,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         helperAvailable = SyncHelperInstaller.isAvailable
         helperInstalled = SyncHelperInstaller.isInstalled()
         helperLoaded = SyncHelperInstaller.isLoaded()
+        helperWorkspaceMismatch = helperInstalled
+            && !SyncHelperInstaller.installedWorkspace(expected: workspace)
         let path = URL(fileURLWithPath: workspace)
             .appendingPathComponent(".firesky/state/helper-status.json")
         if let data = try? Data(contentsOf: path),

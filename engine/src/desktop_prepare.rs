@@ -350,7 +350,12 @@ fn cams_areas(context: &Value) -> Result<Vec<[f64; 4]>, String> {
     cams_data::split_areas(array4(context, "area")?)
 }
 
-fn download_cams(input: &Input, context: &Value, cancel: &AtomicBool) -> Result<Value, String> {
+fn download_cams(
+    input: &Input,
+    context: &Value,
+    cancel: &AtomicBool,
+    progress: Option<&(dyn Fn(Value) -> Result<(), String> + Sync)>,
+) -> Result<Value, String> {
     check(cancel)?;
     let cache_dir = input
         .config
@@ -400,6 +405,7 @@ fn download_cams(input: &Input, context: &Value, cancel: &AtomicBool) -> Result<
                 model_bbox: Some(array4(context, "bbox")?),
             },
             cancel,
+            progress,
         )?;
         let missing = result["missing_valid_times"]
             .as_array()
@@ -660,7 +666,7 @@ pub fn execute_cancellable(
             "message": "正在准备 CAMS 全球大气数据（ADS 排队与整周期下载，耗时数分钟属正常）",
         }))?;
     }
-    let cams_result = download_cams(&input, &context, cancel)?;
+    let cams_result = download_cams(&input, &context, cancel, progress)?;
     if let Some(progress) = progress {
         progress(json!({
             "stage": "prepare",

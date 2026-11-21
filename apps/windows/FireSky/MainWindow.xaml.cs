@@ -35,7 +35,7 @@ public sealed partial class MainWindow : Window
     private string ecmwfSource = "ecmwf";
     private string elevationSource = "auto";
     private string elevationSourceActual = "";
-    private string dateTab = "今天";
+    private string dateTab = "今天";  // 状态键保持中文原文（显示经树遍历翻译）
     private string pointSelectedTime = "";
     private JsonObject? result;
     private JsonObject? resultParams;
@@ -87,18 +87,18 @@ public sealed partial class MainWindow : Window
     private sealed record MetricSpec(string Key, string Title, string Caption);
     private static readonly MetricSpec[] Metrics =
     [
-        new("burnable", "有效可烧云量", "前向可烧云占视野比例"),
-        new("material", "云质厚度", "云体材质负载"),
-        new("brightness", "亮度色彩", "霞光亮度与色彩评分"),
-        new("cloud_layer", "主要云层", "云底–云顶 AGL"),
-        new("aod", "AOD 550", "气溶胶光学厚度 · 通透度"),
-        new("incoming", "入射受光", "太阳入射照亮云体的因子"),
-        new("contrast", "返程对比度", "观测者视线大气对比因子"),
-        new("duration", "持续时长", "核心观赏窗口 · 分钟"),
-        new("confidence", "输入支持度", "输入覆盖与几何支持 · 非命中概率"),
-        new("convective", "对流风险", "模式对流风险指标 · 非事件概率"),
+        new("burnable", L10n.T("有效可烧云量"), L10n.T("前向可烧云占视野比例")),
+        new("material", L10n.T("云质厚度"), L10n.T("云体材质负载")),
+        new("brightness", L10n.T("亮度色彩"), L10n.T("霞光亮度与色彩评分")),
+        new("cloud_layer", L10n.T("主要云层"), L10n.T("云底–云顶 AGL")),
+        new("aod", "AOD 550", L10n.T("气溶胶光学厚度 · 通透度")),
+        new("incoming", L10n.T("入射受光"), L10n.T("太阳入射照亮云体的因子")),
+        new("contrast", L10n.T("返程对比度"), L10n.T("观测者视线大气对比因子")),
+        new("duration", L10n.T("持续时长"), L10n.T("核心观赏窗口 · 分钟")),
+        new("confidence", L10n.T("输入支持度"), L10n.T("输入覆盖与几何支持 · 非命中概率")),
+        new("convective", L10n.T("对流风险"), L10n.T("模式对流风险指标 · 非事件概率")),
     ];
-    private static readonly string[] MetricGroups = ["云况与色彩", "大气光学", "时效与可靠性"];
+    private static readonly string[] MetricGroups = [L10n.T("云况与色彩"), L10n.T("大气光学"), L10n.T("时效与可靠性")];
 
     public MainWindow()
     {
@@ -275,8 +275,8 @@ public sealed partial class MainWindow : Window
 
     private void Fail(Exception error)
     {
-        var message = error is OperationCanceledException ? "操作已取消。" : FriendlyMessages.Map(error.Message);
-        ErrorBar.Message = error is OperationCanceledException ? "操作已取消。" : message;
+        var message = error is OperationCanceledException ? L10n.T("操作已取消。") : FriendlyMessages.Map(error.Message);
+        ErrorBar.Message = error is OperationCanceledException ? L10n.T("操作已取消。") : message;
         ErrorBar.IsOpen = true;
         // 错误全文可选中复制（基准：错误文本可复制）。
         var detail = new TextBlock
@@ -285,7 +285,7 @@ public sealed partial class MainWindow : Window
             FontSize = 11,
         };
         ErrorBar.Content = detail;
-        Status.Text = error is OperationCanceledException ? "已取消" : "操作未完成";
+        Status.Text = error is OperationCanceledException ? L10n.T("已取消") : L10n.T("操作未完成");
         if (page == "settings") SettingsStatusMessage(message, false);
     }
 
@@ -308,7 +308,7 @@ public sealed partial class MainWindow : Window
     private static bool ConfirmExitWhileBusy()
     {
         // Closing 回调是同步的；WinUI 异步对话框无法在此等待，用原生 MessageBox。
-        var result = MessageBoxW(0, "任务仍在运行，确定退出？\n\n当前状态：退出会中断正在进行的预测、下载或同步；已完成的上一份有效结果不会丢失。",
+        var result = MessageBoxW(0, L10n.T("任务仍在运行，确定退出？\n\n当前状态：退出会中断正在进行的预测、下载或同步；已完成的上一份有效结果不会丢失。"),
             "FireSky", 0x30 /* MB_ICONWARNING */ | 0x4 /* MB_YESNO */ | 0x10000 /* MB_TOPMOST */);
         return result == 6 /* IDYES */;
     }
@@ -321,12 +321,12 @@ public sealed partial class MainWindow : Window
     private async Task Connect()
     {
         online = false;
-        Status.Text = "正在连接引擎";
+        Status.Text = L10n.T("正在连接引擎");
         try
         {
             engine.Start(WorkspacePath.Text, EnginePath.Text);
             var hello = await engine.Call("hello");
-            if (Number(hello, "protocol") != 1) throw new InvalidOperationException("引擎协议版本不匹配。");
+            if (Number(hello, "protocol") != 1) throw new InvalidOperationException(L10n.T("引擎协议版本不匹配。"));
             var capabilities = hello["capabilities"] as JsonArray ?? [];
             foreach (var required in new[] { "profile_query", "task_history", "task_events", "result_restore" })
             {
@@ -340,7 +340,7 @@ public sealed partial class MainWindow : Window
             RebuildSyncAnchorPicker();
             online = true;
             ErrorBar.IsOpen = false;
-            Status.Text = "本地引擎已连接";
+            Status.Text = L10n.T("本地引擎已连接");
             await Task.WhenAll(
                 LoadRetentionSettings(),
                 LoadCamsConfiguration(),
@@ -358,14 +358,14 @@ public sealed partial class MainWindow : Window
         if (camsConfigured || !online) return;
         var dialog = new ContentDialog
         {
-            Title = "CAMS 数据源未配置",
+            Title = L10n.T("CAMS 数据源未配置"),
             Content = new TextBlock
             {
-                Text = "尚未配置 CAMS Key，本地数据缺失时无法下载 CAMS 数据。可以现在到「设置 → 数据」粘贴 ADS Personal Access Token；已有完整本地数据时可继续使用。",
+                Text = L10n.T("尚未配置 CAMS Key，本地数据缺失时无法下载 CAMS 数据。可以现在到「设置 → 数据」粘贴 ADS Personal Access Token；已有完整本地数据时可继续使用。"),
                 TextWrapping = TextWrapping.Wrap,
             },
-            PrimaryButtonText = "去配置",
-            CloseButtonText = "稍后",
+            PrimaryButtonText = L10n.T("去配置"),
+            CloseButtonText = L10n.T("稍后"),
             DefaultButton = ContentDialogButton.Primary,
             XamlRoot = Root.XamlRoot,
         };
@@ -526,8 +526,8 @@ public sealed partial class MainWindow : Window
         SettingsPage.Visibility = page == "settings" ? Visibility.Visible : Visibility.Collapsed;
         PageTitle.Text = L10n.Translate(page switch
         {
-            "regional" => "预测区域", "nowcast" => "实况观测", "data" => "数据管理",
-            "history" => "任务历史", "settings" => "设置", _ => "观测点",
+            "regional" => L10n.T("预测区域"), "nowcast" => L10n.T("实况观测"), "data" => L10n.T("数据管理"),
+            "history" => L10n.T("任务历史"), "settings" => L10n.T("设置"), _ => L10n.T("观测点"),
         });
         PageSubtitle.Text = page switch
         {
@@ -538,8 +538,8 @@ public sealed partial class MainWindow : Window
         PointFields.Visibility = page == "regional" ? Visibility.Collapsed : Visibility.Visible;
         RegionFields.Visibility = page == "regional" ? Visibility.Visible : Visibility.Collapsed;
         StarButton.Visibility = page == "regional" ? Visibility.Collapsed : Visibility.Visible;
-        SourcesLabel.Text = page == "nowcast" ? "GFS · CAMS · 卫星帧" : "GFS + EC";
-        PredictButton.Content = page == "nowcast" ? "检查并预热" : "开始预测";
+        SourcesLabel.Text = page == "nowcast" ? L10n.T("GFS · CAMS · 卫星帧") : "GFS + EC";
+        PredictButton.Content = page == "nowcast" ? L10n.T("检查并预热") : L10n.T("开始预测");
         if (page == "regional")
         {
             MiniMapHost.Child = null;
@@ -575,8 +575,8 @@ public sealed partial class MainWindow : Window
             .Where(region => selectedRegions.Contains(Text(region, "code")))
             .Select(region => Text(region, "label") is { Length: > 0 } label ? label : Text(region, "code"))
             .ToList();
-        if (customRegion) names.Add("自定义范围");
-        return names.Count == 0 ? "区域" : string.Join("、", names);
+        if (customRegion) names.Add(L10n.T("自定义范围"));
+        return names.Count == 0 ? L10n.T("区域") : string.Join("、", names);
     }
 
     // ---------- 键盘快捷键（⌘1-5 / ⌘, 的 Windows 等价） ----------
@@ -688,7 +688,7 @@ public sealed partial class MainWindow : Window
         }
         else
         {
-            Latitude.Value = lat; Longitude.Value = lon; LocationName.Text = "地图选点";
+            Latitude.Value = lat; Longitude.Value = lon; LocationName.Text = L10n.T("地图选点");
             await LookupMetadata();
         }
     }
@@ -743,7 +743,7 @@ public sealed partial class MainWindow : Window
         if (!online || searching || locating || string.IsNullOrWhiteSpace(args.QueryText)) return;
         searching = true;
         UpdateActionButtons();
-        Status.Text = "正在搜索地点";
+        Status.Text = L10n.T("正在搜索地点");
         try
         {
             var point = await engine.Call("search", new() { ["query"] = args.QueryText });
@@ -753,7 +753,7 @@ public sealed partial class MainWindow : Window
             elevationSourceActual = Text(point, "source");
             MetadataReady.IsChecked = true;
             result = null; RenderResult(); await UpdateMap();
-            Status.Text = "位置已就绪";
+            Status.Text = L10n.T("位置已就绪");
         }
         catch (Exception error) { Fail(error); }
         finally
@@ -768,18 +768,18 @@ public sealed partial class MainWindow : Window
         if (!online || searching || locating || busy) return;
         locating = true;
         UpdateActionButtons();
-        Status.Text = "正在获取当前位置";
+        Status.Text = L10n.T("正在获取当前位置");
         try
         {
             var access = await Geolocator.RequestAccessAsync();
-            if (access != GeolocationAccessStatus.Allowed) throw new InvalidOperationException("定位未获授权，可在地图上选点。");
+            if (access != GeolocationAccessStatus.Allowed) throw new InvalidOperationException(L10n.T("定位未获授权，可在地图上选点。"));
             var locator = new Geolocator { DesiredAccuracyInMeters = 100 };
             var point = await locator.GetGeopositionAsync(TimeSpan.FromMinutes(2), TimeSpan.FromSeconds(20));
             if (point.Coordinate.Accuracy > 5000 || DateTimeOffset.Now - point.Coordinate.Timestamp > TimeSpan.FromMinutes(2))
-                throw new InvalidOperationException("定位精度不足或位置已过期。");
+                throw new InvalidOperationException(L10n.T("定位精度不足或位置已过期。"));
             Latitude.Value = point.Coordinate.Point.Position.Latitude;
             Longitude.Value = point.Coordinate.Point.Position.Longitude;
-            LocationName.Text = "当前位置";
+            LocationName.Text = L10n.T("当前位置");
             await LookupMetadata();
         }
         catch (Exception error) { Fail(error); }
@@ -796,7 +796,7 @@ public sealed partial class MainWindow : Window
         var revision = ++locationRevision;
         var a = Latitude.Value; var b = Longitude.Value;
         MetadataReady.IsChecked = false;
-        Status.Text = "正在获取海拔与时区";
+        Status.Text = L10n.T("正在获取海拔与时区");
         try
         {
             // v1.1.1 契约：metadata 透传 elevation_source；响应 source 为实际来源。
@@ -809,7 +809,7 @@ public sealed partial class MainWindow : Window
             Timezone.Text = Text(response, "timezone_name");
             elevationSourceActual = Text(response, "source");
             RenderElevationSourceNote();
-            MetadataReady.IsChecked = true; Status.Text = "位置已就绪";
+            MetadataReady.IsChecked = true; Status.Text = L10n.T("位置已就绪");
             result = null; RenderResult(); await UpdateMap();
             ScheduleSessionSave();
         }
@@ -842,16 +842,16 @@ public sealed partial class MainWindow : Window
 
     internal string ElevationSourceLabel() => elevationSource switch
     {
-        "http" => "仅 HTTP（open-meteo）",
-        "srtm" => "SRTM 下载（本地时区 + 瓦片）",
-        _ => "自动（HTTP 优先，SRTM 兜底）",
+        "http" => L10n.T("仅 HTTP（open-meteo）"),
+        "srtm" => L10n.T("SRTM 下载（本地时区 + 瓦片）"),
+        _ => L10n.T("自动（HTTP 优先，SRTM 兜底）"),
     };
 
     internal string ElevationSourceActualLabel() => elevationSourceActual switch
     {
         "open-meteo-point-metadata" => "open-meteo（HTTP）",
-        "local-timezone+srtm" => "本地时区 + SRTM",
-        "" => "未获取",
+        "local-timezone+srtm" => L10n.T("本地时区 + SRTM"),
+        "" => L10n.T("未获取"),
         _ => elevationSourceActual,
     };
 
@@ -862,7 +862,7 @@ public sealed partial class MainWindow : Window
         if (!online || busy) return;
         if (MetadataReady.IsChecked != true)
         {
-            Fail(new InvalidOperationException("请先确认海拔与时区，再收藏该地点。"));
+            Fail(new InvalidOperationException(L10n.T("请先确认海拔与时区，再收藏该地点。")));
             return;
         }
         favorites.RemoveAll(favorite =>
@@ -876,7 +876,7 @@ public sealed partial class MainWindow : Window
         });
         SaveSettings();
         RenderFavorites();
-        Status.Text = "已收藏当前位置";
+        Status.Text = L10n.T("已收藏当前位置");
     }
 
     private void RenderFavorites()
@@ -928,7 +928,7 @@ public sealed partial class MainWindow : Window
                 Background = new SolidColorBrush(Colors.Transparent),
                 Content = new SymbolIcon(Symbol.Delete),
             };
-            ToolTipService.SetToolTip(remove, "删除收藏");
+            ToolTipService.SetToolTip(remove, L10n.T("删除收藏"));
             remove.Click += (_, _) =>
             {
                 favorites.RemoveAll(candidate =>
@@ -1014,7 +1014,7 @@ public sealed partial class MainWindow : Window
     private void RebuildSyncAnchorPicker()
     {
         SyncAnchorPicker.Items.Clear();
-        SyncAnchorPicker.Items.Add(new ComboBoxItem { Content = "未设置", Tag = "" });
+        SyncAnchorPicker.Items.Add(new ComboBoxItem { Content = L10n.T("未设置"), Tag = "" });
         foreach (var region in regionDefinitions)
         {
             var code = Text(region, "code");
@@ -1035,9 +1035,9 @@ public sealed partial class MainWindow : Window
 
     private JsonObject Payload()
     {
-        if (TargetDate.Date == null) throw new InvalidOperationException("请选择日期。");
+        if (TargetDate.Date == null) throw new InvalidOperationException(L10n.T("请选择日期。"));
         if (page != "regional" && MetadataReady.IsChecked != true)
-            throw new InvalidOperationException("请获取海拔与时区，或手动确认位置数据。");
+            throw new InvalidOperationException(L10n.T("请获取海拔与时区，或手动确认位置数据。"));
         var validRegionalLongitudes = double.IsFinite(West.Value) && double.IsFinite(East.Value)
             && West.Value >= -180 && West.Value <= 180
             && East.Value >= -180 && East.Value <= 180
@@ -1048,9 +1048,9 @@ public sealed partial class MainWindow : Window
              || South.Value < -90 || South.Value > 90
              || North.Value < -90 || North.Value > 90
              || North.Value <= South.Value))
-            throw new InvalidOperationException("区域范围无效。");
+            throw new InvalidOperationException(L10n.T("区域范围无效。"));
         if (page == "regional" && !customRegion && selectedRegions.Count == 0)
-            throw new InvalidOperationException("请至少选择一个预设区域或勾选自定义范围。");
+            throw new InvalidOperationException(L10n.T("请至少选择一个预设区域或勾选自定义范围。"));
         var payload = new JsonObject
         {
             ["name"] = LocationName.Text, ["lat"] = Latitude.Value, ["lon"] = Longitude.Value,
@@ -1109,7 +1109,7 @@ public sealed partial class MainWindow : Window
         SetBusy(true);
         operation = new();
         ErrorBar.IsOpen = false;
-        Status.Text = "正在预测";
+        Status.Text = L10n.T("正在预测");
         try
         {
             var parameters = new JsonObject { ["session"] = token, ["confirmed"] = true };
@@ -1124,7 +1124,7 @@ public sealed partial class MainWindow : Window
             AdoptResult(response, kind, payload);
             if (result["model_results"]?["gfs"] == null && result["model_results"]?["ec"] != null)
                 ResultModel.SelectedIndex = 1;
-            Status.Text = "预测完成";
+            Status.Text = L10n.T("预测完成");
             RenderResult();
             await UpdateMap();
             SaveSession();
@@ -1215,7 +1215,7 @@ public sealed partial class MainWindow : Window
     {
         var value = result != null && resultParams != null
             ? Text(resultParams, "phenomenon") : TagOf(Phenomenon.SelectedItem);
-        return value == "dawn" ? "朝霞" : "晚霞";
+        return value == "dawn" ? L10n.T("朝霞") : L10n.T("晚霞");
     }
 
     private string ResultParamsSummary()
@@ -1228,7 +1228,7 @@ public sealed partial class MainWindow : Window
             parts.Add($"坐标：{lat:0.0000}, {lon:0.0000}");
         if (Text(resultParams, "target_date") is { Length: > 0 } date) parts.Add($"日期：{date}");
         if (Text(resultParams, "phenomenon") is { Length: > 0 } phenomenon)
-            parts.Add($"现象：{(phenomenon == "dawn" ? "朝霞" : "晚霞")}");
+            parts.Add($"现象：{(phenomenon == "dawn" ? L10n.T("朝霞") : L10n.T("晚霞"))}");
         if (resultKind == "regional")
         {
             if (Text(resultParams, "model_source") is { Length: > 0 } model)
@@ -1236,7 +1236,7 @@ public sealed partial class MainWindow : Window
             if (resultParams["regions"] is JsonArray regions && regions.Count > 0)
                 parts.Add($"区域：{string.Join("、", regions.Select(node => node?.GetValue<string>() ?? ""))}");
         }
-        return "结果原始参数 — " + string.Join("；", parts);
+        return L10n.T("结果原始参数 — ") + string.Join("；", parts);
     }
 
     // ---------- 设置分类 ----------
@@ -1317,9 +1317,9 @@ public sealed partial class MainWindow : Window
 
     internal string EcmwfSourceLabel() => ecmwfSource switch
     {
-        "aws" => "AWS 欧洲镜像",
-        "google" => "Google Cloud 镜像",
-        _ => "ECMWF 官方",
+        "aws" => L10n.T("AWS 欧洲镜像"),
+        "google" => L10n.T("Google Cloud 镜像"),
+        _ => L10n.T("ECMWF 官方"),
     };
 
     private void OnElevationSourceChanged(object sender, SelectionChangedEventArgs args)
@@ -1337,7 +1337,7 @@ public sealed partial class MainWindow : Window
 
     private async Task ReconnectAsync()
     {
-        if (HasActiveWork) { Fail(new InvalidOperationException("请等待当前任务完成后再重新连接。")); return; }
+        if (HasActiveWork) { Fail(new InvalidOperationException(L10n.T("请等待当前任务完成后再重新连接。"))); return; }
         await Connect();
     }
 
@@ -1346,7 +1346,7 @@ public sealed partial class MainWindow : Window
         operation?.Cancel();
         probeOperation?.Cancel();
         syncOperation?.Cancel();
-        Status.Text = "正在取消，等待当前阶段结束";
+        Status.Text = L10n.T("正在取消，等待当前阶段结束");
     }
     // ---------- 界面多语言（v1.9.7，macOS L10n 同构） ----------
 

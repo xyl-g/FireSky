@@ -573,8 +573,8 @@ fn target_path(root: &Path, area: &Area, run: &Run, lead: u32) -> Result<PathBuf
         )))
 }
 
-struct Session {
-    ads: Ads,
+struct Session<'a> {
+    ads: Ads<'a>,
     codes: Option<EcCodes>,
     local_work_ms: f64,
     decoder_load_ms: f64,
@@ -810,7 +810,7 @@ pub(crate) fn resolve(
 }
 
 pub fn execute(params: Params) -> Result<Value, String> {
-    execute_cancellable(params, &AtomicBool::new(false))
+    execute_cancellable(params, &AtomicBool::new(false), None)
 }
 
 fn check_cancelled(cancel: &AtomicBool) -> Result<(), String> {
@@ -824,11 +824,19 @@ fn check_cancelled(cancel: &AtomicBool) -> Result<(), String> {
 /// Cancellable variant for interactive desktop paths. The flag is checked at
 /// every target/group boundary so a cancelled prepare/sync round stops before
 /// the next ADS queue instead of running the whole continent batch to the end.
-pub fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result<Value, String> {
+pub fn execute_cancellable<'a>(
+    params: Params,
+    cancel: &AtomicBool,
+    progress: Option<&'a (dyn Fn(Value) -> Result<(), String> + Sync)>,
+) -> Result<Value, String> {
     check_cancelled(cancel)?;
-    run(params, cancel)
+    run(params, cancel, progress)
 }
-fn run(params: Params, cancel: &AtomicBool) -> Result<Value, String> {
+fn run<'a>(
+    params: Params,
+    cancel: &AtomicBool,
+    progress: Option<&'a (dyn Fn(Value) -> Result<(), String> + Sync)>,
+) -> Result<Value, String> {
     let started = Instant::now();
     params.config.validate()?;
     let exact = params.require_exact_valid_time;
@@ -891,16 +899,51 @@ fn run(params: Params, cancel: &AtomicBool) -> Result<Value, String> {
         .filter(|t| !results.contains_key(t))
         .collect();
     let mut errors = Vec::new();
-    let mut ads = None;
+    // v1.9.8：session 统计在 scope 内提取（原 ads 变量带借用逃逸，
+    // 进度 sink 的 Box 无法随 session 移出作用域）。
+    let mut session_stats = Value::Null;
     let mut groups_count = 0;
     let mut fallbacks = 0;
     if params.allow_download && !missing.is_empty() {
         let _slot = Slot::acquire(params.config.lock_timeout_seconds)?;
+        // v1.9.8：ADS 排队/读取事件包装为用户可读的 CAMS 进度——排队占
+        // 大头（等待分钟级），读取期携带字节量。Box 必须定义在
+        // with_shared_cancel 之外：client 里的 &'a 引用随 session 移出
+        // 作用域，Box 若在闭包内声明会先于引用死亡（E0521）。
+        let stage = if params.operation == "resolve" { "prepare" } else { "sync" };
+        let ads_sink: Option<Box<dyn Fn(Value) -> Result<(), String> + Sync + 'a>> =
+            progress.map(|outer| {
+                Box::new(move |event: Value| -> Result<(), String> {
+                    let message = match event["stage"].as_str() {
+                        Some("ads_queue") => format!(
+                            "CAMS 全球大气数据：ADS 排队中（{}）· 已等待 {:.0} 分钟",
+                            event["status"].as_str().unwrap_or("queued"),
+                            event["waited_s"].as_f64().unwrap_or(0.0) / 60.0,
+                        ),
+                        Some("ads_read") => {
+                            let bytes = event["bytes"].as_u64().unwrap_or(0);
+                            format!("CAMS 数据下载中 · {:.0} MB", bytes as f64 / 1024.0 / 1024.0)
+                        }
+                        _ => return Ok(()),
+                    };
+                    outer(json!({
+                        "stage": stage,
+                        "source": "cams",
+                        "message": message,
+                        "bytes": event["bytes"],
+                        "waited_s": event["waited_s"],
+                    }))
+                }) as Box<dyn Fn(Value) -> Result<(), String> + Sync + 'a>
+            });
         // The ADS client owns an Arc flag; a scoped mirror thread copies the
         // caller's borrowed flag into it so queue waits and asset reads also
         // observe cancellation without any unsafe lifetime extension.
         let outcome = crate::cancel_scope::with_shared_cancel(cancel, |shared_cancel| {
-            let mut client = Ads::with_cancel(params.config.clone(), Some(shared_cancel))?;
+            let mut client = Ads::with_cancel_progress(
+                params.config.clone(),
+                Some(shared_cancel),
+                ads_sink.as_deref(),
+            )?;
             let mut availability = Availability::new(&mut client, &area)?;
             let mut session = Session {
                 ads: client,
@@ -1013,7 +1056,16 @@ fn run(params: Params, cancel: &AtomicBool) -> Result<Value, String> {
                 }
                 Ok(())
             })();
-            ads = Some(session);
+            session_stats = json!({
+                "constraints_requests": session.ads.constraints_requests,
+                "execution_requests": session.ads.submissions,
+                "asset_downloads": session.ads.downloads,
+                "constraints_ms": session.ads.constraints_ms,
+                "retrieval_ms": session.ads.retrieval_ms,
+                "local_work_ms": session.local_work_ms,
+                "decoder_load_ms": session.decoder_load_ms,
+                "decode_ms": session.decode_ms,
+            });
             result
         });
         outcome?;
@@ -1036,13 +1088,14 @@ fn run(params: Params, cancel: &AtomicBool) -> Result<Value, String> {
         json!({"contract":"rust-cams-data-v1","files":rows,"missing_valid_times":missing,
         "cache_hits":cache_hits,"groups":groups_count,"single_fallbacks":fallbacks,"group_errors":errors,
         "network_enabled":params.allow_download,"all_leads":params.all_leads,
-        "constraints_requests":ads.as_ref().map_or(0,|a|a.ads.constraints_requests),
-        "execution_requests":ads.as_ref().map_or(0,|a|a.ads.submissions),"asset_downloads":ads.as_ref().map_or(0,|a|a.ads.downloads),
-        "timings_ms":{"constraints":ads.as_ref().map_or(0.0,|a|a.ads.constraints_ms),
-            "job_poll_transfer":ads.as_ref().map_or(0.0,|a|a.ads.retrieval_ms),
-            "local_lock_decode_split_publish":ads.as_ref().map_or(0.0,|a|a.local_work_ms),
-            "decoder_load":ads.as_ref().map_or(0.0,|a|a.decoder_load_ms),
-            "profile_decode":ads.as_ref().map_or(0.0,|a|a.decode_ms)},
+        "constraints_requests":session_stats["constraints_requests"],
+        "execution_requests":session_stats["execution_requests"],
+        "asset_downloads":session_stats["asset_downloads"],
+        "timings_ms":{"constraints":session_stats["constraints_ms"],
+            "job_poll_transfer":session_stats["retrieval_ms"],
+            "local_lock_decode_split_publish":session_stats["local_work_ms"],
+            "decoder_load":session_stats["decoder_load_ms"],
+            "profile_decode":session_stats["decode_ms"]},
         "downloaded_files_clock_validated":true,"cache_hit_grib_time_verified":false,
         "public_forecast_complete":false,"elapsed_ms":started.elapsed().as_secs_f64()*1000.0}),
     )

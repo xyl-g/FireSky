@@ -12,6 +12,25 @@ import Darwin
 enum SyncHelperInstaller {
     static let label = "com.firesky.datasync"
 
+    /// v1.9.8 一致性校验：读取已安装 plist 里烘焙的 workspace 绝对路径，
+    /// 与当前数据目录比对——数据目录是系统默认但 FIRESKY_WORKSPACE 覆盖
+    /// / 旧版 plist（历史 bug：陈旧路径在测试工作区全源同步）会不一致。
+    /// 不一致时后台轮把数据同步到错误目录，必须提示重装。
+    static func installedWorkspace(expected: String) -> Bool {
+        guard let data = try? Data(contentsOf: plistURL),
+              let plist = try? PropertyListSerialization.propertyList(
+                  from: data, options: [], format: nil
+              ) as? [String: Any],
+              let arguments = plist["ProgramArguments"] as? [String] else {
+            return true
+        }
+        guard let index = arguments.firstIndex(of: "--workspace"),
+              index + 1 < arguments.count else {
+            return true
+        }
+        return arguments[index + 1] == expected
+    }
+
     static var plistURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents", isDirectory: true)

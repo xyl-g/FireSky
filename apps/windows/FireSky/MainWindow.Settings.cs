@@ -27,14 +27,14 @@ public sealed partial class MainWindow
 
     internal string CamConfigurationDescription() => camsConfiguration switch
     {
-        null => "正在检查本地配置",
+        null => L10n.T("正在检查本地配置"),
         _ => StringOf(camsConfiguration["state"]) switch
         {
-            "configured" => "已检测到 Key，下载时验证授权。",
-            "wrong_endpoint" => "接口地址不是 Copernicus ADS，请重新配置。",
-            "tls_disabled" => "配置关闭了 TLS 验证，请重新保存以启用安全连接。",
-            "unreadable" => "配置文件无法读取或格式有误，请修正后重新检查。",
-            _ => "尚未配置 CAMS Key，本地数据缺失时无法下载。",
+            "configured" => L10n.T("已检测到 Key，下载时验证授权。"),
+            "wrong_endpoint" => L10n.T("接口地址不是 Copernicus ADS，请重新配置。"),
+            "tls_disabled" => L10n.T("配置关闭了 TLS 验证，请重新保存以启用安全连接。"),
+            "unreadable" => L10n.T("配置文件无法读取或格式有误，请修正后重新检查。"),
+            _ => L10n.T("尚未配置 CAMS Key，本地数据缺失时无法下载。"),
         },
     };
 
@@ -47,7 +47,7 @@ public sealed partial class MainWindow
         }
         catch (Exception)
         {
-            camsMessage = "无法检查配置，请确认本地引擎已连接。";
+            camsMessage = L10n.T("无法检查配置，请确认本地引擎已连接。");
             camsSaveFailed = true;
         }
         ApplyCamsState();
@@ -95,11 +95,11 @@ public sealed partial class MainWindow
             if (cams != null)
             {
                 cams.State = "waiting";
-                cams.Detail = "尚未探测";
+                cams.Detail = L10n.T("尚未探测");
                 cams.Host = ""; cams.Bytes = 0; cams.ElapsedMs = 0;
             }
             probeDate = null;
-            camsMessage = "已保存到本机配置文件。";
+            camsMessage = L10n.T("已保存到本机配置文件。");
             camsSaveFailed = false;
             RenderProbeRows();
         }
@@ -158,7 +158,7 @@ public sealed partial class MainWindow
                 .OfType<JsonObject>().Select(ProbeRow.From).Where(row => row != null).ToList();
             if (rows.Count != 3 || rows.Select(row => row!.Source).ToHashSet()
                     .SetEquals(["gfs", "ec", "cams"]) is false)
-                throw new InvalidOperationException("探测结果不完整，请重新探测。");
+                throw new InvalidOperationException(L10n.T("探测结果不完整，请重新探测。"));
             probeRows.Clear();
             probeRows.AddRange(rows!);
             probeDate = DateTimeOffset.Now;
@@ -167,7 +167,7 @@ public sealed partial class MainWindow
         {
             MarkCancelledProbeRows(cancelled: true);
             probeDate = DateTimeOffset.Now;
-            ProbeErrorText.Text = "探测已取消；已完成的结果保留。";
+            ProbeErrorText.Text = L10n.T("探测已取消；已完成的结果保留。");
             ProbeErrorText.Visibility = Visibility.Visible;
         }
         catch (Exception error)
@@ -176,7 +176,7 @@ public sealed partial class MainWindow
             MarkCancelledProbeRows(cancelled);
             probeDate = DateTimeOffset.Now;
             ProbeErrorText.Text = cancelled
-                ? "探测已取消；已完成的结果保留。"
+                ? L10n.T("探测已取消；已完成的结果保留。")
                 : FriendlyMessages.Map(error.Message);
             ProbeErrorText.Visibility = Visibility.Visible;
         }
@@ -194,7 +194,7 @@ public sealed partial class MainWindow
         foreach (var row in probeRows.Where(row => row.Active || row.State == "waiting"))
         {
             row.State = cancelled ? "cancelled" : "error";
-            row.Detail = cancelled ? "已停止，尚未验证下载。" : "探测中断，尚未验证下载。";
+            row.Detail = cancelled ? L10n.T("已停止，尚未验证下载。") : L10n.T("探测中断，尚未验证下载。");
         }
     }
 
@@ -215,10 +215,10 @@ public sealed partial class MainWindow
         ProbeCopyButton.Visibility = probeDate != null && !probingDownloads
             ? Visibility.Visible : Visibility.Collapsed;
         ProbeFooter.Text = probingDownloads
-            ? (cancellingProbe ? "正在停止探测" : "正在验证真实数据下载 · CAMS 等待上限约 90 秒")
+            ? (cancellingProbe ? L10n.T("正在停止探测") : L10n.T("正在验证真实数据下载 · CAMS 等待上限约 90 秒"))
             : probeDate != null
                 ? $"{probeDate:HH:mm:ss} · {probeRows.Count(row => row.Passed)}/3 项下载验证通过"
-                : "尚无本次网络的下载验证结果";
+                : L10n.T("尚无本次网络的下载验证结果");
     }
 
     private void RenderProbeRows()
@@ -294,14 +294,14 @@ public sealed partial class MainWindow
 
     private void OnCopyProbeReport(object sender, RoutedEventArgs args)
     {
-        var timestamp = probeDate?.ToString("yyyy-MM-dd HH:mm:ss") ?? "未完成";
+        var timestamp = probeDate?.ToString("yyyy-MM-dd HH:mm:ss") ?? L10n.T("未完成");
         var report = new List<string> { $"FireSky 数据源下载探测 · {timestamp}" };
         report.AddRange(probeRows.Select(row =>
             $"{row.Title} [{row.Host}] · {row.Label}\n{row.Detail}\n{row.Measurement}"));
         var package = new DataPackage { RequestedOperation = DataPackageOperation.Copy };
         package.SetText(string.Join("\n\n", report));
         Clipboard.SetContent(package);
-        Status.Text = "探测报告已复制";
+        Status.Text = L10n.T("探测报告已复制");
     }
 
     // ---------- 数据：后台同步（data_sync_* 四方法） ----------
@@ -441,8 +441,8 @@ public sealed partial class MainWindow
             dataSyncSettingsResponse = await engine.Call("save_data_sync_settings", payload);
             ApplyDataSyncStatus(dataSyncSettingsResponse);
             dataSyncMessage = dataSyncEnabled
-                ? "后台同步已保存；引擎按新设置在心跳周期内执行。"
-                : "后台同步已关闭。";
+                ? L10n.T("后台同步已保存；引擎按新设置在心跳周期内执行。")
+                : L10n.T("后台同步已关闭。");
             dataSyncSaveFailed = false;
         }
         catch (Exception error)
@@ -469,26 +469,26 @@ public sealed partial class MainWindow
         var sources = DataSyncEnabledSources();
         if (!dataSyncEnabled || sources.Count == 0)
         {
-            dataSyncMessage = "请先在设置中启用后台数据同步并至少选择一个数据源。";
+            dataSyncMessage = L10n.T("请先在设置中启用后台数据同步并至少选择一个数据源。");
             dataSyncSaveFailed = true;
             RenderSyncMessage();
             return;
         }
-        Status.Text = "正在立即同步后台数据";
+        Status.Text = L10n.T("正在立即同步后台数据");
         var round = await RunDataSyncRound(sources);
         if (round.Error != null)
         {
             // 轮级拒绝不进状态文件也不进任务历史，直接展示具体原因。
             dataSyncMessage = FriendlyMessages.Map(round.Error.Message);
             dataSyncSaveFailed = true;
-            Status.Text = "立即同步未完成";
+            Status.Text = L10n.T("立即同步未完成");
         }
         else
         {
-            var summary = round.Response != null ? DataSyncRoundSummary(round.Response) : "立即同步未完成，详见任务历史。";
+            var summary = round.Response != null ? DataSyncRoundSummary(round.Response) : L10n.T("立即同步未完成，详见任务历史。");
             Status.Text = summary;
             dataSyncMessage = summary;
-            dataSyncSaveFailed = summary.Contains("失败") || summary.Contains("未完成");
+            dataSyncSaveFailed = summary.Contains(L10n.T("失败")) || summary.Contains(L10n.T("未完成"));
         }
         RenderSyncMessage();
         RenderSyncStatusRows();
@@ -550,15 +550,15 @@ public sealed partial class MainWindow
             var status = Text(row, "status");
             var text = status switch
             {
-                "synced" => "已同步",
-                "current" => "已是最新",
-                "failed" => "失败",
-                "cancelled" => "已取消",
-                _ => status.Length == 0 ? "无结果" : status,
+                "synced" => L10n.T("已同步"),
+                "current" => L10n.T("已是最新"),
+                "failed" => L10n.T("失败"),
+                "cancelled" => L10n.T("已取消"),
+                _ => status.Length == 0 ? L10n.T("无结果") : status,
             };
             parts.Add($"{labels.GetValueOrDefault(name, name)} {text}");
         }
-        return parts.Count == 0 ? "立即同步结束，没有可同步的数据源。" : "立即同步结束：" + string.Join("、", parts);
+        return parts.Count == 0 ? L10n.T("立即同步结束，没有可同步的数据源。") : L10n.T("立即同步结束：") + string.Join("、", parts);
     }
 
     private void RenderSyncMessage()
@@ -568,7 +568,7 @@ public sealed partial class MainWindow
             ? new SolidColorBrush(Colors.Red)
             : (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
         if (dataSyncMessage.Length == 0 && dataSyncLoaded)
-            SyncMessageText.Text = dataSyncEnabled ? "后台同步已启用" : "已配置，当前关闭";
+            SyncMessageText.Text = dataSyncEnabled ? L10n.T("后台同步已启用") : L10n.T("已配置，当前关闭");
         SyncMessageText.Opacity = dataSyncMessage.Length == 0 ? .65 : .9;
     }
 
@@ -589,8 +589,8 @@ public sealed partial class MainWindow
             var suspended = BoolValue(state, "suspended") == true;
             var badge = status switch
             {
-                "synced" => "已同步", "current" => "已是最新", "failed" => "失败",
-                "cancelled" => "已取消", _ => "从未同步",
+                "synced" => L10n.T("已同步"), "current" => L10n.T("已是最新"), "failed" => L10n.T("失败"),
+                "cancelled" => L10n.T("已取消"), _ => L10n.T("从未同步"),
             };
             var details = new List<string>();
             if (cycle.Length > 0) details.Add($"最近周期 {cycle}");
@@ -603,7 +603,7 @@ public sealed partial class MainWindow
                 if (message.Length > 0) details.Add($"最近错误：{message}");
             }
             if (failures > 0) details.Add($"连续失败 {failures} 次");
-            if (suspended) details.Add("已暂停：立即同步或重新保存设置可解锁");
+            if (suspended) details.Add(L10n.T("已暂停：立即同步或重新保存设置可解锁"));
             var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
             row.Children.Add(new TextBlock
             {
@@ -657,7 +657,7 @@ public sealed partial class MainWindow
             && !dataSyncRunning && !savingSync;
         SyncRunNowButton.Opacity = dataSyncEnabled ? 1 : .6;
         ToolTipService.SetToolTip(SyncRunNowButton, dataSyncEnabled
-            ? "立即同步已启用的数据源（可解除失败熔断）" : "先启用并保存后台同步");
+            ? L10n.T("立即同步已启用的数据源（可解除失败熔断）") : L10n.T("先启用并保存后台同步"));
     }
 
     /// <summary>60 秒心跳：due 时静默拉起一轮同步（tick 失败不写界面文案）。</summary>
@@ -683,7 +683,7 @@ public sealed partial class MainWindow
                 .Where(name => name.Length > 0).ToList();
             if (names.Count == 0) return;
             await RunDataSyncRound(names);
-            Status.Text = online ? "本地引擎已连接" : Status.Text;
+            Status.Text = online ? L10n.T("本地引擎已连接") : Status.Text;
         }
         catch (Exception)
         {
@@ -707,7 +707,7 @@ public sealed partial class MainWindow
             RetentionReportDays.Text = RetentionText(settings["report_days"]);
             RetentionMapDays.Text = RetentionText(settings["map_days"]);
             var configured = BoolValue(response, "configured") == true;
-            RetentionStatus.Text = configured ? "已启用自定义保留策略。" : "未启用自定义保留策略。";
+            RetentionStatus.Text = configured ? L10n.T("已启用自定义保留策略。") : L10n.T("未启用自定义保留策略。");
             dataSyncRetentionConfigured = configured;
             SyncRetentionWarning.IsOpen = dataSyncEnabled && !configured;
         }
@@ -725,12 +725,12 @@ public sealed partial class MainWindow
         {
             var settings = new JsonObject
             {
-                ["gfs_cycles"] = RetentionInteger(RetentionGfs.Text, "GFS 周期"),
-                ["ecmwf_cycles"] = RetentionInteger(RetentionEcmwf.Text, "EC 周期"),
-                ["cams_cycles"] = RetentionInteger(RetentionCams.Text, "CAMS 周期"),
-                ["satellite_days"] = RetentionNumber(RetentionSatelliteDays.Text, "卫星数据"),
-                ["report_days"] = RetentionNumber(RetentionReportDays.Text, "历史报告"),
-                ["map_days"] = RetentionNumber(RetentionMapDays.Text, "报告地图"),
+                ["gfs_cycles"] = RetentionInteger(RetentionGfs.Text, L10n.T("GFS 周期")),
+                ["ecmwf_cycles"] = RetentionInteger(RetentionEcmwf.Text, L10n.T("EC 周期")),
+                ["cams_cycles"] = RetentionInteger(RetentionCams.Text, L10n.T("CAMS 周期")),
+                ["satellite_days"] = RetentionNumber(RetentionSatelliteDays.Text, L10n.T("卫星数据")),
+                ["report_days"] = RetentionNumber(RetentionReportDays.Text, L10n.T("历史报告")),
+                ["map_days"] = RetentionNumber(RetentionMapDays.Text, L10n.T("报告地图")),
             };
             SaveRetentionButton.IsEnabled = false;
             var response = await engine.Call("save_retention_settings",
@@ -744,7 +744,7 @@ public sealed partial class MainWindow
             RetentionMapDays.Text = RetentionText(saved["map_days"]);
             var configured = BoolValue(response, "configured") == true;
             RetentionStatus.Text = configured
-                ? "保留设置已保存；下一次成功准备后执行清理。" : "已清空保留设置。";
+                ? L10n.T("保留设置已保存；下一次成功准备后执行清理。") : L10n.T("已清空保留设置。");
             ErrorBar.IsOpen = false;
             // 同步页的「未配置保留」软警告依赖 retention_configured，一并刷新。
             dataSyncRetentionConfigured = configured;

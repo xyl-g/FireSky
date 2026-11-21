@@ -82,10 +82,10 @@ public sealed partial class MainWindow
         }
         var dialog = new ContentDialog
         {
-            Title = "删除本地数据？",
+            Title = L10n.T("删除本地数据？"),
             Content = new TextBlock { Text = text, TextWrapping = TextWrapping.Wrap },
-            PrimaryButtonText = "删除",
-            CloseButtonText = "取消",
+            PrimaryButtonText = L10n.T("删除"),
+            CloseButtonText = L10n.T("取消"),
             DefaultButton = ContentDialogButton.Close,
             XamlRoot = Root.XamlRoot,
         };
@@ -199,7 +199,7 @@ public sealed partial class MainWindow
                     FontSize = 12, Opacity = .75,
                 });
                 var path = Text(dataset, "path");
-                var open = new IconButton("\uE838", "在资源管理器中打开");
+                var open = new IconButton("\uE838", L10n.T("在资源管理器中打开"));
                 open.Click += (_, _) =>
                 {
                     if (path.Length > 0) System.Diagnostics.Process.Start(
@@ -207,7 +207,7 @@ public sealed partial class MainWindow
                 };
                 header.Children.Add(open);
                 // v1.3.0：整源删除入口（UI 只描述范围，不传磁盘路径）。
-                var sourceDelete = new IconButton("\uE74D", "清空该数据源");
+                var sourceDelete = new IconButton("\uE74D", L10n.T("清空该数据源"));
                 sourceDelete.IsEnabled = !dataDeleteRunning;
                 var capturedSource = source;
                 sourceDelete.Click += (_, _) => _ = BeginDataDelete(capturedSource, null);
@@ -229,9 +229,9 @@ public sealed partial class MainWindow
                     });
                     cycleRow.Children.Add(new TextBlock
                     {
-                        Text = $"{Number(cycle.Value, "files"):0} 个文件", FontSize = 12, Opacity = .65,
+                        Text = $"{Number(cycle.Value, "filesL10n.T("):0} 个文件"), FontSize = 12, Opacity = .65,
                     });
-                    var cycleDelete = new IconButton("\uE74D", "删除该周期");
+                    var cycleDelete = new IconButton("\uE74D", L10n.T("删除该周期"));
                     cycleDelete.IsEnabled = !dataDeleteRunning;
                     var capturedCycle = cycle.Key;
                     cycleDelete.Click += (_, _) => _ = BeginDataDelete(capturedSource, capturedCycle);
@@ -240,7 +240,7 @@ public sealed partial class MainWindow
                     details.Children.Add(cycleRow);
                 }
                 if (cycles.Count == 0)
-                    details.Children.Add(new TextBlock { Text = "无数据", FontSize = 12, Opacity = .6 });
+                    details.Children.Add(new TextBlock { Text = L10n.T("无数据"), FontSize = 12, Opacity = .6 });
                 stack.Children.Add(new Expander
                 {
                     Header = $"{cycles.Count} 个周期",
@@ -255,7 +255,7 @@ public sealed partial class MainWindow
                 });
             }
             DataWorkspaceText.Text = WorkspacePath.Text.Length > 0
-                ? WorkspacePath.Text : "数据目录未设置";
+                ? WorkspacePath.Text : L10n.T("数据目录未设置");
             DataWorkspaceText.Opacity = WorkspacePath.Text.Length > 0 ? .65 : .9;
             InventoryError.Visibility = Visibility.Collapsed;
         }
@@ -286,7 +286,7 @@ public sealed partial class MainWindow
         var path = WorkspacePath.Text;
         if (path.Length == 0 || !Directory.Exists(path))
         {
-            Fail(new InvalidOperationException("数据目录尚未设置或不存在。"));
+            Fail(new InvalidOperationException(L10n.T("数据目录尚未设置或不存在。")));
             return;
         }
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path)
@@ -300,6 +300,8 @@ public sealed partial class MainWindow
     /// <summary>区域预设（用户口径，对齐 macOS TerrainRegion）；全球 = 整覆盖域。</summary>
     internal static readonly (string Label, int South, int North, int West, int East)[] TerrainRegions =
     [
+        // Label 是状态键/引擎参数（terrain region / anchor），保持中文原文；
+        // 显示经 ComboBoxItem Content 的 L10n.T 翻译。
         ("中国", 18, 54, 73, 135),
         ("东亚", 20, 54, 100, 146),
         ("东南亚", -11, 28, 92, 141),
@@ -325,7 +327,7 @@ public sealed partial class MainWindow
     {
         TerrainRegionPicker.Items.Clear();
         foreach (var region in TerrainRegions)
-            TerrainRegionPicker.Items.Add(new ComboBoxItem { Content = region.Label });
+            TerrainRegionPicker.Items.Add(new ComboBoxItem { Content = L10n.T(region.Label) });
         TerrainRegionPicker.SelectedIndex = 0;
         TerrainRegionPicker.SelectionChanged += (_, _) =>
         {
@@ -397,7 +399,7 @@ public sealed partial class MainWindow
         }
         if (estimate == null)
         {
-            terrainMessage = errorMessage ?? "无法获取下载估算。";
+            terrainMessage = errorMessage ?? L10n.T("无法获取下载估算。");
             terrainMessageFailed = true;
             RenderTerrain();
             return;
@@ -405,19 +407,19 @@ public sealed partial class MainWindow
         var global = estimate["global"] as JsonObject ?? [];
         var candidates = (long?)DoubleValue(global["candidates"]) ?? 0;
         var existing = (long?)DoubleValue(global["existing"]) ?? 0;
-        var confirmTitle = region.Label == "全球" ? "下载全球地形数据？" : $"下载{region.Label}地形数据？";
+        var confirmTitle = region.Label == "全球" ? L10n.T("下载全球地形数据？") : $"下载{region.Label}地形数据？";
         var confirmText = $"将下载{region.Label}的 SRTM 瓦片：候选 {candidates} 块，本地已有 {existing} 块会自动跳过"
-            + "（海洋上的瓦片是很小的空值瓦片，同样会下载）。下载耗时较长且占用磁盘，可随时取消，重新开始会跳过已下载瓦片。";
+            + L10n.T("（海洋上的瓦片是很小的空值瓦片，同样会下载）。下载耗时较长且占用磁盘，可随时取消，重新开始会跳过已下载瓦片。");
         if (DoubleValue(global["estimated_gb"]) is { } gb)
             confirmText += $"按抽样估算体积约 {gb:0} GB（抽样混合了海洋小瓦片与陆地大瓦片，实际体积以运行时用量为准）。";
         else
-            confirmText += "暂时无法估算体积（网络或服务不可用），开始后会显示实际用量。";
+            confirmText += L10n.T("暂时无法估算体积（网络或服务不可用），开始后会显示实际用量。");
         var dialog = new ContentDialog
         {
             Title = confirmTitle,
             Content = new TextBlock { Text = confirmText, TextWrapping = TextWrapping.Wrap },
-            PrimaryButtonText = "开始下载",
-            CloseButtonText = "取消",
+            PrimaryButtonText = L10n.T("开始下载"),
+            CloseButtonText = L10n.T("取消"),
             DefaultButton = ContentDialogButton.Close,
             XamlRoot = Root.XamlRoot,
         };
@@ -466,7 +468,7 @@ public sealed partial class MainWindow
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            terrainMessage = "已停止下载；已完成的瓦片保留，重新开始会跳过它们。";
+            terrainMessage = L10n.T("已停止下载；已完成的瓦片保留，重新开始会跳过它们。");
             terrainMessageFailed = false;
         }
         catch (Exception error)
@@ -514,7 +516,7 @@ public sealed partial class MainWindow
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
-            terrainMessage = "已停止下载；未写入半成品瓦片。";
+            terrainMessage = L10n.T("已停止下载；未写入半成品瓦片。");
             terrainMessageFailed = false;
         }
         catch (Exception error)
@@ -560,11 +562,11 @@ public sealed partial class MainWindow
         }
         return status switch
         {
-            "exists" => "地形瓦片已存在，直接复用本地数据。",
+            "exists" => L10n.T("地形瓦片已存在，直接复用本地数据。"),
             "downloaded" => $"已下载地形瓦片 {Text(result, "tile")}。",
             "out_of_coverage" => Text(result, "message") is { Length: > 0 } message
-                ? message : "该位置不在 SRTM 覆盖范围内。",
-            _ => "下载未完成。",
+                ? message : L10n.T("该位置不在 SRTM 覆盖范围内。"),
+            _ => L10n.T("下载未完成。"),
         };
     }
 
@@ -584,22 +586,22 @@ public sealed partial class MainWindow
         string subtitle;
         if (terrain == null)
         {
-            subtitle = online ? "全球瓦片下载后会覆盖任意地点，无需再按点下载。" : "引擎未连接。";
+            subtitle = online ? L10n.T("全球瓦片下载后会覆盖任意地点，无需再按点下载。") : L10n.T("引擎未连接。");
         }
         else if (BoolValue(terrain, "coverage_ok") == false)
         {
-            subtitle = "当前纬度不在 SRTM 覆盖范围（-56 ≤ 纬度 < 60）。";
+            subtitle = L10n.T("当前纬度不在 SRTM 覆盖范围（-56 ≤ 纬度 < 60）。");
         }
         else if (terrain["tile"] is not JsonObject tile)
         {
-            subtitle = "显示本地已有地形瓦片。";
+            subtitle = L10n.T("显示本地已有地形瓦片。");
         }
         else
         {
             var name = Text(tile, "name");
             var exists = BoolValue(tile, "exists") == true;
             subtitle = $"目标 {LocationName.Text}（{LatLonLabel(Latitude.Value, Longitude.Value)}）"
-                + $" · 瓦片 {name} · {(exists ? "已有本地瓦片" : "未下载")}";
+                + $" · 瓦片 {name} · {(exists ? L10n.T("已有本地瓦片") : L10n.T("未下载"))}";
         }
         TerrainSubtitle.Text = subtitle;
         var coverageMissing = BoolValue(terrain, "coverage_ok") == false;
@@ -671,7 +673,7 @@ public sealed partial class MainWindow
             {
                 TerrainPointBar.IsIndeterminate = true;
                 TerrainPointText.Text = Text(terrainProgress, "stage") == "verifying"
-                    ? "校验瓦片数据…" : "下载中…";
+                    ? L10n.T("校验瓦片数据…") : L10n.T("下载中…");
             }
             if (DoubleValue(terrainProgress["received_bytes"]) is { } received)
             {

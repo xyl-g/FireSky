@@ -234,7 +234,7 @@ public sealed class Updater
             throw new UpdateException($"GitHub 返回状态 {(int)response.StatusCode}");
         var text = await response.Content.ReadAsStringAsync(token);
         var release = JsonNode.Parse(text) as JsonObject
-            ?? throw new UpdateException("GitHub 响应无法解析");
+            ?? throw new UpdateException(L10n.T("GitHub 响应无法解析"));
         var architecture = MachineArchitecture();
         var parsed = ParseRelease(release, architecture)
             ?? throw new UpdateException($"最新 Release 没有适用于 {architecture} 的安装包");
@@ -271,7 +271,7 @@ public sealed class Updater
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
             phase = Phase.Available;
-            message = "已取消下载；未安装任何内容。";
+            message = L10n.T("已取消下载；未安装任何内容。");
             Notify();
         }
         catch (Exception error)
@@ -328,15 +328,15 @@ public sealed class Updater
         using var client = MakeClient(30);
         using var response = await client.GetAsync(target.ChecksumUrl, token);
         if (response.StatusCode != HttpStatusCode.OK)
-            throw new UpdateException("无法获取 SHA256SUMS.txt 进行校验");
+            throw new UpdateException(L10n.T("无法获取 SHA256SUMS.txt 进行校验"));
         var text = await response.Content.ReadAsStringAsync(token);
         var expected = ChecksumRow(text, AssetName(target.Version, MachineArchitecture()))
-            ?? throw new UpdateException("SHA256SUMS.txt 中没有本架构安装包的校验和");
+            ?? throw new UpdateException(L10n.T("SHA256SUMS.txt 中没有本架构安装包的校验和"));
         var actual = await Task.Run(() => Sha256OfFile(archive), token);
         if (actual != expected)
         {
             File.Delete(archive);
-            throw new UpdateException("SHA256 校验不匹配，已放弃安装");
+            throw new UpdateException(L10n.T("SHA256 校验不匹配，已放弃安装"));
         }
     }
 
@@ -370,7 +370,7 @@ public sealed class Updater
             ZipFile.ExtractToDirectory(archive, stage, overwriteFiles: true);
             var stagedExe = Path.Combine(stage, "FireSky", "FireSky.exe");
             if (!File.Exists(stagedExe))
-                throw new UpdateException("安装包内未找到 FireSky\\FireSky.exe");
+                throw new UpdateException(L10n.T("安装包内未找到 FireSky\\FireSky.exe"));
             var backup = $"{appDirectory}.old-{DateTime.Now:yyyyMMddHHmmss}";
             var pid = Environment.ProcessId;
             var script = Path.Combine(Path.GetTempPath(), $"firesky-update-{target.Version}", "apply.cmd");
@@ -402,8 +402,8 @@ public sealed class Updater
         if (error is UpdateException specific)
         {
             var detail = specific.Message;
-            return detail.Contains("校验和", StringComparison.Ordinal) ? detail
-                : detail.Contains("权限", StringComparison.Ordinal) ? detail
+            return detail.Contains(L10n.T("校验和"), StringComparison.Ordinal) ? detail
+                : detail.Contains(L10n.T("权限"), StringComparison.Ordinal) ? detail
                 : $"更新检查/下载失败：{detail}";
         }
         var lower = error.Message.ToLowerInvariant();

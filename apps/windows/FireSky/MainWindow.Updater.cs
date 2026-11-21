@@ -85,7 +85,7 @@ public sealed partial class MainWindow
             }
             UpdaterDownloadButton.IsEnabled = !HasActiveWork;
             ToolTipService.SetToolTip(UpdaterDownloadButton,
-                "下载 zip、校验 SHA256 后自动替换安装并重启");
+                L10n.T("下载 zip、校验 SHA256 后自动替换安装并重启"));
         }
         if (phase == Updater.Phase.Downloading)
         {
@@ -113,7 +113,7 @@ public sealed partial class MainWindow
         }
         if (settingsNavItem != null)
             ToolTipService.SetToolTip(settingsNavItem, updater.IsUpdateAvailable
-                ? $"发现新版本 {updater.UpdateInfo?.Version ?? ""}" : "设置");
+                ? $"发现新版本 {updater.UpdateInfo?.Version ?? ""}" : L10n.T("设置"));
     }
 
     private static string FormatBytes(long bytes) => bytes switch
@@ -134,7 +134,7 @@ public sealed partial class MainWindow
     {
         if (HasActiveWork)
         {
-            Fail(new InvalidOperationException("请等待当前任务完成后再更新。"));
+            Fail(new InvalidOperationException(L10n.T("请等待当前任务完成后再更新。")));
             return;
         }
         updater.DownloadAndInstall();

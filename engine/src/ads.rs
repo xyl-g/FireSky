@@ -166,27 +166,42 @@ pub(crate) fn asset_transfer_budget(
     remaining.min(Duration::from_secs_f64(timeout_seconds).max(transfer_budget))
 }
 
-pub(crate) struct Ads {
+pub(crate) struct Ads<'a> {
     api: Client,
     assets: Client,
     base: Url,
     config: Config,
     deadline: Instant,
     cancel: Option<Arc<AtomicBool>>,
+    /// v1.9.8 进度事件 sink：队列等待（ads_queue）与资产分片读取
+    /// （ads_read）事件外发，供 runtime 看门狗识别“慢而活跃”。
+    progress: Option<&'a (dyn Fn(Value) -> Result<(), String> + Sync)>,
     pub constraints_requests: usize,
     pub submissions: usize,
     pub downloads: usize,
     pub constraints_ms: f64,
     pub retrieval_ms: f64,
 }
-impl Ads {
+impl<'a> Ads<'a> {
     pub fn new(config: Config) -> Result<Self, String> {
         Self::with_cancel(config, None)
     }
     /// Interactive variant: the flag is polled inside queue waits and asset
     /// transfers so a cancelled prepare/sync releases the operation lock in
     /// seconds instead of riding out the whole ADS job.
-    pub fn with_cancel(config: Config, cancel: Option<Arc<AtomicBool>>) -> Result<Self, String> {
+    pub fn with_cancel(
+        config: Config,
+        cancel: Option<Arc<AtomicBool>>,
+    ) -> Result<Ads<'a>, String> {
+        Self::with_cancel_progress(config, cancel, None)
+    }
+
+    /// 带进度 sink 的交互构造（v1.9.8）。
+    pub fn with_cancel_progress(
+        config: Config,
+        cancel: Option<Arc<AtomicBool>>,
+        progress: Option<&'a (dyn Fn(Value) -> Result<(), String> + Sync)>,
+    ) -> Result<Ads<'a>, String> {
         config.validate()?;
         let (url, key) = credentials(&config)?;
         let mut headers = HeaderMap::new();
@@ -227,6 +242,7 @@ impl Ads {
             config,
             deadline,
             cancel,
+            progress,
             constraints_requests: 0,
             submissions: 0,
             downloads: 0,
@@ -237,6 +253,14 @@ impl Ads {
         result.json(Method::GET, &process, None, true)?;
         Ok(result)
     }
+    /// v1.9.8：向外发进度事件；未设置 sink 时静默。
+    fn emit(&self, event: Value) -> Result<(), String> {
+        match self.progress {
+            Some(progress) => progress(event),
+            None => Ok(()),
+        }
+    }
+
     fn check_cancelled(&self) -> Result<(), String> {
         if self
             .cancel
@@ -381,9 +405,17 @@ impl Ads {
             link(&job, "monitor").ok_or("ADS submission has no monitor link")?,
         )?;
         let mut delay = self.config.poll_initial_seconds;
+        let queued_at = Instant::now();
         let state = loop {
             self.check_cancelled()?;
             let state = self.json(Method::GET, &monitor, None, true)?;
+            // v1.9.8：排队等待事件化——ADS 排队占 CAMS 准备大头，让
+            // 「慢」可见并维持 runtime 看门狗的活跃心跳。
+            self.emit(json!({
+                "stage": "ads_queue",
+                "status": state["status"],
+                "waited_s": queued_at.elapsed().as_secs_f64(),
+            }))?;
             match state["status"].as_str() {
                 Some("successful") => break state,
                 Some("accepted" | "running") => {
@@ -505,6 +537,10 @@ impl Ads {
                     .map_err(|_| "cannot seek ADS temporary file")?;
                 let mut buffer = vec![0; 1024 * 1024];
                 let mut bytes = 0_u64;
+                // v1.9.8：每 32 MiB 发一次读取事件（慢链路大资产的
+                // “慢而活跃”心跳，防止被空闲看门狗误杀）。
+                const READ_EVENT_CHUNK: u64 = 32 * 1024 * 1024;
+                let mut next_event_at = READ_EVENT_CHUNK;
                 loop {
                     self.check_cancelled()?;
                     let count = response.read(&mut buffer).map_err(|error| {
@@ -516,6 +552,14 @@ impl Ads {
                     bytes += count as u64;
                     if bytes > remaining {
                         return Err("ADS asset exceeds declared size".into());
+                    }
+                    if bytes >= next_event_at {
+                        next_event_at = bytes + READ_EVENT_CHUNK;
+                        self.emit(json!({
+                            "stage": "ads_read",
+                            "bytes": offset + bytes,
+                            "expected": expected,
+                        }))?;
                     }
                     target
                         .write_all(&buffer[..count])
@@ -589,6 +633,7 @@ mod tests {
             downloads: 0,
             constraints_ms: 0.0,
             retrieval_ms: 0.0,
+            progress: None,
         };
         cancel.store(true, Ordering::Release);
         let started = Instant::now();
