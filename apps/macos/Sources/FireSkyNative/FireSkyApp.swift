@@ -42,11 +42,26 @@ struct FireSkyApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var store: Store?
     private var scheduled = false
+    /// v1.9.7 退出守卫防循环：用户本轮已确认过「继续运行」的时间戳——
+    /// 系统注销/关机会反复发起 terminate，不再每次都弹确认框（5s 内
+    /// 只问一次）；用户选择「仍要退出」后置位强制标志，任何后续
+    /// terminate 直接放行，杜绝确认框循环。
+    private var lastConfirmTime: Date?
+    private var forceTerminate = false
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.activate(ignoringOtherApps: true)
         // Intel CI cold start: SwiftUI .onAppear can fail to fire on older
         // macOS runner images; schedule here too (idempotent via `scheduled`).
         scheduleSnapshot()
+        // v1.9.7 启动兜底：8s 后仍无可见窗口则强制前置主窗口——修复极端
+        // 情况下“界面没出来”（应用在跑、窗口不可见）导致的观感卡死。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+            guard let self, NSApp.windows.first(where: { $0.isVisible && !$0.isSheet }) == nil
+            else { return }
+            NSApp.windows.first(where: { $0 is NSWindow && !$0.isSheet })?
+                .makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
         // 从挂载的磁盘映像（DMG）启动时提供安装到「应用程序」的引导；
         // 快照/夹具与常规路径启动不受影响。
         if ProcessInfo.processInfo.environment["FIRESKY_NATIVE_SNAPSHOT"] == nil,
@@ -110,15 +125,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     /// UX #12：仍有任务在运行时退出需要显式确认；快照/夹具运行直接放行。
+    /// v1.9.7：确认过「继续运行」后 5s 内不再重复弹窗（注销/关机重试场景）；
+    /// 「仍要退出」后强制放行后续 terminate，修复确认框循环。
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if forceTerminate { return .terminateNow }
         guard let store, !store.isSnapshotRun, store.hasActiveWork else { return .terminateNow }
+        if let last = lastConfirmTime, Date().timeIntervalSince(last) < 5 {
+            return .terminateCancel
+        }
         let alert = NSAlert()
         alert.messageText = "任务仍在运行，确定退出？"
         alert.informativeText = "当前状态：\(store.status)。退出会中断正在进行的预测、下载或同步；已完成的上一份有效结果不会丢失。"
         alert.alertStyle = .warning
         alert.addButton(withTitle: "继续运行")
         alert.addButton(withTitle: "仍要退出")
-        return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
+        lastConfirmTime = Date()
+        let choice = alert.runModal()
+        if choice == .alertSecondButtonReturn {
+            forceTerminate = true
+            return .terminateNow
+        }
+        return .terminateCancel
     }
     func applicationWillTerminate(_ notification: Notification) { store?.shutdown() }
     func scheduleSnapshot() {

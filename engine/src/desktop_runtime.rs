@@ -290,12 +290,13 @@ impl Runtime {
         payload: &Value,
         regional: bool,
         cancel: &AtomicBool,
+        progress: Option<&(dyn Fn(Value) -> Result<(), String> + Sync)>,
     ) -> Result<Value, String> {
         let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
         let path = dir.path().join("prepare.json");
         json_file(&path, &self.context_input(payload, regional, false))?;
         let mut result =
-            desktop_prepare::execute_cancellable(desktop_prepare::Params { path }, cancel)?;
+            desktop_prepare::execute_cancellable(desktop_prepare::Params { path }, cancel, progress)?;
         if let Some(retention) = crate::retention_settings::apply_configured(&self.workspace)? {
             result["retention"] = retention;
         }
@@ -841,6 +842,9 @@ impl Runtime {
                     .operation
                     .try_lock()
                     .map_err(|_| "another prepare/forecast is active")?;
+                // v1.9.7 手动优先：放置跨进程让路哨兵，后台/助手的同步轮在
+                // 源边界与文件粒度上让路（cancelled 不计熔断）；Drop 清理。
+                let _yield_guard = crate::desktop_sync::manual_yield_guard(&self.workspace);
                 let token = params["session"].as_str().ok_or("session is required")?;
                 let snapshot = self.session("get", token, json!({}))?;
                 let regional = snapshot["kind"] == "regional";
@@ -861,11 +865,11 @@ impl Runtime {
                     } else {
                         for model in Self::models(&payload)? {
                             check(&cancel)?;
-                            progress(json!({"stage":"prepare","percent":10,"source":model,
+                            progress(json!({"stage":"prepare","percent":5,"source":model,
                             "message":format!("正在准备 {} 模式与 CAMS 数据", model.to_uppercase())}))?;
                             let mut request = payload.clone();
                             request["model_source"] = json!(model);
-                            self.prepare_one(&request, regional, &cancel)?;
+                            self.prepare_one(&request, regional, &cancel, Some(progress))?;
                         }
                     }
                     let report = if nowcast {
@@ -1441,7 +1445,7 @@ impl Runtime {
     ) -> Result<Value, String> {
         let context = self.context(payload, true, false)?;
         check(cancel)?;
-        let prepared = self.prepare_one(payload, true, cancel)?;
+        let prepared = self.prepare_one(payload, true, cancel, Some(progress))?;
         check(cancel)?;
         if prepared["model_source"] != model
             || time_contract::parse_utc(

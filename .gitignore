@@ -31,3 +31,6 @@ local.properties
 apps/mobile-android/app/src/main/jniLibs/
 apps/mobile-android/app/src/main/assets/eccodes/
 .kotlin/
+
+# 视觉基线快照为本机测试数据（用户裁定不入库）；CI 用 --update-snapshots=missing 现场生成
+apps/shared-web/tests/**/__screenshots__/

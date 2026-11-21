@@ -26,8 +26,8 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
-        Mutex,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        Arc, Mutex,
     },
     time::{Instant, SystemTime},
 };
@@ -465,6 +465,74 @@ fn commit_probe_failure(
     })
 }
 
+/// v1.9.7 手动优先让路：手动 prepare/forecast 开始时放置哨兵文件，
+/// 同步轮在源边界与每个文件完成后检查——发现即停止本轮（记录为
+/// cancelled，不计熔断），把带宽让给手动操作。跨进程生效（helper 与
+/// GUI 是独立进程，靠文件而不是内存互斥量通信）。
+pub(crate) fn yield_flag_path(workspace: &Path) -> PathBuf {
+    state_path(workspace).with_file_name("sync-yield")
+}
+
+pub(crate) fn request_manual_yield(workspace: &Path) {
+    let path = yield_flag_path(workspace);
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&path, std::process::id().to_string());
+}
+
+/// 检查并消费让路哨兵：存在则删除并返回 true（由同步轮执行）。
+fn take_manual_yield(workspace: &Path) -> bool {
+    let path = yield_flag_path(workspace);
+    match std::fs::remove_file(&path) {
+        Ok(()) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(_) => false,
+    }
+}
+
+/// Drop 时停止重放并移除哨兵（手动操作结束/失败都要清理，避免下一轮
+/// 同步被幽灵哨兵误停；崩溃场景由轮次的 take 自愈——哨兵被消费一次后
+/// 即消失）。
+pub(crate) struct ManualYieldGuard {
+    path: PathBuf,
+    stop: Arc<AtomicBool>,
+    watcher: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Drop for ManualYieldGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(watcher) = self.watcher.take() {
+            let _ = watcher.join();
+        }
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+pub(crate) fn manual_yield_guard(workspace: &Path) -> ManualYieldGuard {
+    request_manual_yield(workspace);
+    let path = yield_flag_path(workspace);
+    let stop = Arc::new(AtomicBool::new(false));
+    // 重放线程：轮次消费哨兵后 1s 内重新放置，手动操作全程保持让路信号。
+    let watcher_stop = stop.clone();
+    let watcher_path = path.clone();
+    let watcher = std::thread::spawn(move || {
+        while !watcher_stop.load(Ordering::Acquire) {
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+            if watcher_stop.load(Ordering::Acquire) {
+                break;
+            }
+            let _ = std::fs::write(&watcher_path, std::process::id().to_string());
+        }
+    });
+    ManualYieldGuard {
+        path,
+        stop,
+        watcher: Some(watcher),
+    }
+}
+
 struct RoundOutcome {
     name: String,
     status: &'static str,
@@ -556,11 +624,23 @@ fn result_summary(status: &str, source: &Value, task_id: Option<&str>) -> Value 
     }
     let error_count = errors.len();
     errors.truncate(4);
+    // v1.9.7：缺失周期单独成字段（欠账可视化），最多展示 8 个。
+    let missing_cycles: Vec<String> = source["missing_valid_times"]
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| row.as_str())
+                .map(|text| clip(text, 40))
+                .take(8)
+                .collect()
+        })
+        .unwrap_or_default();
     json!({
         "status": status,
         "files": files,
         "errors": errors,
         "error_count": error_count,
+        "missing_cycles": missing_cycles,
         "elapsed_ms": source["elapsed_ms"],
         "task_id": task_id.map(|value| json!(value)).unwrap_or(Value::Null),
         "finished_at_utc": time_contract::iso(DateTime::<Utc>::from(SystemTime::now())),
@@ -1008,7 +1088,7 @@ fn sync_gfs<G>(
     file_progress: &G,
 ) -> Result<Value, String>
 where
-    G: Fn(u64, u64) -> Result<(), String> + Sync,
+    G: Fn(u64, u64, u64) -> Result<(), String> + Sync,
 {
     let started = Instant::now();
     // Point forecasts request hourly leads over a domain enlarged by
@@ -1033,11 +1113,23 @@ where
             let row = client
                 .resolve(cycle, *hour, Some(bbox), false, true)?
                 .ok_or_else(|| format!("GFS f{hour:03} did not resolve to a cache file"))?;
-            Ok(json!({
-                "forecast_hour": hour,
-                "path": row["path"],
-                "status": row["status"],
-            }))
+            // v1.9.7：仅统计真实下载字节（缓存命中不计入吞吐）。
+            let bytes = if row["status"].as_str() == Some("downloaded") {
+                std::fs::metadata(row["path"].as_str().unwrap_or(""))
+                    .map(|meta| meta.len())
+                    .unwrap_or(0)
+            } else {
+                0
+            };
+            Ok((
+                json!({
+                    "forecast_hour": hour,
+                    "path": row["path"],
+                    "status": row["status"],
+                    "bytes": bytes,
+                }),
+                bytes,
+            ))
         })?;
         Ok(rows)
     })?;
@@ -1058,10 +1150,11 @@ where
 }
 
 /// 共享的逐文件下载线程池：光标分发 work 项，4 个 worker 并发调用
-/// `fetch`；首错即停（其余 worker 快速退出）；每完成一项回调 file_progress，
-/// 回调失败置取消位（轮次状态转 cancelled，与源级 progress 错误语义一致）。
-/// 返回按 work 项原始顺序排列的结果。
-fn download_pool<T, F, G>(
+/// `fetch`；首错即停（其余 worker 快速退出）；每完成一项回调 file_progress
+/// （done / total / 累计下载字节），回调失败置取消位（轮次状态转
+/// cancelled，与源级 progress 错误语义一致）。返回按 work 项原始顺序
+/// 排列的结果。
+pub(crate) fn download_pool<T, F, G>(
     items: &[T],
     cancel: &AtomicBool,
     file_progress: &G,
@@ -1069,12 +1162,13 @@ fn download_pool<T, F, G>(
 ) -> Result<Vec<Value>, String>
 where
     T: Sync,
-    F: Fn(&T) -> Result<Value, String> + Sync,
-    G: Fn(u64, u64) -> Result<(), String> + Sync,
+    F: Fn(&T) -> Result<(Value, u64), String> + Sync,
+    G: Fn(u64, u64, u64) -> Result<(), String> + Sync,
 {
     let total = items.len() as u64;
     let cursor = AtomicUsize::new(0);
     let done = AtomicUsize::new(0);
+    let bytes = AtomicU64::new(0);
     let first_error: Mutex<Option<String>> = Mutex::new(None);
     let rows: Mutex<Vec<Option<Value>>> = Mutex::new((0..items.len()).map(|_| None).collect());
     std::thread::scope(|scope| {
@@ -1088,10 +1182,12 @@ where
                     return;
                 }
                 match fetch(&items[index]) {
-                    Ok(row) => {
+                    Ok((row, item_bytes)) => {
                         rows.lock().unwrap()[index] = Some(row);
+                        let total_bytes = bytes.fetch_add(item_bytes, Ordering::AcqRel)
+                            + item_bytes;
                         let finished = done.fetch_add(1, Ordering::AcqRel) + 1;
-                        if file_progress(finished as u64, total).is_err() {
+                        if file_progress(finished as u64, total, total_bytes).is_err() {
                             cancel.store(true, Ordering::Release);
                         }
                     }
@@ -1122,7 +1218,7 @@ fn sync_ec<G>(
     file_progress: &G,
 ) -> Result<Value, String>
 where
-    G: Fn(u64, u64) -> Result<(), String> + Sync,
+    G: Fn(u64, u64, u64) -> Result<(), String> + Sync,
 {
     check(cancel)?;
     let started = Instant::now();
@@ -1169,8 +1265,9 @@ where
             Ordering::AcqRel,
         );
         let _ = brackets.lock().unwrap().get_or_insert(value["brackets"].clone());
+        let hour_bytes = value["downloaded_bytes"].as_u64().unwrap_or(0);
         let files = value["files"].take();
-        Ok(files)
+        Ok((files, hour_bytes))
     })?;
     let files = rows
         .into_iter()
@@ -1307,6 +1404,10 @@ pub fn run(
     let mut stop = cancel.load(Ordering::Acquire);
     let total = requested.len();
     for (index, name) in requested.iter().enumerate() {
+        // v1.9.7：源边界让路——手动 prepare/forecast 等待期间不再启动新源。
+        if take_manual_yield(context.workspace) {
+            stop = true;
+        }
         let publication = publications
             .get(publication_name(name))
             .map(publication_from);
@@ -1426,22 +1527,39 @@ pub fn run(
                 let base_percent = index * 100 / total;
                 let span_percent = 100 / total.max(1);
                 let source_key: &str = name;
-                let file_progress = move |done: u64, total_files: u64| {
+                let round_started = started;
+                let yield_workspace = context.workspace.to_path_buf();
+                let file_progress = move |done: u64, total_files: u64, bytes: u64| {
+                    // 手动优先：文件粒度让路（秒级生效），错误会置取消位。
+                    if take_manual_yield(&yield_workspace) {
+                        return Err("manual prepare/forecast takes priority".into());
+                    }
                     let within = if total_files == 0 {
                         0
                     } else {
                         done.min(total_files) * span_percent as u64 / total_files
+                    };
+                    // v1.9.7：吞吐随事件计算（MB/s），网络问题一眼可辨；
+                    // bytes/elapsed_ms 字段同时机读供 UI 自行渲染。
+                    let elapsed_ms = round_started.elapsed().as_secs_f64() * 1000.0;
+                    let mibs = if elapsed_ms > 0.0 {
+                        bytes as f64 / 1024.0 / 1024.0 / (elapsed_ms / 1000.0)
+                    } else {
+                        0.0
                     };
                     progress(json!({
                         "stage": "sync",
                         "percent": (base_percent + within as usize).min(99),
                         "source": source_key,
                         "message": format!(
-                            "{} 正在下载 {} / {}",
+                            "{} 正在下载 {} / {} · {:.1} MB/s",
                             source_label(source_key),
                             done,
-                            total_files
+                            total_files,
+                            mibs
                         ),
+                        "bytes": bytes,
+                        "elapsed_ms": elapsed_ms,
                     }))
                 };
                 match *name {
@@ -2304,8 +2422,8 @@ mod tests {
         let rows = download_pool(
             &(0..16_u32).collect::<Vec<_>>(),
             &cancel,
-            &|_, _| Ok(()),
-            |hour| Ok(json!({"forecast_hour": hour})),
+            &|_, _, _| Ok(()),
+            |hour| Ok((json!({"forecast_hour": hour}), 0)),
         )
         .unwrap();
         let hours: Vec<u32> = rows
@@ -2322,12 +2440,12 @@ mod tests {
         let result = download_pool(
             &(0..16_u32).collect::<Vec<_>>(),
             &cancel,
-            &|_, _| Ok(()),
+            &|_, _, _| Ok(()),
             |hour| {
                 if *hour == 3 {
                     Err("boom-3".into())
                 } else {
-                    Ok(json!({"forecast_hour": hour}))
+                    Ok((json!({"forecast_hour": hour}), 0))
                 }
             },
         );
@@ -2340,8 +2458,8 @@ mod tests {
         let result = download_pool(
             &(0..16_u32).collect::<Vec<_>>(),
             &cancel,
-            &|_, _| Err("progress wire down".into()),
-            |hour| Ok(json!({"forecast_hour": hour})),
+            &|_, _, _| Err("progress wire down".into()),
+            |hour| Ok((json!({"forecast_hour": hour}), 0)),
         );
         assert!(result.is_err());
         assert!(cancel.load(Ordering::Acquire));

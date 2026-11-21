@@ -12,10 +12,13 @@ struct PreflightView: View {
     private var summary: String {
         if !store.ready {
             let missing = store.rows.filter { !$0.ready }.map(\.title).joined(separator: "、")
-            return missing.isEmpty ? store.status : "需下载 \(missing)"
+            return missing.isEmpty ? store.status
+            : L10n.tf("需下载 %@", missing)
         }
         let updates = store.rows.filter(\.old).map(\.title).joined(separator: "、")
-        return updates.isEmpty ? (isNowcast ? "数据已齐，可开始分析" : "数据已齐，可开始预测") : "数据已齐，可更新 \(updates)"
+        return updates.isEmpty
+            ? (isNowcast ? L10n.t("数据已齐，可开始分析") : L10n.t("数据已齐，可开始预测"))
+            : L10n.tf("数据已齐，可更新 %@", updates)
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -26,10 +29,10 @@ struct PreflightView: View {
                 }
                 Spacer()
                 Button { store.refreshCheck() } label: { Image(systemName: "arrow.clockwise") }
-                    .help("重新检查").buttonStyle(.borderless).disabled(store.busy)
+                    .help(L10n.t("重新检查")).buttonStyle(.borderless).disabled(store.busy)
             }.padding(.bottom, 16)
             if store.rows.isEmpty {
-                HStack { ProgressView().controlSize(.small); Text("正在检查本地数据") }
+                HStack { ProgressView().controlSize(.small); Text(L10n.t("正在检查本地数据")) }
                     .frame(maxWidth: .infinity, minHeight: 180)
             } else {
                 ForEach(store.rows) { row in
@@ -64,18 +67,18 @@ struct PreflightView: View {
                 }
             }.frame(minHeight: 38, alignment: .leading).padding(.top, 12)
             HStack {
-                Button("取消") { store.closePreflight() }.keyboardShortcut(.cancelAction)
+                Button(L10n.t("取消")) { store.closePreflight() }.keyboardShortcut(.cancelAction)
                 Spacer()
                 if actions.primary == .download {
-                    Button("下载缺失数据", systemImage: "arrow.down.to.line") { store.prepare() }
+                    Button(L10n.t("下载缺失数据"), systemImage: "arrow.down.to.line") { store.prepare() }
                         .buttonStyle(.borderedProminent).disabled(!actions.canDownload)
                         .foregroundStyle(scheme == .dark ? Color.black : Color.white)
                         .keyboardShortcut(.defaultAction)
                     Button(confirmTitle) {}.disabled(true)
-                        .help("需先补齐本次数据")
+                        .help(L10n.t("需先补齐本次数据"))
                         .accessibilityHint("需先补齐本次数据")
                 } else {
-                    Button("更新数据", systemImage: "arrow.down.to.line") { store.prepare() }
+                    Button(L10n.t("更新数据"), systemImage: "arrow.down.to.line") { store.prepare() }
                         .disabled(!actions.canDownload)
                     Button(confirmTitle) { store.confirm() }
                         .buttonStyle(.borderedProminent).disabled(!actions.canForecast)
@@ -91,8 +94,8 @@ struct PreflightView: View {
                 isPresented: $store.showCycleAgeConfirm,
                 titleVisibility: .visible
             ) {
-                Button("继续预测") { store.confirmCycleAgeAndForecast() }
-                Button("返回更新数据", role: .cancel) {}
+                Button(L10n.t("继续预测")) { store.confirmCycleAgeAndForecast() }
+                Button(L10n.t("返回更新数据"), role: .cancel) {}
             } message: {
                 Text("\(store.cycleAgeSummary) 的发布周期未核验或不是最新发布。可以继续预测（结果可能略有偏差），也可以返回并点击「更新数据」获取最新周期。")
             }
@@ -111,22 +114,22 @@ struct InventoryView: View {
                             .font(.caption).foregroundStyle(.secondary)
                             .lineLimit(1).truncationMode(.middle)
                             .help(store.workspace)
-                        Text("已统计占用仅覆盖模式数据（GFS / EC / CAMS）；地形与卫星以目录为准。")
+                        Text(L10n.t("已统计占用仅覆盖模式数据（GFS / EC / CAMS）；地形与卫星以目录为准。"))
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("同步设置", systemImage: "arrow.triangle.2.circlepath") {
+                    Button(L10n.t("同步设置"), systemImage: "arrow.triangle.2.circlepath") {
                         store.page = .settings
                     }
-                    .help("后台同步与下载探测已移到「设置 → 数据」")
+                    .help(L10n.t("后台同步与下载探测已移到「设置 → 数据」"))
                     Button { Task { await store.loadInventory() } } label: {
                         Image(systemName: "arrow.clockwise")
-                    }.help("刷新本地清单")
+                    }.help(L10n.t("刷新本地清单"))
                     Button {
                         if !store.workspace.isEmpty {
                             NSWorkspace.shared.open(URL(fileURLWithPath: store.workspace))
                         }
-                    } label: { Image(systemName: "folder") }.help("在访达中打开数据目录")
+                    } label: { Image(systemName: "folder") }.help(L10n.t("在访达中打开数据目录"))
                 }
                 if !store.dataDeleteMessage.isEmpty {
                     Text(store.dataDeleteMessage)
@@ -151,11 +154,11 @@ struct InventoryView: View {
                                 if let path = dataset["path"] as? String {
                                     NSWorkspace.shared.open(URL(fileURLWithPath: path))
                                 }
-                            } label: { Image(systemName: "folder") }.help("在访达中打开")
+                            } label: { Image(systemName: "folder") }.help(L10n.t("在访达中打开"))
                             Button {
                                 store.beginDataDelete(source: source, cycle: nil)
                             } label: { Image(systemName: "trash") }
-                                .help("清空该数据源")
+                                .help(L10n.t("清空该数据源"))
                                 .disabled(store.busy || !store.online || store.dataDeleteRunning)
                         }
                         DisclosureGroup("\(cycles.count) 个周期", isExpanded: Binding(
@@ -172,7 +175,7 @@ struct InventoryView: View {
                                         store.beginDataDelete(source: source, cycle: key)
                                     } label: { Image(systemName: "trash") }
                                         .buttonStyle(.borderless)
-                                        .help("删除该周期")
+                                        .help(L10n.t("删除该周期"))
                                         .disabled(store.busy || !store.online || store.dataDeleteRunning)
                                 }.font(.callout).padding(.vertical, 5)
                             }
@@ -184,8 +187,8 @@ struct InventoryView: View {
                 if store.inventory.isEmpty && store.error.isEmpty && !store.layoutLoading {
                     VStack(spacing: 10) {
                         FireSkyMarkScene(size: 64)
-                        Text("本地缓存为空").font(.system(size: 13, weight: .medium))
-                        Text("完成一次预测或在设置中配置数据源后，这里会显示库存。")
+                        Text(L10n.t("本地缓存为空")).font(.system(size: 13, weight: .medium))
+                        Text(L10n.t("完成一次预测或在设置中配置数据源后，这里会显示库存。"))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, alignment: .center)
@@ -195,13 +198,13 @@ struct InventoryView: View {
                 if !store.error.isEmpty { Text(store.error).foregroundStyle(.red) }
             }.padding(30)
         }
-        .confirmationDialog("删除本地数据？", isPresented: Binding(
+        .confirmationDialog(L10n.t("删除本地数据？"), isPresented: Binding(
             get: { store.pendingDataDelete != nil && store.dataDeletePreview != nil },
             set: { if !$0 { store.cancelDataDelete() } }
         )) {
-            Button("删除", role: .destructive) { store.executeDataDelete() }
+            Button(L10n.t("删除"), role: .destructive) { store.executeDataDelete() }
                 .disabled(store.dataDeleteRunning)
-            Button("取消", role: .cancel) { store.cancelDataDelete() }
+            Button(L10n.t("取消"), role: .cancel) { store.cancelDataDelete() }
         } message: {
             Text(deleteConfirmationText)
         }
@@ -219,11 +222,11 @@ struct InventoryView: View {
         let mb = (preview["total_mb"] as? NSNumber)?.doubleValue ?? 0
         let protected = (preview["protected"] as? [Any])?.count ?? 0
         if let cycle = scope["cycle"] as? String {
-            return "删除 \(title) 的周期 \(cycle)：共 \(files) 个文件，预计释放 \(String(format: "%.1f", mb)) MB。占用中的文件会跳过；报告与任务记录不受影响。"
+            return L10n.tf("删除 %@ 的周期 %@：共 %d 个文件，预计释放 %.1f MB。占用中的文件会跳过；报告与任务记录不受影响。", title, cycle, files, mb)
         }
-        var text = "清空 \(title) 的全部本地数据：共 \(files) 个文件，预计释放 \(String(format: "%.1f", mb)) MB。占用中的文件会跳过。"
+        var text = L10n.tf("清空 %@ 的全部本地数据：共 %d 个文件，预计释放 %.1f MB。占用中的文件会跳过。", title, files, mb)
         if protected > 0 {
-            text += "当前有 \(protected) 个文件被下载任务占用，将跳过。"
+            text += L10n.tf("当前有 %d 个文件被下载任务占用，将跳过。", protected)
         }
         return text
     }
@@ -240,7 +243,7 @@ struct TerrainPanelView: View {
             HStack {
                 Image(systemName: "mountain.2").font(.title2).foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("地形 SRTM").font(.headline)
+                    Text(L10n.t("地形 SRTM")).font(.headline)
                     Text(terrainSubtitle).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -248,7 +251,7 @@ struct TerrainPanelView: View {
                     ProgressView().controlSize(.small)
                 }
                 if store.terrainDownloading {
-                    Button("取消", systemImage: "stop.fill") { store.cancelTerrainDownload() }
+                    Button(L10n.t("取消"), systemImage: "stop.fill") { store.cancelTerrainDownload() }
                         .disabled(store.terrainCancelling)
                 } else {
                     // 区域预设（用户口径：按区域下载；全球为其中一个预设）。
@@ -259,20 +262,20 @@ struct TerrainPanelView: View {
                     }.pickerStyle(.menu).frame(width: 104)
                         .disabled(!store.online || store.busy)
                         .accessibilityLabel("下载区域")
-                    Button("下载区域地形", systemImage: "globe") {
+                    Button(L10n.t("下载区域地形"), systemImage: "globe") {
                         store.loadTerrainEstimate()
                     }
                     .disabled(!store.online || store.busy)
-                    .help("确认估算后下载所选区域的 SRTM 瓦片（跳过已有；可随时取消续传）")
-                    Button("仅当前地点", systemImage: "arrow.down.to.line") {
+                    .help(L10n.t("确认估算后下载所选区域的 SRTM 瓦片（跳过已有；可随时取消续传）"))
+                    Button(L10n.t("仅当前地点"), systemImage: "arrow.down.to.line") {
                         store.downloadTerrainPoint()
                     }
                     .buttonStyle(.borderless)
                     .disabled(!store.online || store.busy || coverageMissing)
-                    .help("只下载当前地点对应的一块瓦片")
+                    .help(L10n.t("只下载当前地点对应的一块瓦片"))
                 }
                 Button { store.loadTerrain() } label: { Image(systemName: "arrow.clockwise") }
-                    .help("刷新地形状态")
+                    .help(L10n.t("刷新地形状态"))
                     .disabled(!store.online || store.terrainDownloading)
             }
             if store.terrainDownloading {
@@ -294,10 +297,10 @@ struct TerrainPanelView: View {
                 get: { store.showGlobalTerrainConfirm },
                 set: { if !$0 { store.showGlobalTerrainConfirm = false } }
             )) {
-                Button("开始下载", role: .destructive) {
+                Button(L10n.t("开始下载"), role: .destructive) {
                     store.downloadTerrain(region: store.terrainRegion)
                 }
-                Button("取消", role: .cancel) { store.showGlobalTerrainConfirm = false }
+                Button(L10n.t("取消"), role: .cancel) { store.showGlobalTerrainConfirm = false }
             } message: {
                 Text(globalConfirmText)
             }
@@ -308,7 +311,7 @@ struct TerrainPanelView: View {
     }
 
     private var downloadConfirmTitle: String {
-        store.terrainRegion == .global ? "下载全球地形数据？" : "下载\(store.terrainRegion.rawValue)地形数据？"
+        store.terrainRegion == .global ? L10n.t("下载全球地形数据？") : L10n.tf("下载%@地形数据？", store.terrainRegion.rawValue)
     }
 
     private var coverageMissing: Bool {
@@ -329,9 +332,9 @@ struct TerrainPanelView: View {
         return VStack(alignment: .leading, spacing: 6) {
             ProgressView(value: percent, total: 100)
             HStack {
-                Text("\(Int(percent))% · 已下载 \(downloaded)/\(candidates) · 已有 \(existing) · 缺失 \(absent) · 失败 \(failed)")
+                Text(L10n.tf("%.0f%% · 已下载 %d/%d · 已有 %d · 缺失 %d · 失败 %d", Double(Int(percent)), downloaded, candidates, existing, absent, failed))
                 Spacer()
-                if !current.isEmpty { Text("当前 \(current)") }
+                if !current.isEmpty { Text(L10n.tf("当前 %@", current)) }
             }.font(.caption).foregroundStyle(.secondary).monospacedDigit()
             Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
                 .font(.caption).foregroundStyle(.secondary).monospacedDigit()
@@ -366,9 +369,9 @@ struct TerrainPanelView: View {
     private var localTilesLine: some View {
         let count = (store.terrain?["tile_count"] as? NSNumber)?.intValue ?? 0
         if count > 8 {
-            Text("本地已有 \(count) 块瓦片。").font(.caption).foregroundStyle(.secondary)
+            Text(L10n.tf("本地已有 %d 块瓦片。", count)).font(.caption).foregroundStyle(.secondary)
         } else if let tiles = store.terrain?["tiles"] as? [JSONObject], !tiles.isEmpty {
-            Text("本地瓦片：\(tiles.map { $0["name"] as? String ?? "" }.joined(separator: "、"))")
+            Text(L10n.tf("本地瓦片：%@", tiles.map { $0["name"] as? String ?? "" }.joined(separator: "、")))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -386,7 +389,7 @@ struct TerrainPanelView: View {
         let name = tile["name"] as? String ?? ""
         let exists = tile["exists"] as? Bool == true
         let location = String(format: "%.4f° N, %.4f° E", store.lat, store.lon)
-        return "目标 \(store.name)（\(location)）· 瓦片 \(name) · \(exists ? "已有本地瓦片" : "未下载")"
+        return L10n.tf("目标 %@（%@）· 瓦片 %@ · %@", store.name, location, name, exists ? L10n.t("已有本地瓦片") : L10n.t("未下载"))
     }
 
     /// 确认文案：所选区域候选数 + 抽样估算体积 + 已有数量 + 续传说明。
@@ -394,7 +397,7 @@ struct TerrainPanelView: View {
         let global = store.terrainEstimate?["global"] as? JSONObject ?? [:]
         let candidates = (global["candidates"] as? NSNumber)?.intValue ?? 0
         let existing = (global["existing"] as? NSNumber)?.intValue ?? 0
-        var text = "将下载\(store.terrainRegion.rawValue)的 SRTM 瓦片：候选 \(candidates) 块，本地已有 \(existing) 块会自动跳过（海洋上的瓦片是很小的空值瓦片，同样会下载）。下载耗时较长且占用磁盘，可随时取消，重新开始会跳过已下载瓦片。"
+        var text = L10n.tf("将下载%@的 SRTM 瓦片：候选 %d 块，本地已有 %d 块会自动跳过（海洋上的瓦片是很小的空值瓦片，同样会下载）。下载耗时较长且占用磁盘，可随时取消，重新开始会跳过已下载瓦片。", store.terrainRegion.rawValue, candidates, existing)
         if let gb = (global["estimated_gb"] as? NSNumber)?.doubleValue {
             text += String(format: "按抽样估算体积约 %.0f GB（抽样混合了海洋小瓦片与陆地大瓦片，实际体积以运行时用量为准）。", gb)
         } else {
@@ -469,11 +472,11 @@ struct SettingsView: View {
                 }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .confirmationDialog("卸载后台同步助手？", isPresented: $store.confirmUninstallHelper) {
-            Button("卸载助手", role: .destructive) { store.uninstallHelper() }
-            Button("保留助手", role: .cancel) {}
+        .confirmationDialog(L10n.t("卸载后台同步助手？"), isPresented: $store.confirmUninstallHelper) {
+            Button(L10n.t("卸载助手"), role: .destructive) { store.uninstallHelper() }
+            Button(L10n.t("保留助手"), role: .cancel) {}
         } message: {
-            Text("卸载后，关闭应用时的后台同步将停止；已下载的数据会保留，可随时重新安装助手。")
+            Text(L10n.t("卸载后，关闭应用时的后台同步将停止；已下载的数据会保留，可随时重新安装助手。"))
         }
     }
 
@@ -483,11 +486,11 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 16) {
             settingsHeader("通用")
             VStack(alignment: .leading, spacing: 8) {
-                Text("主题").font(.callout.weight(.medium))
+                Text(L10n.t("主题")).font(.callout.weight(.medium))
                 Picker("", selection: $store.appearance) {
-                    Text("跟随系统").tag("system")
-                    Text("浅色").tag("light")
-                    Text("深色").tag("dark")
+                    Text(L10n.t("跟随系统")).tag("system")
+                    Text(L10n.t("浅色")).tag("light")
+                    Text(L10n.t("深色")).tag("dark")
                 }.pickerStyle(.segmented).frame(width: 300)
                     .onChange(of: store.appearance) { _, _ in store.saveAppearance() }
                     .accessibilityLabel("主题")
@@ -502,12 +505,12 @@ struct SettingsView: View {
     private var updaterBlock: some View {
         let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
         VStack(alignment: .leading, spacing: 10) {
-            Text("软件更新").font(.callout.weight(.medium))
+            Text(L10n.t("软件更新")).font(.callout.weight(.medium))
             HStack {
-                Text("当前版本 \(currentVersion)").font(.caption).foregroundStyle(.secondary)
+                Text(L10n.tf("当前版本 %@", currentVersion)).font(.caption).foregroundStyle(.secondary)
                 if updater.phase == .checking { ProgressView().controlSize(.small) }
                 Spacer()
-                Button("检查更新") { updater.checkForUpdates(interactive: true) }
+                Button(L10n.t("检查更新")) { updater.checkForUpdates(interactive: true) }
                     .disabled(updater.phase == .checking || updater.phase == .downloading
                               || updater.phase == .installing)
             }
@@ -518,7 +521,7 @@ struct SettingsView: View {
                 EmptyView()
             case .available:
                 if let info = updater.info {
-                    Text("发现新版本 \(info.version)，可在下载后自动安装。")
+                    Text(L10n.tf("发现新版本 %@，可在下载后自动安装。", info.version))
                         .font(.callout.weight(.medium)).foregroundStyle(Color.green)
                     if !info.notes.isEmpty {
                         DisclosureGroup("发布说明") {
@@ -528,34 +531,34 @@ struct SettingsView: View {
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-                    Button("下载并安装", systemImage: "arrow.down.circle.fill") {
+                    Button(L10n.t("下载并安装"), systemImage: "arrow.down.circle.fill") {
                         updater.downloadAndInstall()
                     }
-                    .help("下载 DMG、校验 SHA256 后自动安装到「应用程序」并重启")
+                    .help(L10n.t("下载 DMG、校验 SHA256 后自动安装到「应用程序」并重启"))
                 }
             case .downloading:
                 VStack(alignment: .leading, spacing: 6) {
                     ProgressView(value: max(Double(updater.receivedBytes), 1),
                                  total: max(Double(updater.totalBytes), 1))
                     HStack {
-                        Text("已下载 \(ByteCountFormatter.string(fromByteCount: updater.receivedBytes, countStyle: .file)) / \(ByteCountFormatter.string(fromByteCount: updater.totalBytes, countStyle: .file))")
+                        Text(L10n.tf("已下载 %@ / %@", ByteCountFormatter.string(fromByteCount: updater.receivedBytes, countStyle: .file), ByteCountFormatter.string(fromByteCount: updater.totalBytes, countStyle: .file)))
                             .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                         Spacer()
-                        Button("取消") { updater.cancelDownload() }
+                        Button(L10n.t("取消")) { updater.cancelDownload() }
                     }
                 }
             case .installing:
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("正在安装，完成后应用将自动重启。").font(.caption).foregroundStyle(.secondary)
+                    Text(L10n.t("正在安装，完成后应用将自动重启。")).font(.caption).foregroundStyle(.secondary)
                 }
             case .failed:
                 Text(updater.message).font(.caption).foregroundStyle(.red)
                     .textSelection(.enabled)
                     .fixedSize(horizontal: false, vertical: true)
-                Button("重试") { updater.checkForUpdates(interactive: true) }
+                Button(L10n.t("重试")) { updater.checkForUpdates(interactive: true) }
             }
-            Toggle("启动时自动检查更新", isOn: $updater.autoCheck)
+            Toggle(L10n.t("启动时自动检查更新"), isOn: $updater.autoCheck)
                 .font(.caption)
                 .disabled(updater.phase == .downloading || updater.phase == .installing)
         }
@@ -614,14 +617,14 @@ struct SettingsView: View {
 
     private var dataSourcesBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
-            settingsBlockTitle("下载源")
-            Picker("EC 下载源", selection: $store.ecmwfSource) {
-                Text("ECMWF 官方").tag("ecmwf")
-                Text("AWS 欧洲镜像").tag("aws")
-                Text("Google Cloud 镜像").tag("google")
+            settingsBlockTitle(L10n.t("下载源"))
+            Picker(L10n.t("EC 下载源"), selection: $store.ecmwfSource) {
+                Text(L10n.t("ECMWF 官方")).tag("ecmwf")
+                Text(L10n.t("AWS 欧洲镜像")).tag("aws")
+                Text(L10n.t("Google Cloud 镜像")).tag("google")
             }.pickerStyle(.radioGroup).disabled(store.probingDownloads)
                 .accessibilityLabel("EC 下载源")
-            Text("EC 下载源同时用于下载探测、数据准备和预测。GFS 使用 NOAA NOMADS，CAMS 使用 Copernicus ADS。")
+            Text(L10n.t("EC 下载源同时用于下载探测、数据准备和预测。GFS 使用 NOAA NOMADS，CAMS 使用 Copernicus ADS。"))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -636,22 +639,22 @@ struct SettingsView: View {
                 Spacer()
                 Button { Task { await store.refreshCAMSConfiguration() } } label: {
                     Image(systemName: "arrow.clockwise")
-                }.buttonStyle(.borderless).help("重新检查 CAMS 配置")
+                }.buttonStyle(.borderless).help(L10n.t("重新检查 CAMS 配置"))
                     .disabled(!store.online || store.savingCAMS)
             }
             HStack(spacing: 10) {
-                SecureField("粘贴 ADS Personal Access Token", text: $store.camsKeyDraft)
+                SecureField(L10n.t("粘贴 ADS Personal Access Token"), text: $store.camsKeyDraft)
                     .textFieldStyle(.roundedBorder).onSubmit { store.saveCAMSKey() }
                     .disabled(!store.canSaveCAMS || store.savingCAMS || store.probingDownloads)
                 if store.savingCAMS { ProgressView().controlSize(.small) }
-                Button("保存 Key", systemImage: "key.fill") { store.saveCAMSKey() }
+                Button(L10n.t("保存 Key"), systemImage: "key.fill") { store.saveCAMSKey() }
                     .disabled(!store.online || !store.canSaveCAMS || store.savingCAMS || store.probingDownloads
                               || store.camsKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            Text("仅以明文保存在本机配置文件，文件权限 0600；不会写入工程或显示已有 Key。")
+            Text(L10n.t("仅以明文保存在本机配置文件，文件权限 0600；不会写入工程或显示已有 Key。"))
                 .font(.caption).foregroundStyle(.secondary)
             if store.camsConfiguration != nil && !store.canSaveCAMS {
-                Text("环境变量正在覆盖配置。修改 CDSAPI_KEY / CDSAPI_URL 后需重新启动应用。")
+                Text(L10n.t("环境变量正在覆盖配置。修改 CDSAPI_KEY / CDSAPI_URL 后需重新启动应用。"))
                     .font(.caption).foregroundStyle(.secondary)
             }
             if !store.camsMessage.isEmpty {
@@ -672,7 +675,7 @@ struct SettingsView: View {
                     tutorialStep("4", "返回 FireSky 保存 Key", detail: "粘贴到上方输入框并保存，再到预测准备窗口下载数据。") {
                         EmptyView()
                     }
-                    Text("这里只检查本地配置是否完整；Token 是否有效、数据集是否已授权，在实际下载时验证。")
+                    Text(L10n.t("这里只检查本地配置是否完整；Token 是否有效、数据集是否已授权，在实际下载时验证。"))
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(.top, 12).padding(.bottom, 6)
             }
@@ -681,10 +684,10 @@ struct SettingsView: View {
 
     private var dataSyncBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
-            settingsBlockTitle("后台同步")
-            Toggle("启用后台同步", isOn: $store.dataSyncEnabled)
+            settingsBlockTitle(L10n.t("后台同步"))
+            Toggle(L10n.t("启用后台同步"), isOn: $store.dataSyncEnabled)
             if store.dataSyncEnabled && !store.dataSyncRetentionConfigured {
-                Label("未配置缓存保留策略，缓存将随同步增长；可在下方「存储与保留」中设置。", systemImage: "exclamationmark.triangle.fill")
+                Label(L10n.t("未配置缓存保留策略，缓存将随同步增长；可在下方「存储与保留」中设置。"), systemImage: "exclamationmark.triangle.fill")
                     .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -697,15 +700,15 @@ struct SettingsView: View {
                 dataSyncField("同步间隔", text: $store.dataSyncInterval, suffix: "分钟")
                 dataSyncField("GFS/EC 时效上限", text: $store.dataSyncLeadHorizon, suffix: "小时")
             }
-            Picker("锚定区域", selection: $store.dataSyncAnchor) {
-                Text("未设置").tag("")
+            Picker(L10n.t("锚定区域"), selection: $store.dataSyncAnchor) {
+                Text(L10n.t("未设置")).tag("")
                 ForEach(store.regionDefinitions.indices, id: \.self) { index in
                     let region = store.regionDefinitions[index]
                     Text(region["label"] as? String ?? region["code"] as? String ?? "")
                         .tag(region["code"] as? String ?? "")
                 }
             }
-            Text("间隔 30–1440 分钟；时效上限仅 GFS/EC 需要（3–240 小时、3 的倍数），CAMS 自动拉齐全部时效；锚定区域决定 CAMS 洲包络与 GFS/EC 下载范围。")
+            Text(L10n.t("间隔 30–1440 分钟；时效上限仅 GFS/EC 需要（3–240 小时、3 的倍数），CAMS 自动拉齐全部时效；锚定区域决定 CAMS 洲包络与 GFS/EC 下载范围。"))
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
@@ -719,21 +722,21 @@ struct SettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("立即同步", systemImage: "arrow.triangle.2.circlepath") {
+                Button(L10n.t("立即同步"), systemImage: "arrow.triangle.2.circlepath") {
                     store.runDataSyncNow()
                 }
                 .disabled(!store.online || store.busy || store.dataSyncRunning)
                 .help(store.dataSyncEnabled
                       ? "立即同步已启用的数据源（可解除失败熔断）"
                       : "先启用并保存后台同步")
-                Button("保存同步设置", systemImage: "externaldrive.badge.checkmark") {
+                Button(L10n.t("保存同步设置"), systemImage: "externaldrive.badge.checkmark") {
                     store.saveDataSyncSettings()
                 }
                 .disabled(!store.online || store.savingDataSync || store.busy)
             }
             if store.dataSyncLoaded {
                 VStack(alignment: .leading, spacing: 8) {
-                    settingsBlockTitle("同步状态")
+                    settingsBlockTitle(L10n.t("同步状态"))
                     dataSyncSourceRow("cams", "CAMS")
                     dataSyncSourceRow("gfs", "GFS")
                     dataSyncSourceRow("ec", "EC")
@@ -741,8 +744,8 @@ struct SettingsView: View {
             }
             Divider()
             VStack(alignment: .leading, spacing: 8) {
-                settingsBlockTitle("后台助手（关闭应用后仍同步）")
-                Text("安装为系统 launchd 代理，按同步间隔在后台自动拉齐最新已发布周期。")
+                settingsBlockTitle(L10n.t("后台助手（关闭应用后仍同步）"))
+                Text(L10n.t("安装为系统 launchd 代理，按同步间隔在后台自动拉齐最新已发布周期。"))
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if store.helperAvailable {
@@ -753,7 +756,7 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(store.helperLoaded ? Color.green : Color.orange)
                         } else {
-                            Label("未安装", systemImage: "circle").font(.caption).foregroundStyle(.secondary)
+                            Label(L10n.t("未安装"), systemImage: "circle").font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
                         if store.helperBusy { ProgressView().controlSize(.small) }
@@ -762,10 +765,10 @@ struct SettingsView: View {
                         }
                         .disabled(store.helperBusy || store.workspace.isEmpty)
                         if store.helperInstalled {
-                            Button("卸载", systemImage: "trash") { store.confirmUninstallHelper = true }
+                            Button(L10n.t("卸载"), systemImage: "trash") { store.confirmUninstallHelper = true }
                                 .disabled(store.helperBusy)
                         }
-                        Button("刷新", systemImage: "arrow.clockwise") { store.refreshHelperStatus() }
+                        Button(L10n.t("刷新"), systemImage: "arrow.clockwise") { store.refreshHelperStatus() }
                             .disabled(store.helperBusy)
                     }
                     if let summary = store.helperStatus["summary"] as? String, !summary.isEmpty {
@@ -781,7 +784,7 @@ struct SettingsView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 } else {
-                    Text("当前为源码运行环境，后台助手仅在正式 FireSky 安装包中可用。")
+                    Text(L10n.t("当前为源码运行环境，后台助手仅在正式 FireSky 安装包中可用。"))
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -791,8 +794,8 @@ struct SettingsView: View {
 
     private var retentionBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
-            settingsBlockTitle("存储与保留")
-            Text("自动清理按周期、扫描或生成时间滚动保留；新数据校验成功后才会清理旧文件。留空表示不自动清理。")
+            settingsBlockTitle(L10n.t("存储与保留"))
+            Text(L10n.t("自动清理按周期、扫描或生成时间滚动保留；新数据校验成功后才会清理旧文件。留空表示不自动清理。"))
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 12) {
@@ -813,10 +816,10 @@ struct SettingsView: View {
                         .foregroundStyle(store.retentionSaveFailed ? Color.red : Color.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else if store.retentionConfigured {
-                    Text("已启用自定义保留策略").font(.caption).foregroundStyle(.secondary)
+                    Text(L10n.t("已启用自定义保留策略")).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("保存保留设置", systemImage: "externaldrive.badge.checkmark") {
+                Button(L10n.t("保存保留设置"), systemImage: "externaldrive.badge.checkmark") {
                     store.saveRetentionSettings()
                 }
                 .disabled(!store.online || store.savingRetention || store.busy)
@@ -828,34 +831,34 @@ struct SettingsView: View {
     /// （Application Support），不再提供选择/编辑；保留迁移入口与重连。
     private var dataDirectoryBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
-            settingsBlockTitle("数据目录")
+            settingsBlockTitle(L10n.t("数据目录"))
             Text(store.workspace)
                 .font(.caption).foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .lineLimit(2)
                 .truncationMode(.middle)
-            Text("数据固定保存在 macOS 系统数据目录（可在访达中前往）。开发/运维可用 FIRESKY_WORKSPACE 环境变量覆盖。")
+            Text(L10n.t("数据固定保存在 macOS 系统数据目录（可在访达中前往）。开发/运维可用 FIRESKY_WORKSPACE 环境变量覆盖。"))
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
-                Button("在访达中打开", systemImage: "folder") {
+                Button(L10n.t("在访达中打开"), systemImage: "folder") {
                     NSWorkspace.shared.open(URL(fileURLWithPath: store.workspace))
                 }
                 Spacer()
-                Button("重新连接", systemImage: "arrow.clockwise") { Task { await store.connect() } }
+                Button(L10n.t("重新连接"), systemImage: "arrow.clockwise") { Task { await store.connect() } }
                     .disabled(store.busy || store.probingDownloads)
-                    .help("重新连接引擎")
+                    .help(L10n.t("重新连接引擎"))
             }
             Divider()
             layoutStatusBlock
         }
         .onAppear { store.loadLayout() }
-        .confirmationDialog("迁移到可见目录布局？", isPresented: Binding(
+        .confirmationDialog(L10n.t("迁移到可见目录布局？"), isPresented: Binding(
             get: { store.showLayoutConfirm },
             set: { if !$0 { store.dismissLayoutConfirm() } }
         )) {
-            Button("迁移", role: .destructive) { store.migrateLayout() }
-            Button("取消", role: .cancel) { store.dismissLayoutConfirm() }
+            Button(L10n.t("迁移"), role: .destructive) { store.migrateLayout() }
+            Button(L10n.t("取消"), role: .cancel) { store.dismissLayoutConfirm() }
         } message: {
             Text(migrationConfirmText)
         }
@@ -872,9 +875,9 @@ struct SettingsView: View {
                 Image(systemName: "exclamationmark.triangle")
                     .foregroundStyle(.orange)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("当前使用旧版隐藏目录布局（.cache / .firesky）。")
+                    Text(L10n.t("当前使用旧版隐藏目录布局（.cache / .firesky）。"))
                         .font(.callout)
-                    Text("迁移会把数据移动到工作区下的可见目录（gfs/、ecmwf/、cams/、reports/ 等），旧目录残壳保留，可随时确认后手动删除。迁移期间会暂停任务与同步。")
+                    Text(L10n.t("迁移会把数据移动到工作区下的可见目录（gfs/、ecmwf/、cams/、reports/ 等），旧目录残壳保留，可随时确认后手动删除。迁移期间会暂停任务与同步。"))
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     if store.layoutMessageFailed {
@@ -886,10 +889,10 @@ struct SettingsView: View {
                 if store.layoutMigrating {
                     VStack(spacing: 4) {
                         ProgressView().controlSize(.small)
-                        Text("迁移中…").font(.caption).foregroundStyle(.secondary)
+                        Text(L10n.t("迁移中…")).font(.caption).foregroundStyle(.secondary)
                     }
                 } else {
-                    Button("迁移到可见目录", systemImage: "arrow.right.square.fill") {
+                    Button(L10n.t("迁移到可见目录"), systemImage: "arrow.right.square.fill") {
                         store.loadLayout()
                         store.showLayoutConfirm = true
                     }
@@ -917,8 +920,8 @@ struct SettingsView: View {
         let files = pending.reduce(0) { $0 + (($1["file_count"] as? NSNumber)?.intValue ?? 0) }
         let bytes = pending.reduce(0.0) { $0 + (($1["bytes"] as? NSNumber)?.doubleValue ?? 0) }
         let names = pending.prefix(4).compactMap { $0["from"] as? String }.joined(separator: "、")
-        let more = pending.count > 4 ? " 等 \(pending.count) 项" : ""
-        return String(format: "将迁移 \(files) 个文件（共 %.1f MB）：\(names)\(more)。迁移使用同卷移动，失败自动回滚；迁移完成后引擎将按新布局重连。", bytes / 1_048_576)
+        let more = pending.count > 4 ? L10n.tf(" 等 %d 项", pending.count) : ""
+        return L10n.tf("将迁移 %d 个文件（共 %.1f MB）：%@%@。迁移使用同卷移动，失败自动回滚；迁移完成后引擎将按新布局重连。", files, bytes / 1_048_576, names, more)
     }
 
     // MARK: - 高级
@@ -927,9 +930,9 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 18) {
             settingsHeader("高级")
             VStack(alignment: .leading, spacing: 8) {
-                Text("Rust 引擎").font(.callout.weight(.medium))
-                TextField("留空使用内置引擎", text: $store.engineBinary)
-                Text("自定义引擎路径仅供开发调试；日常使用保持留空即可。")
+                Text(L10n.t("Rust 引擎")).font(.callout.weight(.medium))
+                TextField(L10n.t("留空使用内置引擎"), text: $store.engineBinary)
+                Text(L10n.t("自定义引擎路径仅供开发调试；日常使用保持留空即可。"))
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -949,7 +952,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 5) {
-                TextField("不限制", text: text)
+                TextField(L10n.t("不限制"), text: text)
                     .textFieldStyle(.roundedBorder)
                     .frame(minWidth: 64)
                 Text(suffix).font(.caption).foregroundStyle(.secondary)
@@ -961,7 +964,7 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption).foregroundStyle(.secondary)
             HStack(spacing: 5) {
-                TextField("未设置", text: text)
+                TextField(L10n.t("未设置"), text: text)
                     .textFieldStyle(.roundedBorder)
                     .frame(minWidth: 64)
                 Text(suffix).font(.caption).foregroundStyle(.secondary)
@@ -988,10 +991,10 @@ struct SettingsView: View {
         default: badge = "从未同步"; color = .secondary
         }
         var details: [String] = []
-        if !cycle.isEmpty { details.append("最近周期 \(cycle)") }
+        if !cycle.isEmpty { details.append(L10n.tf("最近周期 %@", cycle)) }
         if files > 0 { details.append("\(files) 个文件") }
         if let attempt = state["last_attempt_utc"] as? String, !attempt.isEmpty {
-            details.append("上次同步 \(dataSyncTimeText(attempt))")
+            details.append(L10n.tf("上次同步 %@", dataSyncTimeText(attempt)))
         }
         // v1.9.6：显示上一轮实际耗时——串行时代 GFS 一轮 20+ 分钟，用户
         // 需要知道"慢"的具体量级（引擎 elapsed_ms）。
@@ -1003,9 +1006,13 @@ struct SettingsView: View {
                 : L10n.text(String(format: "耗时 %.0f 秒", seconds), String(format: "Took %.0f s", seconds)))
         }
         if let errors = result["errors"] as? [String], let first = errors.first, !first.isEmpty {
-            details.append("最近错误：\(first)")
+            details.append(L10n.tf("最近错误：%@", first))
         }
-        if failures > 0 { details.append("连续失败 \(failures) 次") }
+        // v1.9.7 欠账可视化：CAMS 缺哪些周期一眼可见，补齐进展随轮次更新。
+        if let missing = result["missing_cycles"] as? [String], !missing.isEmpty {
+            details.append(L10n.tf("缺 %d 个周期：%@", missing.count, missing.joined(separator: "、")))
+        }
+        if failures > 0 { details.append(L10n.tf("连续失败 %d 次", failures)) }
         if suspended { details.append("已暂停：立即同步或重新保存设置可解锁") }
         let live = store.dataSyncRunning ? (store.dataSyncProgress[name] as? JSONObject) : nil
         let livePercent = (live?["percent"] as? NSNumber)?.doubleValue ?? 0

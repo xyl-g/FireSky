@@ -436,6 +436,19 @@ struct NativeTaskHistoryView: View {
                 Text(summary).font(.caption2).foregroundStyle(.secondary)
                     .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             }
+            // v1.9.7：从任务详情直达该次预测的完整 HTML 报告（与工作台
+            // 诊断区同一 html_report_path 契约）。
+            if let path = report?["html_report_path"] as? String, !path.isEmpty {
+                Button {
+                    let url = URL(fileURLWithPath: path, relativeTo: URL(
+                        fileURLWithPath: FileManager.default.currentDirectoryPath))
+                    NSWorkspace.shared.open(url)
+                } label: {
+                    Label(L10n.text("完整报告", "Full report"), systemImage: "doc.text")
+                        .font(.caption)
+                }
+                .buttonStyle(.borderless)
+            }
         }
     }
 

@@ -40,13 +40,13 @@ struct SettingsView: View {
             }
 
             if store.settingsCategory == "数据" {
-                Section("下载源") {
-                    Picker("EC 下载源", selection: $store.ecmwfSource) {
-                        Text("ECMWF 官方").tag("ecmwf")
-                        Text("AWS 欧洲镜像").tag("aws")
-                        Text("Google Cloud 镜像").tag("google")
+                Section(L10n.t("下载源")) {
+                    Picker(L10n.t("EC 下载源"), selection: $store.ecmwfSource) {
+                        Text(L10n.t("ECMWF 官方")).tag("ecmwf")
+                        Text(L10n.t("AWS 欧洲镜像")).tag("aws")
+                        Text(L10n.t("Google Cloud 镜像")).tag("google")
                     }.disabled(store.probingDownloads)
-                    Text("EC 下载源会同时用于下载探测、数据准备和预测。GFS 使用 NOAA NOMADS，CAMS 使用 Copernicus ADS。")
+                    Text(L10n.t("EC 下载源同时用于下载探测、数据准备和预测。GFS 使用 NOAA NOMADS，CAMS 使用 Copernicus ADS。"))
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -62,41 +62,41 @@ struct SettingsView: View {
                             .disabled(!store.online || store.savingCAMS)
                     }
                     HStack(spacing: 10) {
-                        SecureField("粘贴 ADS Personal Access Token", text: $store.camsKeyDraft) {
+                        SecureField(L10n.t("粘贴 ADS Personal Access Token"), text: $store.camsKeyDraft) {
                             store.saveCAMSKey()
                         }
                         .textFieldStyle(.roundedBorder)
                         .disabled(!store.canSaveCAMS || store.savingCAMS || store.probingDownloads)
                         if store.savingCAMS { ProgressView() }
-                        Button("保存 Key", systemImage: "key.fill") { store.saveCAMSKey() }
+                        Button(L10n.t("保存 Key"), systemImage: "key.fill") { store.saveCAMSKey() }
                             .disabled(!store.online || !store.canSaveCAMS || store.savingCAMS || store.probingDownloads
                                       || store.camsKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
-                    Text("仅以明文保存在本机配置文件，文件权限 0600；不会写入工程或显示已有 Key。")
+                    Text(L10n.t("仅以明文保存在本机配置文件，文件权限 0600；不会写入工程或显示已有 Key。"))
                         .font(.caption).foregroundStyle(.secondary)
                     if store.camsConfiguration != nil && !store.canSaveCAMS {
-                        Text("环境变量正在覆盖配置。修改 CDSAPI_KEY / CDSAPI_URL 后需重新启动应用。")
+                        Text(L10n.t("环境变量正在覆盖配置。修改 CDSAPI_KEY / CDSAPI_URL 后需重新启动应用。"))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if !store.camsMessage.isEmpty {
                         Text(store.camsMessage).font(.callout)
                             .foregroundStyle(store.camsSaveFailed ? Color.red : Color.secondary)
                     }
-                    DisclosureGroup("配置教程", isExpanded: $store.showCAMSTutorial) {
+                    DisclosureGroup(L10n.t("配置教程"), isExpanded: $store.showCAMSTutorial) {
                         VStack(alignment: .leading, spacing: 14) {
-                            tutorialStep("1", "注册并登录 ADS", detail: "使用 ECMWF 账号登录 Atmosphere Data Store。") {
-                                Link("打开 ADS", destination: URL(string: "https://ads.atmosphere.copernicus.eu/")!)
+                            tutorialStep("1", L10n.t("注册并登录 ADS"), detail: L10n.t("使用 ECMWF 账号登录 Atmosphere Data Store。")) {
+                                Link(L10n.t("打开 ADS"), destination: URL(string: "https://ads.atmosphere.copernicus.eu/")!)
                             }
-                            tutorialStep("2", "复制 Personal Access Token", detail: "在官方 API 配置页复制 key 后面的 Token，不要复制 url 或整段配置。") {
-                                Link("获取 Token", destination: URL(string: "https://ads.atmosphere.copernicus.eu/how-to-api")!)
+                            tutorialStep("2", L10n.t("复制 Personal Access Token"), detail: L10n.t("在官方 API 配置页复制 key 后面的 Token，不要复制 url 或整段配置。")) {
+                                Link(L10n.t("获取 Token"), destination: URL(string: "https://ads.atmosphere.copernicus.eu/how-to-api")!)
                             }
-                            tutorialStep("3", "接受 CAMS 数据集条款", detail: "在数据集 Download 页底部接受 Terms of Use，完成网页端授权。") {
-                                Link("打开数据集", destination: URL(string: "https://ads.atmosphere.copernicus.eu/datasets/cams-global-atmospheric-composition-forecasts?tab=download")!)
+                            tutorialStep("3", L10n.t("接受 CAMS 数据集条款"), detail: L10n.t("在数据集 Download 页底部接受 Terms of Use，完成网页端授权。")) {
+                                Link(L10n.t("打开数据集"), destination: URL(string: "https://ads.atmosphere.copernicus.eu/datasets/cams-global-atmospheric-composition-forecasts?tab=download")!)
                             }
-                            tutorialStep("4", "返回 FireSky 保存 Key", detail: "粘贴到上方输入框并保存，再到预测准备面板下载数据。") {
+                            tutorialStep("4", L10n.t("返回 FireSky 保存 Key"), detail: L10n.t("粘贴到上方输入框并保存，再到预测准备面板下载数据。")) {
                                 EmptyView()
                             }
-                            Text("这里只检查本地配置是否完整；Token 是否有效、数据集是否已授权，在实际下载时验证。")
+                            Text(L10n.t("这里只检查本地配置是否完整；Token 是否有效、数据集是否已授权，在实际下载时验证。"))
                                 .font(.caption).foregroundStyle(.secondary)
                         }.padding(.top, 12).padding(.bottom, 6)
                     }
@@ -107,24 +107,24 @@ struct SettingsView: View {
             }
 
             if store.settingsCategory == "高级" {
-                Section("引擎通道") {
+                Section(L10n.t("引擎通道")) {
                     Picker("通道", selection: Binding(
                         get: { store.engineTransport },
                         set: { store.switchEngineTransport($0) }
                     )) {
-                        Text("内置模拟（Mock）").tag("mock")
-                        Text("FFI（engine-mobile）").tag("ffi")
+                        Text(L10n.t("内置模拟（Mock）")).tag("mock")
+                        Text(L10n.t("FFI（engine-mobile）")).tag("ffi")
                     }
                     Text("FFI 按 fsmobile.h C 契约对接进程内 engine-mobile 库；Mock 通道在无引擎库时驱动界面全链路（模拟数据）。切换后自动重连。")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Section("本地引擎") {
-                    TextField("数据目录", text: $store.workspace)
+                Section(L10n.t("本地引擎")) {
+                    TextField(L10n.t("数据目录"), text: $store.workspace)
                     Text("iOS 沙箱不支持任意目录选择：缓存根固定在应用沙箱内，可微调路径文本。")
                         .font(.caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button("重新连接", systemImage: "arrow.clockwise") { Task { await store.connect() } }
+                    Button(L10n.t("重新连接"), systemImage: "arrow.clockwise") { Task { await store.connect() } }
                         .disabled(store.busy || store.probingDownloads)
                 }
                 if !store.error.isEmpty {

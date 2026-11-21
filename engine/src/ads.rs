@@ -429,16 +429,17 @@ impl Ads {
         expected: u64,
         target: &mut tempfile::NamedTempFile,
     ) -> Result<(), String> {
+        use std::io::{Seek, SeekFrom};
         for attempt in 1..=self.config.request_attempts {
-            target
-                .as_file_mut()
-                .set_len(0)
-                .map_err(|_| "cannot reset ADS temporary file")?;
-            use std::io::{Seek, SeekFrom};
-            target
-                .as_file_mut()
-                .seek(SeekFrom::Start(0))
-                .map_err(|_| "cannot seek ADS temporary file")?;
+            // v1.9.7 断点续传：重试不再清空临时文件——从上一轮断点
+            // (Range: bytes=N-) 续传剩余部分；服务端忽略 Range 返回 200
+            // 时退回全量重下。几百 MB 资产失败重试不再从头下载。
+            let resume_from = target
+                .as_file()
+                .metadata()
+                .map(|meta| meta.len())
+                .unwrap_or(0)
+                .min(expected);
             let result = (|| {
                 // v1.9.6：总时限按资产大小自适应（asset_transfer_budget）——旧
                 // 实现固定 min(remaining, 120s) 覆盖整个响应体读取，慢链路下
@@ -446,24 +447,62 @@ impl Ads {
                 let timeout = asset_transfer_budget(
                     self.remaining()?,
                     self.config.timeout_seconds,
-                    expected,
+                    expected - resume_from,
                 );
-                let mut response = self
+                let mut request = self
                     .assets
                     .get(url.clone())
                     .header("Accept-Encoding", "identity")
-                    .timeout(timeout)
+                    .timeout(timeout);
+                if resume_from > 0 {
+                    request = request.header("Range", format!("bytes={resume_from}-"));
+                }
+                let mut response = request
                     .send()
                     .map_err(|_| "ADS asset request failed (URL redacted)")?;
-                if !response.status().is_success() {
+                let mut offset = resume_from;
+                if resume_from > 0 {
+                    if response.status() == reqwest::StatusCode::PARTIAL_CONTENT {
+                        // Content-Range 起点必须与断点一致，否则视为服务端
+                        // 内容已变化，退回全量（fail-closed）。
+                        let content_range = response
+                            .headers()
+                            .get(reqwest::header::CONTENT_RANGE)
+                            .and_then(|value| value.to_str().ok())
+                            .unwrap_or("")
+                            .to_owned();
+                        if !content_range.starts_with(&format!("bytes {resume_from}-")) {
+                            return Err(format!(
+                                "ADS asset Content-Range mismatch ({content_range})"
+                            ));
+                        }
+                    } else if response.status() == reqwest::StatusCode::OK {
+                        // 服务端忽略 Range：清空断点，退回全量重下。
+                        offset = 0;
+                        target
+                            .as_file_mut()
+                            .set_len(0)
+                            .map_err(|_| "cannot reset ADS temporary file")?;
+                    } else {
+                        return Err(format!(
+                            "ADS asset HTTP status {}",
+                            response.status().as_u16()
+                        ));
+                    }
+                } else if !response.status().is_success() {
                     return Err(format!(
                         "ADS asset HTTP status {}",
                         response.status().as_u16()
                     ));
                 }
-                if response.content_length().is_some_and(|n| n != expected) {
+                let remaining = expected - offset;
+                if response.content_length().is_some_and(|n| n != remaining) {
                     return Err("ADS asset Content-Length disagrees with result size".into());
                 }
+                target
+                    .as_file_mut()
+                    .seek(SeekFrom::Start(offset))
+                    .map_err(|_| "cannot seek ADS temporary file")?;
                 let mut buffer = vec![0; 1024 * 1024];
                 let mut bytes = 0_u64;
                 loop {
@@ -475,14 +514,14 @@ impl Ads {
                         break;
                     }
                     bytes += count as u64;
-                    if bytes > expected {
+                    if bytes > remaining {
                         return Err("ADS asset exceeds declared size".into());
                     }
                     target
                         .write_all(&buffer[..count])
                         .map_err(|_| "cannot write ADS temporary file")?;
                 }
-                if bytes != expected {
+                if bytes != remaining {
                     return Err("ADS asset is truncated".into());
                 }
                 target

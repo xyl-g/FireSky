@@ -14,7 +14,7 @@ use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
     time::Instant,
 };
 
@@ -127,6 +127,7 @@ fn download_gfs(
     cycle: DateTime<Utc>,
     requested: &[u32],
     cancel: &AtomicBool,
+    tracker: Option<&PhaseTracker<'_>>,
 ) -> Result<Vec<Value>, String> {
     let bbox = array4(context, "bbox")?;
     // Mirror the caller's borrowed flag into the client's Arc flag so mid-file
@@ -142,15 +143,31 @@ fn download_gfs(
                     return Err(format!("GFS f{hour:03} did not resolve to a cache file"));
                 }
                 let mut parts = Vec::new();
+                let mut bytes = 0_u64;
                 for row in rows {
                     let path = row["path"]
                         .as_str()
                         .ok_or("GFS resolve response has no path")?;
+                    // v1.9.7：仅真实下载计入吞吐（缓存命中 0）。
+                    if row["status"].as_str() == Some("downloaded") {
+                        bytes += std::fs::metadata(path)
+                            .map(|meta| meta.len())
+                            .unwrap_or(0);
+                    }
                     parts.push(json!({
                         "forecast_hour": hour,
                         "path": path,
                         "status": row["status"].as_str().unwrap_or("resolved"),
+                        "bytes": if row["status"].as_str() == Some("downloaded") {
+                            json!(std::fs::metadata(path).map(|meta| meta.len()).unwrap_or(0))
+                        } else {
+                            json!(0)
+                        },
                     }));
+                }
+                if let Some(tracker) = tracker {
+                    tracker.bytes.fetch_add(bytes, Ordering::AcqRel);
+                    tracker.tick()?;
                 }
                 // Wrapped bboxes resolve to two longitude segments; the first
                 // part keeps the legacy single-path row shape.
@@ -169,24 +186,71 @@ fn download_ec(
     cycle: DateTime<Utc>,
     requested: &[u32],
     cancel: &AtomicBool,
+    tracker: Option<&PhaseTracker<'_>>,
 ) -> Result<Value, String> {
     check(cancel)?;
-    ecmwf_data::execute_cancellable(
-        ecmwf_data::Params {
-            operation: "download".into(),
-            config: ec_config(input),
-            cycle_utc: Some(time_contract::iso(cycle)),
-            forecast_hour: None,
-            forecast_hours: Some(requested.iter().map(|v| i64::from(*v)).collect()),
-            reference_utc: None,
-            now_utc: None,
-            evaluation_utcs: Vec::new(),
-            max_cycles: 8,
-            allow_download: true,
-            use_cache_for_cycle: true,
-        },
+    let hours: Vec<i64> = requested.iter().map(|v| i64::from(*v)).collect();
+    // v1.9.7：与同步轮同款 4 worker 并发 + 逐文件进度（每目标文件独立
+    // lock，并发安全）。
+    let rows = crate::desktop_sync::download_pool(
+        &hours,
         cancel,
-    )
+        &|done, total, _bytes| {
+            phase_event(
+                tracker.and_then(|t| t.progress),
+                tracker.map(|t| t.stage_start).unwrap_or(35),
+                tracker.map(|t| t.stage_span).unwrap_or(20),
+                done as usize,
+                total as usize,
+                "ec",
+                tracker.map(|t| t.bytes.load(Ordering::Acquire)).unwrap_or(0),
+                tracker.map(|t| t.started).unwrap_or_else(Instant::now),
+            )
+        },
+        |hour| {
+            let mut value = ecmwf_data::execute_cancellable(
+                ecmwf_data::Params {
+                    operation: "download".into(),
+                    config: ec_config(input),
+                    cycle_utc: Some(time_contract::iso(cycle)),
+                    forecast_hour: None,
+                    forecast_hours: Some(vec![*hour]),
+                    reference_utc: None,
+                    now_utc: None,
+                    evaluation_utcs: Vec::new(),
+                    max_cycles: 8,
+                    allow_download: true,
+                    use_cache_for_cycle: true,
+                },
+                cancel,
+            )?;
+            let hour_bytes = value["downloaded_bytes"].as_u64().unwrap_or(0);
+            if let Some(tracker) = tracker {
+                tracker.bytes.fetch_add(hour_bytes, Ordering::AcqRel);
+                tracker.tick()?;
+            }
+            let files = value["files"].take();
+            Ok((json!({"hour": hour, "hour_bytes": hour_bytes, "files": files}), hour_bytes))
+        },
+    )?;
+    let downloaded_bytes: u64 = rows
+        .iter()
+        .filter_map(|row| row.get("hour_bytes").and_then(Value::as_u64))
+        .sum();
+    let files = rows
+        .into_iter()
+        .flat_map(|row| match row.get("files") {
+            Some(Value::Array(rows)) => rows.clone(),
+            _ => Vec::new(),
+        })
+        .collect::<Vec<_>>();
+    Ok(json!({
+        "contract": "rust-ecmwf-data-v1",
+        "cycle_utc": time_contract::iso(cycle),
+        "forecast_hours": hours,
+        "files": files,
+        "downloaded_bytes": downloaded_bytes,
+    }))
 }
 
 /// 日期策略（v1.8.0 用户裁定）：
@@ -413,10 +477,10 @@ fn download_first_for_terrain(
         .ok_or("desktop context model source is missing")?
     {
         "gfs" => {
-            let _ = download_gfs(input, context, cycle, &[hour], cancel)?;
+            let _ = download_gfs(input, context, cycle, &[hour], cancel, None)?;
         }
         "ec" => {
-            let _ = download_ec(input, cycle, &[hour], cancel)?;
+            let _ = download_ec(input, cycle, &[hour], cancel, None)?;
         }
         _ => return Err("desktop context model source is invalid".into()),
     }
@@ -424,7 +488,68 @@ fn download_first_for_terrain(
 }
 
 pub fn execute(params: Params) -> Result<Value, String> {
-    execute_cancellable(params, &AtomicBool::new(false))
+    execute_cancellable(params, &AtomicBool::new(false), None)
+}
+
+/// 阶段事件助手：GFS 8→35%，EC 35→55%，CAMS 55→90%（prepare 段）。
+fn phase_event(
+    progress: Option<&(dyn Fn(Value) -> Result<(), String> + Sync)>,
+    stage_start: usize,
+    stage_span: usize,
+    done: usize,
+    total: usize,
+    model: &str,
+    bytes: u64,
+    started: Instant,
+) -> Result<(), String> {
+    let Some(progress) = progress else { return Ok(()) };
+    let within = if total == 0 {
+        0
+    } else {
+        done.min(total) * stage_span / total
+    };
+    let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
+    let mibs = if elapsed_ms > 0.0 {
+        bytes as f64 / 1024.0 / 1024.0 / (elapsed_ms / 1000.0)
+    } else {
+        0.0
+    };
+    progress(json!({
+        "stage": "prepare",
+        "percent": (stage_start + within).min(95),
+        "source": model,
+        "message": format!("正在下载 {} {}/{} · {:.1} MB/s", model.to_uppercase(), done, total, mibs),
+        "bytes": bytes,
+        "elapsed_ms": elapsed_ms,
+    }))
+}
+
+/// 逐文件事件包（GFS/EC 共用）：闭包持有 done/bytes 计数。
+struct PhaseTracker<'a> {
+    progress: Option<&'a (dyn Fn(Value) -> Result<(), String> + Sync)>,
+    stage_start: usize,
+    stage_span: usize,
+    total: usize,
+    done: AtomicUsize,
+    bytes: AtomicU64,
+    model: String,
+    started: Instant,
+}
+
+impl PhaseTracker<'_> {
+    fn tick(&self) -> Result<(), String> {
+        let done = self.done.fetch_add(1, Ordering::AcqRel) + 1;
+        phase_event(
+            self.progress,
+            self.stage_start,
+            self.stage_span,
+            done,
+            self.total,
+            &self.model,
+            self.bytes.load(Ordering::Acquire),
+            self.started,
+        )
+    }
 }
 
 fn check(cancel: &AtomicBool) -> Result<(), String> {
@@ -435,7 +560,13 @@ fn check(cancel: &AtomicBool) -> Result<(), String> {
     }
 }
 
-pub fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result<Value, String> {
+/// v1.9.7：准备阶段进度回调（JSON-lines 事件，shape 与同步轮一致）。
+/// None 时静默（契约脚本/CLI 直用）。
+pub fn execute_cancellable(
+    params: Params,
+    cancel: &AtomicBool,
+    progress: Option<&(dyn Fn(Value) -> Result<(), String> + Sync)>,
+) -> Result<Value, String> {
     check(cancel)?;
     let started = Instant::now();
     let (input, _) = request_file::read::<Input>(&params.path, MAX_JSON)?;
@@ -485,17 +616,59 @@ pub fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result<Value,
         .as_str()
         .ok_or("desktop context model source is missing")?;
     let model_result = match model {
-        "gfs" => json!({
-            "source": "gfs",
-            "files": download_gfs(&input, &context, cycle, &requested, cancel)?,
-        }),
-        "ec" => json!({
-            "source": "ecmwf",
-            "resolution": download_ec(&input, cycle, &requested, cancel)?,
-        }),
+        "gfs" => {
+            let tracker = PhaseTracker {
+                progress,
+                stage_start: 8,
+                stage_span: 27,
+                total: requested.len(),
+                done: AtomicUsize::new(0),
+                bytes: AtomicU64::new(0),
+                model: "gfs".into(),
+                started: Instant::now(),
+            };
+            json!({
+                "source": "gfs",
+                "files": download_gfs(&input, &context, cycle, &requested, cancel, Some(&tracker))?,
+            })
+        }
+        "ec" => {
+            let tracker = PhaseTracker {
+                progress,
+                stage_start: 35,
+                stage_span: 20,
+                total: requested.len(),
+                done: AtomicUsize::new(0),
+                bytes: AtomicU64::new(0),
+                model: "ec".into(),
+                started: Instant::now(),
+            };
+            json!({
+                "source": "ecmwf",
+                "resolution": download_ec(&input, cycle, &requested, cancel, Some(&tracker))?,
+            })
+        }
         _ => return Err("desktop context model source is invalid".into()),
     };
+    // CAMS 段（55→90）：ADS 排队 + 整周期资产下载，无文件粒度事件，
+    // 给出段边界与提示（排队时间占大头）。
+    if let Some(progress) = progress {
+        progress(json!({
+            "stage": "prepare",
+            "percent": 55,
+            "source": "cams",
+            "message": "正在准备 CAMS 全球大气数据（ADS 排队与整周期下载，耗时数分钟属正常）",
+        }))?;
+    }
     let cams_result = download_cams(&input, &context, cancel)?;
+    if let Some(progress) = progress {
+        progress(json!({
+            "stage": "prepare",
+            "percent": 90,
+            "source": "cams",
+            "message": "CAMS 数据就绪",
+        }))?;
+    }
     check(cancel)?;
     Ok(json!({
         "contract": "rust-desktop-prepare-v1",

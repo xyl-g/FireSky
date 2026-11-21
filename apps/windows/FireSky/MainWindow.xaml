@@ -498,6 +498,17 @@
                                     </RadioButtons>
                                 </StackPanel>
                                 <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+                                <!-- v1.9.7 i18n：界面语言（跟随系统/中文/English）。 -->
+                                <StackPanel Spacing="10">
+                                    <TextBlock Text="语言" FontWeight="Medium"/>
+                                    <RadioButtons x:Name="LanguageChoice" MaxColumns="3" SelectedIndex="0"
+                                                  SelectionChanged="OnLanguageChanged">
+                                        <RadioButton Content="跟随系统 / System" Tag="system"/>
+                                        <RadioButton Content="中文" Tag="zh"/>
+                                        <RadioButton Content="English" Tag="en"/>
+                                    </RadioButtons>
+                                </StackPanel>
+                                <Border Height="1" Background="{ThemeResource DividerStrokeColorDefaultBrush}"/>
                                 <!-- v1.5.0：软件更新（检查 → 下载 + SHA256 校验 → 自替换重启）。 -->
                                 <StackPanel Spacing="10">
                                     <TextBlock Text="软件更新" FontWeight="Medium"/>

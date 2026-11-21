@@ -104,6 +104,71 @@ ships release capability (self-contained zip, installer, CI publishing).
   breaking inventory/check before any download; normalized only real path
   levels and tolerated error 1, with a Windows regression test. The app
   assembly now embeds the engine version for in-app update comparison.
+## v1.9.7 (2026-11-21)
+
+进度与吞吐透明化（prepare 逐文件进度 / ADS 断点续传 / 欠账可视化 / MB/s 吞吐 / EC index 复用 / 手动优先让路）+ 三端 i18n 收尾 + 任务详情打开报告 + web uPlot 试点合并。
+Progress & throughput transparency (per-file prepare progress, ADS range
+resume, missing-cycle visibility, MB/s throughput, EC index reuse,
+manual-priority yield) plus i18n wrap-up on three platforms, report access
+from task details, and the web uPlot pilot merge.
+
+**引擎 / Engine**
+
+- prepare 阶段逐文件进度：GFS 8–35% / EC 35–55% / CAMS 55–90% 段内按文件
+  细分（替换固定 10% 占位），EC 下载改用与同步轮同款 4 worker 线程池；
+  事件带 bytes/elapsed_ms 供吞吐显示。
+- ADS 断点续传：资产下载重试不再清空临时文件，从断点 `Range: bytes=N-`
+  续传（206 校验 Content-Range 起点；服务端忽略 Range 回 200 时退回全量
+  重下），几百 MB 资产失败重试不再从头下载。
+- 同步轮/准备阶段进度消息内联实时吞吐（`… · 8.4 MB/s`），事件携带
+  bytes/elapsed_ms 机读字段。
+- 每源同步状态新增 `missing_cycles` 字段（缺失周期最多 8 个），欠账一眼
+  可见。
+- 手动优先让路：prepare/forecast 开始时放置跨进程哨兵（1s 重放保持），
+  后台同步轮在源边界与文件粒度自动让路（cancelled 不计熔断，崩溃自愈）。
+- EC index 跨会话缓存（URL→记录，已发布周期 index 不可变），消除并行
+  逐小时下载的 index 重复请求。
+  Engine: per-file prepare progress with phase spans, ADS range resume,
+  inline MB/s throughput in progress events, missing_cycles field,
+  manual-priority yield sentinel for background sync rounds, and a
+  cross-session EC index cache.
+
+**桌面 / 移动端**
+
+- macOS 设置/数据页全量 i18n：集中英译表（与 Android values-en 同口径）
+  + 94 处显示位 + 22 处格式化模板（t()/tf()），语言来回切换幂等。
+- iOS 设置页数据/高级分类接入同源字典（t()/tf()）。
+- Windows 界面语言：中心字典 + 视觉树遍历替换（zh↔en 幂等），设置 →
+  通用新增语言选择（跟随系统/中文/English，LocalSettings 持久化）。
+- macOS 任务详情卡新增「完整报告」入口：直接打开该次预测的已发布
+  HTML 报告（html_report_path 契约）。
+  macOS settings/data pages fully localized; iOS data/advanced settings
+  share the same dictionary; Windows gains interface-language selection
+  with a visual-tree applier; macOS task details can open the published
+  HTML report.
+
+**macOS 退出守卫修复 / Quit-guard fix**
+
+- 修复退出确认框循环：用户选择「仍要退出」后置位强制标志，后续
+  terminate 直接放行；注销/关机等系统反复发起 terminate 时 5s 内不再
+  重复弹确认。新增启动兜底：8s 后仍无可见窗口时强制前置主窗口，消除
+  「界面没出来」的卡死观感。
+  Quit confirmation can no longer loop: explicit exit sets a force flag,
+  system-initiated repeated termination is re-confirmed at most once per
+  5s, and a launch watchdog brings the main window forward if no window
+  is visible 8s after launch.
+
+**Web**
+
+- 合并 feat/web-ui-ux-polish 余下 3 提交：uPlot 试点（WebTrendChart
+  两处 SVG 换 canvas 图表）+ Playwright 视觉基线脚手架。视觉基线快照
+  为本机测试数据，**不再入库**（用户裁定）：`tests/**/__screenshots__/`
+  加入 .gitignore，本地/CI 用 `--update-snapshots=missing` 现场生成。
+  Merges the remaining web-ui-ux-polish commits (uPlot canvas pilot,
+  visual baseline scaffolding). Snapshot baselines are local test data
+  and stay out of the repo (user decision); they are gitignored and
+  generated on demand.
+
 ## v1.9.6 (2026-11-21)
 
 数据同步专项修复：ADS 大资产自适应超时 + 失败欠账自动补齐 + GFS/EC 并发下载与逐文件进度 + 同步页实时刷新。来源为专项走查（CAM 撞 120s 总超时熔断、失败后 24h+ 不重试、GFS 串行 22 min、杂散 helper 抢带宽）。

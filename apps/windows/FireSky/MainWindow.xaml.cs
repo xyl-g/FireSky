@@ -121,6 +121,8 @@ public sealed partial class MainWindow : Window
         RestoreSession();
         Navigation.SelectedItem = Navigation.MenuItems[0];
         initialized = true;
+        LanguageChoice.SelectedIndex = L10n.Preference switch { "zh" => 1, "en" => 2, _ => 0 };
+        ApplyLocalization();
         AddKeyboardAccelerators();
         Root.Loaded += async (_, _) =>
         {
@@ -522,11 +524,11 @@ public sealed partial class MainWindow : Window
         DataPage.Visibility = page == "data" ? Visibility.Visible : Visibility.Collapsed;
         HistoryPage.Visibility = page == "history" ? Visibility.Visible : Visibility.Collapsed;
         SettingsPage.Visibility = page == "settings" ? Visibility.Visible : Visibility.Collapsed;
-        PageTitle.Text = page switch
+        PageTitle.Text = L10n.Translate(page switch
         {
             "regional" => "预测区域", "nowcast" => "实况观测", "data" => "数据管理",
             "history" => "任务历史", "settings" => "设置", _ => "观测点",
-        };
+        });
         PageSubtitle.Text = page switch
         {
             "point" or "nowcast" => $"{LocationName.Text} · {LatLonLabel(Latitude.Value, Longitude.Value)}",
@@ -1346,4 +1348,70 @@ public sealed partial class MainWindow : Window
         syncOperation?.Cancel();
         Status.Text = "正在取消，等待当前阶段结束";
     }
+    // ---------- 界面多语言（v1.9.7，macOS L10n 同构） ----------
+
+    private void OnLanguageChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (!initialized) return;
+        var index = LanguageChoice.SelectedIndex;
+        L10n.Preference = index switch { 1 => "zh", 2 => "en", _ => "system" };
+        ApplyLocalization();
+    }
+
+    private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
+    {
+        var count = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChildrenCount(root);
+        for (var i = 0; i < count; i++)
+        {
+            var child = Microsoft.UI.Xaml.Media.VisualTreeHelper.GetChild(root, i);
+            yield return child;
+            foreach (var nested in Descendants(child)) yield return nested;
+        }
+    }
+
+    /// 视觉树遍历替换：字典命中的文案换为当前语言；en→zh 反向归一使
+    /// 语言来回切换幂等。动态构建的面板（指标卡/历史行等）构建后重刷。
+    internal void ApplyLocalization()
+    {
+        foreach (var node in Descendants(Root))
+        {
+            switch (node)
+            {
+                case TextBlock text when !string.IsNullOrEmpty(text.Text):
+                    text.Text = L10n.Translate(text.Text);
+                    break;
+                case Microsoft.UI.Xaml.Documents.Run run when !string.IsNullOrEmpty(run.Text):
+                    run.Text = L10n.Translate(run.Text);
+                    break;
+                case Microsoft.UI.Xaml.Controls.Primitives.ButtonBase button
+                    when button.Content is string content && !string.IsNullOrEmpty(content):
+                    button.Content = L10n.Translate(content);
+                    break;
+                case RadioButton radio when radio.Content is string content:
+                    radio.Content = L10n.Translate(content);
+                    break;
+                case CheckBox checkbox when checkbox.Content is string content:
+                    checkbox.Content = L10n.Translate(content);
+                    break;
+                case ComboBoxItem item when item.Content is string content:
+                    item.Content = L10n.Translate(content);
+                    break;
+                case NavigationViewItem nav when nav.Content is string content:
+                    nav.Content = L10n.Translate(content);
+                    break;
+                case ToggleSwitch toggle:
+                    if (toggle.OnContent is string onText) toggle.OnContent = L10n.Translate(onText);
+                    if (toggle.OffContent is string offText) toggle.OffContent = L10n.Translate(offText);
+                    break;
+                case TextBox box when !string.IsNullOrEmpty(box.PlaceholderText):
+                    box.PlaceholderText = L10n.Translate(box.PlaceholderText);
+                    break;
+                case InfoBar info:
+                    if (!string.IsNullOrEmpty(info.Title)) info.Title = L10n.Translate(info.Title);
+                    if (!string.IsNullOrEmpty(info.Message)) info.Message = L10n.Translate(info.Message);
+                    break;
+            }
+        }
+    }
+
 }

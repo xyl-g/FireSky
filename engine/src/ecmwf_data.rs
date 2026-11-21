@@ -22,6 +22,51 @@ const MAX_INDEX: u64 = 32 * 1024 * 1024;
 const MAX_FILE: u64 = 512 * 1024 * 1024;
 const MAX_RECORDS: usize = 100_000;
 const MAX_RETAINED_INDEX: usize = 64 * 1024 * 1024;
+
+/// v1.9.7：跨会话 index 缓存（URL → 记录）。已发布周期的 index 内容
+/// 不可变，缓存无失效问题；条目上限防内存膨胀（每条 ≤32 MiB 校验过，
+/// 实际每条几百 KB）。命中时计入调用方自己的 LRU，语义不变。
+static EC_INDEX_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::VecDeque<(String, std::sync::Arc<Vec<IndexRecord>>)>>,
+> = std::sync::OnceLock::new();
+
+const EC_INDEX_CACHE_ENTRIES: usize = 32;
+
+fn global_index_cache() -> &'static std::sync::Mutex<std::collections::VecDeque<(String, std::sync::Arc<Vec<IndexRecord>>)>> {
+    EC_INDEX_CACHE.get_or_init(|| std::sync::Mutex::new(std::collections::VecDeque::new()))
+}
+
+fn global_index_get(url: &str) -> Option<std::sync::Arc<Vec<IndexRecord>>> {
+    let mut cache = global_index_cache().lock().unwrap();
+    if let Some(position) = cache.iter().position(|(cached, _)| cached == url) {
+        let (url, records) = cache.remove(position).unwrap();
+        cache.push_back((url, records));
+        return cache.back().map(|(_, records)| std::sync::Arc::clone(records));
+    }
+    None
+}
+
+fn global_index_put(url: &str, records: &std::sync::Arc<Vec<IndexRecord>>) {
+    let mut cache = global_index_cache().lock().unwrap();
+    if cache.iter().any(|(cached, _)| cached == url) {
+        return;
+    }
+    cache.push_back((url.to_string(), std::sync::Arc::clone(records)));
+    while cache.len() > EC_INDEX_CACHE_ENTRIES {
+        cache.pop_front();
+    }
+}
+
+fn index_entry_bytes(records: &std::sync::Arc<Vec<IndexRecord>>, url: &str) -> usize {
+    std::mem::size_of::<IndexRecord>() * records.capacity()
+        + records
+            .iter()
+            .flat_map(|row| [&row.param, &row.request_type, &row.step, &row.levtype, &row.levelist])
+            .filter_map(|v| v.as_ref())
+            .map(String::capacity)
+            .sum::<usize>()
+        + url.len()
+}
 const PRESSURE: [&str; 6] = ["gh", "r", "t", "w", "u", "v"];
 const SURFACE: [&str; 3] = ["z", "2t", "2d"];
 
@@ -385,6 +430,23 @@ impl Transfer {
             self.indexes.push_back(entry);
             return Ok(result);
         }
+        // v1.9.7：跨会话 index 缓存——已发布周期的 index 内容不变，并发
+        // 逐小时下载各自新建 Transfer 时避免重复拉取同一 index（v1.9.6
+        // 的并行改造把每小时的 index 请求从 1 次放大到 N 次）。
+        if let Some(records) = global_index_get(url.as_str()) {
+            let bytes = index_entry_bytes(&records, url.as_str());
+            retain_index(
+                &mut self.indexes,
+                &mut self.retained_index_bytes,
+                IndexEntry {
+                    url: url.to_string(),
+                    records: Arc::clone(&records),
+                    bytes,
+                },
+                MAX_RETAINED_INDEX,
+            );
+            return Ok(records);
+        }
         let mut response = self.send(reqwest::Method::GET, &url, None)?;
         self.index_requests += 1;
         if !response.status().is_success() {
@@ -437,6 +499,7 @@ impl Transfer {
             + url.as_str().len()
             + std::mem::size_of::<IndexEntry>();
         let records = Arc::new(rows);
+        global_index_put(url.as_str(), &records);
         retain_index(
             &mut self.indexes,
             &mut self.retained_index_bytes,
