@@ -1338,7 +1338,8 @@ class WorkbenchStore(application: Application) : AndroidViewModel(application) {
                     "terrain_inventory",
                     JSONObject().put("lat", current.location.lat).put("lon", current.location.lon),
                 )
-                _state.update { it.copy(terrain = response, terrainMessage = "", terrainMessageFailed = false) }
+                // 成功刷新不清空刚设置的下载完成消息；仅失败时覆盖。
+                _state.update { it.copy(terrain = response) }
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {

@@ -136,7 +136,7 @@ class MockTransport : EngineTransport {
         "result_restore" -> resultRestore()
         "data_delete_preview" -> dataDeletePreview()
         "data_delete_execute" -> dataDeleteExecute()
-        "terrain_inventory" -> terrainInventory()
+        "terrain_inventory" -> terrainInventory(params)
         "terrain_download" -> terrainDownload(requestId)
         "cams_credentials" -> camsCredentials()
         "save_cams_key" -> saveCamsKey(params)
@@ -298,16 +298,32 @@ class MockTransport : EngineTransport {
         .put("deleted", 42).put("skipped", JSONArray()).put("failed", JSONArray())
         .put("freed_mb", 512.5)
 
-    private fun terrainInventory(): JSONObject = JSONObject()
-        .put("contract", "rust-terrain-inventory-v1")
-        .put("tile_count", 3)
-        .put("tiles", JSONArray()
-            .put(JSONObject().put("name", "N30E119").put("bytes", 25_934_402))
-            .put(JSONObject().put("name", "N30E120").put("bytes", 25_934_402))
-            .put(JSONObject().put("name", "N31E120").put("bytes", 25_934_402)))
-        .put("coverage_ok", true)
-        .put("tile", JSONObject().put("name", "N30E120").put("exists", true).put("bytes", 25_934_402)
-            .put("lat_range", JSONArray(listOf(30.0, 31.0))).put("lon_range", JSONArray(listOf(120.0, 121.0))))
+    private fun terrainInventory(params: JSONObject): JSONObject {
+        val result = JSONObject()
+            .put("contract", "rust-terrain-inventory-v1")
+            .put("tile_count", 3)
+            .put("tiles", JSONArray()
+                .put(JSONObject().put("name", "N30E119").put("bytes", 25_934_402))
+                .put(JSONObject().put("name", "N30E120").put("bytes", 25_934_402))
+                .put(JSONObject().put("name", "N31E120").put("bytes", 25_934_402)))
+            .put("coverage_ok", true)
+            .put("tile", JSONObject().put("name", "N30E120").put("exists", true).put("bytes", 25_934_402)
+                .put("lat_range", JSONArray(listOf(30.0, 31.0))).put("lon_range", JSONArray(listOf(120.0, 121.0))))
+        if (params.optBoolean("estimate_global", false)) {
+            // 与真引擎同口径：bounds（缺省全球）→ 候选数 + 已有 + 估算体积。
+            val bounds = params.optJSONObject("bounds") ?: JSONObject()
+                .put("south", -56).put("north", 59).put("west", -180).put("east", 179)
+            val candidates = (bounds.optInt("north", 0) - bounds.optInt("south", 0) + 1) *
+                (bounds.optInt("east", 0) - bounds.optInt("west", 0) + 1)
+            result.put("global", JSONObject()
+                .put("candidates", candidates)
+                .put("existing", 2)
+                .put("estimated_bytes", candidates * 6_000_000L)
+                .put("estimated_gb", candidates * 0.006)
+                .put("bounds", bounds))
+        }
+        return result
+    }
 
     /** mock 批量下载：模拟 4 块瓦片进度后完成（真下载走 JniTransport 真引擎）。 */
     private fun terrainDownload(requestId: String): JSONObject {

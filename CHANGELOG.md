@@ -8,6 +8,36 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v1.6.1 (2026-11-21)
+
+发布前全流程走查（模拟真实用户体验）发现的问题修复。
+Fixes surfaced by a full pre-release walkthrough (simulated real-user flows).
+
+**macOS 安装引导 / macOS install flow**
+
+- 修复 DMG 引导「安装到应用程序」后应用不自动重启：`openApplication` 会
+  被 LaunchServices 指向同 bundle id 的现有实例（且 async 版本在同步上
+  下文中被丢弃）；改为独立接力进程在旧实例退出后再打开新实例。
+  Fixed the DMG-guided install not relaunching: LaunchServices pointed
+  `openApplication` at the still-running instance and the async variant
+  was discarded; a detached relay process now opens the installed copy
+  after the old instance quits.
+- 走查路径：下载 Release DMG → 校验 SHA256 → Finder 式挂载 → /Volumes
+  双击启动 → 确认弹窗 → 安装 → 自动重启，全链通过。
+  Verified end-to-end: download, checksum, mount, launch from volume,
+  confirm, install, auto-relaunch.
+
+**地形下载反馈 / Terrain download feedback**
+
+- 修复下载完成消息被 `loadTerrain` 刷新吞掉（双端）：状态刷新成功不再
+  清空刚设置的完成消息，仅失败时覆盖。
+  The completion message is no longer swallowed by the inventory refresh
+  on both platforms; refresh now only overwrites on failure.
+- Mock 通道补齐 `terrain_inventory` 的 `estimate_global`（按 bounds 计算
+  候选数/已有/估算体积，口径同真引擎），区域确认框不再显示「候选 0 块」。
+  Mock transports now implement `estimate_global` with bounds-aware
+  candidate counts and size estimates, matching the real engine.
+
 ## v1.6.0 (2026-11-21)
 
 Android / iOS 与 macOS 功能对齐（2026-11-20 方案阶段 A/C/D 移动端落地）。

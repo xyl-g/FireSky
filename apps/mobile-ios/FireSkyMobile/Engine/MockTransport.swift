@@ -117,7 +117,7 @@ final class MockTransport: EngineTransport {
                 "deleted": 42, "skipped": [], "failed": [], "freed_mb": 512.5,
             ])
         case "terrain_inventory":
-            emitResult(id: id, [
+            var inventory: JSONObject = [
                 "contract": "rust-terrain-inventory-v1",
                 "tile_count": 3,
                 "tiles": [["name": "N30E119", "bytes": 25_934_402],
@@ -126,7 +126,22 @@ final class MockTransport: EngineTransport {
                 "coverage_ok": true,
                 "tile": ["name": "N30E120", "exists": true, "bytes": 25_934_402,
                          "lat_range": [30.0, 31.0], "lon_range": [120.0, 121.0]],
-            ])
+            ]
+            if (params["estimate_global"] as? Bool) == true {
+                // 与真引擎同口径：bounds（缺省全球）→ 候选数 + 已有 + 估算体积。
+                let bounds = (params["bounds"] as? JSONObject) ??
+                    ["south": -56, "north": 59, "west": -180, "east": 179]
+                let south = (bounds["south"] as? NSNumber)?.intValue ?? -56
+                let north = (bounds["north"] as? NSNumber)?.intValue ?? 59
+                let west = (bounds["west"] as? NSNumber)?.intValue ?? -180
+                let east = (bounds["east"] as? NSNumber)?.intValue ?? 179
+                let candidates = (north - south + 1) * (east - west + 1)
+                inventory["global"] = ["candidates": candidates, "existing": 2,
+                                       "estimated_bytes": candidates * 6_000_000,
+                                       "estimated_gb": Double(candidates) * 0.006,
+                                       "bounds": bounds]
+            }
+            emitResult(id: id, inventory)
         case "terrain_download":
             await mockTerrainDownload(id: id)
         case "network_probe":

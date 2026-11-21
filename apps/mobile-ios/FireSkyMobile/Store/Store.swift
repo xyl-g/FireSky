@@ -974,9 +974,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             defer { terrainLoading = false }
             do {
                 let response = try await engine.call("terrain_inventory", ["lat": lat, "lon": lon])
+                // 成功刷新不清空刚设置的下载完成消息；仅失败时覆盖。
                 terrain = response
-                terrainMessage = ""
-                terrainMessageFailed = false
             } catch is CancellationError {
             } catch {
                 terrain = nil
