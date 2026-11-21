@@ -86,10 +86,20 @@ ARM64 同理（`-Arch arm64`，需 ARM64 MSVC 工具链）。
 
 ## 5. 平台适配注记
 
+- **应用内更新（v1.5.0 对齐）**：设置 → 通用「软件更新」——检查
+  GitHub Releases → 匹配 `FireSky-<版本>-windows-<架构>.zip` → 下载
+  （进度/取消）→ SHA256SUMS.txt 校验 → 解压暂存 → 批处理脚本等待旧进程
+  退出后自替换应用目录并自动重启。安装目录无写权限（如 Program Files
+  管理员安装）时给出手动安装指引，不静默失败。启动后 8 秒静默检查
+  （默认开，可在设置关闭）；发现新版本时侧栏设置入口显示绿色徽标。
 - **后台同步助手**：macOS 用 launchd LaunchAgent；Windows 版本当前为应用内
   60 秒心跳驱动（应用退出即停）。任务计划程序（Task Scheduler）等价物留作
   后续平台适配项，设置页不出现 macOS 助手控件。
-- **数据管理手动删除 / 目录迁移 / SRTM 独立下载**：macOS 方案阶段 B/C/D，
-  任何平台都未实施；Windows 不超前实现。
+- **数据管理手动删除 / 地形下载**：v1.3.0 起已对齐（`data_delete_*` 与
+  `terrain_*` 契约）；Windows 特有注意点——杀软/索引器会瞬时锁住新写文件，
+  引擎的临时文件 fsync 已降级为非致命（stderr 记录），删除时占用中的文件
+  照常跳过并单独报告。
+- **UI 对齐矩阵**：可一致项 / Windows 等价项 / 暂不可一致项及原因，见
+  [Windows UI 对齐矩阵](WINDOWS_UI_PARITY.zh-CN.md)。
 - **无障碍 / 快捷键**：Ctrl+1-5 切页、Ctrl+, 设置；控件均带 ToolTip 描述，
   VoiceOver 对应的屏幕阅读器验收随基准统一推进。
