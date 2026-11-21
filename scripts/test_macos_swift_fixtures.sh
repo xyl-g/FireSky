@@ -20,6 +20,9 @@ test -f "$RESOURCES/app-data/RESOURCE-MANIFEST.json"
 FIXTURE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/firesky-swift-fixtures.XXXXXX")"
 trap 'rm -rf "$FIXTURE_DIR"' EXIT
 
+swiftc -warnings-as-errors -parse-as-library -swift-version 5 -target "$TARGET" \
+    -typecheck "$ROOT/apps/macos/Sources/FireSkyNative/L10n.swift"
+
 swiftc -parse-as-library -swift-version 5 -target "$TARGET" \
     "$ROOT/apps/macos/Sources/FireSkyNative/PreparationActions.swift" \
     "$ROOT/apps/macos/Sources/FireSkyNative/DownloadProbe.swift" \
