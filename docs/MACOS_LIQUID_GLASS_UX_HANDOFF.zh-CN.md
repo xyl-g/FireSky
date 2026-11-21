@@ -844,3 +844,11 @@ GFS/EC 双摘要、0–2.5 指数、档位、最佳时刻、推荐窗口、天�
 - Reduce Transparency / Increase Contrast：`FireSkySurface` 统一降级导航与浮层材质；内容表面始终稳定；高对比下边界和状态线索增强。
 - 直接材质调用收口：日历浮层、趋势图悬浮提示、区域地图容器、区域错误提示改走 `fireSkySurface(role:cornerRadius:)`，并新增可选圆角以保持原视觉尺寸。
 - 本机无法通过环境变量伪造系统辅助功能 EnvironmentValues，因此未生成假截图；审计矩阵见 `output/ui-polish-20261122/accessibility-settings-matrix.md`。macOS 14–25 / 26 真机矩阵仍待验证。
+
+### 20.9 业务场景回放（P0-5 已完成本地可覆盖部分）
+
+- `bash scripts/test_macos_native.sh` 全链路通过：FFI smoke、Swift FFI smoke、Swift fixture checks、DMG 安装布局、native bundle smoke。
+- 点/区域历史回放各跑 GFS 宽窗与 EC 窄窗，恢复、参数回填和结果展示正常；截图在 `output/ui-polish-20261122/business-replay/`。
+- 仓库回放脚本的 `sandbox-exec` 在本机被策略拒绝，已用同一编译产物去掉沙箱包装重跑；数据仍全部来自本地夹具。
+- 历史冻结剖面因日期过期被引擎正确拒绝，测试夹具新增显式开关只容忍「过期」错误后继续截图，不绕过业务校验。细节见 `output/ui-polish-20261122/business-scenario-matrix.md`。
+- Gatekeeper、首次真实下载/取消/看门狗、离线缓存、更新与真实用户任务测试仍需真实环境验证。

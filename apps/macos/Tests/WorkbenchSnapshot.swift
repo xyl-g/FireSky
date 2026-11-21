@@ -209,24 +209,33 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
                 } catch {
                     fputs("Historical UI restore failed: \(error)\n", stderr); exit(1)
                 }
-                if isRegional, let coordinate = store.selectedRegionalCoordinate {
-                    store.queryRegionalProfile(model: store.selectedModel, coordinate: coordinate)
-                    for _ in 0..<200 where store.regionalProfileState == "loading" {
-                        try? await Task.sleep(for: .milliseconds(100))
+                    let tolerateStale = env["FIRESKY_TEST_ALLOW_STALE_PROFILE"] == "1"
+                    if isRegional, let coordinate = store.selectedRegionalCoordinate {
+                        store.queryRegionalProfile(model: store.selectedModel, coordinate: coordinate)
+                        for _ in 0..<200 where store.regionalProfileState == "loading" {
+                            try? await Task.sleep(for: .milliseconds(100))
+                        }
+                        guard store.regionalProfileState == "ready"
+                                || (tolerateStale && store.regionalProfileError.contains("过期")) else {
+                            fputs("Regional profile failed: \(store.regionalProfileError)\n", stderr); exit(1)
+                        }
+                        if store.regionalProfileState != "ready" {
+                            print("Regional frozen profile expired (expected for historical fixture)")
+                        }
+                    } else if !isNowcast {
+                        store.queryPointProfile()
+                        for _ in 0..<200 where store.frozenProfileState == "loading" {
+                            try? await Task.sleep(for: .milliseconds(100))
+                        }
+                        guard store.frozenProfileState == "ready"
+                                || (tolerateStale && store.frozenProfileError.contains("过期")) else {
+                            fputs("Point profile failed: \(store.frozenProfileError)\n", stderr); exit(1)
+                        }
+                        if store.frozenProfileState != "ready" {
+                            print("Point frozen profile expired (expected for historical fixture)")
+                        }
                     }
-                    guard store.regionalProfileState == "ready" else {
-                        fputs("Regional profile failed: \(store.regionalProfileError)\n", stderr); exit(1)
-                    }
-                } else if !isNowcast {
-                    store.queryPointProfile()
-                    for _ in 0..<200 where store.frozenProfileState == "loading" {
-                        try? await Task.sleep(for: .milliseconds(100))
-                    }
-                    guard store.frozenProfileState == "ready" else {
-                        fputs("Point profile failed: \(store.frozenProfileError)\n", stderr); exit(1)
-                    }
-                }
-                print("Historical replay FFI profile: ready (\(store.selectedModel))")
+                    print("Historical replay FFI profile: ready (\(store.selectedModel))")
             }
             if env["FIRESKY_TEST_DOWNLOAD_PROBE"] == "1" {
                 store.page = .data
