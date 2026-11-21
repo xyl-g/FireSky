@@ -662,7 +662,7 @@ public sealed partial class MainWindow
         AdjustmentRow(L10n.T("可烧云比例"),
             $"可烧/总云量 {RatioText(components["forward_burnable_cloud_ratio_peak"])} · 前方可烧云量 {RatioText(components["forward_burnable_cloud_field_amount_peak"])}", null);
         AdjustmentRow(L10n.T("几何遮挡（已计入可烧量）"),
-            $"最佳云入射遮挡 {RatioText(components["solar_incoming_block_risk_at_best_cloud"] ?? components["solar_incoming_block_risk_mean"])} · 不重复扣分"), null);
+            $"最佳云入射遮挡 {RatioText(components["solar_incoming_block_risk_at_best_cloud"] ?? components["solar_incoming_block_risk_mean"])} · 不重复扣分", null);
         AdjustmentRow(L10n.T("持续时间修正"),
             $"{QualityText(report["duration_minutes"] ?? components["duration_minutes"], 0)} 分钟 · ×{QualityText(components["duration_factor"], 3)}",
             SignedDelta(components["duration_adjustment"]));

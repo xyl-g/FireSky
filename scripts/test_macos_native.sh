@@ -152,14 +152,20 @@ if [ "${FIRESKY_APP_SMOKE:-0}" = "1" ]; then
         kill "$APP_PID" 2>/dev/null || true
         wait "$APP_PID" 2>/dev/null || true
     }
-    app_attempt
-    rc=$?
+    if app_attempt; then
+        rc=0
+    else
+        rc=$?
+    fi
     if [ "$rc" -ne 0 ]; then
         echo "cold-start attempt 1 failed (rc=$rc); collecting diagnostics and retrying" >&2
         smoke_diag
         rm -f "$SNAPSHOT"
-        app_attempt
-        rc=$?
+        if app_attempt; then
+            rc=0
+        else
+            rc=$?
+        fi
     fi
     if [ "$rc" -ne 0 ]; then
         echo "cold-start attempt 2 failed (rc=$rc); collecting diagnostics" >&2
