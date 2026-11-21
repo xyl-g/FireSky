@@ -296,13 +296,91 @@ jobs:
         if: always()
         run: docker volume rm -f firesky-smoke-state
 
+  mobile-release:
+    name: Android APK + iOS simulator .app（真引擎）
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - name: Install NDK
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26d
+          add-to-path: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - name: Download ecCodes + libaec sources
+        run: |
+          set -euo pipefail
+          ROOT="$PWD/.cache/mm0-cross"
+          mkdir -p "$ROOT"
+          curl -fL -sS -o "$ROOT/eccodes.tar.gz" \
+            "https://codeload.github.com/ECMWF/eccodes/tar.gz/refs/tags/2.50.0"
+          tar xzf "$ROOT/eccodes.tar.gz" -C "$ROOT"
+          mv "$(find "$ROOT" -maxdepth 1 -type d -name 'eccodes-*' | head -n 1)" "$ROOT/eccodes-src"
+          curl -fL -sS -o "$ROOT/libaec.tar.gz" \
+            "https://github.com/Deutsches-Klimarechenzentrum/libaec/releases/download/v1.1.8/libaec-1.1.8.tar.gz"
+          tar xzf "$ROOT/libaec.tar.gz" -C "$ROOT"
+          mv "$(find "$ROOT" -maxdepth 1 -type d -name 'libaec-*' | head -n 1)" "$ROOT/libaec-src"
+      - name: Build ecCodes + libaec for Android arm64
+        run: |
+          set -euo pipefail
+          ROOT="$PWD/.cache/mm0-cross"
+          NDK="${ANDROID_NDK_HOME:-${{ steps.setup-ndk.outputs.ndk-path }}}"
+          mkdir -p "$ROOT/build-android/lib"
+          # libaec（Android arm64，NDK toolchain）
+          cmake -S .cache/mm0-cross/libaec-src -B "$ROOT/build-libaec-android" \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DBUILD_TESTING=OFF \
+            -DCMAKE_INSTALL_PREFIX="$ROOT/build-android/aec"
+          cmake --build "$ROOT/build-libaec-android" -j "$(nproc)"
+          cmake --install "$ROOT/build-libaec-android"
+          mkdir -p "$ROOT/build-android/lib"
+          cp "$ROOT/build-android/aec/lib/libaec.a" "$ROOT/build-android/lib/libaec.a"
+          # ecCodes（Android arm64，ENABLE_AEC=ON + libaec_DIR）
+          cmake -S .cache/mm0-cross/eccodes-src -B "$ROOT/build-android" \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 \
+            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            -DENABLE_AEC=ON -DENABLE_USE_SHARED_LIB_AEC=OFF \
+            -DCMAKE_PREFIX_PATH="$ROOT/build-android/aec" \
+            -Dlibaec_DIR="$ROOT/build-android/aec/lib/cmake/libaec" \
+            -DENABLE_FORTRAN=OFF -DENABLE_PYTHON=OFF -DENABLE_TESTS=OFF \
+            -DENABLE_EXAMPLES=OFF -DENABLE_TOOLS=OFF -DENABLE_NETCDF=OFF \
+            -DENABLE_OPENMP=OFF -DENABLE_PNG=OFF -DENABLE_JPEG=OFF \
+            -DCMAKE_INSTALL_PREFIX="$ROOT/build-android"
+          cmake --build "$ROOT/build-android" -j "$(nproc)"
+          test -f "$ROOT/build-android/lib/libeccodes.a"
+          echo "MM0_ECCODES_ANDROID_LIB=$ROOT/build-android/lib" >> "$GITHUB_ENV"
+      - name: Build release APK（真引擎 JNI）
+        env:
+          MM0_ECCODES_ANDROID_LIB: ${{ github.workspace }}/.cache/mm0-cross/build-android/lib
+        run: |
+          cd apps/mobile-android
+          ./gradlew :app:assembleDebug --no-daemon
+      - name: Upload Android APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FireSky-android
+          path: apps/mobile-android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
   release:
     name: Publish GitHub Release
     # 打 v* tag 时自动发布：macOS 双架构 DMG 与 Windows 双架构 zip 取自本
     # run 的矩阵产物，不再需要本地下载/上传。移动端/Docker 资产仍按 README
     # 口径另行补齐。
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [macos-native, windows-native]
+    needs: [macos-native, windows-native, mobile-release]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -328,6 +406,11 @@ jobs:
         with:
           name: FireSky-windows-arm64
           path: artifacts/windows-arm64
+      - name: Download Android APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: FireSky-android
+          path: artifacts/android
       - name: Stage DMGs, zips, installers and SHA256SUMS
         run: |
           set -euo pipefail
@@ -335,6 +418,10 @@ jobs:
           mkdir -p release-assets
           find artifacts -name '*.dmg' -exec cp {} release-assets/ \;
           find artifacts \( -name '*.zip' -o -name '*-setup.exe' \) -exec cp {} release-assets/ \;
+          # Android APK 重命名为版本化文件名。
+          if [ -f artifacts/android/app-debug.apk ]; then
+            cp artifacts/android/app-debug.apk "release-assets/FireSky-${VERSION}-android-arm64.apk"
+          fi
           # 资产文件名必须带 tag 版本，防止旧版本产物混入。
           for arch in arm64 x86_64; do
             test -f "release-assets/FireSky-${VERSION}-macos-${arch}.dmg"
@@ -343,7 +430,7 @@ jobs:
             test -f "release-assets/FireSky-${VERSION}-windows-${arch}.zip"
             test -f "release-assets/FireSky-${VERSION}-windows-${arch}-setup.exe"
           done
-          (cd release-assets && sha256sum FireSky-*.dmg FireSky-*.zip FireSky-*-setup.exe > SHA256SUMS.txt)
+          (cd release-assets && sha256sum FireSky-*.dmg FireSky-*.zip FireSky-*-setup.exe FireSky-*-apk > SHA256SUMS.txt)
           (cd release-assets && sha256sum -c SHA256SUMS.txt)
       - name: Extract changelog section for this version
         run: |
