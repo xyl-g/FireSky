@@ -41,8 +41,10 @@ struct PreflightView: View {
                             Text(row.detail).font(.caption).foregroundStyle(.secondary)
                         }
                         Spacer()
-                        Label(row.status, systemImage: !row.ready ? "arrow.down.circle" : row.old ? "arrow.clockwise" : "checkmark.circle.fill")
-                            .font(.callout).foregroundStyle(!row.ready || row.old ? Color.primary : Color.green)
+                        StatusChip(
+                            status: !row.ready ? "pending" : row.old ? "interrupted" : "done",
+                            title: row.status,
+                        )
                     }.frame(height: 64)
                     if row.id != store.rows.last?.id { Divider() }
                 }

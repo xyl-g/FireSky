@@ -51,9 +51,7 @@ struct WorkbenchRootView: View {
         .environment(\.timeZone, TimeZone(identifier: store.timezone) ?? .current)
         .background {
             LinearGradient(
-                colors: scheme == .dark
-                    ? [Color(red: 0.07, green: 0.10, blue: 0.11), Color(red: 0.13, green: 0.12, blue: 0.14), Color(red: 0.08, green: 0.13, blue: 0.12)]
-                    : [Color(red: 0.89, green: 0.93, blue: 0.94), Color(red: 0.96, green: 0.92, blue: 0.90), Color(red: 0.89, green: 0.94, blue: 0.92)],
+                colors: FSDesign.pageBackground(dark: scheme == .dark),
                 startPoint: .topLeading, endPoint: .bottomTrailing)
         }
         .tint(warm)
@@ -181,9 +179,9 @@ struct WorkbenchRootView: View {
                 Button { store.beginCheck() } label: {
                     Text(store.page == .nowcast ? "开始实况分析" : "开始预测")
                         .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(scheme == .dark ? Color.black.opacity(0.86) : Color.white)
+                        .foregroundStyle(scheme == .dark ? Color(0x14, 0x14, 0x14) : Color.white)
                         .frame(maxWidth: .infinity).frame(height: 41)
-                        .background(warm, in: RoundedRectangle(cornerRadius: 8))
+                        .background(FSDesign.accentGradient(dark: scheme == .dark), in: RoundedRectangle(cornerRadius: 8))
                 }.buttonStyle(.plain)
                     .opacity(store.busy || !store.online ? 0.45 : 1)
                     .disabled(store.busy || !store.online)

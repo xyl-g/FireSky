@@ -395,12 +395,20 @@ private fun RunButton(store: WorkbenchStore, state: WorkbenchState) {
         enabled = !state.busy && state.online,
         modifier = Modifier.fillMaxWidth().height(44.dp),
         colors = ButtonDefaults.buttonColors(
-            containerColor = MaterialTheme.colorScheme.primary,
+            containerColor = Color.Transparent,
             contentColor = Color.White,
         ),
         shape = RoundedCornerShape(8.dp),
     ) {
-        Text("开始预测", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(44.dp)
+                .background(com.firesky.mobile.ui.accentGradientBrush(), RoundedCornerShape(8.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text("开始预测", fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+        }
     }
 }
 

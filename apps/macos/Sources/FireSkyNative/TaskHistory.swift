@@ -396,9 +396,7 @@ struct NativeTaskHistoryView: View {
                     HStack(spacing: 7) {
                         Text(item.rowTitle)
                             .font(.callout.weight(.medium))
-                        Text(item.statusTitle)
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(statusColor(item.status))
+                        StatusChip(status: item.status, title: item.statusTitle)
                     }
                     if !item.contextTitle.isEmpty {
                         Text(item.contextTitle).font(.caption).foregroundStyle(.secondary)

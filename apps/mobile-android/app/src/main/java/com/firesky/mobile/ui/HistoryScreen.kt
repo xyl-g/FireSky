@@ -169,7 +169,7 @@ private fun HistoryRow(store: WorkbenchStore, state: WorkbenchState, item: TaskH
             Column(Modifier.weight(1f)) {
                 Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(item.rowTitle, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-                    Text(item.statusTitle, fontSize = 11.sp, color = statusColor(item.status), fontWeight = FontWeight.Medium)
+                    StatusChip(item.status, item.statusTitle)
                 }
                 if (item.contextTitle.isNotEmpty()) {
                     Text(item.contextTitle, fontSize = 11.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))

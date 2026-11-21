@@ -39,8 +39,21 @@ colors:
   chart.transmission.light: "#0A5B8F"
   selection.light: "#BD523D1F"
   selection.dark: "#FF8C611F"
+  accent.gradient.dark.start: "#FF8C61"
+  accent.gradient.dark.end: "#FABF24"
+  accent.gradient.light.start: "#E06A3C"
+  accent.gradient.light.end: "#D98A2E"
+  chip.success.light.bg: "#3B9C571F"
+  chip.success.dark.bg: "#33CC7024"
+  chip.warning.light.bg: "#C9A23C1F"
+  chip.warning.dark.bg: "#FFB34024"
+  chip.danger.light.bg: "#C4574A1F"
+  chip.danger.dark.bg: "#FF6B5224"
+  card.border.dark: "#FFFFFF14"
+  card.border.light: "#1B22240F"
 
 typography:
+  display.numeric: "32px mono medium（百分比/时刻/倒计时等关键数字）"
   body.mobile: "12-14px sans-serif（Roboto / SF / system）"
   body.desktop: "12px system (SF Pro / Segoe UI)"
   heading.page: "22px bold"
@@ -136,6 +149,17 @@ motion:
   状态字 + 时间行；行内动作图标按钮 28-30px。
 - 卡片标题行右侧放该卡片的唯一主动作；次级动作 borderless。
 - 空态：图标 + 一句话说明 + 条件提示（在线/离线口径）。
+
+## Components
+
+- 状态徽标 StatusChip：语义色 14% 底 + 图标(10 semibold) + 文字(11 medium)，
+  圆角 6、内边距 3×8；五态 done/running/failed/interrupted/pending。
+  替换一切裸彩色状态文字（v1.9.0 起历史/预检行已接入）。
+- 主行动按钮 AccentButton：`accent.gradient` 实底（dark #FF8C61→#FABF24，
+  light #E06A3C→#D98A2E）+ 圆角 8 + 高 41；dark 深字 / light 白字；
+  禁用改 30% 灰。次级动作 Outlined/borderless。
+- 卡片 hairline 边框：dark 白 8%、light 黑 6%（v1.9.0 移动端已接入）。
+- 「加载更早任务」：历史页底部居中次级按钮，分页游标 has_more 时显示。
 
 ## Do's and Don'ts
 

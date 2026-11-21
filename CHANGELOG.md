@@ -104,6 +104,28 @@ ships release capability (self-contained zip, installer, CI publishing).
   breaking inventory/check before any download; normalized only real path
   levels and tolerated error 1, with a Windows regression test. The app
   assembly now embeds the engine version for in-app update comparison.
+## v1.9.0 (2026-11-21)
+
+UI 设计系统 P1 落地（docs/UI_DESIGN_REFRESH_2026-11-21 方案，纯视觉层）。
+Design system P1 rollout (docs/UI_DESIGN_REFRESH_2026-11-21, visual only).
+
+- 新增四端共享 DesignSystem：**主行动强调渐变**（暖橙→琥珀，dark/light
+  两套，端点经视觉验收微调）、**状态徽标 StatusChip**（语义色 14% 底 +
+  图标 + 文字，五态）、卡片 hairline 边框、深色页面底渐变去紫修正
+  （青绿同族）。
+  Shared DesignSystem on all four platforms: accent gradient for primary
+  actions, StatusChip (semantic 14% background + icon + text, five
+  states), card hairline border, and a purple-free dark page gradient.
+- 替换点：工作台「开始预测」主按钮渐变；任务历史与预检行状态徽标；
+  Android/iOS 主按钮渐变与历史徽标。纯视觉层——功能行为与文案口径
+  逐字不变。
+  Applied to the workbench CTA, task-history/preflight rows, and mobile
+  equivalents; purely visual, copy identical.
+- 设计 token 与组件规范沉淀于 DESIGN.md（v2，Google Labs design.md
+  格式，lint errors=0），四端 UI 迭代的单一事实来源。
+  Tokens and component specs live in DESIGN.md (v2, Google Labs
+  design.md format, lint errors=0) as the single source of truth.
+
 ## v1.8.1 (2026-11-21)
 
 瓦片下载可用性修复与数据目录口径（走查实测发现）。
