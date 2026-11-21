@@ -1,15 +1,14 @@
 <script lang="ts">
   import ChevronLeft from "@lucide/svelte/icons/chevron-left";
   import ChevronRight from "@lucide/svelte/icons/chevron-right";
-  import { TREND_SERIES, trendSamples, trendSegments, trendSummary, trendTime, type TrendKey } from "../forecast-trends";
+  import UPlotChart from "./UPlotChart.svelte";
+  import { TREND_SERIES, trendSamples, trendSegments, trendSummary, trendTime, trendValue, type TrendKey, type TrendValueKey } from "../forecast-trends";
 
   let { report, timezone, selectedUtc = null, onSelect = () => {}, aodField = "quality_aod550", aodLabel = "AOD550" }: {
     report: Record<string, unknown> | null; timezone: string; selectedUtc?: string | null; onSelect?: (utc: string) => void;
     aodField?: string; aodLabel?: string;
   } = $props();
   let enabled = $state<TrendKey[]>(TREND_SERIES.map((series) => series.key));
-  let plotWidth = $state(680);
-  let aodWidth = $state(260);
   const samples = $derived(trendSamples(report, aodField));
   const summary = $derived(trendSummary(samples));
   const series = $derived(TREND_SERIES.filter((item) => enabled.includes(item.key)).map((item) => ({
@@ -24,12 +23,29 @@
   const high = $derived(summary.lastTime ?? 1);
   const aodMinimum = $derived(Math.max(0, (summary.aodMin ?? 0) - Math.max(.05, ((summary.aodMax ?? 0) - (summary.aodMin ?? 0)) * .25)));
   const aodMaximum = $derived(Math.max(aodMinimum + .1, (summary.aodMax ?? 0) + Math.max(.05, ((summary.aodMax ?? 0) - (summary.aodMin ?? 0)) * .25)));
-  const x = (time: number, width: number) => 38 + (high === low ? .5 : (time - low) / (high - low)) * Math.max(1, width - 52);
-  const y = (value: number) => 174 - value * 148;
-  const aodY = (value: number) => 174 - (value - aodMinimum) / (aodMaximum - aodMinimum) * 148;
+  // uPlot 数据：x 取全量去重时点（升序），各曲线按时间对齐，缺测置 null 断线。
+  const times = $derived([...new Set(samples.flatMap((sample) => sample.time === null ? [] : [sample.time]))].sort((a, b) => a - b));
+  const valueAt = (key: TrendValueKey): (number | null)[] => {
+    const byTime = new Map(samples.filter((sample) => sample.time !== null).map((sample) => [sample.time as number, sample]));
+    return times.map((time) => {
+      const sample = byTime.get(time);
+      return sample ? trendValue(sample, key) : null;
+    });
+  };
+  const ratioData = $derived.by(() => {
+    const data: [number[], ...(number | null)[][]] = [times];
+    for (const item of series) data.push(valueAt(item.key));
+    return data;
+  });
+  const aodData: [number[], ...(number | null)[][]] = $derived([times, valueAt("aod")]);
   const ratio = (value: number | null | undefined) => value == null ? "--" : `${(value * 100).toFixed(0)}%`;
   const number = (value: number | null | undefined) => value == null ? "--" : value.toFixed(3);
   function select(index: number) { const utc = samples[index]?.utc; if (utc) onSelect(utc); }
+  function selectAtPoint(index: number) {
+    const time = times[index];
+    const sample = time === undefined ? undefined : samples.find((row) => row.time === time);
+    if (sample?.utc) onSelect(sample.utc);
+  }
 </script>
 
 <section class="physical-trends" aria-label="云况与光学趋势">
@@ -53,52 +69,39 @@
       {/each}
     </fieldset>
     <div class="plots">
-      <div class="ratio-plot" bind:clientWidth={plotWidth}>
+      <div class="ratio-plot">
         <h3>云况与光路占比</h3>
-        <svg viewBox={`0 0 ${Math.max(160, plotWidth)} 210`} role="img" aria-label="逐时云量、可烧比例与光路占比曲线">
-          {#each [0, .25, .5, .75, 1] as value}
-            <line x1="38" x2={plotWidth - 14} y1={y(value)} y2={y(value)} class="guide" />
-            <text x="31" y={y(value) + 4} text-anchor="end">{value * 100}%</text>
-          {/each}
-          {#if active?.time !== null && active?.time !== undefined}
-            <line x1={x(active.time, plotWidth)} x2={x(active.time, plotWidth)} y1="26" y2="174" class="selection" />
-          {/if}
-          {#each series as item (item.key)}
-            {#each item.segments as segment}
-              <polyline points={segment.map((point) => `${x(point.time, plotWidth)},${y(point.value)}`).join(" ")} stroke={item.color} stroke-dasharray={item.dash} />
-              {#each segment as point}
-                <circle cx={x(point.time, plotWidth)} cy={y(point.value)} r="2.2" fill={item.color}>
-                  <title>{item.label} · {trendTime(point.time, timezone)} · {ratio(point.value)}</title>
-                </circle>
-              {/each}
-            {/each}
-          {/each}
-          <text x="38" y="198">{trendTime(summary.firstTime, timezone)}</text>
-          <text x={plotWidth - 14} y="198" text-anchor="end">{trendTime(summary.lastTime, timezone)}</text>
-        </svg>
+        <UPlotChart
+          ariaLabel="逐时云量、可烧比例与光路占比曲线"
+          data={ratioData}
+          series={series.map((item) => ({ label: item.label, color: item.color, dash: item.dash }))}
+          xRange={[low, high]}
+          yRange={[0, 1]}
+          yTicks={[0, .25, .5, .75, 1]}
+          formatX={(time) => trendTime(time, timezone)}
+          formatY={(value) => `${value * 100}%`}
+          selection={active?.time ?? null}
+          onSelect={selectAtPoint}
+          dataSegments={series.map((item) => item.segments.length).join(",")}
+        />
         {#if !hasSeries}<p class="plot-empty">{enabled.length ? "暂无有效云况时序" : "未选择曲线"}</p>{/if}
       </div>
-      <div class="aod-plot" bind:clientWidth={aodWidth}>
+      <div class="aod-plot">
         <h3>{aodLabel}</h3>
-        <svg viewBox={`0 0 ${Math.max(160, aodWidth)} 210`} role="img" aria-label={`${aodLabel} 逐时光学厚度曲线`}>
-          {#each [aodMinimum, (aodMinimum + aodMaximum) / 2, aodMaximum] as value}
-            <line x1="38" x2={aodWidth - 14} y1={aodY(value)} y2={aodY(value)} class="guide" />
-            <text x="31" y={aodY(value) + 4} text-anchor="end">{value.toFixed(2)}</text>
-          {/each}
-          {#if active?.time !== null && active?.time !== undefined}
-            <line x1={x(active.time, aodWidth)} x2={x(active.time, aodWidth)} y1="26" y2="174" class="selection" />
-          {/if}
-          {#each aodSegments as segment}
-            <polyline points={segment.map((point) => `${x(point.time, aodWidth)},${aodY(point.value)}`).join(" ")} class="aod-line" />
-            {#each segment as point}
-              <circle cx={x(point.time, aodWidth)} cy={aodY(point.value)} r="2.5" class="aod-point">
-                <title>{trendTime(point.time, timezone)} · {aodLabel} {number(point.value)}</title>
-              </circle>
-            {/each}
-          {/each}
-          <text x="38" y="198">{trendTime(summary.firstTime, timezone)}</text>
-          <text x={aodWidth - 14} y="198" text-anchor="end">{trendTime(summary.lastTime, timezone)}</text>
-        </svg>
+        <UPlotChart
+          ariaLabel={`${aodLabel} 逐时光学厚度曲线`}
+          data={aodData}
+          series={[{ label: aodLabel, color: "var(--trend-burnable)", width: 2, pointSize: 5 }]}
+          xRange={[low, high]}
+          yRange={[aodMinimum, aodMaximum]}
+          yTicks={[aodMinimum, (aodMinimum + aodMaximum) / 2, aodMaximum]}
+          formatX={(time) => trendTime(time, timezone)}
+          formatY={(value) => value.toFixed(2)}
+          selection={active?.time ?? null}
+          onSelect={selectAtPoint}
+          dataSegments={String(aodSegments.length)}
+          dataPoints={String(aodSegments.reduce((count, segment) => count + segment.length, 0))}
+        />
         {#if !aodSegments.length}<p class="plot-empty">暂无有效 {aodLabel} 时序</p>{/if}
       </div>
     </div>
@@ -134,13 +137,6 @@
   label i { display: block; width: 14px; border-top: 2px solid; flex: none; }
   .plots { display: grid; grid-template-columns: minmax(0, 1fr) minmax(170px, 28%); gap: 18px; min-width: 0; }
   .ratio-plot, .aod-plot { position: relative; min-width: 0; }
-  svg { display: block; width: 100%; height: 210px; overflow: hidden; }
-  svg text { font-size: 10px; fill: var(--fs-ink2); font-variant-numeric: tabular-nums; }
-  .guide { stroke: var(--fs-border); }
-  .selection { stroke: var(--fs-ink2); stroke-width: 1; stroke-dasharray: 3 4; opacity: .5; }
-  polyline { fill: none; stroke-width: 1.8; stroke-linejoin: round; }
-  .aod-line { stroke: var(--trend-burnable); stroke-width: 2; }
-  .aod-point { fill: var(--trend-burnable); }
   .plot-empty { position: absolute; inset: 60px 10px 50px 40px; display: flex; align-items: center; justify-content: center; font-size: 11px; color: var(--fs-ink2); text-align: center; background: var(--fs-bg); }
   .timeline { display: grid; grid-template-columns: 30px minmax(0, 1fr) 30px auto; align-items: center; gap: 6px; margin: 2px 0 14px; }
   .timeline button { display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 1px solid var(--fs-control-border); border-radius: 4px; background: var(--fs-control); color: var(--fs-ink); cursor: pointer; }

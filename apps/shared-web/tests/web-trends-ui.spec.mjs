@@ -71,10 +71,11 @@ test("Web physical trends preserve gaps, zero readings and selectable series and
   await expect(trends).toBeVisible();
   const plot = trends.getByRole("img", { name: "逐时云量、可烧比例与光路占比曲线", exact: true });
   await expect(trends.getByRole("checkbox")).toHaveCount(6);
-  await expect(plot.locator("polyline")).toHaveCount(12);
+  // 图形已 canvas 化（uPlot）：缺测断线经 data-segments/data-points 断言。
+  await expect(plot).toHaveAttribute("data-segments", "2,2,2,2,2,2");
   const aod = trends.getByRole("img", { name: "AOD550 逐时光学厚度曲线", exact: true });
-  await expect(aod.locator("polyline")).toHaveCount(2);
-  await expect(aod.locator("circle")).toHaveCount(2);
+  await expect(aod).toHaveAttribute("data-segments", "2");
+  await expect(aod).toHaveAttribute("data-points", "2");
   await trends.getByRole("slider", { name: "逐时时刻", exact: true }).focus();
   await trends.getByRole("slider", { name: "逐时时刻", exact: true }).press("Home");
   await expect(trends.locator("output")).toHaveText("18:00 · 质量 0.000");
@@ -85,18 +86,22 @@ test("Web physical trends preserve gaps, zero readings and selectable series and
   await expect(trends.locator("output")).toHaveText("18:05 · 缺测");
   await expect(trends.locator(".readings dd")).toHaveText(Array(7).fill("--"));
   await trends.getByRole("checkbox", { name: "可烧云占比", exact: true }).uncheck();
-  await expect(plot.locator("polyline")).toHaveCount(10);
+  await expect(plot).toHaveAttribute("data-segments", "2,2,2,2,2");
   await trends.getByRole("checkbox", { name: "可烧云占比", exact: true }).check();
-  await expect(plot.locator("polyline")).toHaveCount(12);
+  await expect(plot).toHaveAttribute("data-segments", "2,2,2,2,2,2");
   expect(errors).toEqual([]);
 });
 
-test("Web physical trend content fits small and wide windows in both themes", async ({ page }, testInfo) => {
+test("Web physical trend content fits small and wide windows in both themes", async ({ page }) => {
   const trends = await fixture(page);
   for (const width of [390, 1440]) {
     await page.setViewportSize({ width, height: 820 });
     for (const theme of ["light", "dark"]) {
-      await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      await page.evaluate(async (value) => {
+        document.documentElement.dataset.theme = value;
+        await document.fonts.ready;
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      }, theme);
       await trends.scrollIntoViewIfNeeded();
       await expect(trends).toBeVisible();
       expect(await trends.evaluate((root) => root.scrollWidth <= root.clientWidth + 1)).toBe(true);
@@ -104,7 +109,10 @@ test("Web physical trend content fits small and wide windows in both themes", as
         const rect = chart.getBoundingClientRect();
         return rect.width > 100 && rect.height >= 200 && rect.left >= 0 && rect.right <= innerWidth + 1;
       }))).toBe(true);
-      await trends.screenshot({ path: testInfo.outputPath(`web-trends-${width}-${theme}.png`) });
+      // 视觉基线（uPlot 试点前置）：替换前 SVG 渲染留档，见 __screenshots__。
+      await expect(trends).toHaveScreenshot(`web-trends-${width}-${theme}.png`, {
+        animations: "disabled", caret: "hide", maxDiffPixelRatio: 0.02,
+      });
     }
   }
 });

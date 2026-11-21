@@ -21,7 +21,8 @@
     "@maplibre/maplibre-gl-leaflet": "^0.1.4",
     "leaflet": "^1.9.4",
     "leaflet-draw": "^1.0.4",
-    "maplibre-gl": "^6.17.0"
+    "maplibre-gl": "^6.17.0",
+    "uplot": "^1.6.32"
   },
   "devDependencies": {
     "@playwright/test": "^1.65.0",

@@ -169,7 +169,7 @@ test("probe failures stay distinct from decoded success and reconnect invalidate
   await expect(page.getByRole("button", { name: "检查数据", exact: true })).toBeEnabled();
 });
 
-test("populated data layout fits narrow and wide windows in both themes", async ({ page }, testInfo) => {
+test("populated data layout fits narrow and wide windows in both themes", async ({ page }) => {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await fixture(page);
@@ -189,7 +189,11 @@ test("populated data layout fits narrow and wide windows in both themes", async 
         workspace: document.querySelector(".workspace").scrollWidth > document.querySelector(".workspace").clientWidth,
       }));
       expect(overflow).toEqual({ document: false, workspace: false });
-      await page.screenshot({ path: testInfo.outputPath(`data-${width}-${theme}.png`), fullPage: true, animations: "disabled", caret: "hide" });
+      // 视觉基线（tests/__screenshots__/）：布局回归不再只靠 DOM 断言兜底。
+      // 字体敏感区域放 2% 像素差容忍，基线跨次运行必须逐字节稳定。
+      await expect(page).toHaveScreenshot(`data-${width}-${theme}.png`, {
+        fullPage: true, animations: "disabled", caret: "hide", maxDiffPixelRatio: 0.02,
+      });
     }
   }
   expect(errors).toEqual([]);
@@ -223,7 +227,7 @@ test("changing EC source does not mislabel an in-flight probe or retain the old 
   await expect(page.getByText("下载解码通过", { exact: true })).toBeVisible();
 });
 
-test("task history exposes interrupted work, replays terminal events, and restores without restarting", async ({ page }, testInfo) => {
+test("task history exposes interrupted work, replays terminal events, and restores without restarting", async ({ page }) => {
   await fixture(page);
   await page.getByRole("button", { name: "任务历史", exact: true }).click();
   await expect(page.getByRole("heading", { name: "任务历史", exact: true })).toBeVisible();
@@ -239,7 +243,11 @@ test("task history exposes interrupted work, replays terminal events, and restor
   for (const [width, height] of [[390, 667], [1440, 720]]) {
     await page.setViewportSize({ width, height });
     for (const theme of ["light", "dark"]) {
-      await page.evaluate((value) => { document.documentElement.dataset.theme = value; }, theme);
+      await page.evaluate(async (value) => {
+        document.documentElement.dataset.theme = value;
+        await document.fonts.ready;
+        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      }, theme);
       await history.scrollIntoViewIfNeeded();
       const layout = await page.locator(".task-row").evaluateAll((rows) => rows.map((row) => {
         const main = row.querySelector(".task-main").getBoundingClientRect();
@@ -248,7 +256,10 @@ test("task history exposes interrupted work, replays terminal events, and restor
       }));
       expect(layout.some((item) => item.overlap)).toBe(false);
       expect(await history.evaluate((element) => element.scrollWidth > element.clientWidth)).toBe(false);
-      await history.screenshot({ path: testInfo.outputPath(`history-${width}-${theme}.png`), animations: "disabled" });
+      // 视觉基线：历史区在 390/1440 × 双主题的像素级快照。
+      await expect(history).toHaveScreenshot(`history-${width}-${theme}.png`, {
+        animations: "disabled", maxDiffPixelRatio: 0.02,
+      });
     }
   }
 
