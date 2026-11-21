@@ -7,13 +7,15 @@ native desktop clients**. The physics follows the methodology of the
 
 > 中文文档：[README.md](README.md)
 
-> Current release **v1.2.0**: macOS / Android / iOS / Docker are officially
+> Current release **v1.5.0**: macOS / Android / iOS / Docker are officially
 > released (see [Download & install](#download--install-releases)).
-> Windows release capability is ready on `feat/windows-release` — the WinUI
-> client matches the v1.2.0 baseline, ships as a self-contained zip plus an
-> Inno Setup installer, and CI attaches both to GitHub Releases on `v*` tags;
-> the first official Windows package follows with the next release (see the
-> [Windows release doc](docs/RELEASE_WINDOWS.zh-CN.md)).
+> Windows matches the v1.5.0 baseline on `feat/windows-release` (including
+> the v1.3.0 manual deletion and terrain download and the v1.5.0 in-app
+> update) — the self-contained zip and installer are built and validated on
+> a real Windows machine, and CI attaches the Windows assets to GitHub
+> Releases on `v*` tags; the first official Windows package follows with the
+> next tag (see the [Windows release doc](docs/RELEASE_WINDOWS.zh-CN.md)
+> and the [UI parity matrix](docs/WINDOWS_UI_PARITY.zh-CN.md)).
 > The UI reference is the [macOS product & UI baseline](docs/MACOS_UI_BASELINE.zh-CN.md);
 > mobile blueprint and acceptance status:
 > [mobile native plan](docs/MOBILE_NATIVE_PLAN.md).
@@ -197,12 +199,12 @@ docker exec firesky cat /data/state/http-token
 
 ### Platform strategy
 
-- **macOS / Android / iOS / Docker**: official release targets of v1.2.0.
+- **macOS / Android / iOS / Docker**: official release targets of v1.5.0.
 - **Windows**: an official release target since `feat/windows-release`
-  (2026-11-21) — UI aligned to the v1.2.0 baseline, build/run validated on a
-  real Windows machine; CI builds x64/ARM64 zip + installer on `v*` tags and
-  attaches them to Releases. The first official Windows package follows with
-  the next release.
+  (2026-11-21) — UI aligned to the v1.5.0 baseline, build/run/three-source
+  GRIB decode validated on a real Windows machine; CI builds x64/ARM64 zip +
+  installer on `v*` tags and attaches them to Releases. The first official
+  Windows package follows with the next tag.
 - **Linux**: **no longer a release target since 2026-11-20** (user decision);
   the GTK4 client and FFI code are kept and can be built from source. For
   servers, use Docker.
