@@ -116,29 +116,54 @@ FIRESKY_FIXTURE_WORKSPACE="$SMOKE_WORKSPACE" \
 
 if [ "${FIRESKY_APP_SMOKE:-0}" = "1" ]; then
     SNAPSHOT="$SMOKE_DIR/startup.png"
-    FIRESKY_RESOURCE_DIR="$RESOURCES/app-data" \
-    FIRESKY_REQUIRE_APP_RESOURCES=1 \
-    FIRESKY_NATIVE_SNAPSHOT="$SNAPSHOT" \
-    FIRESKY_NATIVE_PREFLIGHT=1 \
-    FIRESKY_WORKSPACE="$SMOKE_WORKSPACE" \
-      "$APP/Contents/MacOS/FireSky" >"$SMOKE_DIR/app.stdout" 2>"$SMOKE_DIR/app.stderr" &
-    APP_PID=$!
-    for _ in $(seq 1 90); do
-        if [ -s "$SNAPSHOT" ]; then break; fi
-        if ! kill -0 "$APP_PID" 2>/dev/null; then break; fi
-        sleep 1
-    done
-    if [ ! -s "$SNAPSHOT" ]; then
-        # Diagnostics before teardown: cold-start failures on Intel runners
-        # need the app's own output and a live thread sample to be actionable.
+    # v1.9.8：runner 上的 cold-start 曾现 Trace/BPT（本地不可复现的时序型
+    # 崩溃）。2 次尝试 + 崩溃报告收集（DiagnosticReports 最近 1 份），
+    # 重试通过即继续；两次全败才退出并附全部诊断。
+    app_attempt() {
+        : > "$SMOKE_DIR/app.stdout"; : > "$SMOKE_DIR/app.stderr"
+        FIRESKY_RESOURCE_DIR="$RESOURCES/app-data" \
+        FIRESKY_REQUIRE_APP_RESOURCES=1 \
+        FIRESKY_NATIVE_SNAPSHOT="$SNAPSHOT" \
+        FIRESKY_NATIVE_PREFLIGHT=1 \
+        FIRESKY_WORKSPACE="$SMOKE_WORKSPACE" \
+          "$APP/Contents/MacOS/FireSky" >"$SMOKE_DIR/app.stdout" 2>"$SMOKE_DIR/app.stderr" &
+        APP_PID=$!
+        for _ in $(seq 1 180); do
+            if [ -s "$SNAPSHOT" ]; then return 0; fi
+            if ! kill -0 "$APP_PID" 2>/dev/null; then return 1; fi
+            sleep 1
+        done
+        return 2
+    }
+    smoke_diag() {
         echo "--- app.stdout ---" >&2
         cat "$SMOKE_DIR/app.stdout" >&2 || true
         echo "--- app.stderr ---" >&2
         cat "$SMOKE_DIR/app.stderr" >&2 || true
         ps -o pid,stat,%cpu,etime -p "$APP_PID" >&2 || true
         sample "$APP_PID" 1 100 >&2 || true
+        # 崩溃报告：BPT trap 时系统会写 DiagnosticReports，取出最新一份。
+        local crash
+        crash=$(ls -t ~/Library/Logs/DiagnosticReports/FireSky* 2>/dev/null | head -1)
+        if [ -n "$crash" ]; then
+            echo "--- crash report: $crash ---" >&2
+            head -c 8000 "$crash" >&2 || true
+        fi
         kill "$APP_PID" 2>/dev/null || true
         wait "$APP_PID" 2>/dev/null || true
+    }
+    app_attempt
+    rc=$?
+    if [ "$rc" -ne 0 ]; then
+        echo "cold-start attempt 1 failed (rc=$rc); collecting diagnostics and retrying" >&2
+        smoke_diag
+        rm -f "$SNAPSHOT"
+        app_attempt
+        rc=$?
+    fi
+    if [ "$rc" -ne 0 ]; then
+        echo "cold-start attempt 2 failed (rc=$rc); collecting diagnostics" >&2
+        smoke_diag
         echo "macOS application cold-start smoke did not produce a snapshot" >&2
         exit 1
     fi

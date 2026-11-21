@@ -657,17 +657,17 @@ public sealed partial class MainWindow
             panel.Children.Add(row);
         }
         AdjustmentRow(L10n.T("云量基础分"),
-            $"有效可烧 {RatioText(components["burnable_cloud_coverage_effectiveL10n.T("])} · 可烧载荷 {QualityText(components[")forward_burnable_cloud_load_effective"] ?? components["forward_burnable_cloud_load_peakL10n.T("], 2)} · 前方总云场 {RatioText(components[")forward_view_cloud_field_amount_peak"])}",
+            $"有效可烧 {RatioText(components["burnable_cloud_coverage_effective"])} · 可烧载荷 {QualityText(components["forward_burnable_cloud_load_effective"] ?? components["forward_burnable_cloud_load_peak"], 2)} · 前方总云场 {RatioText(components["forward_view_cloud_field_amount_peak"])}",
             SignedDelta(components["coverage_base_score"] ?? components["coverage_score"]));
         AdjustmentRow(L10n.T("可烧云比例"),
-            $"可烧/总云量 {RatioText(components["forward_burnable_cloud_ratio_peakL10n.T("])} · 前方可烧云量 {RatioText(components[")forward_burnable_cloud_field_amount_peak"])}", null);
+            $"可烧/总云量 {RatioText(components["forward_burnable_cloud_ratio_peak"])} · 前方可烧云量 {RatioText(components["forward_burnable_cloud_field_amount_peak"])}", null);
         AdjustmentRow(L10n.T("几何遮挡（已计入可烧量）"),
-            $"最佳云入射遮挡 {RatioText(components["solar_incoming_block_risk_at_best_cloud"] ?? components["solar_incoming_block_risk_meanL10n.T("])} · 不重复扣分"), null);
+            $"最佳云入射遮挡 {RatioText(components["solar_incoming_block_risk_at_best_cloud"] ?? components["solar_incoming_block_risk_mean"])} · 不重复扣分"), null);
         AdjustmentRow(L10n.T("持续时间修正"),
-            $"{QualityText(report["duration_minutes"] ?? components["duration_minutesL10n.T("], 0)} 分钟 · ×{QualityText(components[")duration_factor"], 3)}",
+            $"{QualityText(report["duration_minutes"] ?? components["duration_minutes"], 0)} 分钟 · ×{QualityText(components["duration_factor"], 3)}",
             SignedDelta(components["duration_adjustment"]));
         AdjustmentRow(L10n.T("入射 AOD 修正"),
-            $"本地 AOD {QualityText(components["quality_aod550L10n.T("], 3)} · 入射因子 ×{QualityText(components[")incoming_aod_illumination_factor"], 3)}",
+            $"本地 AOD {QualityText(components["quality_aod550"], 3)} · 入射因子 ×{QualityText(components["incoming_aod_illumination_factor"], 3)}",
             SignedDelta(components["incoming_aod_adjustment"]));
         AdjustmentRow(L10n.T("观测 AOD 修正"),
             $"观测对比因子 ×{QualityText(components["observer_aod_contrast_factor"], 3)}",

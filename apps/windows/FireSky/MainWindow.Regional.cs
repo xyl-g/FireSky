@@ -356,8 +356,8 @@ public sealed partial class MainWindow
         var summary = new StackPanel { Spacing = 3, Padding = new Thickness(0, 4, 0, 0) };
         summary.Children.Add(new TextBlock
         {
-            Text = $"云量样本 {NestedArrayCount(fields?["cloud_fraction_percentL10n.T("])} · 温度样本 {NestedArrayCount(fields?[")temperature_c"])}"
-                   + $" · 湿度样本 {NestedArrayCount(fields?["relative_humidity_percentL10n.T("])} · 消光样本 {NestedArrayCount(fields?[")extinction_coefficient"])}",
+            Text = $"云量样本 {NestedArrayCount(fields?["cloud_fraction_percent"])} · 温度样本 {NestedArrayCount(fields?["temperature_c"])}"
+                   + $" · 湿度样本 {NestedArrayCount(fields?["relative_humidity_percent"])} · 消光样本 {NestedArrayCount(fields?["extinction_coefficient"])}",
             FontSize = 11, Opacity = .8,
         });
         RegionalProfileRows.Items.Add(summary);

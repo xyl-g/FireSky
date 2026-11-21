@@ -229,7 +229,7 @@ public sealed partial class MainWindow
                     });
                     cycleRow.Children.Add(new TextBlock
                     {
-                        Text = $"{Number(cycle.Value, "filesL10n.T("):0} 个文件"), FontSize = 12, Opacity = .65,
+                        Text = $"{Number(cycle.Value, "files"):0} 个文件"), FontSize = 12, Opacity = .65,
                     });
                     var cycleDelete = new IconButton("\uE74D", L10n.T("删除该周期"));
                     cycleDelete.IsEnabled = !dataDeleteRunning;
