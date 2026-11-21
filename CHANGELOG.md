@@ -104,13 +104,15 @@ ships release capability (self-contained zip, installer, CI publishing).
   breaking inventory/check before any download; normalized only real path
   levels and tolerated error 1, with a Windows regression test. The app
   assembly now embeds the engine version for in-app update comparison.
-> 发布说明：v1.9.5 / v1.9.6 因 mobile-release CI 的 Android 交叉工具链
-> 问题未产出发布物（仓库 .cargo/config.toml 携带 darwin NDK 绝对路径，
-> ubuntu runner 失败）；修复后三个版本随 **v1.9.7** 一并发布——即本版
-> 资产包含 v1.9.5（i18n + 任务详情）与 v1.9.6（数据同步专项）的全部内容。
-> Release note: v1.9.5 / v1.9.6 shipped inside **v1.9.7** after a CI
-> toolchain fix (portable Android cross paths); this release therefore
-> contains everything from both.
+> 发布说明：v1.9.5 / v1.9.6 / v1.9.7 因 mobile-release CI 的 Android 交叉
+> 工具链问题未产出完整发布物（仓库 .cargo/config.toml 与 linkEngineJni
+> 携带 darwin NDK 绝对路径，ubuntu runner 失败；v1.9.7 tag 早于修复提交
+> 无法回补）；修复后四个版本随 **v1.9.8** 一并发布——即本版资产包含
+> v1.9.5（i18n + 任务详情）、v1.9.6（数据同步专项）、v1.9.7（进度/吞吐/
+> 让路/退出守卫）的全部内容。
+> Release note: v1.9.5–v1.9.7 shipped inside **v1.9.8** after CI toolchain
+> fixes (portable Android cross paths); this release therefore contains
+> everything from all three.
 
 ## v1.9.8 (2026-11-21)
 
