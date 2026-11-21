@@ -768,6 +768,10 @@ private struct WorkActionSummaryView: View {
         return result
     }
 
+    private var exportFilename: String { SummaryExport.suggestedFilename(store) }
+
+    private var exportText: String { SummaryExport.summaryText(store: store, comparison: comparison) }
+
     private var statusSymbol: String {
         if snapshots.isEmpty { return failedModels.isEmpty ? "sparkles" : "exclamationmark.triangle" }
         return levelsAgree && failedModels.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle"
@@ -786,6 +790,20 @@ private struct WorkActionSummaryView: View {
                         Text("行动摘要").font(.system(size: 11, weight: .semibold)).foregroundStyle(.secondary)
                         Spacer(minLength: 8)
                         if !snapshots.isEmpty {
+                            Menu {
+                                Button(L10n.text("保存为文本文件", "Save as text")) {
+                                    SummaryExport.save(exportText, suggestedFilename: exportFilename)
+                                }
+                                Button(L10n.text("复制摘要", "Copy summary")) {
+                                    SummaryExport.copy(exportText)
+                                }
+                            } label: {
+                                Label(L10n.text("导出摘要", "Export summary"), systemImage: "square.and.arrow.up")
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 11))
+                            .help(L10n.text("导出地点、日期、模型状态、来源时效与缺测说明；不重算科学结论。",
+                                            "Export location, date, model status, source timeliness and missing-data notes without recomputing results."))
                             Button {
                                 store.starLocation()
                             } label: {

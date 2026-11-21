@@ -887,3 +887,11 @@ GFS/EC 双摘要、0–2.5 指数、档位、最佳时刻、推荐窗口、天�
 - `AppDelegate` 设置通知 delegate，让应用前台收到提醒时仍以 banner + sound 呈现；不重算科学结论，也不读取或存储 CAMS 凭据。
 - 验证截图：`output/ui-polish-20261122/reminders/{notDetermined,authorized,denied,scheduled}.png`。权限与已设置状态由仅夹具使用的环境变量注入；真实授权弹窗、系统通知送达和跨重启恢复仍需真机手动确认。
 - `swift build --disable-sandbox --package-path apps/macos` 与 `bash scripts/test_macos_native.sh` 均通过。
+
+### 20.14 原生分享与摘要导出（P2-2 已完成）
+
+- 新增 `SummaryExport`：行动摘要右上角的「导出摘要」菜单提供真实动作「保存为文本文件」（`NSSavePanel`）和「复制摘要」（`NSPasteboard`）；没有结果时不显示该菜单。
+- 导出文本由 `SummaryExport.summaryText(store:comparison:)` 统一生成，内容包含地点与经纬度、结果原始日期与现象、时区、结论、GFS/EC 各自状态与指数、最佳时刻和窗口、来源周期/缓存/数据来源、单模式失败与旧参数说明。所有字段直接读取已发布报告，不在 SwiftUI 重算科学结论。
+- 验证样本：`output/ui-polish-20261122/export/{full,partial,stale}.txt` 与同名截图。full 覆盖双模式一致，partial 覆盖 EC 失败且保留 GFS，stale 覆盖旧参数说明；文本由与 UI 同一个导出函数生成，夹具只负责落盘。
+- 真机仍需手动确认 `NSSavePanel` 的保存路径选择和系统粘贴板权限行为；本机没有把弹窗自动化，也没有伪造导出成功。
+- `swift build --disable-sandbox --package-path apps/macos`：Build complete。

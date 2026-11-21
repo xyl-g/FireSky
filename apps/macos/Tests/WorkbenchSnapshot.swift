@@ -299,6 +299,10 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
                     store.selectTaskHistory(item.taskID)
                 }
             }
+            if let exportPath = env["FIRESKY_TEST_EXPORT_DUMP"] {
+                let text = SummaryExport.summaryText(store: store, comparison: store.pointComparison)
+                try? text.write(to: URL(fileURLWithPath: exportPath), atomically: true, encoding: .utf8)
+            }
             if let width = env["FIRESKY_NATIVE_WIDTH"].flatMap(Double.init),
                let height = env["FIRESKY_NATIVE_HEIGHT"].flatMap(Double.init),
                width >= 1120, height >= 720, width <= 2560, height <= 1600 {
