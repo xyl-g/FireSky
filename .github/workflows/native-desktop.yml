@@ -52,6 +52,7 @@ jobs:
       - run: node --test apps/shared-web/scripts/*.test.mjs
 
   macos-native:
+    needs: contracts
     timeout-minutes: 90
     # Build and smoke-test the actual SwiftUI + Rust FFI app on both required
     # macOS architectures.
@@ -96,6 +97,9 @@ jobs:
             dist/native-macos/*.dmg
 
   windows-native:
+    # P0-3：与 macos-native 并行（无数据依赖，只消费 contracts 与自身产物）；
+    # 此前文件里出现两个 needs 键（contracts/macos-native），YAML 后值覆盖
+    # 前值导致并行改造静默失效——本 run 起合并为单一 needs。
     needs: contracts
     timeout-minutes: 90
     # Windows follows the macOS ABI baseline. This builds the actual WinUI
@@ -104,7 +108,6 @@ jobs:
     # builds). 2026-11-21 恢复：Windows 原生链已在真实 Windows 机器上完成
     # 构建/运行冒烟（feat/windows-release）。
     name: WinUI + Rust FFI ${{ matrix.arch }}
-    needs: macos-native
     strategy:
       fail-fast: false
       matrix:
