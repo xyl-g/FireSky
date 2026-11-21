@@ -358,6 +358,7 @@ jobs:
     # run 的矩阵产物，不再需要本地下载/上传。移动端/Docker 资产仍按 README
     # 口径另行补齐。
     if: >-
+      always() &&
       startsWith(github.ref, 'refs/tags/v') &&
       needs['macos-native'].result == 'success' &&
       needs['windows-native'].result == 'success'
@@ -418,8 +419,8 @@ jobs:
           done
           # APK 可能缺席（mobile-release 软依赖），哈希分段生成。
           (cd release-assets && sha256sum FireSky-*.dmg FireSky-*.zip FireSky-*-setup.exe > SHA256SUMS.txt)
-          if [ -f release-assets/FireSky-*-apk ]; then
-            (cd release-assets && sha256sum FireSky-*-apk >> SHA256SUMS.txt)
+          if [ "${NEEDS_MOBILE_RELEASE}" = "success" ]; then
+            (cd release-assets && sha256sum "FireSky-${VERSION}-android-arm64.apk" >> SHA256SUMS.txt)
           fi
           (cd release-assets && sha256sum -c SHA256SUMS.txt)
       - name: Extract changelog section for this version
