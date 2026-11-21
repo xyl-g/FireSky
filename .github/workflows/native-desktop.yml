@@ -348,13 +348,18 @@ jobs:
           cp "$ROOT/build-android/aec/lib/libaec.a" "$ROOT/build-android/lib/libaec.a"
           # ecCodes（Android arm64，ENABLE_AEC=ON + libaec_DIR）。
           # DISABLE_OS_CHECK：eccodes 2.50 仍为 ecbuild 工程，其 OS 白名单不含
-          # Android（NDK toolchain 设 CMAKE_SYSTEM_NAME=Android 会拒配），与
-          # ci.yml iOS job 的放行方式一致。
+          # Android（NDK toolchain 设 CMAKE_SYSTEM_NAME=Android 会拒配）。
+          # IEEE_LE/IEEE_BE：端序探测走 check_c_source_runs，交叉编译无法执行
+          # 目标机程序（try_run in cross-compiling mode 直接 fatal），预置
+          # arm64 小端跳过，传值与 ci.yml iOS job 一致。
+          # ENABLE_BUILD_TOOLS：与 iOS 对齐关掉交叉 CLI 工具；原有 ENABLE_TOOLS
+          # 对 ecbuild 的 BUILD_TOOLS feature 不生效。
           cmake -S .cache/mm0-cross/eccodes-src -B "$ROOT/build-android" \
             -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
             -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 \
             -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-            -DDISABLE_OS_CHECK=ON \
+            -DDISABLE_OS_CHECK=ON -DIEEE_LE=1 -DIEEE_BE=0 \
+            -DENABLE_BUILD_TOOLS=OFF \
             -DENABLE_AEC=ON -DENABLE_USE_SHARED_LIB_AEC=OFF \
             -DCMAKE_PREFIX_PATH="$ROOT/build-android/aec" \
             -Dlibaec_DIR="$ROOT/build-android/aec/lib/cmake/libaec" \
