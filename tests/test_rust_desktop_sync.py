@@ -95,7 +95,11 @@ def all_sources_settings():
 
 
 def state_path(workspace):
-    return workspace / ".firesky" / "state" / "data-sync.json"
+    # v1.8.0 布局代际（方案 §8）：引擎在旧布局工作区（.firesky 存在）继续
+    # 读 .firesky/state/；全新/可见布局工作区写 state/。测试按代际对齐。
+    if (workspace / ".firesky").exists():
+        return workspace / ".firesky" / "state" / "data-sync.json"
+    return workspace / "state" / "data-sync.json"
 
 
 def write_state(workspace, sources):

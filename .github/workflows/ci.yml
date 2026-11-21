@@ -147,3 +147,78 @@ jobs:
       - uses: actions/checkout@v4
       - name: 构建镜像（不推送）
         run: docker build -f docker/Dockerfile -t firesky:ci .
+
+  android-native:
+    name: Android Compose（unit tests，Mock 链）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: 安装 Android SDK（cmdline-tools + platform）
+        uses: android-actions/setup-android@v3
+      - name: 接受 SDK 许可
+        run: yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null || true
+      - name: Kotlin 编译 + 单元测试（MockTransport 全链契约）
+        run: |
+          cd apps/mobile-android
+          ./gradlew :app:compileDebugKotlin :app:testDebugUnitTest --no-daemon
+
+  ios-native:
+    name: iOS SwiftUI + engine-mobile（simulator tests）
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim
+      - name: 构建模拟器 ecCodes/libaec 交叉静态库
+        run: |
+          ROOT="$PWD/.cache/mm0-cross"
+          mkdir -p "$ROOT" && cd "$ROOT"
+          curl -fL -sS -o eccodes.tar.gz             "https://codeload.github.com/ECMWF/eccodes/tar.gz/refs/tags/2.50.0"
+          tar xzf eccodes.tar.gz
+          mv "$(find . -maxdepth 1 -type d -name 'eccodes-*' | head -n 1)" eccodes-src
+          curl -fL -sS -o libaec.tar.gz             "https://github.com/Deutsches-Klimarechenzentrum/libaec/releases/download/v1.1.8/libaec-1.1.8.tar.gz"
+          tar xzf libaec.tar.gz
+          mv "$(find . -maxdepth 1 -type d -name 'libaec-*' | head -n 1)" libaec-src
+          DEV="$(xcode-select -p)"
+          SIM_SDK="$DEV/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator.sdk"
+          XC="$DEV/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang"
+          J="$(sysctl -n hw.ncpu)"
+          cmake -S libaec-src -B build-libaec-ios-sim \
+            -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_SYSROOT="$SIM_SDK" \
+            -DCMAKE_C_COMPILER="$XC" -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DBUILD_TESTING=OFF \
+            -DCMAKE_INSTALL_PREFIX="$ROOT/build-ios-sim/aec"
+          cmake --build build-libaec-ios-sim -j "$J"
+          cmake --install build-libaec-ios-sim
+          mkdir -p build-ios-sim/lib
+          cp build-ios-sim/aec/lib/libaec.a build-ios-sim/lib/libaec.a
+          COMMON=(-DDISABLE_OS_CHECK=ON -DIEEE_LE=1 -DIEEE_BE=0
+                  -DENABLE_BUILD_TOOLS=OFF -DCMAKE_MACOSX_BUNDLE=OFF -DENABLE_AEC=ON
+                  -DENABLE_USE_SHARED_LIB_AEC=OFF
+                  -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_ARCHITECTURES=arm64
+                  -DCMAKE_C_COMPILER="$XC" -DCMAKE_CXX_COMPILER="$XC++"
+                  -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF
+                  -DENABLE_FORTRAN=OFF -DENABLE_PYTHON=OFF -DENABLE_TESTS=OFF -DENABLE_EXAMPLES=OFF
+                  -DENABLE_TOOLS=OFF -DENABLE_NETCDF=OFF -DENABLE_OPENMP=OFF -DENABLE_PNG=OFF -DENABLE_JPEG=OFF)
+          cmake -S eccodes-src -B build-ios-sim "${COMMON[@]}" -DCMAKE_OSX_SYSROOT="$SIM_SDK" \
+            -DCMAKE_PREFIX_PATH="$PWD/build-ios-sim/aec" \
+            -Dlibaec_DIR="$PWD/build-ios-sim/aec/lib/cmake/libaec"
+          cmake --build build-ios-sim -j "$J"
+          mkdir -p build-ios-sim/lib
+          test -f build-ios-sim/lib/libeccodes.a
+      - name: 构建 engine-mobile 模拟器静态库
+        env:
+          MM0_ECCODES_IOSSIM_LIB: ${{ github.workspace }}/.cache/mm0-cross/build-ios-sim/lib
+        run: cargo build --release --target aarch64-apple-ios-sim --manifest-path engine-mobile/Cargo.toml
+      - name: XCTest（真引擎模拟器全链 + 单元）
+        run: |
+          SIM_NAME=$(xcrun simctl list devices available | grep -oE 'iPhone [0-9]+( Pro)? \([0-9A-F-]+\)' | head -1 | sed 's/ (.*//')
+          echo "simulator: $SIM_NAME"
+          xcodebuild -project apps/mobile-ios/FireSkyMobile.xcodeproj -scheme FireSkyMobile \
+            -destination "platform=iOS Simulator,name=$SIM_NAME" \
+            -resultBundlePath /tmp/firesky-ios.xcresult test CODE_SIGNING_ALLOWED=NO | tail -30
