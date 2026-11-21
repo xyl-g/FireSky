@@ -1,5 +1,5 @@
 # Mobile cross-target linker wiring.
-# Android recipe copied from spikes/mm0-eccodes-cross/crate/.cargo/config.toml
+# Android 配方源自 MM0 尖峰（spikes 已删，坑清单见 docs/ECCODES_CROSS_COMPILE_NOTES.md）
 # (ecCodes 静态库含 C++ 段 → -lc++_static -lc++abi，见 MM0 坑 5）。
 # iOS 链接需 Xcode 工具链（MM0 坑 11；真机 SDK 的 ___chkstk_darwin 需显式补
 # libclang_rt.ios.a，坑 6）。仅影响移动目标；host 构建不受影响。

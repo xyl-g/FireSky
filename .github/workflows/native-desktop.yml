@@ -51,42 +51,6 @@ jobs:
         run: bash scripts/test_windows_ffi_contract.sh
       - run: node --test apps/shared-web/scripts/*.test.mjs
 
-  linux-native:
-    timeout-minutes: 30
-    name: Linux GTK4 + Rust FFI
-    # 2026-11-20 临时停用：Linux 已降级为非发布目标（用户裁定）。if:false
-    # 不分配 runner；保留块以维持 needs 图与恢复上下文（审计 P2-19 曾建议
-    # 删除，2026-11-21 实删时误伤 macos-native 两次，改为保守保留）。
-    if: false
-    # Linux follows the macOS ABI and lifecycle baseline; do not fan out
-    # platform UI builds before the macOS gate has passed.
-    needs: macos-native
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Install GTK4 and native build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y \
-            build-essential cmake pkg-config libgtk-4-dev
-      - name: Build Rust FFI shared library
-        run: cargo build --manifest-path engine/Cargo.toml --release --locked --lib
-      - name: Configure and build Linux native targets
-        run: |
-          cmake -S apps/linux -B build/linux-ffi \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DFIRESKY_BUILD_GTK_UI=ON
-          cmake --build build/linux-ffi --parallel
-          test -x build/linux-ffi/firesky_linux_native
-      - name: Run Linux FFI hello smoke
-        env:
-          FIRESKY_RESOURCE_DIR: ${{ github.workspace }}/resources/app-data
-          FIRESKY_REQUIRE_APP_RESOURCES: "1"
-        run: |
-          build/linux-ffi/firesky_linux_ffi_smoke \
-            "$PWD/engine/target/release/libfiresky_engine.so" "$PWD"
-
   macos-native:
     timeout-minutes: 90
     # Build and smoke-test the actual SwiftUI + Rust FFI app on both required
@@ -212,29 +176,6 @@ jobs:
             dist/native-windows/*.zip.sha256
             dist/native-windows/*-setup.exe
             dist/native-windows/*-setup.exe.sha256
-
-  linux-ffi:
-    timeout-minutes: 30
-    # Linux currently verifies the shared native FFI foundation. The full
-    # toolkit UI and installer remain a follow-up after this contract gate.
-    name: Linux FFI ${{ matrix.arch }}
-    # 2026-11-20 临时停用：随 linux-native/windows-native 一并关闭（用户裁定）。
-    if: false
-    needs: windows-native
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-24.04
-            arch: amd64
-          - runner: ubuntu-24.04-arm
-            arch: arm64
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Linux C++ FFI smoke
-        run: bash scripts/test_linux_ffi.sh
 
   docker:
     name: Docker ${{ matrix.platform }} build and runtime smoke

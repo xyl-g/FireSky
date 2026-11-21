@@ -1,4 +1,4 @@
-//! ecCodes link strategy per the MM0 spike (spikes/mm0-eccodes-cross/README.md).
+//! ecCodes link strategy per the MM0 spike (docs/ECCODES_CROSS_COMPILE_NOTES.md).
 //!
 //! host (macOS/Linux/Windows): engine/src/grib.rs resolves ecCodes at runtime
 //! via libloading (desktop parity) — nothing is linked at build time.

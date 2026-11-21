@@ -69,7 +69,7 @@ fn main() {
             None => panic!(
                 "engine: mobile target {target_os} requires the MM0 static ecCodes library; \
                  set MM0_ECCODES_ANDROID_LIB / MM0_ECCODES_IOS_LIB / MM0_ECCODES_IOSSIM_LIB \
-                 (spikes/mm0-eccodes-cross/scripts)"
+                 (scripts/eccodes-cross)"
             ),
         }
     }

@@ -2,7 +2,7 @@
 
 > 状态：开工蓝图 v1（2026-11-12）；**MM0 可行性尖峰已通过**；**v1.1.0（2026-11-20）双端随正式版发布**——MN1/MN2 验收通过，MN3 部分完成（definitions 打包 + 会话恢复已落，真机蜂窝待硬件），MN5 分发方式已定（自签 APK / 无签名 IPA）。
 > 决策记录：2026-11-12 用户裁定——移动端**弃 Tauri 壳改双原生**；UI 基底 = 最初 macOS 的 SwiftUI 方案（主仓库 `apps/macos/Sources/FireSkyNative/`，约 3.6k 行）；**v1 不做区域预测**。**厚客户端（引擎内嵌、离线独立）不变**。桌面 Tauri 线（Codex 负责）不受影响。
-> 上位文档：`docs/TAURI_DESKTOP_PLAN.md`（桌面）；MM0 尖峰全记录：`spikes/mm0-eccodes-cross/README.md`。
+> 上位文档：MM0 尖峰全记录（原 `spikes/mm0-eccodes-cross/README.md`）：`docs/ECCODES_CROSS_COMPILE_NOTES.md`。
 > 旧文档 `TAURI_MOBILE_PLAN.md` 已废止（同日裁定，内容归档见本文附录 A）。
 
 ---
@@ -47,7 +47,7 @@ iOS：SwiftUI（基底 apps/macos）              Android：Kotlin + Jetpack Com
 - 绑定生成用 **UniFFI**（Swift/Kotlin 双端 codegen，回调接口承载 progress 帧）；备选手工 C ABI（桥接面小，完全可行），见 openQuestions D2。
 - 引擎打包形态：iOS staticlib 进 App 二进制；Android cdylib（`libengine_mobile.so`）+ JNI（UniFFI 生成）。
 - **definitions 注入**（MM0 坑 10/12/13 直接适用）：iOS 从 bundle resource 取路径；Android assets 首启解压到 `filesDir`；统一设 `ECCODES_DEFINITION_PATH`（**单数**）环境变量后再触发引擎初始化。缓存根/数据目录 → App 沙箱（Application Support / filesDir）。
-- 交叉编译配方直接引用尖峰脚本（`spikes/mm0-eccodes-cross/scripts/`），engine 全量构建时 14 条坑逐条对照。
+- 交叉编译配方见 `scripts/eccodes-cross/`，engine 全量构建时 14 条坑逐条对照。
 
 ## 2. 复用映射表（apps/macos → 移动双端）
 
