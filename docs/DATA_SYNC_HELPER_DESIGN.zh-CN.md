@@ -22,7 +22,7 @@
 ### 守护进程化 / 应用无关同步落地（2026-11-13）
 
 第 1.2.5 / 2 / 15.6 节显式推迟的「守护进程化 / 应用无关同步」已展开为跨平台选型并落地 macOS：
-见 [跨平台技术选型](BACKGROUND_SYNC_PLATFORM_SELECTION.zh-CN.md) 第 7.3（决策记录）/ 7.4（落地与验收）。
+（决策记录原存于后台同步选型文档，该过程性文档已删——结论见仓库 CHANGELOG 与本文第 16 节。）
 - 定案：macOS 用 **launchd LaunchAgent + 独立无头 helper**（传统 plist）；移动端**每设备本地后台**
   （CAMS 仅前台）；进度可见**随 helper 一起**。
 - 引擎新增一次性 `desktop-call` CLI 与 `data_sync_tick`（due→run），同步轮**跨进程文件锁**（`state/sync.lock`）。

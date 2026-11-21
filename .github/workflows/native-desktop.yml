@@ -21,10 +21,17 @@ on:
       - ".github/workflows/native-desktop.yml"
   workflow_dispatch:
 
+# 并发控制（审计 P0-1）：main push 用 ref 组可取消旧 run；tag 发布用
+# 独立组——同 tag 重打取消旧 run，不同 tag 互不干扰。
+concurrency:
+  group: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/') && format('release-{0}', github.ref_name) || format('native-{0}', github.ref) }}
+  cancel-in-progress: true
+
 jobs:
   contracts:
     name: Native resource contracts
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -45,6 +52,7 @@ jobs:
       - run: node --test apps/shared-web/scripts/*.test.mjs
 
   linux-native:
+    timeout-minutes: 30
     name: Linux GTK4 + Rust FFI
     # 2026-11-20 临时停用：Linux 已降级为非发布目标，当前无法判断可用性（用户裁定）。
     if: false
@@ -78,6 +86,7 @@ jobs:
             "$PWD/engine/target/release/libfiresky_engine.so" "$PWD"
 
   macos-native:
+    timeout-minutes: 90
     # Build and smoke-test the actual SwiftUI + Rust FFI app on both required
     # macOS architectures.
     name: SwiftUI + Rust FFI ${{ matrix.arch }}
@@ -121,6 +130,8 @@ jobs:
             dist/native-macos/*.dmg
 
   windows-native:
+    needs: contracts
+    timeout-minutes: 90
     # Windows follows the macOS ABI baseline. This builds the actual WinUI
     # client and Rust DLL for both required Windows architectures, and stages
     # the release zip via scripts/build_windows_native.ps1 (same path as local
@@ -201,6 +212,7 @@ jobs:
             dist/native-windows/*-setup.exe.sha256
 
   linux-ffi:
+    timeout-minutes: 30
     # Linux currently verifies the shared native FFI foundation. The full
     # toolkit UI and installer remain a follow-up after this contract gate.
     name: Linux FFI ${{ matrix.arch }}
@@ -297,6 +309,7 @@ jobs:
         run: docker volume rm -f firesky-smoke-state
 
   mobile-release:
+    timeout-minutes: 60
     name: Android APK（真引擎）
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
@@ -373,6 +386,9 @@ jobs:
       - name: Build release APK（真引擎 JNI）
         env:
           MM0_ECCODES_ANDROID_LIB: ${{ github.workspace }}/.cache/mm0-cross/build-android/lib
+          # 宿主 definitions 树供 copyEccodesDefinitions（ubuntu 无
+          # /opt/homebrew 路径；源码 tar 自带完整 definitions）。
+          FIRESKY_ECCODES_DEFINITIONS: ${{ github.workspace }}/.cache/mm0-cross/eccodes-src/definitions
           # v1.9.7 走查：gradle 的 cargoAndroidEngine 按本机 NDK 派生
           # CC/AR/linker（仓库 .cargo/config.toml 不再携带 darwin 绝对路径）。
           ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
@@ -387,11 +403,15 @@ jobs:
           if-no-files-found: error
 
   release:
+    timeout-minutes: 15
     name: Publish GitHub Release
     # 打 v* tag 时自动发布：macOS 双架构 DMG 与 Windows 双架构 zip 取自本
     # run 的矩阵产物，不再需要本地下载/上传。移动端/Docker 资产仍按 README
     # 口径另行补齐。
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: >-
+      startsWith(github.ref, 'refs/tags/v') &&
+      needs['macos-native'].result == 'success' &&
+      needs['windows-native'].result == 'success'
     needs: [macos-native, windows-native, mobile-release]
     runs-on: ubuntu-24.04
     permissions:
@@ -419,19 +439,24 @@ jobs:
           name: FireSky-windows-arm64
           path: artifacts/windows-arm64
       - name: Download Android APK artifact
+        if: needs['mobile-release'].result == 'success'
         uses: actions/download-artifact@v4
         with:
           name: FireSky-android
           path: artifacts/android
       - name: Stage DMGs, zips, installers and SHA256SUMS
+        env:
+          NEEDS_MOBILE_RELEASE: ${{ needs['mobile-release'].result }}
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p release-assets
           find artifacts -name '*.dmg' -exec cp {} release-assets/ \;
           find artifacts \( -name '*.zip' -o -name '*-setup.exe' \) -exec cp {} release-assets/ \;
-          # Android APK 重命名为版本化文件名。
-          if [ -f artifacts/android/app-debug.apk ]; then
+          # Android APK 重命名为版本化文件名；mobile-release 成功后缺失
+          # 视为硬错误（防 artifact 路径变更导致无声少资产）。
+          if [ "${NEEDS_MOBILE_RELEASE}" = "success" ]; then
+            test -f artifacts/android/app-debug.apk
             cp artifacts/android/app-debug.apk "release-assets/FireSky-${VERSION}-android-arm64.apk"
           fi
           # 资产文件名必须带 tag 版本，防止旧版本产物混入。
@@ -442,7 +467,11 @@ jobs:
             test -f "release-assets/FireSky-${VERSION}-windows-${arch}.zip"
             test -f "release-assets/FireSky-${VERSION}-windows-${arch}-setup.exe"
           done
-          (cd release-assets && sha256sum FireSky-*.dmg FireSky-*.zip FireSky-*-setup.exe FireSky-*-apk > SHA256SUMS.txt)
+          # APK 可能缺席（mobile-release 软依赖），哈希分段生成。
+          (cd release-assets && sha256sum FireSky-*.dmg FireSky-*.zip FireSky-*-setup.exe > SHA256SUMS.txt)
+          if [ -f release-assets/FireSky-*-apk ]; then
+            (cd release-assets && sha256sum FireSky-*-apk >> SHA256SUMS.txt)
+          fi
           (cd release-assets && sha256sum -c SHA256SUMS.txt)
       - name: Extract changelog section for this version
         run: |
@@ -461,7 +490,10 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $GITHUB_REF_NAME already exists; skipping."
+            # 重打 tag 幂等：已存在则覆盖上传资产（上次 run 资产不全时补齐）。
+            echo "Release $GITHUB_REF_NAME already exists; uploading assets with clobber."
+            gh release upload "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" --clobber release-assets/*
             exit 0
           fi
           gh release create "$GITHUB_REF_NAME" \

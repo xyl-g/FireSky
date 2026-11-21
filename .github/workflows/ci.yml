@@ -5,10 +5,16 @@ on:
     branches: [main]
   pull_request:
 
+# 连续 push / PR 更新时取消同分支旧 run，释放 runner（审计 P0-1）。
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   native-contracts:
     name: pytest（现架构契约：Rust IPC + Swift UI）
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -26,6 +32,7 @@ jobs:
         run: python -m pytest tests/ -q
 
   rust:
+    timeout-minutes: 45
     name: cargo test（引擎 + 并入的评分核心，Python-free runtime）
     runs-on: ubuntu-latest
     steps:
@@ -63,6 +70,7 @@ jobs:
         run: cargo deny --manifest-path engine/Cargo.toml --config deny.toml check advisories bans licenses sources
 
   frontend:
+    timeout-minutes: 15
     # 2026-11-13：产品共享 Web 统一为 apps/shared-web（Docker/Rust HTTP 同源）。
     # 旧 frontend/（SvelteKit）待合并，其契约测试保留为独立轻量 job。
     name: shared-web check + build
@@ -91,6 +99,7 @@ jobs:
         run: npm run build
 
   frontend-legacy-contracts:
+    timeout-minutes: 15
     name: legacy frontend/ contract tests (pending merge)
     runs-on: ubuntu-latest
     steps:
@@ -114,6 +123,7 @@ jobs:
 
 
   desktop:
+    timeout-minutes: 45
     name: SwiftUI + Rust bundle
     runs-on: macos-26
     steps:
@@ -141,6 +151,7 @@ jobs:
             dist/native-macos/*.dmg
 
   docker:
+    timeout-minutes: 25
     name: docker build（三阶段镜像）
     runs-on: ubuntu-latest
     steps:
@@ -168,6 +179,7 @@ jobs:
           ./gradlew :app:compileDebugKotlin :app:testDebugUnitTest --no-daemon
 
   ios-native:
+    timeout-minutes: 60
     name: iOS SwiftUI + engine-mobile（simulator tests）
     runs-on: macos-15
     steps:
