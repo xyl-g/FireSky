@@ -783,7 +783,7 @@ struct SettingsView: View {
         }
     }
 
-    /// 数据目录独立分区：选择目录后通过「重新连接」生效。
+    /// 数据目录独立分区：选择目录 + 数据布局迁移入口（方案 §8 阶段 B）。
     private var dataDirectoryBlock: some View {
         VStack(alignment: .leading, spacing: 8) {
             settingsBlockTitle("数据目录")
@@ -802,7 +802,79 @@ struct SettingsView: View {
                     .disabled(store.busy || store.probingDownloads)
                     .help("应用新目录或引擎路径后重新连接引擎")
             }
+            Divider()
+            layoutStatusBlock
         }
+        .onAppear { store.loadLayout() }
+        .confirmationDialog("迁移到可见目录布局？", isPresented: Binding(
+            get: { store.showLayoutConfirm },
+            set: { if !$0 { store.dismissLayoutConfirm() } }
+        )) {
+            Button("迁移", role: .destructive) { store.migrateLayout() }
+            Button("取消", role: .cancel) { store.dismissLayoutConfirm() }
+        } message: {
+            Text(migrationConfirmText)
+        }
+    }
+
+    /// 布局状态：Legacy 提供迁移入口；Visible 只显示口径说明。
+    @ViewBuilder
+    private var layoutStatusBlock: some View {
+        let generation = store.layout?["generation"] as? String ?? ""
+        let busy = (store.layout?["operation_busy"] as? Bool ?? false)
+            || (store.layout?["sync_busy"] as? Bool ?? false)
+        if generation == "legacy" {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("当前使用旧版隐藏目录布局（.cache / .firesky）。")
+                        .font(.callout)
+                    Text("迁移会把数据移动到工作区下的可见目录（gfs/、ecmwf/、cams/、reports/ 等），旧目录残壳保留，可随时确认后手动删除。迁移期间会暂停任务与同步。")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if store.layoutMessageFailed {
+                        Text(store.layoutMessage).font(.caption).foregroundStyle(.red)
+                            .textSelection(.enabled)
+                    }
+                }
+                Spacer()
+                if store.layoutMigrating {
+                    VStack(spacing: 4) {
+                        ProgressView().controlSize(.small)
+                        Text("迁移中…").font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button("迁移到可见目录", systemImage: "arrow.right.square.fill") {
+                        store.loadLayout()
+                        store.showLayoutConfirm = true
+                    }
+                    .disabled(!store.online || busy || store.layoutLoading)
+                    .help(busy ? "有任务或同步正在进行，完成后再迁移" : "迁移数据到工作区可见目录并重连引擎")
+                }
+            }
+        } else {
+            Text(store.layoutMessage.isEmpty
+                 ? "已使用可见目录布局（gfs/、reports/ 等直接位于工作区下）。"
+                 : store.layoutMessage)
+                .font(.caption).foregroundStyle(
+                    store.layoutMessageFailed ? Color.red : Color.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// 迁移确认文案：列出将迁移的条目数与总规模（来自 data_layout_status）。
+    private var migrationConfirmText: String {
+        let items = (store.layout?["items"] as? [JSONObject]) ?? []
+        let pending = items.filter { ($0["exists"] as? Bool) == true }
+        if pending.isEmpty {
+            return "没有检测到旧布局数据（.cache / .firesky），迁移将只写入布局标记。"
+        }
+        let files = pending.reduce(0) { $0 + (($1["file_count"] as? NSNumber)?.intValue ?? 0) }
+        let bytes = pending.reduce(0.0) { $0 + (($1["bytes"] as? NSNumber)?.doubleValue ?? 0) }
+        let names = pending.prefix(4).compactMap { $0["from"] as? String }.joined(separator: "、")
+        let more = pending.count > 4 ? " 等 \(pending.count) 项" : ""
+        return String(format: "将迁移 \(files) 个文件（共 %.1f MB）：\(names)\(more)。迁移使用同卷移动，失败自动回滚；迁移完成后引擎将按新布局重连。", bytes / 1_048_576)
     }
 
     // MARK: - 位置与海拔

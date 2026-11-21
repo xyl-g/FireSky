@@ -78,13 +78,9 @@ fn env_path(workspace: &Path, key: &str, default: &str) -> PathBuf {
 
 fn hsd_cache_dir(workspace: &Path) -> PathBuf {
     if std::env::var_os("FIRESKY_HSD_CACHE_DIR").is_some() {
-        env_path(workspace, "FIRESKY_HSD_CACHE_DIR", ".cache/himawari-hsd")
+        crate::paths::resolve(workspace, "FIRESKY_HSD_CACHE_DIR", ".cache/himawari-hsd", "himawari-hsd")
     } else {
-        env_path(
-            workspace,
-            "FIRESKY_SATELLITE_CACHE_DIR",
-            ".cache/himawari-hsd",
-        )
+        crate::paths::resolve(workspace, "FIRESKY_SATELLITE_CACHE_DIR", ".cache/himawari-hsd", "himawari-hsd")
     }
 }
 
@@ -96,35 +92,38 @@ impl Runtime {
         }
         let resources = crate::app_resources::resolve(&workspace)?;
         let inventory: desktop_inventory::Config = decode(json!({
-            "gfs_cache_dir":env_path(&workspace,"FIRESKY_GFS_CACHE_DIR",".cache/gfs"),
-            "ecmwf_cache_dir":env_path(&workspace,"FIRESKY_ECMWF_CACHE_DIR",".cache/ecmwf"),
-            "cams_cache_dir":env_path(&workspace,"FIRESKY_CAMS_CACHE_DIR",".cache/cams"),
+            "gfs_cache_dir":crate::paths::resolve(&workspace,"FIRESKY_GFS_CACHE_DIR",".cache/gfs","gfs"),
+            "ecmwf_cache_dir":crate::paths::resolve(&workspace,"FIRESKY_ECMWF_CACHE_DIR",".cache/ecmwf","ecmwf"),
+            "cams_cache_dir":crate::paths::resolve(&workspace,"FIRESKY_CAMS_CACHE_DIR",".cache/cams","cams"),
         }))?;
         inventory.validate()?;
         let timezone_manifest = resources.timezone_manifest.clone();
         let location = decode(json!({
-            "location_cache_path":workspace.join(".cache/locations.json"),
-            "srtm_cache_dir":workspace.join(".cache/srtm"),
+            "location_cache_path":crate::paths::resolve(&workspace,"FIRESKY_LOCATIONS_PATH",".cache/locations.json","locations.json"),
+            "srtm_cache_dir":crate::paths::resolve(&workspace,"FIRESKY_SRTM_CACHE_DIR",".cache/srtm","srtm"),
             "timezone_manifest":timezone_manifest,
         }))?;
-        let history = crate::task_history::TaskHistory::open(&env_path(
+        let history = crate::task_history::TaskHistory::open(&crate::paths::resolve(
             &workspace,
             "FIRESKY_TASK_HISTORY_DIR",
             ".firesky/state/tasks",
+            "state/tasks",
         ))?;
         Ok(Self {
-            report_dir: env_path(&workspace, "FIRESKY_REPORT_DIR", "reports/web"),
-            point_cache_dir: env_path(
+            report_dir: crate::paths::resolve(&workspace, "FIRESKY_REPORT_DIR", "reports/web", "reports"),
+            point_cache_dir: crate::paths::resolve(
                 &workspace,
                 "FIRESKY_POINT_CACHE_DIR",
                 ".cache/point-forecasts",
+                "point-forecasts",
             ),
-            regional_cache_dir: env_path(
+            regional_cache_dir: crate::paths::resolve(
                 &workspace,
                 "FIRESKY_REGIONAL_CACHE_DIR",
                 ".cache/regional-forecasts",
+                "regional-forecasts",
             ),
-            map_cache_dir: env_path(&workspace, "FIRESKY_MAP_CACHE_DIR", ".cache/map-frames"),
+            map_cache_dir: crate::paths::resolve(&workspace, "FIRESKY_MAP_CACHE_DIR", ".cache/map-frames", "map-frames"),
             workspace,
             inventory,
             location,
@@ -501,7 +500,7 @@ impl Runtime {
                 "protocol":1,"engine":"firesky-rust","workspace":self.workspace,
                 "source_id":env!("FIRESKY_ENGINE_SOURCE_ID"),
                 "runtime_python_used":false,"production_desktop_complete":false,
-                "capabilities":["point","regional","nowcast","inventory","search","metadata","network_probe","data_sync","cancel","profile_query","task_history","task_events","result_restore","data_delete","terrain_inventory","terrain_download"],
+                "capabilities":["point","regional","nowcast","inventory","search","metadata","network_probe","data_sync","cancel","profile_query","task_history","task_events","result_restore","data_delete","terrain_inventory","terrain_download","data_layout"],
                 "profile_capabilities":{
                     "dynamic_model_cross_section":true,"regional_result_points":true,
                     "satellite_step_solar_path":true,"dynamic_satellite_vertical":false,
@@ -657,6 +656,28 @@ impl Runtime {
                 location::desktop_dispatch(method, &params, &self.location, true, cancel)
             }
             "inventory" => desktop_inventory::execute(&self.inventory, cancel),
+            "data_layout_status" => {
+                let mut value = crate::paths::status(&self.workspace);
+                // 迁移需要独占：忙时 UI 显示原因而非失败。
+                value["operation_busy"] = json!(self.operation.try_lock().is_err());
+                value["sync_busy"] = json!(self.sync.try_lock().is_err());
+                Ok(value)
+            }
+            "data_layout_migrate" => {
+                // 迁移独占计算与同步锁（方案 8.2-3：暂停任务并协调活跃读写）。
+                let _operation = self
+                    .operation
+                    .try_lock()
+                    .map_err(|_| "another prepare/forecast is active")?;
+                let _sync = self
+                    .sync
+                    .try_lock()
+                    .map_err(|_| "another data sync is active")?;
+                // 迁移改变工作区路径布局：本进程内的已解析路径随之失效，
+                // 响应标记 requires_restart，UI 成功后重连引擎通道。
+                let result = crate::paths::migrate(&self.workspace)?;
+                Ok(json!({"requires_restart": true, "result": result}))
+            }
             "data_delete_preview" | "data_delete_execute" => {
                 // Deletion shares the compute lock with prepare/forecast and
                 // refuses to run while a sync round is active, matching the

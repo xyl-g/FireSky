@@ -16,14 +16,13 @@ use std::{
 };
 
 fn path(workspace: &Path, key: &str, default: &str) -> PathBuf {
-    let value = std::env::var_os(key)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| default.into());
-    if value.is_absolute() {
-        value
-    } else {
-        workspace.join(value)
-    }
+    let visible = match default {
+        ".cache/gfs" => "gfs",
+        ".cache/ecmwf" => "ecmwf",
+        ".cache/cams" => "cams",
+        _ => default,
+    };
+    crate::paths::resolve(workspace, key, default, visible)
 }
 fn config(workspace: &Path) -> desktop_inventory::Config {
     desktop_inventory::Config {

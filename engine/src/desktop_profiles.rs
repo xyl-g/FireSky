@@ -63,7 +63,7 @@ fn check(cancel: &AtomicBool) -> Result<(), String> {
 }
 
 fn root(workspace: &Path) -> Result<PathBuf, String> {
-    let root = workspace.join(".cache/profiles/rust-v1");
+    let root = crate::paths::resolve(workspace, "", ".cache/profiles/rust-v1", "profiles/rust-v1");
     fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     if !fs::symlink_metadata(&root)
         .map_err(|e| e.to_string())?

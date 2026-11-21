@@ -8,6 +8,50 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v1.7.0 (2026-11-21)
+
+数据布局可见化与迁移（方案 §8 阶段 B）：工作区直接使用可见分类目录。
+Visible data layout with migration (phase B, §8 of the redesign).
+
+**可见布局 / Visible layout**
+
+- 新增统一路径解析层（engine `paths.rs`）：显式 `FIRESKY_*` 环境变量永远
+  优先（开发者/运维选择，不参与迁移），其余按工作区代际取默认——
+  Legacy（存在 `.cache`/`.firesky`）继续旧路径完全兼容读写，Visible
+  （写入 `data-layout-v1.json` 标记或全新工作区）使用可见目录：
+  `gfs/`、`ecmwf/`、`cams/`、`srtm/`、`himawari-hsd/`、`locations.json`、
+  `profiles/`、`map-frames/`、`point-forecasts/`、`regional-forecasts/`、
+  `reports/`（原 `reports/web` 上移一层）、`settings/`、`state/tasks`。
+  A single resolver (engine `paths.rs`) now owns every data path: explicit
+  `FIRESKY_*` env vars always win (never migrated), otherwise the
+  workspace generation decides — Legacy stays fully compatible, Visible
+  uses user-facing category directories marked by `data-layout-v1.json`.
+  移动端宿主（engine-mobile）通过 `fsm_start` 注入的显式环境变量锁定
+  路径，不受布局改动影响。
+  Mobile hosts pin paths via explicit env injection, unaffected.
+- 全部默认路径消费者接入统一解析：desktop_runtime（库存/位置/SRTM/
+  报告/单点/区域/地图帧/任务历史）、native_data、cache_retention、
+  desktop_sync（同步设置与状态）、retention_settings、desktop_profiles。
+  Every default-path consumer is wired to the resolver.
+
+**迁移 / Migration**
+
+- 新增 `data_layout_status` / `data_layout_migrate` 契约：状态预览
+  （代际、14 项映射的存在性/文件数/体积、env 覆盖清单、忙闲）、迁移
+  执行（同卷 rename 逐项移动，冲突立即整单逆序回滚；`reports/web →
+  reports` 父目录壳三步上移；成功写入标记；`.cache`/`.firesky` 残壳
+  保留由用户确认后清理）。迁移独占计算与同步锁；完成后标记
+  `requires_restart`，UI 自动重连引擎通道。
+  New layout contracts: a status preview and a migrate executor
+  (same-volume renames, full rollback on any conflict, a three-step
+  lift for the `reports/web` parent shell, marker write, residual shells
+  kept for user cleanup). Migration takes the compute+sync locks and
+  marks `requires_restart`; the UI reconnects automatically.
+- macOS 设置 → 数据 → 数据目录新增迁移入口：Legacy 提示 + 迁移按钮
+  （忙时禁用）+ 确认弹窗（列出待迁移条目数/文件数/体积）+ 结果消息。
+  macOS Settings → Data → Data Directory gains the migration entry with
+  a confirmation summary and result messages.
+
 ## v1.6.1 (2026-11-21)
 
 发布前全流程走查（模拟真实用户体验）发现的问题修复。

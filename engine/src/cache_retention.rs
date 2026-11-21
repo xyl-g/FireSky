@@ -558,7 +558,19 @@ fn referenced_maps(report_roots: &[PathBuf], map_root: &Path) -> Result<BTreeSet
 }
 
 fn roots(workspace: &Path, key: &str, default: &str) -> PathBuf {
-    env_path(workspace, key, default)
+    let visible = match default {
+        ".cache/gfs" => "gfs",
+        ".cache/ecmwf" => "ecmwf",
+        ".cache/cams" => "cams",
+        ".cache/himawari-hsd" => "himawari-hsd",
+        ".cache/map-frames" => "map-frames",
+        ".cache/point-forecasts" => "point-forecasts",
+        ".cache/regional-forecasts" => "regional-forecasts",
+        "reports/web" => "reports",
+        ".firesky/state/tasks" => "state/tasks",
+        _ => default,
+    };
+    crate::paths::resolve(workspace, key, default, visible)
 }
 
 fn snapshot_sha(name: &str) -> Option<&str> {
