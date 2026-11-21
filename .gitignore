@@ -34,3 +34,5 @@ apps/mobile-android/app/src/main/assets/eccodes/
 
 # 视觉基线快照为本机测试数据（用户裁定不入库）；CI 用 --update-snapshots=missing 现场生成
 apps/shared-web/tests/**/__screenshots__/
+# 旧 SvelteKit 前端已退役删除（2026-11-21）；本地磁盘残留不入库
+frontend/
