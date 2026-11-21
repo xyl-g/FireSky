@@ -116,7 +116,9 @@ jobs:
             rid: win-x64
             target: x86_64-pc-windows-msvc
             triplet: x64-windows
-          - runner: windows-11-arm
+          # Cross-build ARM64 from x64 so vcpkg host tools (notably Python)
+          # use the x64 compiler instead of exhausting the ARM runner heap.
+          - runner: windows-2022
             arch: arm64
             rid: win-arm64
             target: aarch64-pc-windows-msvc
