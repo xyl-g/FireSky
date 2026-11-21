@@ -4,6 +4,7 @@ import SwiftUI
 struct PreflightView: View {
     @EnvironmentObject private var store: Store
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var isNowcast: Bool { store.requestKind == .nowcast }
     private var confirmTitle: String { isNowcast ? "确定分析" : "确定预测" }
     private var actions: PreparationActions {
@@ -110,7 +111,7 @@ struct PreflightView: View {
                         .keyboardShortcut(.defaultAction)
                 }
             }.padding(.top, 14)
-                .animation(.easeInOut(duration: 0.18), value: store.ready)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.ready)
         }.padding(26).frame(width: 490)
             .background(Color(nsColor: .windowBackgroundColor))
             .confirmationDialog(
@@ -462,6 +463,7 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     @EnvironmentObject private var store: Store
     @EnvironmentObject private var updater: Updater
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// 分类与卸载确认状态都在 store：跨分区动作（CAMS 提醒跳转、助手卸载）可直接落位。
     private var category: Binding<SettingsCategory> {
         Binding(get: { store.settingsCategory }, set: { store.settingsCategory = $0 })
@@ -612,7 +614,11 @@ struct SettingsView: View {
                     HStack(spacing: 6) {
                         ForEach(dataAnchors, id: \.1) { anchor in
                             Button {
-                                withAnimation { proxy.scrollTo(anchor.1, anchor: .top) }
+                                if reduceMotion {
+                                    proxy.scrollTo(anchor.1, anchor: .top)
+                                } else {
+                                    withAnimation { proxy.scrollTo(anchor.1, anchor: .top) }
+                                }
                             } label: {
                                 Text(anchor.0)
                                     .font(.system(size: 11, weight: .medium))

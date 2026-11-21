@@ -556,7 +556,7 @@ private struct WorkCalendarView: View {
                 }.buttonStyle(.plain).help("关闭日历").accessibilityLabel("关闭日历").keyboardShortcut(.cancelAction)
             }.font(.system(size: 11))
         }.padding(14).frame(width: 262)
-            .tint(warm).background(.regularMaterial)
+            .tint(warm).fireSkySurface(role: .overlay, cornerRadius: 10)
     }
     private func select(_ day: Date) {
         store.date = day
@@ -1282,7 +1282,7 @@ struct WorkComparisonCurveView: View {
                             .font(.system(size: 9, weight: .medium))
                         Text("质量 \(String(format: "%.3f", hovered.quality))")
                             .font(.system(size: 9)).monospacedDigit()
-                    }.padding(4).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 4))
+                    }.padding(4).fireSkySurface(role: .overlay, cornerRadius: 4)
                         .accessibilityHidden(true)
                 }
         }
@@ -2514,7 +2514,7 @@ struct WorkRegionPage: View {
                 VStack(spacing: 0) {
                     map(store.regionalModel)
                     legend
-                }.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                }.fireSkySurface(role: .content, cornerRadius: 8)
                     .clipShape(RoundedRectangle(cornerRadius: 8))
                 if store.showRegionalInspector { inspector.frame(width: 236) }
             }.frame(maxHeight: .infinity)
@@ -2664,7 +2664,7 @@ struct WorkRegionPage: View {
                     if let error = store.regionalForecast.model(model).error {
                         Label(error, systemImage: "exclamationmark.triangle")
                             .font(.system(size: 10)).padding(10)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6)).padding(10)
+                            .fireSkySurface(role: .overlay, cornerRadius: 6).padding(10)
                     }
                 }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)

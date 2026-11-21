@@ -837,3 +837,10 @@ GFS/EC 双摘要、0–2.5 指数、档位、最佳时刻、推荐窗口、天�
 - 主「开始预测」按钮补 `accessibilityHint`，说明忙碌、离线或需先预检。
 - 静态扫描：所有含 `Image(systemName:)` 的 Button 均有 `accessibilityLabel`；所有 `Chart` 均有相邻 `accessibilityLabel`。审计记录见 `output/ui-polish-20261122/accessibility-static-audit.md`。
 - 真机 VoiceOver / 键盘循环仍需后续验证，未把静态审计写成真机验收。
+
+### 20.8 辅助功能设置降级路径（P0-4 已完成代码级部分）
+
+- Reduce Motion：侧栏显隐、结果页签、预检动作区、设置数据锚点跳转全部读取 `accessibilityReduceMotion`；关闭动画时保持即时状态变化。
+- Reduce Transparency / Increase Contrast：`FireSkySurface` 统一降级导航与浮层材质；内容表面始终稳定；高对比下边界和状态线索增强。
+- 直接材质调用收口：日历浮层、趋势图悬浮提示、区域地图容器、区域错误提示改走 `fireSkySurface(role:cornerRadius:)`，并新增可选圆角以保持原视觉尺寸。
+- 本机无法通过环境变量伪造系统辅助功能 EnvironmentValues，因此未生成假截图；审计矩阵见 `output/ui-polish-20261122/accessibility-settings-matrix.md`。macOS 14–25 / 26 真机矩阵仍待验证。

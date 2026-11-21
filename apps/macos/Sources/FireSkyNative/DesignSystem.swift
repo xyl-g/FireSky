@@ -246,6 +246,7 @@ enum FireSkySurfaceRole {
 struct FireSkySurface: ViewModifier {
     let role: FireSkySurfaceRole
     var emphasized = false
+    var cornerRadius: CGFloat? = nil
 
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
@@ -254,6 +255,7 @@ struct FireSkySurface: ViewModifier {
     private var highContrast: Bool { contrast == .increased }
 
     private var radius: CGFloat {
+        if let cornerRadius { return cornerRadius }
         switch role {
         case .content: return 16
         case .grouped, .overlay: return 12
@@ -337,8 +339,9 @@ struct FireSkySurface: ViewModifier {
 }
 
 extension View {
-    func fireSkySurface(role: FireSkySurfaceRole = .content, emphasized: Bool = false) -> some View {
-        modifier(FireSkySurface(role: role, emphasized: emphasized))
+    func fireSkySurface(role: FireSkySurfaceRole = .content, emphasized: Bool = false,
+                        cornerRadius: CGFloat? = nil) -> some View {
+        modifier(FireSkySurface(role: role, emphasized: emphasized, cornerRadius: cornerRadius))
     }
 }
 
