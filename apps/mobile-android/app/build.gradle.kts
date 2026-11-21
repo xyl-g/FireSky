@@ -82,10 +82,14 @@ val linkEngineJni = tasks.register<Exec>("linkEngineJni") {
     description = "把 JNI shim + engine-mobile/ecCodes/libaec 静态库链接为 libengine_mobile.so"
     dependsOn(cargoAndroidEngine)
     workingDir = repoRoot
-    // NDK r30 在 Apple Silicon 上只有 darwin-x86_64 预构建目录（经 Rosetta 运行）；
-    // 若未来出现 darwin-aarch64 则优先选用。
+    // host 标签按平台派生（v1.9.8 走查：硬编码 darwin-x86_64 使 ubuntu
+    // runner 的 linkEngineJni 直接失败）；Apple Silicon 上 darwin-aarch64
+    // 存在则优先，否则回退按 OS 派生的标签。
     val prebuilt = ndkDir.resolve("toolchains/llvm/prebuilt")
-    val hostTag = if (prebuilt.resolve("darwin-aarch64").isDirectory) "darwin-aarch64" else "darwin-x86_64"
+    val hostTag = when {
+        prebuilt.resolve("darwin-aarch64").isDirectory -> "darwin-aarch64"
+        else -> ndkHostTag
+    }
     val clang = prebuilt.resolve("$hostTag/bin/aarch64-linux-android26-clang")
     val staticLib = engineMobileDir.resolve("target/aarch64-linux-android/release/libengine_mobile.a")
     val output = jniLibDir.resolve("libengine_mobile.so")

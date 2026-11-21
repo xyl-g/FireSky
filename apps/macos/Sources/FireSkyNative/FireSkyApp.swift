@@ -55,12 +55,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         scheduleSnapshot()
         // v1.9.7 启动兜底：8s 后仍无可见窗口则强制前置主窗口——修复极端
         // 情况下“界面没出来”（应用在跑、窗口不可见）导致的观感卡死。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
-            guard let self, NSApp.windows.first(where: { $0.isVisible && !$0.isSheet }) == nil
-            else { return }
-            NSApp.windows.first(where: { $0 is NSWindow && !$0.isSheet })?
-                .makeKeyAndOrderFront(nil)
-            NSApp.activate(ignoringOtherApps: true)
+        // v1.9.8 走查：快照/夹具运行（CI 冒烟）延迟出窗是预期行为，跳过
+        // 兜底，避免与截图流程竞争窗口状态。
+        if ProcessInfo.processInfo.environment["FIRESKY_NATIVE_SNAPSHOT"] == nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
+                guard let self,
+                      NSApp.windows.first(where: { $0.isVisible && !$0.isSheet }) == nil
+                else { return }
+                NSApp.activate(ignoringOtherApps: true)
+                NSApp.windows
+                    .first(where: { !$0.isSheet && ($0 is NSPanel || $0.isKeyWindow || $0.isMainWindow || !($0 is NSPanel)) })?
+                    .makeKeyAndOrderFront(nil)
+            }
         }
         // 从挂载的磁盘映像（DMG）启动时提供安装到「应用程序」的引导；
         // 快照/夹具与常规路径启动不受影响。
