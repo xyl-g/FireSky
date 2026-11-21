@@ -12,7 +12,8 @@ struct WorkbenchSnapshot: App {
         WindowGroup("FireSky · UI Test Fixture") {
             WorkbenchRootView().environmentObject(store)
                 .environmentObject(updater)
-                .environment(\.locale, Locale(identifier: "zh_CN"))
+                .environment(\.locale, Locale(identifier:
+                    ProcessInfo.processInfo.environment["FIRESKY_TEST_ENGLISH"] == "1" ? "en_US" : "zh_CN"))
                 .onAppear { delegate.capture(store) }
         }.defaultSize(width: 1440, height: 1040)
     }
@@ -149,7 +150,18 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
         if ProcessInfo.processInfo.environment["FIRESKY_TEST_TUTORIAL"] == "1" {
             store.openCAMSSetup()
         }
+        let previousLanguage = UserDefaults.standard.string(forKey: "appLanguage")
+        if ProcessInfo.processInfo.environment["FIRESKY_TEST_ENGLISH"] == "1" {
+            L10n.language = .english
+        }
         Task {
+            defer {
+                if let previousLanguage {
+                    UserDefaults.standard.set(previousLanguage, forKey: "appLanguage")
+                } else {
+                    UserDefaults.standard.removeObject(forKey: "appLanguage")
+                }
+            }
             let env = ProcessInfo.processInfo.environment
             if env["FIRESKY_TEST_READ_PROFILE"] == "1" {
                 TaskHistoryChecks.run()
