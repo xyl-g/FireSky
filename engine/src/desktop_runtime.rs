@@ -488,8 +488,8 @@ impl Runtime {
         self.history.request_cancel(request_id)
     }
 
-    pub(crate) fn task_history_list(&self, limit: usize) -> Result<Value, String> {
-        self.history.list(limit)
+    pub(crate) fn task_history_list(&self, limit: usize, before: Option<&str>) -> Result<Value, String> {
+        self.history.list(limit, before)
     }
 
     pub(crate) fn task_history_detail(&self, task_id: &str) -> Result<Value, String> {
@@ -541,7 +541,8 @@ impl Runtime {
                         .ok_or("task history limit must be an integer")?
                         as usize,
                 };
-                self.history.list(limit)
+                let before = params["before"].as_str();
+                self.history.list(limit, before)
             }
             "task_events" => {
                 let id = params["task_id"].as_str().ok_or("task_id is required")?;

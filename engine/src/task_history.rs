@@ -183,7 +183,7 @@ impl TaskHistory {
             sequence: AtomicU64::new(0),
             active: Mutex::new(BTreeMap::new()),
         });
-        history.list(1)?;
+        history.list(1, None)?;
         Ok(history)
     }
 
@@ -391,9 +391,17 @@ impl TaskHistory {
         Ok(())
     }
 
-    pub fn list(&self, limit: usize) -> Result<Value, String> {
+    /// 任务历史列表（分页，v1.8.0 可用性）：`before` 为上一页最后一条的
+    /// `created_at_utc`，返回严格更早的记录；响应携带 `next_cursor`/
+    /// `has_more`，超过单页上限的记录不再对 UI 不可见（方案 §4 分页口径）。
+    pub fn list(&self, limit: usize, before: Option<&str>) -> Result<Value, String> {
         if !(1..=100).contains(&limit) {
             return Err("task history limit must be within 1..100".into());
+        }
+        if let Some(cursor) = before {
+            if crate::task_history::TaskHistory::parse_cursor(cursor).is_err() {
+                return Err("task history cursor must be an ISO8601 timestamp".into());
+            }
         }
         let _guard = self.lock()?;
         let mut records = Vec::new();
@@ -416,7 +424,15 @@ impl TaskHistory {
                 .then_with(|| right.task_id.cmp(&left.task_id))
         });
         let total = records.len();
+        if let Some(cursor) = before {
+            records.retain(|record| record.created_at_utc.as_str() < cursor);
+        }
+        let has_more = records.len() > limit;
         records.truncate(limit);
+        let next_cursor = records
+            .last()
+            .filter(|_| has_more)
+            .map(|record| record.created_at_utc.clone());
         let rows: Vec<_> = records
             .into_iter()
             .map(|record| {
@@ -427,8 +443,19 @@ impl TaskHistory {
             })
             .collect();
         Ok(
-            json!({"schema":SCHEMA,"tasks":rows,"total":total,"issues":issues,"automatic_restart":false}),
+            json!({"schema":SCHEMA,"tasks":rows,"total":total,"issues":issues,"automatic_restart":false,
+            "has_more":has_more,"next_cursor":next_cursor}),
         )
+    }
+
+    /// 分页游标校验：必须可解析为 ISO8601 时间戳（与记录 created_at_utc 同形）。
+    fn parse_cursor(cursor: &str) -> Result<(), String> {
+        if cursor.len() > 64 || cursor.is_empty() {
+            return Err("invalid cursor length".into());
+        }
+        chrono::DateTime::parse_from_rfc3339(cursor)
+            .map(|_| ())
+            .map_err(|_| "cursor is not RFC3339".into())
     }
 
     pub fn detail(&self, id: &str) -> Result<Value, String> {
@@ -811,7 +838,7 @@ mod tests {
         task.progress(&json!({"stage":"forecast","percent":20,"message":"token=secret","probe":{"key":"secret"}})).unwrap();
         task.finish(&Ok(json!({"session":"secret","report_url":format!("/api/v1/firesky/reports/{}.html","a".repeat(64))})), false).unwrap();
         drop(history);
-        let recovered = TaskHistory::open(root.path()).unwrap().list(20).unwrap();
+        let recovered = TaskHistory::open(root.path()).unwrap().list(20, None).unwrap();
         assert_eq!(recovered["tasks"][0]["status"], "done");
         assert_eq!(
             recovered["tasks"][0]["retry_request"]["payload"]["lat"],
@@ -870,7 +897,7 @@ mod tests {
             .finish(&Ok(result), false)
             .unwrap();
         drop(history);
-        let rows = TaskHistory::open(root.path()).unwrap().list(10).unwrap();
+        let rows = TaskHistory::open(root.path()).unwrap().list(10, None).unwrap();
         let reference = &rows["tasks"][0]["result_ref"];
         assert_eq!(reference["cache"]["key"], "a".repeat(64));
         assert_eq!(reference["cache"]["regional"], true);
@@ -916,9 +943,9 @@ mod tests {
         let first = TaskHistory::open(root.path()).unwrap();
         let task = first.begin("request", "prepare", request()).unwrap();
         let second = TaskHistory::open(root.path()).unwrap();
-        assert_eq!(second.list(10).unwrap()["tasks"][0]["status"], "running");
+        assert_eq!(second.list(10, None).unwrap()["tasks"][0]["status"], "running");
         task.finish(&Ok(json!({})), false).unwrap();
-        assert_eq!(second.list(10).unwrap()["tasks"][0]["status"], "done");
+        assert_eq!(second.list(10, None).unwrap()["tasks"][0]["status"], "done");
     }
 
     #[test]
@@ -931,10 +958,10 @@ mod tests {
         drop(task);
         drop(first);
         let second = TaskHistory::open(root.path()).unwrap();
-        let row = &second.list(10).unwrap()["tasks"][0];
+        let row = &second.list(10, None).unwrap()["tasks"][0];
         assert_eq!(row["status"], "interrupted");
         assert_eq!(row["event_seq"], 2);
-        assert_eq!(second.list(10).unwrap()["tasks"][0]["event_seq"], 2);
+        assert_eq!(second.list(10, None).unwrap()["tasks"][0]["event_seq"], 2);
         assert_eq!(
             second.events(&id, 1).unwrap()["events"][0]["event"],
             "interrupted"
@@ -947,14 +974,14 @@ mod tests {
         let history = TaskHistory::open(root.path()).unwrap();
         let task = history.begin("request", "forecast", request()).unwrap();
         history.request_cancel("request").unwrap();
-        let row = &history.list(10).unwrap()["tasks"][0];
+        let row = &history.list(10, None).unwrap()["tasks"][0];
         let id = row["task_id"].as_str().unwrap();
         assert_eq!(row["status"], "running");
         assert_eq!(row["cancel_requested"], true);
         assert!(history.forget(id).unwrap_err().contains("running"));
         task.finish(&Ok(json!({"cache_key":"a".repeat(64)})), true)
             .unwrap();
-        let row = &history.list(10).unwrap()["tasks"][0];
+        let row = &history.list(10, None).unwrap()["tasks"][0];
         assert_eq!(row["status"], "cancelled");
         assert_eq!(row["result_ref"], Value::Null);
         assert_eq!(history.forget(id).unwrap()["forgotten"], true);
@@ -972,7 +999,7 @@ mod tests {
         assert!(!history.path(&id).unwrap().exists());
         drop(history);
         let reopened = TaskHistory::open(root.path()).unwrap();
-        assert_eq!(reopened.list(10).unwrap()["total"], 0);
+        assert_eq!(reopened.list(10, None).unwrap()["total"], 0);
         assert!(reopened.events(&id, 0).is_err());
         assert_eq!(reopened.forget(&id).unwrap()["forgotten"], false);
     }
@@ -997,7 +1024,7 @@ mod tests {
         assert!(history.events(&task.id, next + 1).is_err());
         task.finish(&Err("private failure".into()), false).unwrap();
         assert!(!history
-            .list(10)
+            .list(10, None)
             .unwrap()
             .to_string()
             .contains("private failure"));
@@ -1013,7 +1040,7 @@ mod tests {
             .finish(&Ok(json!({})), false)
             .unwrap();
         drop(history.begin("second", "prepare", request()).unwrap());
-        let rows = history.list(10).unwrap();
+        let rows = history.list(10, None).unwrap();
         let statuses: Vec<_> = rows["tasks"]
             .as_array()
             .unwrap()
@@ -1071,10 +1098,10 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         let observer = TaskHistory::open(&root.path().join("store")).unwrap();
-        assert_eq!(observer.list(10).unwrap()["tasks"][0]["status"], "running");
+        assert_eq!(observer.list(10, None).unwrap()["tasks"][0]["status"], "running");
         child.0.kill().unwrap();
         assert!(!child.0.wait().unwrap().success());
-        let recovered = observer.list(10).unwrap();
+        let recovered = observer.list(10, None).unwrap();
         assert_eq!(recovered["tasks"][0]["status"], "interrupted");
         assert_eq!(recovered["tasks"][0]["retry_request"]["kind"], "point");
         assert_eq!(recovered["automatic_restart"], false);
@@ -1095,7 +1122,7 @@ mod tests {
             history.path(&id).unwrap(),
         )
         .unwrap();
-        let page = history.list(10).unwrap();
+        let page = history.list(10, None).unwrap();
         assert_eq!(page["issues"][0]["code"], "invalid_record");
         assert!(page["tasks"].as_array().unwrap().is_empty());
         assert!(!outside.path().join("absent.json").exists());
@@ -1115,13 +1142,13 @@ mod tests {
         assert!(!owner_path.exists());
         assert!(history.alive(&history.owner).is_err());
         let observer = TaskHistory::open(root.path()).unwrap();
-        let page = observer.list(10).unwrap();
+        let page = observer.list(10, None).unwrap();
         assert!(page["tasks"].as_array().unwrap().is_empty());
         assert_eq!(page["issues"][0]["code"], "invalid_record");
         assert_eq!(history.read(&task.id).unwrap().status, "running");
         fs::remove_file(&owner_path).unwrap();
         fs::rename(&held_path, &owner_path).unwrap();
-        assert_eq!(observer.list(10).unwrap()["tasks"][0]["status"], "running");
+        assert_eq!(observer.list(10, None).unwrap()["tasks"][0]["status"], "running");
         task.finish(&Ok(json!({})), false).unwrap();
     }
 
@@ -1134,7 +1161,7 @@ mod tests {
             let task = history.begin("request", "forecast", request()).unwrap();
             let id = task.id().to_owned();
             task.finish(&Ok(result.clone()), false).unwrap();
-            let row = &history.list(10).unwrap()["tasks"][0];
+            let row = &history.list(10, None).unwrap()["tasks"][0];
             assert_eq!(
                 row["result_ref"]["snapshot"]["contract"],
                 "firesky-result-snapshot-v1"
@@ -1179,7 +1206,7 @@ mod tests {
         failed.finish(&Err("boom".into()), false).unwrap();
         assert!(history.restore(&cancelled_id).is_err());
         assert!(history.restore(&failed_id).is_err());
-        let rows = history.list(10).unwrap();
+        let rows = history.list(10, None).unwrap();
         for row in rows["tasks"].as_array().unwrap() {
             assert!(row["result_ref"].get("snapshot").is_none());
         }
@@ -1207,10 +1234,57 @@ mod tests {
         let id = task.id().to_owned();
         task.finish(&Ok(json!({"model_results":{"gfs":{}}})), false)
             .unwrap();
-        let row = &history.list(10).unwrap()["tasks"][0];
+        let row = &history.list(10, None).unwrap()["tasks"][0];
         let sha = row["result_ref"]["snapshot"]["sha256"].as_str().unwrap();
         let path = root.path().join("snapshots").join(format!("{sha}.json"));
         fs::write(&path, b"tampered").unwrap();
         assert!(history.restore(&id).is_err());
+    }
+}
+
+#[cfg(test)]
+mod pagination_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn list_pagination_returns_cursor_and_older_pages() {
+        let dir = tempfile::tempdir().unwrap();
+        let history = TaskHistory::open(dir.path()).unwrap();
+        // 3 条不同时间戳的历史（手动注入 record 文件，绕过 begin_task 的实时时钟）。
+        let stamps = ["2026-11-20T10:00:00Z", "2026-11-20T11:00:00Z", "2026-11-20T12:00:00Z"];
+        for (index, stamp) in stamps.iter().enumerate() {
+            let id = format!("{:064x}", index + 1);
+            let record = json!({
+                "schema": SCHEMA, "task_id": id,
+                "request_id": format!("req-{index}"), "owner": format!("owner-{index}"),
+                "method": "forecast", "status": "done",
+                "created_at_utc": stamp, "updated_at_utc": stamp,
+                "cancel_requested": false, "retry_request": null, "result_ref": null,
+                "progress": {}, "event_seq": 1,
+                "events": [{"seq": 1, "at_utc": stamp, "event": "running", "data": {}}],
+            });
+            fs::write(
+                dir.path().join("jobs").join(format!("{id}.json")),
+                serde_json::to_vec(&record).unwrap(),
+            ).unwrap();
+        }
+        let first = history.list(2, None).unwrap();
+        eprintln!("issues={:?}", first["issues"]);
+        assert_eq!(first["total"], 3);
+        assert_eq!(first["tasks"].as_array().unwrap().len(), 2);
+        assert_eq!(first["has_more"], true);
+        let cursor = first["next_cursor"].as_str().unwrap().to_owned();
+        // 首页按时间降序：最新两条。
+        assert_eq!(first["tasks"][0]["created_at_utc"], json!(stamps[2]));
+        // 游标翻页 → 剩余 1 条（更早），无更多。
+        let second = history.list(2, Some(&cursor)).unwrap();
+        assert_eq!(second["has_more"], false);
+        assert!(second["next_cursor"].is_null());
+        let tasks = second["tasks"].as_array().unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0]["created_at_utc"], json!(stamps[0]));
+        // 非法游标被拒绝。
+        assert!(history.list(2, Some("not-a-time")).is_err());
     }
 }

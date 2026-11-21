@@ -177,8 +177,12 @@ android {
 
 // 真引擎接线挂到 preBuild：assembleDebug/connectedAndroidTest 前自动
 // cargo → 链接 .so → 复制 definitions assets。
-tasks.named("preBuild") {
-    dependsOn(linkEngineJni, copyEccodesDefinitions)
+// FIRESKY_SKIP_NATIVE=1（CI 单元测试）跳过该链：无 NDK/交叉库环境跑
+// Kotlin 编译与 Mock 链单元测试，不产出带真引擎的 APK。
+if (System.getenv("FIRESKY_SKIP_NATIVE") != "1") {
+    tasks.named("preBuild") {
+        dependsOn(linkEngineJni, copyEccodesDefinitions)
+    }
 }
 
 tasks.matching { it.name == "assembleRelease" }.configureEach {

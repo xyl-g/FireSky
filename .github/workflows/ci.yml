@@ -158,8 +158,11 @@ jobs:
           distribution: temurin
           java-version: "17"
       # ubuntu runner 预装 Android SDK（ANDROID_HOME + licenses 已接受）；
-      # unit test 只需 compileDebugKotlin，不触发 native/JNI 打包链。
+      # FIRESKY_SKIP_NATIVE=1 跳过 JNI/交叉库链（CI 无 NDK + ecCodes 交叉库），
+      # 只验证 Kotlin 编译与 MockTransport 全链单元测试。
       - name: Kotlin 编译 + 单元测试（MockTransport 全链契约）
+        env:
+          FIRESKY_SKIP_NATIVE: "1"
         run: |
           cd apps/mobile-android
           ./gradlew :app:compileDebugKotlin :app:testDebugUnitTest --no-daemon

@@ -782,7 +782,7 @@ async fn list_jobs(
         .unwrap_or(0);
     let history = app
         .runtime
-        .task_history_list(100)
+        .task_history_list(100, params.get("before").map(|s| s.as_str()))
         .map_err(|error| ApiError(StatusCode::INTERNAL_SERVER_ERROR, error))?;
     let mut merged = BTreeMap::<String, Value>::new();
     if let Some(tasks) = history["tasks"].as_array() {
@@ -1459,7 +1459,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(current["status"], "failed");
-        let history = app.runtime.task_history_list(10).unwrap();
+        let history = app.runtime.task_history_list(10, None).unwrap();
         assert_eq!(history["total"], 1);
         assert_eq!(history["tasks"][0]["task_id"], id);
         assert_eq!(history["tasks"][0]["method"], "forecast");
