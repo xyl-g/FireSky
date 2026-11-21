@@ -119,7 +119,9 @@ pub struct Settings {
 fn settings_path(workspace: &Path) -> PathBuf {
     let configured = std::env::var_os("FIRESKY_DATA_SYNC_SETTINGS_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|| workspace.join(".firesky/settings/data_sync.json"));
+        .unwrap_or_else(|| {
+            crate::paths::resolve(workspace, "", ".firesky/settings/data_sync.json", "settings/data_sync.json")
+        });
     if configured.is_absolute() {
         configured
     } else {
@@ -344,7 +346,7 @@ impl State {
 }
 
 fn state_path(workspace: &Path) -> PathBuf {
-    workspace.join(".firesky/state/data-sync.json")
+    crate::paths::resolve(workspace, "", ".firesky/state/data-sync.json", "state/data-sync.json")
 }
 
 /// The state file is advisory bookkeeping: a corrupted, oversized or
@@ -1444,8 +1446,12 @@ mod tests {
         assert_eq!(value["configured"], false);
         assert_eq!(value["retention_configured"], false);
         assert_eq!(value["settings"]["enabled"], false);
-        assert!(settings_path(workspace.path()).ends_with(".firesky/settings/data_sync.json"));
-        assert!(state_path(workspace.path()).ends_with(".firesky/state/data-sync.json"));
+        // 全新工作区 → 可见布局；旧布局存在时仍解析到 .firesky（Legacy）。
+        let legacy = workspace.path().join(".firesky").exists();
+        let settings_suffix = if legacy { ".firesky/settings/data_sync.json" } else { "settings/data_sync.json" };
+        let state_suffix = if legacy { ".firesky/state/data-sync.json" } else { "state/data-sync.json" };
+        assert!(settings_path(workspace.path()).ends_with(settings_suffix));
+        assert!(state_path(workspace.path()).ends_with(state_suffix));
     }
 
     #[test]

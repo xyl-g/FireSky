@@ -91,7 +91,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         do {
             try fileManager.copyItem(at: Bundle.main.bundleURL, to: destination)
-            NSWorkspace.shared.openApplication(at: destination, configuration: .init())
+            // LaunchServices 会把 openApplication 指向同 bundle id 的现有实例
+            // （本进程），因此改用独立接力进程：旧实例退出后 1 秒再打开
+            // /Applications 里的新实例，完成「安装并重启」的用户预期。
+            let relay = Process()
+            relay.executableURL = URL(fileURLWithPath: "/bin/sh")
+            relay.arguments = ["-c",
+                               "sleep 1; /usr/bin/open \"\(destination.path)\""]
+            try relay.run()
             NSApp.terminate(nil)
         } catch {
             let failure = NSAlert()

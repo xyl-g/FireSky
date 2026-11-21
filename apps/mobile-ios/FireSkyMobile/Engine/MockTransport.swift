@@ -53,6 +53,10 @@ final class MockTransport: EngineTransport {
               "event": ["percent": percent, "source": source, "message": message]])
     }
 
+    private func emitEvent(id: String, _ event: JSONObject) {
+        emit(["id": id, "type": "progress", "event": event])
+    }
+
     private func emitResult(id: String, _ result: JSONObject) {
         emit(["id": id, "type": "result", "result": result])
     }
@@ -91,6 +95,55 @@ final class MockTransport: EngineTransport {
             emitResult(id: id, ["ok": true])
         case "inventory":
             emitResult(id: id, ["datasets": Self.mockInventory])
+        case "task_history":
+            emitResult(id: id, Self.mockTaskHistory)
+        case "task_events":
+            emitResult(id: id, Self.mockTaskEvents)
+        case "task_forget":
+            emitResult(id: id, ["forgotten": true])
+        case "result_restore":
+            emitResult(id: id, ["model_results": ["gfs": ["score": 0.8]]])
+        case "data_delete_preview":
+            emitResult(id: id, [
+                "contract": "rust-data-delete-preview-v1",
+                "preview_id": "mock0preview000001",
+                "file_count": 42,
+                "total_mb": 512.5,
+                "protected": [],
+            ])
+        case "data_delete_execute":
+            emitResult(id: id, [
+                "contract": "rust-data-delete-execute-v1",
+                "deleted": 42, "skipped": [], "failed": [], "freed_mb": 512.5,
+            ])
+        case "terrain_inventory":
+            var inventory: JSONObject = [
+                "contract": "rust-terrain-inventory-v1",
+                "tile_count": 3,
+                "tiles": [["name": "N30E119", "bytes": 25_934_402],
+                          ["name": "N30E120", "bytes": 25_934_402],
+                          ["name": "N31E120", "bytes": 25_934_402]],
+                "coverage_ok": true,
+                "tile": ["name": "N30E120", "exists": true, "bytes": 25_934_402,
+                         "lat_range": [30.0, 31.0], "lon_range": [120.0, 121.0]],
+            ]
+            if (params["estimate_global"] as? Bool) == true {
+                // 与真引擎同口径：bounds（缺省全球）→ 候选数 + 已有 + 估算体积。
+                let bounds = (params["bounds"] as? JSONObject) ??
+                    ["south": -56, "north": 59, "west": -180, "east": 179]
+                let south = (bounds["south"] as? NSNumber)?.intValue ?? -56
+                let north = (bounds["north"] as? NSNumber)?.intValue ?? 59
+                let west = (bounds["west"] as? NSNumber)?.intValue ?? -180
+                let east = (bounds["east"] as? NSNumber)?.intValue ?? 179
+                let candidates = (north - south + 1) * (east - west + 1)
+                inventory["global"] = ["candidates": candidates, "existing": 2,
+                                       "estimated_bytes": candidates * 6_000_000,
+                                       "estimated_gb": Double(candidates) * 0.006,
+                                       "bounds": bounds]
+            }
+            emitResult(id: id, inventory)
+        case "terrain_download":
+            await mockTerrainDownload(id: id)
         case "network_probe":
             await probeFlow(id: id)
         case "cams_credentials":
@@ -307,4 +360,70 @@ final class MockTransport: EngineTransport {
          "path": "/mock/data/cams",
          "cycles": ["2026-11-12 00Z": ["files": 12]] as JSONObject],
     ]
+
+    private static let mockTaskHistory: JSONObject = {
+        let payload: JSONObject = ["kind": "point",
+                                   "payload": ["name": "杭州", "lat": 30.2741, "lon": 120.1551,
+                                               "target_date": "2026-11-09", "phenomenon": "dusk"]]
+        let running: JSONObject = [
+            "task_id": String(repeating: "b", count: 64), "method": "prepare", "status": "running",
+            "created_at_utc": "2026-11-21T09:00:00.000Z", "updated_at_utc": "2026-11-21T09:01:00.000Z",
+            "cancel_requested": false, "event_seq": 2, "progress": ["percent": 40.0],
+            "retry_request": payload,
+        ]
+        let done: JSONObject = [
+            "task_id": String(repeating: "a", count: 64), "method": "forecast", "status": "done",
+            "created_at_utc": "2026-11-20T12:27:33.706Z", "updated_at_utc": "2026-11-20T12:27:42.600Z",
+            "cancel_requested": false, "event_seq": 5, "retry_request": payload,
+            "result_ref": ["snapshot": ["contract": "firesky-result-snapshot-v1",
+                                        "sha256": String(repeating: "c", count: 64)]],
+        ]
+        let sync: JSONObject = [
+            "task_id": String(repeating: "d", count: 64), "method": "data_sync", "status": "done",
+            "created_at_utc": "2026-11-20T04:00:00.000Z", "updated_at_utc": "2026-11-20T04:01:00.000Z",
+            "cancel_requested": false, "event_seq": 1,
+        ]
+        return ["schema": "firesky-task-history-v1", "automatic_restart": false,
+                "total": 3, "issues": [], "tasks": [running, done, sync]]
+    }()
+
+    private static let mockTaskEvents: JSONObject = [
+        "task_id": String(repeating: "a", count: 64),
+        "events": [
+            ["seq": 1, "at_utc": "2026-11-20T12:27:31.000Z", "event": "running", "data": [:]],
+            ["seq": 2, "at_utc": "2026-11-20T12:27:32.000Z", "event": "progress",
+             "data": ["percent": 30.0, "stage": "prepare", "message": "正在准备 GFS 与 CAMS 数据"]],
+            ["seq": 3, "at_utc": "2026-11-20T12:27:33.000Z", "event": "progress",
+             "data": ["percent": 70.0, "stage": "prepare", "message": "GFS 数据已就绪"]],
+            ["seq": 4, "at_utc": "2026-11-20T12:27:34.000Z", "event": "progress",
+             "data": ["percent": 90.0, "stage": "forecast", "message": "预测计算进行中"]],
+            ["seq": 5, "at_utc": "2026-11-20T12:27:35.000Z", "event": "done", "data": [:]],
+        ],
+        "next_seq": 6, "truncated": false,
+    ]
+
+    /// mock 批量下载：模拟 4 块瓦片进度后完成（真下载走 FSMobileTransport 真引擎）。
+    private func mockTerrainDownload(id: String) async {
+        let total = 4
+        for index in 1...total {
+            if index > 1 {
+                try? await Task.sleep(nanoseconds: 400_000_000)
+            }
+            emitEvent(id: id, ["terrain": [
+                "stage": "global", "candidates": total,
+                "downloaded": index, "absent": 0, "failed": 0, "existing": 0,
+                "received_bytes": index * 10_000_000,
+                "percent": Double(index) * 100.0 / Double(total),
+                "current_tile": "N30E11\(index)",
+            ]])
+        }
+        emitResult(id: id, [
+            "contract": "rust-terrain-download-v1",
+            "status": "done", "mode": "global", "candidates": total,
+            "existing": 0, "downloaded": total, "absent": 0, "failed": 0,
+            "received_bytes": total * 10_000_000, "received_gb": Double(total) * 0.01,
+            "stopped_reason": NSNull(),
+        ])
+    }
+
 }

@@ -37,7 +37,9 @@ pub struct RetentionSettings {
 fn path(workspace: &Path) -> PathBuf {
     let configured = std::env::var_os("FIRESKY_RETENTION_SETTINGS_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|| workspace.join(".firesky/settings/retention.json"));
+        .unwrap_or_else(|| {
+            crate::paths::resolve(workspace, "", ".firesky/settings/retention.json", "settings/retention.json")
+        });
     if configured.is_absolute() {
         configured
     } else {
@@ -185,7 +187,13 @@ mod tests {
         let workspace = tempfile::tempdir().unwrap();
         let value = status(workspace.path()).unwrap();
         assert_eq!(value["configured"], false);
-        assert!(path(workspace.path()).ends_with(".firesky/settings/retention.json"));
+        // 全新工作区 → 可见布局；旧布局存在时仍解析到 .firesky（Legacy）。
+        let expected = if workspace.path().join(".firesky").exists() {
+            ".firesky/settings/retention.json"
+        } else {
+            "settings/retention.json"
+        };
+        assert!(path(workspace.path()).ends_with(expected));
     }
 
     #[test]

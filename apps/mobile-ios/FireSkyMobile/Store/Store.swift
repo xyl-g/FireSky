@@ -7,20 +7,194 @@ import UIKit
 /// 区域预测（用户裁定排除）与实况观测（延后 MN4 裁决）未迁移；
 /// AppKit 菜单/快捷键（⌘1/⌘4/⌘,）降级为底部标签页导航。
 enum Page: String, CaseIterable, Identifiable {
-    case point, data, settings
+    case point, data, history, settings
     var id: String { rawValue }
     var title: String {
         switch self {
         case .point: "单点预测"
-        case .data: "数据与下载"
+        case .data: "数据管理"
+        case .history: "任务历史"
         case .settings: "设置"
         }
     }
     var symbol: String {
         switch self {
         case .point: "location.circle"
-        case .data: "arrow.down.circle"
+        case .data: "externaldrive"
+        case .history: "clock.arrow.circlepath"
         case .settings: "gearshape"
+        }
+    }
+}
+
+/// 任务历史行（同构 macOS NativeTaskHistoryItem）。
+struct MobileTaskHistoryItem: Identifiable {
+    var id: String { taskID }
+    let taskID: String
+    let method: String
+    let status: String
+    let createdAt: String
+    let cancelRequested: Bool
+    let percent: Double?
+    let retryPayload: JSONObject?
+    let canRestoreResult: Bool
+
+    var isBackgroundSync: Bool { method == "data_sync" }
+    var methodTitle: String {
+        switch method {
+        case "check": "数据检查"
+        case "prepare": "数据准备"
+        case "forecast": "预测计算"
+        case "publications": "发布核验"
+        case "network_probe": "下载探测"
+        case "data_sync": "后台同步"
+        case "terrain_download": "地形下载"
+        default: "任务"
+        }
+    }
+    var kindTitle: String {
+        switch retryPayload?["kind"] as? String {
+        case "point": "单点"
+        case "regional": "区域"
+        case "nowcast": "实况"
+        default: methodTitle
+        }
+    }
+    var rowTitle: String { kindTitle == methodTitle ? methodTitle : "\(kindTitle) · \(methodTitle)" }
+    var statusTitle: String {
+        switch status {
+        case "running": cancelRequested ? "取消中" : "运行中"
+        case "done": "已完成"
+        case "failed": "失败"
+        case "cancelled": "已取消"
+        case "interrupted": "已中断"
+        default: status
+        }
+    }
+    var contextTitle: String {
+        guard let payload = retryPayload else {
+            return isBackgroundSync ? "后台数据同步轮次" : ""
+        }
+        let name = payload["name"] as? String
+            ?? (payload["regions"] as? [String])?.joined(separator: "、")
+            ?? ""
+        let date = payload["target_date"] as? String ?? ""
+        let phenomenon: String
+        switch payload["phenomenon"] as? String {
+        case "dawn": phenomenon = "朝霞"
+        case "dusk": phenomenon = "晚霞"
+        default: phenomenon = ""
+        }
+        let text = [name, date, phenomenon].filter { !$0.isEmpty }.joined(separator: " · ")
+        if text.isEmpty && isBackgroundSync { return "后台数据同步轮次" }
+        return text
+    }
+    /// 本地时区短时间（UTC ISO8601 → MM-dd HH:mm）。
+    var localTime: String {
+        guard let date = ObservationDate.timestamp(createdAt) else { return createdAt }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MM-dd HH:mm"
+        return formatter.string(from: date)
+    }
+    var rowTimeLine: String {
+        var text = localTime
+        if status == "running", let percent {
+            text += String(format: " · %.0f%%", percent)
+        }
+        if status == "interrupted" { text += " · 不会自动重跑" }
+        return text
+    }
+
+    static func parse(_ value: JSONObject) -> MobileTaskHistoryItem? {
+        guard let taskID = value["task_id"] as? String,
+              taskID.count == 64, taskID.allSatisfy({ $0.isHexDigit }),
+              let method = value["method"] as? String,
+              let status = value["status"] as? String,
+              ["running", "done", "failed", "cancelled", "interrupted"].contains(status),
+              let createdAt = value["created_at_utc"] as? String,
+              ObservationDate.timestamp(createdAt) != nil else {
+            return nil
+        }
+        let retry = value["retry_request"] as? JSONObject
+        let payload = (retry?["payload"] as? JSONObject).flatMap { payload in
+            ["point", "regional", "nowcast"].contains(retry?["kind"] as? String ?? "") ? payload : nil
+        }
+        let snapshot = (value["result_ref"] as? JSONObject)?["snapshot"] as? JSONObject
+        let canRestore = snapshot?["contract"] as? String == "firesky-result-snapshot-v1"
+            && snapshot?["sha256"] is String
+        return MobileTaskHistoryItem(
+            taskID: taskID, method: method, status: status, createdAt: createdAt,
+            cancelRequested: value["cancel_requested"] as? Bool ?? false,
+            percent: (value["progress"] as? JSONObject)?["percent"] as? Double,
+            retryPayload: payload,
+            canRestoreResult: canRestore,
+        )
+    }
+}
+
+/// 任务事件行（同构 macOS NativeTaskEvent）。
+struct MobileTaskEventRow: Identifiable {
+    let seq: Int
+    let at: String
+    let event: String
+    let stage: String
+    let message: String
+    let percent: Double?
+
+    var id: Int { seq }
+    var title: String {
+        switch event {
+        case "running": "开始"
+        case "progress": "进度"
+        case "cancel_requested": "请求取消"
+        case "done": "完成"
+        case "failed": "失败"
+        case "cancelled": "已取消"
+        case "interrupted": "已中断"
+        default: "状态更新"
+        }
+    }
+    var detail: String {
+        var values: [String] = []
+        if !stage.isEmpty { values.append(String(stage.prefix(128))) }
+        if !message.isEmpty { values.append(String(message.prefix(128))) }
+        if let percent { values.append(String(format: "%.0f%%", percent)) }
+        return values.joined(separator: " · ")
+    }
+    var localTime: String {
+        guard let date = ObservationDate.timestamp(at) else { return at }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "MM-dd HH:mm:ss"
+        return formatter.string(from: date)
+    }
+}
+
+/// 地形下载区域预设（v1.4.0 macOS TerrainRegion 同构）。
+enum TerrainRegion: String, CaseIterable, Identifiable {
+    case china = "中国"
+    case eastAsia = "东亚"
+    case southeastAsia = "东南亚"
+    case asia = "亚洲"
+    case europe = "欧洲"
+    case northAmerica = "北美"
+    case southAmerica = "南美"
+    case africa = "非洲"
+    case oceania = "大洋洲"
+    case global = "全球"
+
+    var id: String { rawValue }
+    var bounds: JSONObject? {
+        switch self {
+        case .china: ["south": 18, "north": 54, "west": 73, "east": 135]
+        case .eastAsia: ["south": 20, "north": 54, "west": 100, "east": 146]
+        case .southeastAsia: ["south": -11, "north": 28, "west": 92, "east": 141]
+        case .asia: ["south": -11, "north": 59, "west": 26, "east": 179]
+        case .europe: ["south": 35, "north": 59, "west": -11, "east": 40]
+        case .northAmerica: ["south": 15, "north": 59, "west": -170, "east": -52]
+        case .southAmerica: ["south": -56, "north": 13, "west": -82, "east": -34]
+        case .africa: ["south": -35, "north": 37, "west": -18, "east": 52]
+        case .oceania: ["south": -47, "north": 0, "west": 110, "east": 179]
+        case .global: nil
         }
     }
 }
@@ -30,7 +204,13 @@ enum Page: String, CaseIterable, Identifiable {
 @MainActor
 final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
     let engine = EngineClient(transportFactory: Store.makeTransport)
-    @Published var page: Page = .point
+    /// 截图夹具：`FIRESKY_PAGE=data|history|settings` 指定初始页
+    /// （simctl launch 的 SIMCTL_CHILD_FIRESKY_PAGE 环境变量注入）。
+    @Published var page: Page = {
+        guard let raw = ProcessInfo.processInfo.environment["FIRESKY_PAGE"],
+              let forced = Page(rawValue: raw) else { return .point }
+        return forced
+    }()
     @Published var name = "杭州"
     @Published var query = ""
     @Published var lat = 30.2741 { didSet { metadataReady = false; result = nil } }
@@ -68,6 +248,38 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var calendarMonth = Date()
     @Published var showCAMSReminder = false
     @Published var showCAMSTutorial = false
+    // 任务历史（v1.6.0 历史页）
+    @Published var taskHistory: [MobileTaskHistoryItem] = []
+    @Published var taskHistoryTotal = 0
+    @Published var taskHistoryLoaded = false
+    @Published var taskHistoryLoading = false
+    @Published var taskHistoryError = ""
+    @Published var selectedTaskID: String?
+    @Published var taskEvents: [MobileTaskEventRow] = []
+    @Published var taskEventsLoading = false
+    @Published var taskEventsError = ""
+    @Published var pendingForgetTaskID: String?
+    @Published var restoringTaskID: String?
+    // 数据管理（手动删除 + 地形区域下载）
+    @Published var pendingDataDelete: JSONObject?
+    @Published var dataDeletePreview: JSONObject?
+    @Published var dataDeletePreviewing = false
+    @Published var dataDeleteRunning = false
+    @Published var dataDeleteMessage = ""
+    @Published var dataDeleteFailed = false
+    @Published var terrain: JSONObject?
+    @Published var terrainLoading = false
+    @Published var terrainDownloading = false
+    @Published var terrainCancelling = false
+    @Published var terrainMessage = ""
+    @Published var terrainMessageFailed = false
+    @Published var terrainProgress: JSONObject = [:]
+    @Published var terrainRegion: TerrainRegion = .china
+    @Published var terrainEstimate: JSONObject?
+    @Published var terrainEstimateLoading = false
+    @Published var showTerrainConfirm = false
+    // 设置分类（通用/数据/位置与海拔/高级）
+    @Published var settingsCategory = "通用"
     @Published var camsConfiguration: JSONObject?
     @Published var camsKeyDraft = ""
     @Published var savingCAMS = false
@@ -119,7 +331,11 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     private var connecting = false
 
     private static func makeTransport() -> EngineTransport {
-        let choice = UserDefaults.standard.string(forKey: "engineTransport") ?? "ffi"
+        // 截图夹具：FIRESKY_TRANSPORT=mock 强制走模拟通道（SIMCTL_CHILD_ 注入）。
+        let environment = ProcessInfo.processInfo.environment
+        let choice = environment["FIRESKY_TRANSPORT"]
+            ?? UserDefaults.standard.string(forKey: "engineTransport")
+            ?? "ffi"
         return choice == "mock" ? MockTransport() : FSMobileTransport()
     }
 
@@ -186,7 +402,11 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             if capabilities.isSuperset(of: ["task_history", "result_restore"]) {
                 await restoreLatestForecastResult()
             }
-            if page == .data { await loadInventory() }
+            if page == .data {
+                await loadInventory()
+                loadTerrain()
+            }
+            if page == .history { loadTaskHistory() }
         } catch { self.error = error.localizedDescription; status = "引擎未连接" }
     }
 
@@ -541,6 +761,350 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             let response = try await engine.call("inventory")
             inventory = response["datasets"] as? [JSONObject] ?? []
         } catch { fail(error) }
+    }
+
+    // MARK: - 任务历史（v1.6.0 与 macOS 历史页对齐）
+
+    func loadTaskHistory() {
+        guard online, !taskHistoryLoading else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            taskHistoryLoading = true
+            taskHistoryError = ""
+            defer { taskHistoryLoading = false }
+            do {
+                let response = try await engine.call("task_history", ["limit": 100])
+                guard response["schema"] as? String == "firesky-task-history-v1",
+                      let tasks = response["tasks"] as? [JSONObject] else {
+                    throw EngineError(message: "任务历史协议不匹配，请重新连接引擎。")
+                }
+                let parsed = tasks.compactMap(MobileTaskHistoryItem.parse)
+                if Set(parsed.map(\.taskID)).count != parsed.count {
+                    throw EngineError(message: "任务历史包含重复记录。")
+                }
+                taskHistory = parsed
+                taskHistoryTotal = (response["total"] as? NSNumber)?.intValue ?? parsed.count
+                taskHistoryLoaded = true
+                if let selectedTaskID, !parsed.contains(where: { $0.taskID == selectedTaskID }) {
+                    clearTaskSelection()
+                }
+            } catch is CancellationError {
+            } catch {
+                taskHistoryError = error.localizedDescription
+            }
+        }
+    }
+
+    func selectTask(_ taskID: String) {
+        if selectedTaskID == taskID {
+            clearTaskSelection()
+            return
+        }
+        guard taskHistory.contains(where: { $0.taskID == taskID }) else { return }
+        selectedTaskID = taskID
+        taskEvents = []
+        taskEventsError = ""
+        taskEventsLoading = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { taskEventsLoading = false }
+            do {
+                let response = try await engine.call("task_events", ["task_id": taskID, "after_seq": 0])
+                guard response["task_id"] as? String == taskID,
+                      let values = response["events"] as? [JSONObject] else {
+                    throw EngineError(message: "任务事件协议不匹配。")
+                }
+                var previous = 0
+                let rows: [MobileTaskEventRow] = try values.compactMap { value in
+                    let seq = (value["seq"] as? NSNumber)?.intValue ?? 0
+                    guard seq > previous else { throw EngineError(message: "事件顺序无效。") }
+                    previous = seq
+                    guard let at = value["at_utc"] as? String, let event = value["event"] as? String else {
+                        throw EngineError(message: "事件字段无效。")
+                    }
+                    let data = value["data"] as? JSONObject ?? [:]
+                    return MobileTaskEventRow(
+                        seq: seq, at: at, event: event,
+                        stage: data["stage"] as? String ?? "",
+                        message: data["message"] as? String ?? "",
+                        percent: data["percent"] as? Double,
+                    )
+                }
+                taskEvents = rows
+            } catch {
+                taskEventsError = error.localizedDescription
+            }
+        }
+    }
+
+    func clearTaskSelection() {
+        selectedTaskID = nil
+        taskEvents = []
+        taskEventsError = ""
+        taskEventsLoading = false
+    }
+
+    func setPendingForgetTask(_ taskID: String?) {
+        pendingForgetTaskID = taskID
+    }
+
+    /// 「删除记录」语义同 macOS：只删除状态与事件，不删报告与数据。
+    func forgetPendingTask() {
+        let taskID = pendingForgetTaskID
+        pendingForgetTaskID = nil
+        guard let taskID, online, !busy,
+              taskHistory.first(where: { $0.taskID == taskID })?.status != "running" else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let response = try await engine.call("task_forget", ["task_id": taskID])
+                guard response["forgotten"] as? Bool == true else {
+                    throw EngineError(message: "任务记录没有被删除。")
+                }
+                if selectedTaskID == taskID { clearTaskSelection() }
+                loadTaskHistory()
+            } catch {
+                taskHistoryError = error.localizedDescription
+            }
+        }
+    }
+
+    /// 恢复已发布结果（回填原始参数 + adoptResult，同 macOS restoreTaskResult）。
+    func restoreTaskResult(_ item: MobileTaskHistoryItem) {
+        guard !busy, restoringTaskID == nil, item.canRestoreResult else { return }
+        restoringTaskID = item.taskID
+        Task { [weak self] in
+            guard let self else { return }
+            defer { restoringTaskID = nil }
+            do {
+                let response = try await engine.call("result_restore", ["task_id": item.taskID])
+                guard response["model_results"] is JSONObject else {
+                    throw EngineError(message: "已发布结果格式无效。")
+                }
+                if let payload = item.retryPayload {
+                    applyRestoredPayload(payload)
+                }
+                result = response
+                selectedModel = (response["model_results"] as? JSONObject)?["gfs"] == nil ? "ec" : "gfs"
+                status = "已恢复历史结果"
+                error = ""
+            } catch {
+                taskHistoryError = error.localizedDescription
+            }
+        }
+    }
+
+    /// 恢复参数并重新检查（同 macOS restoreTaskParameters）。
+    func restoreTaskParameters(_ item: MobileTaskHistoryItem) {
+        guard !busy, restoringTaskID == nil, let payload = item.retryPayload, online else { return }
+        applyRestoredPayload(payload)
+        beginCheck()
+    }
+
+    // MARK: - 数据管理（手动删除，v1.3.0 macOS 契约）
+
+    /// 选择范围并请求引擎预览；范围始终是库存周期键，不传磁盘路径。
+    func beginDataDelete(source: String, cycle: String?) {
+        guard online, !busy, !dataDeleteRunning, !dataDeletePreviewing else { return }
+        var scope: JSONObject = ["source": source]
+        if let cycle { scope["cycle"] = cycle }
+        pendingDataDelete = scope
+        dataDeletePreview = nil
+        dataDeleteMessage = ""
+        dataDeleteFailed = false
+        dataDeletePreviewing = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { dataDeletePreviewing = false }
+            do {
+                dataDeletePreview = try await engine.call("data_delete_preview", ["scope": scope])
+            } catch {
+                pendingDataDelete = nil
+                dataDeleteMessage = error.localizedDescription
+                dataDeleteFailed = true
+            }
+        }
+    }
+
+    func cancelDataDelete() {
+        pendingDataDelete = nil
+        dataDeletePreview = nil
+    }
+
+    /// 确认后执行；预览过期保留范围并提示重新确认，不静默扩大。
+    func executeDataDelete() {
+        guard let scope = pendingDataDelete,
+              let preview = dataDeletePreview,
+              let previewID = preview["preview_id"] as? String,
+              online, !dataDeleteRunning else { return }
+        dataDeleteRunning = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { dataDeleteRunning = false }
+            do {
+                let result = try await engine.call("data_delete_execute", [
+                    "scope": scope, "preview_id": previewID, "confirm": true,
+                ])
+                pendingDataDelete = nil
+                dataDeletePreview = nil
+                let deleted = (result["deleted"] as? NSNumber)?.intValue ?? 0
+                let skipped = (result["skipped"] as? [Any])?.count ?? 0
+                let failed = (result["failed"] as? [Any])?.count ?? 0
+                let mb = (result["freed_mb"] as? NSNumber)?.doubleValue ?? 0
+                dataDeleteMessage = "已删除 \(deleted) 个文件，释放 \(String(format: "%.1f", mb)) MB"
+                    + (skipped > 0 ? "；占用中跳过 \(skipped) 个" : "")
+                    + (failed > 0 ? "；失败 \(failed) 个" : "")
+                dataDeleteFailed = failed > 0
+                await loadInventory()
+            } catch {
+                dataDeletePreview = nil
+                dataDeleteMessage = error.localizedDescription
+                dataDeleteFailed = true
+            }
+        }
+    }
+
+    // MARK: - 地形区域下载（v1.4.0 macOS 契约）
+
+    func loadTerrain() {
+        guard online, !terrainLoading, !terrainDownloading else { return }
+        terrainLoading = true
+        Task { [weak self] in
+            guard let self else { return }
+            defer { terrainLoading = false }
+            do {
+                let response = try await engine.call("terrain_inventory", ["lat": lat, "lon": lon])
+                // 成功刷新不清空刚设置的下载完成消息；仅失败时覆盖。
+                terrain = response
+            } catch is CancellationError {
+            } catch {
+                terrain = nil
+                terrainMessage = error.localizedDescription
+                terrainMessageFailed = true
+            }
+        }
+    }
+
+    /// 请求所选区域估算（HEAD 抽样）；完成后弹确认。
+    func loadTerrainEstimate() {
+        guard online, !terrainDownloading, !terrainEstimateLoading else { return }
+        terrainEstimateLoading = true
+        var params: JSONObject = ["estimate_global": true, "lat": lat, "lon": lon]
+        if let bounds = terrainRegion.bounds {
+            params["bounds"] = bounds
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            defer { terrainEstimateLoading = false }
+            do {
+                terrainEstimate = try await engine.call("terrain_inventory", params)
+                showTerrainConfirm = true
+            } catch {
+                terrainEstimate = nil
+                terrainMessage = error.localizedDescription
+                terrainMessageFailed = true
+            }
+        }
+    }
+
+    func dismissTerrainConfirm() {
+        showTerrainConfirm = false
+    }
+
+    /// 批量（区域/全球）下载：跳过已有、可取消续传；进度经 terrain 事件回填。
+    func downloadTerrainRegion() {
+        guard online, !busy, !terrainDownloading else { return }
+        terrainDownloading = true
+        terrainCancelling = false
+        terrainMessage = ""
+        terrainProgress = [:]
+        showTerrainConfirm = false
+        var params: JSONObject = ["mode": "global", "timeout_seconds": 300.0]
+        if let bounds = terrainRegion.bounds {
+            params["bounds"] = bounds
+        }
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                terrainDownloading = false
+                terrainCancelling = false
+            }
+            do {
+                let result = try await engine.call("terrain_download", params, progress: { [weak self] event in
+                    guard let self, let terrain = event["terrain"] as? JSONObject else { return }
+                    self.terrainProgress = terrain
+                })
+                try Task.checkCancellation()
+                let downloaded = (result["downloaded"] as? NSNumber)?.intValue ?? 0
+                let absent = (result["absent"] as? NSNumber)?.intValue ?? 0
+                let failed = (result["failed"] as? NSNumber)?.intValue ?? 0
+                let gb = (result["received_gb"] as? NSNumber)?.doubleValue ?? 0
+                let summary = "新增 \(downloaded) 块、缺失 \(absent) 块、失败 \(failed) 块，占用 \(String(format: "%.1f", gb)) GB。"
+                switch result["status"] as? String ?? "" {
+                case "cancelled":
+                    terrainMessage = (result["stopped_reason"] as? String == "disk_space"
+                        ? "\(terrainRegion.rawValue)下载因磁盘空间不足停止：" : "\(terrainRegion.rawValue)下载已停止：") + summary
+                    terrainMessageFailed = result["stopped_reason"] as? String == "disk_space"
+                default:
+                    terrainMessage = (failed > 0 ? "\(terrainRegion.rawValue)下载完成（部分失败）：" : "\(terrainRegion.rawValue)下载完成：") + summary
+                    terrainMessageFailed = failed > 0
+                }
+            } catch is CancellationError {
+                terrainMessage = "已停止下载；已完成的瓦片保留，重新开始会跳过它们。"
+                terrainMessageFailed = false
+            } catch {
+                terrainMessage = error.localizedDescription
+                terrainMessageFailed = true
+            }
+            loadTerrain()
+        }
+    }
+
+    /// 点级下载（次级入口）：仅当前地点对应瓦片。
+    func downloadTerrainPoint() {
+        guard online, !busy, !terrainDownloading else { return }
+        terrainDownloading = true
+        terrainCancelling = false
+        terrainMessage = ""
+        terrainProgress = [:]
+        Task { [weak self] in
+            guard let self else { return }
+            defer {
+                terrainDownloading = false
+                terrainCancelling = false
+            }
+            do {
+                let result = try await engine.call("terrain_download",
+                                                   ["lat": lat, "lon": lon, "timeout_seconds": 600.0])
+                try Task.checkCancellation()
+                switch result["status"] as? String ?? "" {
+                case "exists":
+                    terrainMessage = "地形瓦片已存在，直接复用本地数据。"
+                    terrainMessageFailed = false
+                case "downloaded":
+                    terrainMessage = "已下载地形瓦片 \(result["tile"] as? String ?? "")。"
+                    terrainMessageFailed = false
+                case "out_of_coverage":
+                    terrainMessage = result["message"] as? String ?? "该位置不在 SRTM 覆盖范围内。"
+                    terrainMessageFailed = true
+                default:
+                    terrainMessage = "下载未完成。"
+                    terrainMessageFailed = true
+                }
+            } catch is CancellationError {
+                terrainMessage = "已停止下载。"
+                terrainMessageFailed = false
+            } catch {
+                terrainMessage = error.localizedDescription
+                terrainMessageFailed = true
+            }
+            loadTerrain()
+        }
+    }
+
+    func cancelTerrainDownload() {
+        guard terrainDownloading else { return }
+        terrainCancelling = true
     }
 
     func fail(_ error: Error) {

@@ -288,6 +288,13 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var helperMessageFailed = false
     @Published var helperStatus: JSONObject = [:]
     @Published var taskHistory: [NativeTaskHistoryItem] = []
+    /// 数据布局迁移（方案 §8 阶段 B）：Legacy(.cache) → 可见目录。
+    @Published var layout: JSONObject?
+    @Published var layoutLoading = false
+    @Published var layoutMessage = ""
+    @Published var layoutMessageFailed = false
+    @Published var layoutMigrating = false
+    @Published var showLayoutConfirm = false
     /// 手动数据删除（方案 5.2）：引擎预览 → 确认 → 执行，对象身份由引擎冻结。
     @Published var pendingDataDelete: JSONObject?
     @Published var dataDeletePreview: JSONObject?
@@ -1055,6 +1062,56 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         guard terrainDownloading else { return }
         terrainCancelling = true
         terrainDownloadTask?.cancel()
+    }
+
+    // MARK: - 数据布局迁移（方案 §8 阶段 B）
+
+    func loadLayout() {
+        guard online, !layoutLoading, !layoutMigrating else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            layoutLoading = true
+            defer { layoutLoading = false }
+            do {
+                layout = try await engine.call("data_layout_status")
+            } catch {
+                layout = nil
+            }
+        }
+    }
+
+    /// 迁移后布局变化使本进程内已解析路径失效：停引擎通道并重连，
+    /// Runtime::new 重新按可见布局解析。
+    func migrateLayout() {
+        guard online, !busy, !layoutMigrating else { return }
+        layoutMigrating = true
+        layoutMessage = ""
+        showLayoutConfirm = false
+        Task { [weak self] in
+            guard let self else { return }
+            defer { layoutMigrating = false }
+            do {
+                let response = try await engine.call("data_layout_migrate")
+                let migrated = (response["result"] as? JSONObject)?["migrated"] as? [Any] ?? []
+                if response["status"] as? String == "already-visible" {
+                    layoutMessage = "已在使用可见目录布局。"
+                    layoutMessageFailed = false
+                } else {
+                    layoutMessage = "迁移完成（\(migrated.count) 项），正在按新布局重连引擎…"
+                    layoutMessageFailed = false
+                    engine.stop()
+                    await connect()
+                }
+                loadLayout()
+            } catch {
+                layoutMessage = friendlyEngineMessage(error.localizedDescription)
+                layoutMessageFailed = true
+            }
+        }
+    }
+
+    func dismissLayoutConfirm() {
+        showLayoutConfirm = false
     }
 
     func loadTaskHistory() {

@@ -15,6 +15,7 @@ pub mod cross_section;
 mod derived_cache;
 pub mod desktop_context;
 pub mod desktop_delete;
+pub mod paths;
 pub mod desktop_credentials;
 pub mod desktop_hsd;
 pub mod desktop_hsd_advection;

@@ -8,7 +8,7 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
-## v1.5.1 (2026-11-21)
+## Unreleased（Windows 对齐，随下一版本发布）
 
 Windows 成正式发布目标：UI 对齐至 v1.5.0 macOS 基准（v1.2.0 信息架构 +
 v1.3.0 手动删除/地形下载 + v1.5.0 应用内更新）+ 发布能力（zip + 安装器 +
@@ -104,6 +104,140 @@ ships release capability (self-contained zip, installer, CI publishing).
   breaking inventory/check before any download; normalized only real path
   levels and tolerated error 1, with a Windows regression test. The app
   assembly now embeds the engine version for in-app update comparison.
+## v1.7.0 (2026-11-21)
+
+数据布局可见化与迁移（方案 §8 阶段 B）：工作区直接使用可见分类目录。
+Visible data layout with migration (phase B, §8 of the redesign).
+
+**可见布局 / Visible layout**
+
+- 新增统一路径解析层（engine `paths.rs`）：显式 `FIRESKY_*` 环境变量永远
+  优先（开发者/运维选择，不参与迁移），其余按工作区代际取默认——
+  Legacy（存在 `.cache`/`.firesky`）继续旧路径完全兼容读写，Visible
+  （写入 `data-layout-v1.json` 标记或全新工作区）使用可见目录：
+  `gfs/`、`ecmwf/`、`cams/`、`srtm/`、`himawari-hsd/`、`locations.json`、
+  `profiles/`、`map-frames/`、`point-forecasts/`、`regional-forecasts/`、
+  `reports/`（原 `reports/web` 上移一层）、`settings/`、`state/tasks`。
+  A single resolver (engine `paths.rs`) now owns every data path: explicit
+  `FIRESKY_*` env vars always win (never migrated), otherwise the
+  workspace generation decides — Legacy stays fully compatible, Visible
+  uses user-facing category directories marked by `data-layout-v1.json`.
+  移动端宿主（engine-mobile）通过 `fsm_start` 注入的显式环境变量锁定
+  路径，不受布局改动影响。
+  Mobile hosts pin paths via explicit env injection, unaffected.
+- 全部默认路径消费者接入统一解析：desktop_runtime（库存/位置/SRTM/
+  报告/单点/区域/地图帧/任务历史）、native_data、cache_retention、
+  desktop_sync（同步设置与状态）、retention_settings、desktop_profiles。
+  Every default-path consumer is wired to the resolver.
+
+**迁移 / Migration**
+
+- 新增 `data_layout_status` / `data_layout_migrate` 契约：状态预览
+  （代际、14 项映射的存在性/文件数/体积、env 覆盖清单、忙闲）、迁移
+  执行（同卷 rename 逐项移动，冲突立即整单逆序回滚；`reports/web →
+  reports` 父目录壳三步上移；成功写入标记；`.cache`/`.firesky` 残壳
+  保留由用户确认后清理）。迁移独占计算与同步锁；完成后标记
+  `requires_restart`，UI 自动重连引擎通道。
+  New layout contracts: a status preview and a migrate executor
+  (same-volume renames, full rollback on any conflict, a three-step
+  lift for the `reports/web` parent shell, marker write, residual shells
+  kept for user cleanup). Migration takes the compute+sync locks and
+  marks `requires_restart`; the UI reconnects automatically.
+- macOS 设置 → 数据 → 数据目录新增迁移入口：Legacy 提示 + 迁移按钮
+  （忙时禁用）+ 确认弹窗（列出待迁移条目数/文件数/体积）+ 结果消息。
+  macOS Settings → Data → Data Directory gains the migration entry with
+  a confirmation summary and result messages.
+
+## v1.6.1 (2026-11-21)
+
+发布前全流程走查（模拟真实用户体验）发现的问题修复。
+Fixes surfaced by a full pre-release walkthrough (simulated real-user flows).
+
+**macOS 安装引导 / macOS install flow**
+
+- 修复 DMG 引导「安装到应用程序」后应用不自动重启：`openApplication` 会
+  被 LaunchServices 指向同 bundle id 的现有实例（且 async 版本在同步上
+  下文中被丢弃）；改为独立接力进程在旧实例退出后再打开新实例。
+  Fixed the DMG-guided install not relaunching: LaunchServices pointed
+  `openApplication` at the still-running instance and the async variant
+  was discarded; a detached relay process now opens the installed copy
+  after the old instance quits.
+- 走查路径：下载 Release DMG → 校验 SHA256 → Finder 式挂载 → /Volumes
+  双击启动 → 确认弹窗 → 安装 → 自动重启，全链通过。
+  Verified end-to-end: download, checksum, mount, launch from volume,
+  confirm, install, auto-relaunch.
+
+**地形下载反馈 / Terrain download feedback**
+
+- 修复下载完成消息被 `loadTerrain` 刷新吞掉（双端）：状态刷新成功不再
+  清空刚设置的完成消息，仅失败时覆盖。
+  The completion message is no longer swallowed by the inventory refresh
+  on both platforms; refresh now only overwrites on failure.
+- Mock 通道补齐 `terrain_inventory` 的 `estimate_global`（按 bounds 计算
+  候选数/已有/估算体积，口径同真引擎），区域确认框不再显示「候选 0 块」。
+  Mock transports now implement `estimate_global` with bounds-aware
+  candidate counts and size estimates, matching the real engine.
+
+## v1.6.0 (2026-11-21)
+
+Android / iOS 与 macOS 功能对齐（2026-11-20 方案阶段 A/C/D 移动端落地）。
+Android and iOS parity with macOS (mobile slice of the 2026-11-20 redesign,
+phases A/C/D).
+
+**任务历史 / Task history**
+
+- 双端新增独立「任务历史」页：列表 + 详情（事件时间线，点击行展开）、
+  行内恢复已发布结果 / 恢复参数并重新检查 / 删除记录三个动作；删除沿用
+  macOS 口径——只删状态与事件，不删报告与数据；协议校验（task_id 长度/
+  16 进制、状态枚举、事件 seq 单调）与桌面一致。
+  Both mobile apps gain a standalone Task History page: list plus detail
+  (event timeline via row tap), inline restore-result / restore-params /
+  delete-record actions; deletion only removes status and events. Protocol
+  validation mirrors the desktop.
+- Android 底部导航扩为 4 项（工作台/数据管理/任务历史/设置）；iOS 底部
+  标签扩为 4 项并移除数据页红点徽标（与 macOS 中性化口径一致）。
+  Android bottom navigation and iOS tab bar both expand to four entries;
+  the iOS data-tab badge is removed, matching the macOS neutral probe
+  presentation.
+
+**数据管理 / Data management**
+
+- Android 新增数据管理页；iOS 数据页按 macOS 口径改造：库存（周期展开）
+  + 按周期/整源手动删除（`data_delete_preview`/`execute`：确认框展示
+  候选数/预计释放/占用跳过说明，预览过期不静默扩大）+ 地形区域下载卡
+  （区域预设选择 → 估算确认 → 批量进度/取消续传）。
+  Android gains a Data Management screen; the iOS data page is reworked
+  to macOS parity: inventory with per-cycle/whole-source manual deletion
+  (preview/execute contracts with stale-preview rejection) and a terrain
+  region-download card (presets, sampled estimate confirmation, aggregate
+  progress with cancellation and resume).
+
+**设置分类 / Settings categories**
+
+- 双端设置拆分类（macOS SettingsCategory 同构）：通用（主题）/ 数据
+  （下载源 + CAMS + 下载连通性）/ 位置与海拔（海拔来源）/ 高级（引擎
+  通道 + 沙箱路径）；切换分类保留表单草稿。
+  Settings are split into General / Data (source + CAMS + probe) /
+  Location & Elevation / Advanced on both platforms, with drafts
+  preserved across category switches.
+
+**夹具 / Fixtures**
+
+- 移动端截图夹具：Android 沿用 `FIRESKY_NATIVE_PAGE`；iOS 新增
+  `SIMCTL_CHILD_FIRESKY_PAGE`（初始页）与 `SIMCTL_CHILD_FIRESKY_TRANSPORT`
+  （强制 mock 通道），便于无 UI 点按的模拟器验收。
+  Mobile screenshot fixtures: iOS gains `SIMCTL_CHILD_FIRESKY_PAGE` and
+  `SIMCTL_CHILD_FIRESKY_TRANSPORT` env injection (Android already had
+  `FIRESKY_NATIVE_PAGE`).
+- iOS `ObservationDate` 新增 ISO8601 时间戳解析（兼容小数秒），修复任务
+  时间戳解析。
+  iOS `ObservationDate` gains ISO8601 timestamp parsing (fractional-second
+  tolerant).
+- Mock 通道（双端）补齐 task_history / task_events / task_forget /
+  result_restore / data_delete / terrain 契约，无引擎库环境可驱动新页面
+  全链路。
+  Both mock transports now cover the history/delete/terrain contracts.
+
 ## v1.5.0 (2026-11-21)
 
 应用内更新逻辑（GitHub Releases 检查 → 下载 → 校验 → 自动安装）。

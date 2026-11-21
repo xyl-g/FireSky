@@ -19,6 +19,22 @@ enum ObservationDate {
         format(date, timezone: timezone, pattern: "HH:mm")
     }
 
+    /// ISO8601 时间戳 → Date（任务历史/事件；兼容 macOS 的小数秒 `.300Z` 变体）。
+    static func timestamp(_ value: String) -> Date? {
+        if let date = ISO8601TimestampFormatter.date(from: value) {
+            return date
+        }
+        return ISO8601WholeSecondFormatter.date(from: value)
+    }
+
+    private static let ISO8601TimestampFormatter: ISO8601DateFormatter = {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter
+    }()
+
+    private static let ISO8601WholeSecondFormatter = ISO8601DateFormatter()
+
     private static func format(_ date: Date, timezone: String, pattern: String) -> String {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)

@@ -119,8 +119,8 @@ android {
         applicationId = "com.firesky.mobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 8
-        versionName = "1.5.1"
+        versionCode = 10
+        versionName = "1.7.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // 真引擎 .so 仅 arm64-v8a（AVD firesky34 同架构）。
         ndk {
@@ -207,6 +207,7 @@ dependencies {
     implementation("androidx.compose.foundation:foundation")
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-core")
+    implementation("androidx.compose.material:material-icons-extended")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
 
