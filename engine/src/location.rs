@@ -749,7 +749,7 @@ impl Config {
         require(!regular(&target)?, "SRTM tile appeared during download")?;
         pending
             .persist_noclobber(&target)
-            .map_err(|e| e.error.to_string())?;
+            .map_err(|e| format!("srtm: persist {name}: {}", e.error.to_string()))?;
         sync_dir(&self.srtm_cache_dir)?;
         Ok((count, elevation))
     }

@@ -682,10 +682,19 @@ fn retrieve_group_inner(
         if fs::symlink_metadata(&path).is_ok_and(|m| !m.is_file()) {
             return Err("CAMS destination changed to a nonregular file".into());
         }
-        File::open(&temporary)
+        // 刷盘是耐久性优化而非正确性前提：Windows 下杀软/索引器会瞬时锁住
+        // 新写文件（FlushFileBuffers/open 报 ERROR_ACCESS_DENIED），失败时
+        // 降级为 stderr 提示继续发布，persist 自身仍校验内容完整性。
+        if let Err(error) = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&temporary)
             .and_then(|f| f.sync_all())
-            .map_err(|e| e.to_string())?;
-        temporary.persist(&path).map_err(|e| e.error.to_string())?;
+        {
+            eprintln!("cams: temp fsync skipped for {}: {error}", temporary.display());
+        }
+        temporary
+            .persist(&path)
+            .map_err(|e| format!("cams: persist: {}", e.error.to_string()))?;
         #[cfg(unix)]
         File::open(parent)
             .and_then(|f| f.sync_all())

@@ -30,9 +30,15 @@ child.stderr.on("data", (chunk) => {
 
 let pendingId = 0;
 const pending = new Map();
+let lineBuffer = "";
 child.stdout.on("data", (chunk) => {
-    for (const line of chunk.toString().split(/\r?\n/)) {
-        if (!line.trim()) continue;
+    lineBuffer += chunk.toString();
+    for (;;) {
+        const idx = lineBuffer.indexOf("\n");
+        if (idx < 0) break;
+        const line = lineBuffer.slice(0, idx).trim();
+        lineBuffer = lineBuffer.slice(idx + 1);
+        if (!line) continue;
         let obj;
         try { obj = JSON.parse(line); } catch { console.error(`[non-json] ${line.slice(0, 200)}`); continue; }
         if (obj.type === "progress") {
@@ -87,7 +93,7 @@ try {
         const payload = {
             name: "杭州", lat: 30.25, lon: 120.25, elevation_m: 20,
             timezone_name: "Asia/Shanghai", target_date: tomorrow,
-            phenomenon: "dusk", model_source: "both", workers: 1,
+            phenomenon: "dusk", model_source: process.env.PIPELINE_MODEL ?? "both", workers: 1,
             forecast_mode: "model", satellite_source: "off",
             ecmwf_source: "ecmwf", elevation_source: "auto",
         };
@@ -102,7 +108,7 @@ try {
         if (stage === "noprep") process.exit(0);
 
         console.log("=== prepare (downloading; may take minutes)");
-        const prepare = summarize("prepare", await call("prepare", { session: check.result?.session }, 1_500_000));
+        const prepare = summarize("prepare", await call("prepare", { session: check.result?.session }, 2_700_000));
         console.log(`  prepared=${prepare.result?.report?.ready}`);
         for (const row of prepare.result?.report?.datasets ?? []) {
             console.log(`  ${row.source}: ready=${row.ready} verified=${row.verified} latest=${row.is_latest}`);

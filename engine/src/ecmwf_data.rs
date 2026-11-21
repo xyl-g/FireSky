@@ -668,10 +668,10 @@ fn download(
         }
         regular(&sidecar(&target))?;
         meta.persist(sidecar(&target))
-            .map_err(|e| e.error.to_string())?;
+            .map_err(|e| format!("ec: persist meta: {}", e.error.to_string()))?;
         temporary
             .persist(&target)
-            .map_err(|e| e.error.to_string())?;
+            .map_err(|e| format!("ec: persist bundle: {}", e.error.to_string()))?;
         #[cfg(unix)]
         File::open(parent)
             .and_then(|f| f.sync_all())

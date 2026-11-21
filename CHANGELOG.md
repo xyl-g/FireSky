@@ -10,11 +10,13 @@ Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
 ## Unreleased（feat/windows-release）
 
-Windows 成正式发布目标：UI 全面对齐 v1.2.0 macOS 基准 + 发布能力（zip +
-安装器 + CI 直发）。
-Windows becomes an official release target: full UI alignment with the
-v1.2.0 macOS baseline plus release capability (self-contained zip,
-installer, CI publishing).
+Windows 成正式发布目标：UI 对齐至 v1.5.0 macOS 基准（v1.2.0 信息架构 +
+v1.3.0 手动删除/地形下载 + v1.5.0 应用内更新）+ 发布能力（zip + 安装器 +
+CI 直发）。
+Windows becomes an official release target: the client aligns with the
+v1.5.0 macOS baseline (v1.2.0 information architecture plus the v1.3.0
+manual deletion and terrain download and the v1.5.0 in-app update) and
+ships release capability (self-contained zip, installer, CI publishing).
 
 **Windows UI 对齐 / Windows UI alignment**
 
@@ -24,6 +26,28 @@ installer, CI publishing).
   The Windows client matches the v1.2.0 information architecture:
   standalone Task History with list/detail split and filters, four-category
   Settings with per-category drafts, and the slimmed Data Management page.
+- v1.3.0 对齐：数据管理页每周期与每数据源删除入口
+  （`data_delete_preview`/`data_delete_execute`，确认框展示范围/文件数/预计
+  释放，执行后报告已删/跳过/失败并刷新库存）；数据管理页「地形 SRTM」面板
+  （`terrain_inventory` 点状态与区域估算确认 → `terrain_download` 区域/全球/
+  点级下载，批量进度含总体百分比/已下载/缺失/失败/当前瓦片，可取消续传）。
+  v1.3.0 alignment: per-cycle and per-source delete entries on the data page
+  with a scoped confirmation dialog and result summary, plus the terrain
+  panel with region-preset estimate confirmation, bulk/point downloads and
+  aggregate progress.
+- v1.5.0 对齐：设置 → 通用「软件更新」（检查更新、发布说明折叠、下载进度
+  与取消、启动静默检查默认开可关）；下载完成后执行 SHA256SUMS.txt 校验，
+  解压暂存后由批处理自替换应用目录并自动重启；无写权限时给出手动安装
+  指引；发现新版本时侧栏设置入口显示绿色徽标。版本比较/资产名匹配/架构
+  探测/Release 解析/校验和行解析为纯函数（与 macOS UpdaterChecks 同口径）。
+  v1.5.0 alignment: Settings → General "Software update" with check, release
+  notes, download progress and an auto-check toggle; after download the
+  SHA256SUMS checksum is verified and the zip is staged and swapped in by a
+  batch script with automatic relaunch, or an explanatory manual-install
+  hint when the install directory is not writable; a green badge appears on
+  the sidebar Settings entry. Version comparison, asset matching,
+  architecture detection, release parsing and checksum-row parsing are pure
+  functions mirroring the macOS UpdaterChecks fixture.
 - 点预测深度：GFS/EC 双摘要卡、分组指标卡（双模式并列）、AOD 环境读数
   来源摘要、评分组成面板、对比曲线（缺测断线 + 悬停读数 + 最佳标记）、
   15 列逐时台账、太阳方向剖面图层、点冻结剖面查询、诊断分组。
@@ -69,6 +93,17 @@ installer, CI publishing).
   采样点标注与网格/采样开关。
   The shared map document gains the fixed palette, missing-data legend,
   drag-drawn bounds and sample annotations.
+- 引擎 Windows 修复：首次安装的全新工作区上 inventory/check 报
+  「函数不正确。(os error 1)」——`desktop_inventory::resolved()` 逐组件
+  canonicalize 会碰到裸 verbatim 盘根（`\\?\C:`）的
+  ERROR_INVALID_FUNCTION；修复为仅对真实层级做归一化并容忍 error 1，
+  附 Windows 回归测试。应用版本与 `engine/Cargo.toml` 同源注入程序集
+  （应用内更新的版本比较依据）。
+  Engine fix for Windows: on a fresh workspace the verbatim (`\\?\`) drive
+  root made per-component canonicalize fail with ERROR_INVALID_FUNCTION,
+  breaking inventory/check before any download; normalized only real path
+  levels and tolerated error 1, with a Windows regression test. The app
+  assembly now embeds the engine version for in-app update comparison.
 ## v1.5.0 (2026-11-21)
 
 应用内更新逻辑（GitHub Releases 检查 → 下载 → 校验 → 自动安装）。

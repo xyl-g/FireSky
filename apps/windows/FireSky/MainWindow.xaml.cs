@@ -114,6 +114,8 @@ public sealed partial class MainWindow : Window
         }
         BuildMetrics();
         BuildHeroCards();
+        AttachUpdater();
+        BuildTerrainRegionPicker();
         TargetDate.Date = DateTimeOffset.Now;
         LoadSettings();
         RestoreSession();
@@ -124,6 +126,7 @@ public sealed partial class MainWindow : Window
         {
             await InitializeMap();
             await Connect();
+            StartAutoUpdateCheck();
         };
         AppWindow.Closing += (_, args) =>
         {
@@ -410,6 +413,7 @@ public sealed partial class MainWindow : Window
         {
             "general" => 0, "data" => 1, "location" => 2, _ => 3,
         };
+        updater.SetAutoCheck(Flag(saved, "autoUpdateCheck") || saved["autoUpdateCheck"] == null);
         ApplySettingsCategory();
     }
 
@@ -422,6 +426,7 @@ public sealed partial class MainWindow : Window
         saved["ecmwfSource"] = ecmwfSource;
         saved["elevationSource"] = elevationSource;
         saved["settingsCategory"] = settingsCategory;
+        saved["autoUpdateCheck"] = updater.AutoCheck;
         saved["favorites"] = new JsonArray(favorites.Select(node => (JsonNode)node.DeepClone()).ToArray());
         Directory.CreateDirectory(Path.GetDirectoryName(settingsFile)!);
         File.WriteAllText(settingsFile, saved.ToJsonString());
@@ -553,7 +558,11 @@ public sealed partial class MainWindow : Window
         }
         RenderResult();
         _ = UpdateMap();
-        if (page == "data") _ = LoadInventory();
+        if (page == "data")
+        {
+            _ = LoadInventory();
+            _ = LoadTerrain();
+        }
         if (page == "history") _ = LoadTaskHistory();
         if (page == "settings") _ = LoadRetentionSettings();
     }

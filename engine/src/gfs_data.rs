@@ -989,11 +989,15 @@ impl GfsClient {
                     // Empty cache placeholders are replaceable; nonempty files
                     // are never overwritten. The per-target lock spans publish.
                     if target.exists() {
-                        fs::remove_file(&target).map_err(|e| e.to_string())?;
+                        fs::remove_file(&target).map_err(|e| {
+                            format!("gfs: remove stale placeholder {}: {e}", target.display())
+                        })?;
                     }
                     temporary
                         .persist_noclobber(&target)
-                        .map_err(|e| e.error.to_string())?;
+                        .map_err(|e| {
+                            format!("gfs: persist {}: {e}", target.display())
+                        })?;
                     sync_directory(parent)?;
                     self.metadata(&target, url, cycle, hour, bbox)?;
                     return Ok(
