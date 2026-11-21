@@ -373,6 +373,9 @@ jobs:
       - name: Build release APK（真引擎 JNI）
         env:
           MM0_ECCODES_ANDROID_LIB: ${{ github.workspace }}/.cache/mm0-cross/build-android/lib
+          # v1.9.7 走查：gradle 的 cargoAndroidEngine 按本机 NDK 派生
+          # CC/AR/linker（仓库 .cargo/config.toml 不再携带 darwin 绝对路径）。
+          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           cd apps/mobile-android
           ./gradlew :app:assembleDebug --no-daemon

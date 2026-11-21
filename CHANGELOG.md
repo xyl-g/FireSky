@@ -104,6 +104,14 @@ ships release capability (self-contained zip, installer, CI publishing).
   breaking inventory/check before any download; normalized only real path
   levels and tolerated error 1, with a Windows regression test. The app
   assembly now embeds the engine version for in-app update comparison.
+> 发布说明：v1.9.5 / v1.9.6 因 mobile-release CI 的 Android 交叉工具链
+> 问题未产出发布物（仓库 .cargo/config.toml 携带 darwin NDK 绝对路径，
+> ubuntu runner 失败）；修复后三个版本随 **v1.9.7** 一并发布——即本版
+> 资产包含 v1.9.5（i18n + 任务详情）与 v1.9.6（数据同步专项）的全部内容。
+> Release note: v1.9.5 / v1.9.6 shipped inside **v1.9.7** after a CI
+> toolchain fix (portable Android cross paths); this release therefore
+> contains everything from both.
+
 ## v1.9.7 (2026-11-21)
 
 进度与吞吐透明化（prepare 逐文件进度 / ADS 断点续传 / 欠账可视化 / MB/s 吞吐 / EC index 复用 / 手动优先让路）+ 三端 i18n 收尾 + 任务详情打开报告 + web uPlot 试点合并。

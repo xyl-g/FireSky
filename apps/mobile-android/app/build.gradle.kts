@@ -35,11 +35,33 @@ val hostDefinitionsDir = File(
     System.getenv("FIRESKY_ECCODES_DEFINITIONS") ?: "/opt/homebrew/share/eccodes/definitions",
 )
 
+// NDK 工具链 host 标签按平台派生（v1.9.7 CI 走查：仓库 .cargo/config.toml
+// 不得携带机器绝对路径——darwin NDK 路径会让 ubuntu runner 的 cc-rs 直接
+// 失败；改为任务内按本机 NDK 注入 CC/AR/linker，任何机器均可用）。
+val ndkHostTag = run {
+    val os = System.getProperty("os.name").lowercase()
+    when {
+        os.contains("windows") -> "windows-x86_64"
+        os.contains("mac") || os.contains("darwin") -> "darwin-x86_64"
+        else -> "linux-x86_64"
+    }
+}
+val ndkClang: String = ndkDir
+    .resolve("toolchains/llvm/prebuilt/$ndkHostTag/bin/aarch64-linux-android26-clang")
+    .absolutePath
+val ndkAr: String = ndkDir
+    .resolve("toolchains/llvm/prebuilt/$ndkHostTag/bin/llvm-ar")
+    .absolutePath
+
 val cargoAndroidEngine = tasks.register<Exec>("cargoAndroidEngine") {
     group = "firesky"
     description = "交叉编译 engine-mobile 静态库（aarch64-linux-android，release）"
     workingDir = engineMobileDir
     environment("MM0_ECCODES_ANDROID_LIB", crossLibDir.absolutePath)
+    // cc-rs 与 cargo linker 均按本机 NDK 注入（不依赖仓库级绝对路径）。
+    environment("CC_aarch64_linux_android", ndkClang)
+    environment("AR_aarch64_linux_android", ndkAr)
+    environment("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", ndkClang)
     // rustup 优先于 Homebrew rust（MM0 坑 11）；全局 ~/.cargo/config.toml 已钉扎 rustc。
     environment(
         "PATH",
