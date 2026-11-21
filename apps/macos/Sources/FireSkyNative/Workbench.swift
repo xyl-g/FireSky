@@ -41,6 +41,7 @@ private final class SidebarVisibility: ObservableObject {
 struct WorkbenchRootView: View {
     @EnvironmentObject private var store: Store
     @EnvironmentObject private var updater: Updater
+    @EnvironmentObject private var reminders: ReminderCenter
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// 本机工具链无 SwiftUIMacros，使用普通 ObservableObject 代替 @State。
@@ -684,6 +685,7 @@ private struct WorkFirstRunGuide: View {
 /// 双模式并列展示，不平均、不互相填补；缺测与单模式失败都有独立文案。
 private struct WorkActionSummaryView: View {
     @EnvironmentObject private var store: Store
+    @EnvironmentObject private var reminders: ReminderCenter
     let comparison: ForecastComparison
 
     private struct ModelSnapshot {
@@ -711,6 +713,16 @@ private struct WorkActionSummaryView: View {
 
     private var failedModels: [String] {
         ForecastComparison.models.filter { comparison.error($0) != nil }
+    }
+
+    /// 提醒只读取已发布报告的原始最佳时刻；多模型存在时明确标注依据的模式。
+    private var reminderBest: (model: String, time: String)? {
+        for model in ForecastComparison.models {
+            guard let report = comparison.report(model),
+                  let time = report["best_time_local"] as? String, !time.isEmpty else { continue }
+            return (model, time)
+        }
+        return nil
     }
 
     private var levelsAgree: Bool {
@@ -795,6 +807,11 @@ private struct WorkActionSummaryView: View {
                             .foregroundStyle(.secondary)
                             .accessibilityLabel("时间与窗口：\(timingText)")
                     }
+                    if let reminderBest {
+                        WorkReminderControl(bestTime: reminderBest.time,
+                                            model: reminderBest.model,
+                                            detail: timingText)
+                    }
                     ForEach(notes, id: \.self) { note in
                         Text(note)
                             .font(.system(size: 11))
@@ -806,6 +823,152 @@ private struct WorkActionSummaryView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fireSkySurface(role: .content, emphasized: !snapshots.isEmpty)
             }
+        }
+    }
+}
+
+private struct WorkReminderControl: View {
+    @EnvironmentObject private var store: Store
+    @EnvironmentObject private var reminders: ReminderCenter
+    let bestTime: String?
+    let model: String
+    let detail: String
+
+    private final class ActionState: ObservableObject {
+        @Published var busy = false
+        @Published var message: String?
+    }
+    @StateObject private var action = ActionState()
+
+    private let minutesBefore = 30
+
+    private var timeZone: TimeZone { TimeZone(identifier: store.timezone) ?? .current }
+    private var reminderKey: String {
+        [store.name, String(store.lat), String(store.lon),
+         store.targetDateLabel, store.phenomenon, model, bestTime ?? ""].joined(separator: "|")
+    }
+    private var isCurrentScheduled: Bool { reminders.scheduled?.key == reminderKey }
+
+    var body: some View {
+        Group {
+            if let fireDate = parsedBestTime {
+                if fireDate.addingTimeInterval(-Double(minutesBefore * 60)) <= Date() {
+                    Text(L10n.text("该结果的最佳时刻已过，无法设置提醒。", "This result's best time has passed; no reminder can be set."))
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                } else {
+                    reminderContent(fireDate: fireDate)
+                }
+            } else {
+                EmptyView()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func reminderContent(fireDate: Date) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            switch reminders.permission {
+            case .authorized:
+                if isCurrentScheduled, let scheduled = reminders.scheduled {
+                    HStack(spacing: 8) {
+                        Image(systemName: "bell.badge.fill").foregroundStyle(warm)
+                        Text(String(format: L10n.text("已设置提醒 · %1$@ 前 %2$d 分钟",
+                                                       "Reminder set · %1$@ · %2$d min before"),
+                                    scheduledTime(scheduled.fireDate), minutesBefore))
+                            .font(.system(size: 10))
+                        Button(L10n.text("取消提醒", "Cancel reminder")) { reminders.cancel() }
+                            .buttonStyle(.borderless).font(.system(size: 10))
+                            .accessibilityLabel(L10n.text("取消提醒", "Cancel reminder"))
+                    }
+                } else {
+                    Button {
+                        schedule(fireDate: fireDate)
+                    } label: {
+                        Label(reminders.scheduled == nil
+                              ? L10n.text("设置最佳时刻提醒", "Remind me before the best time")
+                              : L10n.text("替换为当前结果提醒", "Replace with this result reminder"),
+                              systemImage: "bell")
+                            .font(.system(size: 10))
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(action.busy)
+                }
+            case .denied:
+                Text(L10n.text("通知权限已关闭。可在系统设置中开启后再设置提醒。",
+                               "Notifications are off. Enable them in System Settings to use reminders."))
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                Button(L10n.text("打开系统通知设置", "Open notification settings")) {
+                    reminders.openSystemSettings()
+                }
+                .buttonStyle(.borderless).font(.system(size: 10))
+            case .unknown, .notDetermined:
+                Button {
+                    requestAndSchedule(fireDate: fireDate)
+                } label: {
+                    Label(L10n.text("开启最佳时刻提醒", "Enable best-time reminder"), systemImage: "bell.badge")
+                        .font(.system(size: 10))
+                }
+                .buttonStyle(.borderless)
+                .disabled(action.busy)
+            }
+            Text(String(format: L10n.text("依据 %1$@ 最佳时刻，提前 %2$d 分钟通知；时区 %3$@。可在此取消，也可在系统通知设置中关闭。",
+                                          "Based on %1$@ best time, notify %2$d min earlier; time zone %3$@. Cancel here or in Notification settings."),
+                         model.uppercased(), minutesBefore, store.timezone))
+                .font(.system(size: 9)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let message = action.message {
+                Text(message).font(.system(size: 9)).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.top, 2)
+    }
+
+    private var parsedBestTime: Date? {
+        guard let bestTime else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: bestTime) { return date }
+        formatter.formatOptions = .withInternetDateTime
+        return formatter.date(from: bestTime)
+    }
+
+    private func scheduledTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeZone = timeZone
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    private func requestAndSchedule(fireDate: Date) {
+        action.busy = true
+        action.message = nil
+        reminders.requestAuthorization { [weak action] granted in
+            guard granted else {
+                action?.busy = false
+                action?.message = L10n.text("未获得通知权限；可在系统设置中开启。",
+                                            "Notification permission was not granted; enable it in System Settings.")
+                return
+            }
+            schedule(fireDate: fireDate)
+        }
+    }
+
+    private func schedule(fireDate: Date) {
+        action.busy = true
+        action.message = nil
+        let body = "\(store.name) · \(store.resultPhenomenonLabel)\(detail.isEmpty ? "" : "\n\(detail)")"
+        reminders.schedule(
+            key: reminderKey,
+            title: L10n.text("FireSky 观测提醒", "FireSky observation reminder"),
+            body: body,
+            fireDate: fireDate,
+            minutesBefore: minutesBefore,
+            timeZone: timeZone
+        ) { [weak action] success, message in
+            action?.busy = false
+            action?.message = success ? nil : message
         }
     }
 }

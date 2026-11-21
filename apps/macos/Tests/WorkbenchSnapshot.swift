@@ -7,14 +7,16 @@ struct WorkbenchSnapshot: App {
     @NSApplicationDelegateAdaptor(WorkbenchSnapshotDelegate.self) private var delegate
     @StateObject private var store = Store()
     @StateObject private var updater = Updater()
+    @StateObject private var reminders = ReminderCenter()
 
     var body: some Scene {
         WindowGroup("FireSky · UI Test Fixture") {
             WorkbenchRootView().environmentObject(store)
                 .environmentObject(updater)
+                .environmentObject(reminders)
                 .environment(\.locale, Locale(identifier:
                     ProcessInfo.processInfo.environment["FIRESKY_TEST_ENGLISH"] == "1" ? "en_US" : "zh_CN"))
-                .onAppear { delegate.capture(store) }
+                .onAppear { delegate.capture(store, reminders) }
         }.defaultSize(width: 1440, height: 1040)
     }
 }
@@ -30,7 +32,7 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ notification: Notification) { store?.shutdown() }
 
-    func capture(_ store: Store) {
+    func capture(_ store: Store, _ reminders: ReminderCenter) {
         guard !scheduled, let path = ProcessInfo.processInfo.environment["FIRESKY_NATIVE_SNAPSHOT"] else { return }
         scheduled = true
         self.store = store
@@ -61,6 +63,26 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
             if ProcessInfo.processInfo.environment["FIRESKY_TEST_COMPARE"] == "1" { store.regionalDisplay = "compare" }
             if ProcessInfo.processInfo.environment["FIRESKY_TEST_INSPECT"] == "1" {
                 store.selectedRegionalCoordinate = GridCoordinate(lat: 30, lon: 120)
+            }
+        }
+        if ProcessInfo.processInfo.environment["FIRESKY_TEST_REMINDER_FUTURE"] == "1",
+           var result = store.result,
+           var models = result["model_results"] as? JSONObject {
+            let future = ISO8601DateFormatter().string(from: Date().addingTimeInterval(3 * 3600))
+            for model in ["gfs", "ec"] {
+                if var report = models[model] as? JSONObject {
+                    report["best_time_local"] = future
+                    models[model] = report
+                }
+            }
+            result["model_results"] = models
+            store.result = result
+            if ProcessInfo.processInfo.environment["FIRESKY_TEST_REMINDER_SCHEDULED"] == "1",
+               let report = models["gfs"] as? JSONObject,
+               let bestTime = report["best_time_local"] as? String {
+                let key = [store.name, String(store.lat), String(store.lon),
+                           store.targetDateLabel, store.phenomenon, "gfs", bestTime].joined(separator: "|")
+                reminders.adoptTestScheduled(key: key)
             }
         }
         if let replay = ProcessInfo.processInfo.environment["FIRESKY_TEST_REPLAY"] {

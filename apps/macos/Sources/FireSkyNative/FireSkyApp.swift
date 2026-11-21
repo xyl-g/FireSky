@@ -1,15 +1,18 @@
 import AppKit
 import SwiftUI
+import UserNotifications
 
 @main
 struct FireSkyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var store = Store()
     @StateObject private var updater = Updater()
+    @StateObject private var reminders = ReminderCenter()
     var body: some Scene {
         WindowGroup("FireSky") {
             WorkbenchRootView().environmentObject(store)
                 .environmentObject(updater)
+                .environmentObject(reminders)
                 .environment(\.locale, Locale(identifier: "zh_CN"))
                 .onAppear {
                     delegate.store = store
@@ -39,7 +42,7 @@ struct FireSkyApp: App {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     weak var store: Store?
     private var scheduled = false
     /// v1.9.7 退出守卫防循环：用户本轮已确认过「继续运行」的时间戳——
@@ -50,6 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var forceTerminate = false
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.activate(ignoringOtherApps: true)
+        UNUserNotificationCenter.current().delegate = self
         // Intel CI cold start: SwiftUI .onAppear can fail to fire on older
         // macOS runner images; schedule here too (idempotent via `scheduled`).
         scheduleSnapshot()
@@ -152,6 +156,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return .terminateNow
         }
         return .terminateCancel
+    }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        if #available(macOS 11.0, *) {
+            completionHandler([.banner, .sound])
+        } else {
+            completionHandler([.alert, .sound])
+        }
     }
     func applicationWillTerminate(_ notification: Notification) { store?.shutdown() }
     func scheduleSnapshot() {
