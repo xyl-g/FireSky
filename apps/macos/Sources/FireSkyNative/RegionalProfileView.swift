@@ -34,6 +34,7 @@ struct RegionalProfileView: View {
                     }
                     .buttonStyle(.borderless)
                     .help("重新读取剖面")
+                    .accessibilityLabel("重新读取 \(model.uppercased()) 剖面")
                     .disabled(store.busy)
                 }
             }

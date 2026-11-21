@@ -29,7 +29,8 @@ struct PreflightView: View {
                 }
                 Spacer()
                 Button { store.refreshCheck() } label: { Image(systemName: "arrow.clockwise") }
-                    .help(L10n.t("重新检查")).buttonStyle(.borderless).disabled(store.busy)
+                    .help(L10n.t("重新检查")).accessibilityLabel(L10n.t("重新检查"))
+                    .buttonStyle(.borderless).disabled(store.busy)
             }.padding(.bottom, 16)
             if store.rows.isEmpty {
                 HStack { ProgressView().controlSize(.small); Text(L10n.t("正在检查本地数据")) }
@@ -147,12 +148,14 @@ struct InventoryView: View {
                     .help(L10n.t("后台同步与下载探测已移到「设置 → 数据」"))
                     Button { Task { await store.loadInventory() } } label: {
                         Image(systemName: "arrow.clockwise")
-                    }.help(L10n.t("刷新本地清单"))
+                    }.help(L10n.t("刷新本地清单")).accessibilityLabel(L10n.t("刷新本地清单"))
                     Button {
                         if !store.workspace.isEmpty {
                             NSWorkspace.shared.open(URL(fileURLWithPath: store.workspace))
                         }
-                    } label: { Image(systemName: "folder") }.help(L10n.t("在访达中打开数据目录"))
+                    } label: { Image(systemName: "folder") }
+                    .help(L10n.t("在访达中打开数据目录"))
+                    .accessibilityLabel(L10n.t("在访达中打开数据目录"))
                 }
                 if !store.dataDeleteMessage.isEmpty {
                     Text(store.dataDeleteMessage)
@@ -177,11 +180,14 @@ struct InventoryView: View {
                                 if let path = dataset["path"] as? String {
                                     NSWorkspace.shared.open(URL(fileURLWithPath: path))
                                 }
-                            } label: { Image(systemName: "folder") }.help(L10n.t("在访达中打开"))
+                            } label: { Image(systemName: "folder") }
+                            .help(L10n.t("在访达中打开"))
+                            .accessibilityLabel(L10n.t("在访达中打开"))
                             Button {
                                 store.beginDataDelete(source: source, cycle: nil)
                             } label: { Image(systemName: "trash") }
                                 .help(L10n.t("清空该数据源"))
+                                .accessibilityLabel("\(L10n.t("清空该数据源"))：\(title)")
                                 .disabled(store.busy || !store.online || store.dataDeleteRunning)
                         }
                         DisclosureGroup("\(cycles.count) 个周期", isExpanded: Binding(
@@ -199,6 +205,7 @@ struct InventoryView: View {
                                     } label: { Image(systemName: "trash") }
                                         .buttonStyle(.borderless)
                                         .help(L10n.t("删除该周期"))
+                                        .accessibilityLabel("\(L10n.t("删除该周期"))：\(title) \(key)")
                                         .disabled(store.busy || !store.online || store.dataDeleteRunning)
                                 }.font(.callout).padding(.vertical, 5)
                             }
@@ -299,6 +306,7 @@ struct TerrainPanelView: View {
                 }
                 Button { store.loadTerrain() } label: { Image(systemName: "arrow.clockwise") }
                     .help(L10n.t("刷新地形状态"))
+                    .accessibilityLabel(L10n.t("刷新地形状态"))
                     .disabled(!store.online || store.terrainDownloading)
             }
             if store.terrainDownloading {
@@ -663,6 +671,7 @@ struct SettingsView: View {
                 Button { Task { await store.refreshCAMSConfiguration() } } label: {
                     Image(systemName: "arrow.clockwise")
                 }.buttonStyle(.borderless).help(L10n.t("重新检查 CAMS 配置"))
+                    .accessibilityLabel(L10n.t("重新检查 CAMS 配置"))
                     .disabled(!store.online || store.savingCAMS)
             }
             HStack(spacing: 10) {

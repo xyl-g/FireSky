@@ -828,3 +828,12 @@ GFS/EC 双摘要、0–2.5 指数、档位、最佳时刻、推荐窗口、天�
 - 预检窗口新增「下载前先知道」：明确首次下载量取决于缺失数据集与网络，已下载文件不重复下载，过程可取消，失败项保留可重试；不声明固定耗时或体积。
 - 新增三条英文 L10n 文案，避免英文模式回退中文。
 - 验证截图：`output/ui-polish-20261122/first-run/{empty-light,empty-dark,empty-1120,preflight-light}.png`；窄窗口下四步引导自然换行，无截断。说明见同目录 `README.md`。
+
+### 20.7 键盘与 VoiceOver 静态审计（P0-3 已完成代码级部分）
+
+- 图标按钮补齐 `accessibilityLabel`，覆盖搜索、日历、取消、刷新、文件夹、删除、复制、剖面、网格详情与任务动作等入口。
+- 历史任务行补 `.isSelected` trait；已有侧栏、分段控件、日期与状态徽标选中态保持。
+- 大气剖面 Canvas 与趋势图补摘要，覆盖率、照明、透过率趋势图均不再只有视觉表达。
+- 主「开始预测」按钮补 `accessibilityHint`，说明忙碌、离线或需先预检。
+- 静态扫描：所有含 `Image(systemName:)` 的 Button 均有 `accessibilityLabel`；所有 `Chart` 均有相邻 `accessibilityLabel`。审计记录见 `output/ui-polish-20261122/accessibility-static-audit.md`。
+- 真机 VoiceOver / 键盘循环仍需后续验证，未把静态审计写成真机验收。

@@ -247,6 +247,7 @@ struct NativeTaskHistoryView: View {
             Button { store.loadTaskHistory() } label: {
                 Image(systemName: "arrow.clockwise")
             }.help(L10n.text("刷新任务历史", "Refresh task history"))
+                .accessibilityLabel(L10n.text("刷新任务历史", "Refresh task history"))
                 .disabled(!store.online || store.taskHistoryLoading)
         }.padding(.horizontal, 20).padding(.vertical, 10)
     }
@@ -320,7 +321,9 @@ struct NativeTaskHistoryView: View {
                         Spacer()
                         Button { store.clearTaskHistorySelection() } label: {
                             Image(systemName: "xmark")
-                        }.help(L10n.text("关闭详情", "Close details")).buttonStyle(.borderless)
+                        }.help(L10n.text("关闭详情", "Close details"))
+                            .accessibilityLabel(L10n.text("关闭详情", "Close details"))
+                            .buttonStyle(.borderless)
                     }
                     summaryCard(selected)
                     if selected.method == "forecast", selected.status == "done" {
@@ -554,6 +557,7 @@ struct NativeTaskHistoryView: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .help(L10n.text("任务动作", "Task actions"))
+                .accessibilityLabel(L10n.text("任务动作", "Task actions"))
                 .disabled(store.forgettingTaskHistoryID != nil)
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
@@ -561,6 +565,7 @@ struct NativeTaskHistoryView: View {
             .background(store.selectedTaskHistoryID == item.taskID
                         ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.18) : Color.clear)
         }.buttonStyle(.plain)
+            .accessibilityAddTraits(store.selectedTaskHistoryID == item.taskID ? .isSelected : [])
     }
 
     private func statusSymbol(_ status: String) -> String {

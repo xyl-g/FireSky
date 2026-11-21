@@ -245,6 +245,12 @@ struct WorkbenchRootView: View {
         .fireSkySurface(role: .navigation)
     }
 
+    private var startAccessibilityHint: String {
+        if store.busy { return "当前有任务正在进行，完成或取消后可开始新预测。" }
+        if !store.online { return "引擎未连接，请重新连接后再开始。" }
+        return "先预检本地数据，确认后开始预测。"
+    }
+
     private var workbench: some View {
         HStack(alignment: .top, spacing: 16) {
             VStack(spacing: 10) {
@@ -266,6 +272,7 @@ struct WorkbenchRootView: View {
                     .help(store.busy ? "当前有任务正在进行（\(store.status)），完成或取消后可开始新预测。"
                           : !store.online ? "引擎未连接，请先在左下角重新连接。"
                           : "先预检本地数据，确认后开始预测。")
+                    .accessibilityHint(startAccessibilityHint)
                 if store.page == .nowcast {
                     Button("预热卫星与数据", systemImage: "arrow.down.to.line") { store.beginCheck() }
                         .buttonStyle(.borderless).font(.system(size: 10))
@@ -346,7 +353,8 @@ struct WorkLocationView: View {
                     if store.searching { ProgressView().controlSize(.mini).frame(width: 16, height: 16) }
                     else { Image(systemName: "magnifyingglass").frame(width: 16, height: 16) }
                 }
-                    .help("搜索位置").controlSize(.large).disabled(store.searching)
+                    .help("搜索位置").accessibilityLabel("搜索位置")
+                    .controlSize(.large).disabled(store.searching)
                 Button { store.locate() } label: {
                     if store.locating { ProgressView().controlSize(.mini).frame(width: 16, height: 16) }
                     else { Image(systemName: "location").frame(width: 16, height: 16) }
@@ -513,10 +521,10 @@ private struct WorkCalendarView: View {
                 Spacer()
                 Button { store.calendarMonth = month.moved(-1) } label: {
                     Image(systemName: "chevron.left").frame(width: 24, height: 24)
-                }.help("上个月")
+                }.help("上个月").accessibilityLabel("上个月")
                 Button { store.calendarMonth = month.moved(1) } label: {
                     Image(systemName: "chevron.right").frame(width: 24, height: 24)
-                }.help("下个月")
+                }.help("下个月").accessibilityLabel("下个月")
             }.buttonStyle(.plain)
             LazyVGrid(columns: columns, spacing: 4) {
                 ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) { day in
@@ -545,7 +553,7 @@ private struct WorkCalendarView: View {
                 Spacer()
                 Button { store.showDatePicker = false } label: {
                     Image(systemName: "xmark").frame(width: 24, height: 24)
-                }.buttonStyle(.plain).help("关闭日历").keyboardShortcut(.cancelAction)
+                }.buttonStyle(.plain).help("关闭日历").accessibilityLabel("关闭日历").keyboardShortcut(.cancelAction)
             }.font(.system(size: 11))
         }.padding(14).frame(width: 262)
             .tint(warm).background(.regularMaterial)
@@ -1356,6 +1364,7 @@ struct WorkComparisonCurveView: View {
                         .lineStyle(StrokeStyle(lineWidth: 1.8, dash: point.model == "ec" ? [4, 3] : []))
                 }
             }
+            .accessibilityLabel("覆盖率、照明与透过率趋势，共 \(ratios.count) 个采样点；EC 为虚线。")
             .chartYScale(domain: 0...1)
             .chartYAxis {
                 AxisMarks(position: .trailing, values: [0, 0.5, 1]) { value in
@@ -1611,6 +1620,7 @@ struct WorkCurveView: View {
                         .lineStyle(StrokeStyle(lineWidth: 1.8))
                 }
             }
+            .accessibilityLabel("卫星实况比率趋势，共 \(ratios.count) 个采样点；缺测序列不会补零。")
             .chartYScale(domain: 0...1)
             .chartYAxis {
                 AxisMarks(position: .leading, values: [0, 0.5, 1]) { value in
@@ -2023,6 +2033,13 @@ struct CrossSectionFigureView: View {
 
     private var data: CrossSectionData? { CrossSectionData(section: section) }
 
+    private var canvasAccessibilityLabel: String {
+        guard let data else { return "大气剖面图不可用" }
+        let low = Int(data.terrain.min() ?? 0)
+        let high = Int(data.terrain.max() ?? 0)
+        return "大气剖面图，\(data.distances.count) 个距离采样点，\(data.levels.count) 个气压层，地形高度 \(low) 至 \(high) 米，\(data.targets.count) 个目标云层标记"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
@@ -2038,6 +2055,8 @@ struct CrossSectionFigureView: View {
                     draw(context: context, size: size, data: data)
                 }
                 .frame(height: 252)
+                .accessibilityLabel(canvasAccessibilityLabel)
+                .accessibilityHint("详细数值请查看诊断分组与逐时台账。")
                 legend
                 targetStrip(data.targets)
             } else {
@@ -2504,7 +2523,7 @@ struct WorkRegionPage: View {
                     ProgressView(value: store.percent, total: 100).frame(width: 130)
                     Text(store.status).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
-                    Button { store.cancel() } label: { Image(systemName: "xmark") }.help("取消任务")
+                    Button { store.cancel() } label: { Image(systemName: "xmark") }.help("取消任务").accessibilityLabel("取消任务")
                 }
             }
             if !store.error.isEmpty {
@@ -2690,7 +2709,7 @@ struct WorkRegionPage: View {
                     Text("网格详情").font(.system(size: 12, weight: .semibold))
                     Spacer()
                     Button { store.selectedRegionalCoordinate = nil } label: { Image(systemName: "xmark") }
-                        .buttonStyle(.borderless).help("关闭网格详情")
+                        .buttonStyle(.borderless).help("关闭网格详情").accessibilityLabel("关闭网格详情")
                 }
                 Text(coordinate.label).font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
                 ForEach([store.regionalModel], id: \.self) { model in
@@ -2712,6 +2731,7 @@ struct WorkRegionPage: View {
                             }
                             .buttonStyle(.borderless)
                             .help("读取 \(model.uppercased()) 剖面")
+                            .accessibilityLabel("读取 \(model.uppercased()) 剖面")
                             .disabled(store.busy)
                         }
                     }.font(.system(size: 11)).help(display?.error ?? display?.level ?? "无该模式结果")
