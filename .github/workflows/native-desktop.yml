@@ -68,7 +68,6 @@ jobs:
             arch: x86_64
             target: x86_64-apple-darwin
     runs-on: ${{ matrix.runner }}
-    needs: contracts
     env:
       FIRESKY_MACOS_ARCH: ${{ matrix.arch }}
       FIRESKY_EXPECTED_ARCH: ${{ matrix.arch }}
