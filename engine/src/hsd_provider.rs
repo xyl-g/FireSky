@@ -419,7 +419,7 @@ pub fn execute(params: Value) -> Result<Value, String> {
     let input: Input = serde_json::from_value(params).map_err(|e| e.to_string())?;
     let reference = crate::time_contract::parse_utc(&input.reference_time_utc)?;
     if !input.cache_dir.is_absolute()
-        || !(1..=4).contains(&input.count)
+        || !(1..=8).contains(&input.count)
         || !input.max_age_minutes.is_finite()
         || !(0.1..=1440.0).contains(&input.max_age_minutes)
     {

@@ -964,6 +964,16 @@ impl SharedSolarPathNodes {
 
 struct SharedSolarPathNodeSets {
     paths: Vec<SharedSolarPathNodes>,
+    bearing_indices: HashMap<u32, usize>,
+}
+
+impl SharedSolarPathNodeSets {
+    #[inline(always)]
+    fn path_for_bearing(&self, bearing_bits: u32) -> Option<&SharedSolarPathNodes> {
+        self.bearing_indices
+            .get(&bearing_bits)
+            .and_then(|&index| self.paths.get(index))
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -3923,7 +3933,8 @@ impl Batch<'_> {
     }
 
     fn build_shared_solar_path_node_sets(&self) -> Option<Arc<SharedSolarPathNodeSets>> {
-        const MAX_BEARINGS: usize = 16;
+        const MAX_BEARINGS: usize = 128;
+        const DEFAULT_MAX_BYTES: usize = 1536 * 1024 * 1024;
 
         if std::env::var_os("FIRESKY_NATIVE_DISABLE_SHARED_SOLAR_PATH_CACHE").is_some()
             || std::env::var_os("FIRESKY_NATIVE_DISABLE_MULTI_BEARING_PATH_CACHE").is_some()
@@ -3945,7 +3956,7 @@ impl Batch<'_> {
             return None;
         }
 
-        let mut bearings = Vec::new();
+        let mut bearing_counts: HashMap<u32, usize> = HashMap::new();
         for sample in self.samples.chunks_exact(SAMPLE_FIELDS) {
             if sample[SAMPLE_VALID] < 0.5 {
                 continue;
@@ -3954,39 +3965,51 @@ impl Batch<'_> {
             if !bearing.is_finite() {
                 return None;
             }
-            let bits = bearing.to_bits();
-            if !bearings.contains(&bits) {
-                bearings.push(bits);
-                if bearings.len() > MAX_BEARINGS {
-                    return None;
-                }
-            }
+            *bearing_counts.entry(bearing.to_bits()).or_insert(0) += 1;
         }
-        if bearings.len() <= 1 {
+        if bearing_counts.len() <= 1 {
             return None;
         }
 
         let step_km = (self.spacing.abs() * 111.0).clamp(8.0, 35.0);
         let max_trace_km = 1000.0f32.min(self.radius_km + 400.0);
         let nodes_per_cell = (max_trace_km / step_km).ceil() as usize + 1;
-        let distance_table =
-            shared_solar_path_distance_table(step_km, max_trace_km, nodes_per_cell);
         let total_nodes = self.cell_count.checked_mul(nodes_per_cell)?;
         let per_path_bytes =
             total_nodes.checked_mul(std::mem::size_of::<SharedHorizontalPathNode>())?;
-        let estimated_bytes = per_path_bytes.checked_mul(bearings.len())?;
+        if per_path_bytes == 0 {
+            return None;
+        }
         let max_bytes = std::env::var("FIRESKY_NATIVE_SHARED_SOLAR_PATH_MULTI_MAX_BYTES")
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .filter(|value| *value > 0)
-            .unwrap_or(4 * 1024 * 1024 * 1024);
-        if estimated_bytes > max_bytes {
+            .unwrap_or(DEFAULT_MAX_BYTES);
+        let max_cached_bearings = MAX_BEARINGS.min(max_bytes / per_path_bytes);
+        if max_cached_bearings == 0 {
             return None;
         }
 
-        let paths = bearings
+        let radius_cells = (self.radius_km / (self.spacing.abs() * 111.0)).max(1.0);
+        let approx_disc_cells = (std::f32::consts::PI * radius_cells * radius_cells)
+            .clamp(1.0, self.cell_count as f32) as usize;
+        let min_samples_per_bearing = (self.cell_count / approx_disc_cells.max(1)).clamp(2, 64);
+
+        let mut ranked_bearings: Vec<(u32, usize)> = bearing_counts
+            .into_iter()
+            .filter(|&(_, count)| count >= min_samples_per_bearing)
+            .collect();
+        if ranked_bearings.is_empty() {
+            return None;
+        }
+        ranked_bearings.sort_unstable_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        ranked_bearings.truncate(max_cached_bearings);
+
+        let distance_table =
+            shared_solar_path_distance_table(step_km, max_trace_km, nodes_per_cell);
+        let paths: Vec<SharedSolarPathNodes> = ranked_bearings
             .into_par_iter()
-            .map(|bearing_bits| {
+            .map(|(bearing_bits, _)| {
                 self.build_shared_solar_path_nodes_for_bearing(
                     bearing_bits,
                     nodes_per_cell,
@@ -3994,7 +4017,15 @@ impl Batch<'_> {
                 )
             })
             .collect();
-        Some(Arc::new(SharedSolarPathNodeSets { paths }))
+        let bearing_indices = paths
+            .iter()
+            .enumerate()
+            .map(|(index, path)| (path.bearing_bits, index))
+            .collect();
+        Some(Arc::new(SharedSolarPathNodeSets {
+            paths,
+            bearing_indices,
+        }))
     }
 
     fn build_shared_solar_path_samples(
@@ -4068,7 +4099,7 @@ impl Batch<'_> {
         let cache_aerosol = aerosol_empty
             || std::env::var_os("FIRESKY_NATIVE_ENABLE_MULTI_BEARING_PATH_AEROSOL_SAMPLE_CACHE")
                 .is_some();
-        if node_sets.paths.len() <= 1
+        if node_sets.paths.is_empty()
             || (cache_aerosol && !aerosol_empty && shared_terrain.is_none())
         {
             // Aerosol normalization depends on the exact terrain used by the
@@ -4086,7 +4117,7 @@ impl Batch<'_> {
                     .and_then(|value| value.parse::<usize>().ok())
                     .filter(|value| *value > 0)
             })
-            .unwrap_or(8 * 1024 * 1024 * 1024);
+            .unwrap_or(1536 * 1024 * 1024);
         let nodes_per_cell = node_sets.paths.first()?.nodes_per_cell;
         let total_nodes = self.cell_count.checked_mul(nodes_per_cell)?;
         let sample_aerosol_empty = aerosol_empty || !cache_aerosol;
@@ -4100,20 +4131,22 @@ impl Batch<'_> {
         let bytes_per_key = total_nodes.checked_mul(bytes_per_node)?;
         let key_count = motion.keys.len();
         let bytes_per_path = bytes_per_key.checked_mul(key_count)?;
-        let estimated_bytes = bytes_per_path.checked_mul(node_sets.paths.len())?;
-        if bytes_per_key == 0
-            || key_count == 0
-            || bytes_per_path > max_bytes
-            || estimated_bytes > max_bytes
+        if bytes_per_key == 0 || key_count == 0 || bytes_per_path == 0 || bytes_per_path > max_bytes
         {
+            return None;
+        }
+        let max_paths = (max_bytes / bytes_per_path).min(node_sets.paths.len());
+        if max_paths == 0 {
             return None;
         }
 
         // Build one bearing at a time. Each bearing uses Rayon internally for
         // its keys and path nodes, while sequential bearing construction keeps
         // the temporary per-key allocations from multiplying the peak RSS.
-        let mut paths = Vec::with_capacity(node_sets.paths.len());
-        for nodes in &node_sets.paths {
+        // Because `node_sets.paths` is sorted by descending sample frequency,
+        // taking the prefix caches the hottest bearings that fit `max_bytes`.
+        let mut paths = Vec::with_capacity(max_paths);
+        for nodes in &node_sets.paths[..max_paths] {
             if cancel.is_cancelled() {
                 return None;
             }
@@ -5178,12 +5211,7 @@ impl Batch<'_> {
                                 .shared_solar_path_sample_set_index
                                 .and_then(|path_index| paths.paths.get(path_index))
                                 .filter(|path| path.bearing_bits == bearing_bits)
-                                .or_else(|| {
-                                    paths
-                                        .paths
-                                        .iter()
-                                        .find(|path| path.bearing_bits == bearing_bits)
-                                })
+                                .or_else(|| paths.path_for_bearing(bearing_bits))
                         })
                 });
             if let Some(shared) = shared {
@@ -5214,6 +5242,8 @@ impl Batch<'_> {
                     debug_assert_eq!(node.distance_km.to_bits(), distance_km.to_bits());
                     return node;
                 }
+            } else if index == 0 {
+                buffers.shared_solar_path_cell = None;
             }
         }
         let distance_trig = buffers.cached_path_distance_trig(index, distance_km);
@@ -17116,5 +17146,205 @@ mod tests {
         assert!(!observer_work_matches(
             &observers, &samples, 0, 1, step_count
         ));
+    }
+
+    #[test]
+    fn multi_bearing_path_cache_builds_above_16_bearings_and_caps_by_frequency() {
+        let rows = 16usize;
+        let cols = 16usize;
+        let cell_count = rows * cols;
+        let grid = vec![0.0f32; cell_count * GRID_FIELDS];
+        let aerosol = vec![0.0f32; cell_count * AEROSOL_PROFILE_LEVELS];
+        let observer_count = 2048usize;
+        let mut observers = vec![0.0f32; observer_count * OBSERVER_FIELDS];
+        for i in 0..observer_count {
+            let cell = i % cell_count;
+            observers[i * OBSERVER_FIELDS] = 30.0 + (cell / cols) as f32 * 0.25;
+            observers[i * OBSERVER_FIELDS + 1] = 110.0 + (cell % cols) as f32 * 0.25;
+        }
+
+        // Case 1: 24 distinct bearings (> legacy MAX_BEARINGS = 16).
+        let mut samples_24 = vec![0.0f32; observer_count * SAMPLE_FIELDS];
+        for i in 0..observer_count {
+            let offset = i * SAMPLE_FIELDS;
+            let bearing = 240.0 + (i % 24) as f32;
+            samples_24[offset] = -1.0;
+            samples_24[offset + 1] = bearing;
+            samples_24[offset + SAMPLE_VALID] = 1.0;
+        }
+        let batch_24 = Batch {
+            grid: &grid,
+            aerosol_profiles: &aerosol,
+            time_count: 1,
+            cell_count,
+            observers: &observers,
+            samples: &samples_24,
+            step_count: 1,
+            rows,
+            cols,
+            lat0: 30.0,
+            lon0: 110.0,
+            spacing: 0.25,
+            radius_km: 500.0,
+            observer_geometry_templates: None,
+        };
+        let sets_24 = batch_24
+            .build_shared_solar_path_node_sets()
+            .expect("24 bearings must build bounded multi-bearing cache instead of returning None");
+        assert_eq!(sets_24.paths.len(), 24);
+        for b in 0..24 {
+            let bits = (240.0 + b as f32).to_bits();
+            assert!(sets_24.path_for_bearing(bits).is_some());
+        }
+
+        // Case 2: 160 distinct bearings (> MAX_BEARINGS = 128) with skewed frequency.
+        // Bearings 0..10 have higher counts than 10..160; cache keeps top 128
+        // hottest bearings while rare bearings stay uncached for clean fallback.
+        let mut samples_160 = vec![0.0f32; observer_count * SAMPLE_FIELDS];
+        for i in 0..observer_count {
+            let offset = i * SAMPLE_FIELDS;
+            let bearing = if i < 600 {
+                200.0 + (i % 10) as f32
+            } else {
+                210.0 + ((i - 600) % 150) as f32
+            };
+            samples_160[offset] = -1.0;
+            samples_160[offset + 1] = bearing;
+            samples_160[offset + SAMPLE_VALID] = 1.0;
+        }
+        let batch_160 = Batch {
+            samples: &samples_160,
+            observer_geometry_templates: None,
+            ..batch_24
+        };
+        let sets_160 = batch_160
+            .build_shared_solar_path_node_sets()
+            .expect("160 bearings must cap to top 128 instead of returning None");
+        assert_eq!(sets_160.paths.len(), 128);
+        for hot in 0..10 {
+            let bits = (200.0 + hot as f32).to_bits();
+            assert!(sets_160.path_for_bearing(bits).is_some());
+            assert_eq!(sets_160.paths[hot].bearing_bits, bits);
+        }
+        let cached_count = (0..160)
+            .filter(|&b| sets_160.path_for_bearing((200.0 + b as f32).to_bits()).is_some())
+            .count();
+        assert_eq!(cached_count, 128);
+
+        // Case 3: Every bearing appears only once (no cross-sample reuse) -> skips cache cleanly.
+        let mut samples_unique = vec![0.0f32; observer_count * SAMPLE_FIELDS];
+        for i in 0..observer_count {
+            let offset = i * SAMPLE_FIELDS;
+            samples_unique[offset] = -1.0;
+            samples_unique[offset + 1] = 200.0 + i as f32 * 0.01;
+            samples_unique[offset + SAMPLE_VALID] = 1.0;
+        }
+        let batch_unique = Batch {
+            samples: &samples_unique,
+            observer_geometry_templates: None,
+            ..batch_24
+        };
+        assert!(batch_unique.build_shared_solar_path_node_sets().is_none());
+    }
+
+    #[test]
+    fn multi_bearing_partial_cache_matches_uncached_path_bitwise() {
+        let rows = 16usize;
+        let cols = 16usize;
+        let cell_count = rows * cols;
+        let mut grid = vec![0.0f32; cell_count * GRID_FIELDS];
+        for cell in 0..cell_count {
+            let base = cell * GRID_FIELDS;
+            grid[base + HIGH] = 0.55;
+            grid[base + HIGH_BASE] = 7200.0;
+            grid[base + HIGH_TOP] = 9200.0;
+            grid[base + MID] = 0.25;
+            grid[base + MID_BASE] = 3500.0;
+            grid[base + MID_TOP] = 5200.0;
+            grid[base + TERRAIN_ELEVATION] = 120.0;
+        }
+        let aerosol = vec![0.0f32; cell_count * AEROSOL_PROFILE_LEVELS];
+        let observer_count = 2048usize;
+        let mut observers = vec![0.0f32; observer_count * OBSERVER_FIELDS];
+        let mut samples = vec![0.0f32; observer_count * SAMPLE_FIELDS];
+        for i in 0..observer_count {
+            let cell = i % cell_count;
+            observers[i * OBSERVER_FIELDS] = 30.0 + (cell / cols) as f32 * 0.25;
+            observers[i * OBSERVER_FIELDS + 1] = 110.0 + (cell % cols) as f32 * 0.25;
+            observers[i * OBSERVER_FIELDS + 2] = 120.0;
+            let offset = i * SAMPLE_FIELDS;
+            // 160 distinct bearings (> MAX_BEARINGS = 128) so both cached hot
+            // bearings and uncached rare bearings are exercised together.
+            let bearing = if i < 600 {
+                245.0 + (i % 10) as f32 * 0.5
+            } else {
+                250.0 + ((i - 600) % 150) as f32 * 0.25
+            };
+            samples[offset] = -1.5;
+            samples[offset + 1] = bearing;
+            samples[offset + SAMPLE_VALID] = 1.0;
+        }
+        let batch = Batch {
+            grid: &grid,
+            aerosol_profiles: &aerosol,
+            time_count: 1,
+            cell_count,
+            observers: &observers,
+            samples: &samples,
+            step_count: 1,
+            rows,
+            cols,
+            lat0: 30.0,
+            lon0: 110.0,
+            spacing: 0.25,
+            radius_km: 120.0,
+            observer_geometry_templates: None,
+        };
+        let node_sets = batch
+            .build_shared_solar_path_node_sets()
+            .expect("multi-bearing node sets must build");
+        assert_eq!(node_sets.paths.len(), 128);
+        let cancel_flag = AtomicBool::new(false);
+        let cancel = BatchCancel::from_ref(&cancel_flag);
+        let shared_winds = batch.build_shared_wind_cache();
+        let shared_motion = batch.build_shared_motion_cache(&cancel);
+        let shared_terrain = batch.build_shared_terrain_cache();
+        let sample_sets = batch.build_shared_solar_path_sample_sets(
+            Some(&node_sets),
+            shared_motion.as_ref(),
+            shared_terrain.as_ref(),
+            true,
+            &cancel,
+        );
+
+        // Compare one observer hitting the hot cache (i = 0) and one observer
+        // hitting an uncached rare bearing (find an index whose bearing was not cached).
+        let rare_index = (600..observer_count)
+            .find(|&i| node_sets.path_for_bearing(samples[i * SAMPLE_FIELDS + 1].to_bits()).is_none())
+            .expect("at least one rare bearing should be uncached");
+        for &observer_index in &[0usize, rare_index] {
+            let mut cached_buffers = SkyBuffers::with_shared_caches(
+                shared_winds.clone(),
+                shared_terrain.clone(),
+                shared_motion.clone(),
+                None,
+                Some(node_sets.clone()),
+                None,
+                sample_sets.clone(),
+                None,
+            );
+            let mut uncached_buffers = SkyBuffers::new();
+            let mut cached_out = [0.0f32; OUTPUT_FIELDS];
+            let mut uncached_out = [0.0f32; OUTPUT_FIELDS];
+            batch.assess_observer_sky_v2(observer_index, &mut cached_out, &mut cached_buffers);
+            batch.assess_observer_sky_v2(observer_index, &mut uncached_out, &mut uncached_buffers);
+            for (field, (a, b)) in cached_out.iter().zip(&uncached_out).enumerate() {
+                assert_eq!(
+                    a.to_bits(),
+                    b.to_bits(),
+                    "observer={observer_index} field={field} mismatch: cached={a} uncached={b}"
+                );
+            }
+        }
     }
 }

@@ -6,13 +6,27 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Schedule
+import androidx.compose.material.icons.filled.PauseCircle
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material3.Icon
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -22,38 +36,68 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /**
- * FireSky 视觉基底 —— 抄 Workbench.swift 的暖橙（warm）/青绿（teal）双色与深浅双主题。
- * warm：浅色 (0.74, 0.32, 0.24) / 深色 (1, 0.55, 0.38)；teal：(0.26, 0.56, 0.54)。
+ * Native appearance tokens, aligned with macOS and iOS FSDesign.
  */
-val WarmLight = Color(0xFFBD523D)
-val WarmDark = Color(0xFFFF8C61)
+val WarmLight = Color(0xFFD25A36)
+val WarmDark = Color(0xFFFF9B6A)
 val Teal = Color(0xFF428F8A)
 
-/** v1.9.0 设计系统 P1：主行动强调渐变与状态徽标（DESIGN.md 方案 4.1/4.2）。 */
-val AccentGradient = Brush.linearGradient(
-    colors = listOf(Color(0xFFE06A3C), Color(0xFFC86A2E)),
-)
+internal val LocalFireSkyDark = staticCompositionLocalOf { false }
 
 @Composable
 fun accentGradient() = Brush.linearGradient(
-    colors = if (isSystemInDarkTheme())
-        listOf(Color(0xFFFF8C61), Color(0xFFFABF24))
-    else listOf(Color(0xFFE06A3C), Color(0xFFD98A2E)),
+    colors = if (LocalFireSkyDark.current)
+        listOf(Color(0xFFFF9B6A), Color(0xFFFFC273))
+    else listOf(Color(0xFFB84B2E), Color(0xFF9B401F)),
 )
 
 @Composable
 fun accentGradientBrush(): Brush = accentGradient()
 
+@Composable
+fun actionForeground(): Color = if (LocalFireSkyDark.current) Color(0xFF241810) else Color.White
+
+@Composable
+fun AccentButton(title: String, enabled: Boolean = true, onClick: () -> Unit) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .background(
+                if (enabled) accentGradientBrush()
+                else androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.12f)),
+                RoundedCornerShape(8.dp),
+            ),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = Color.Transparent,
+            contentColor = actionForeground(),
+            disabledContainerColor = Color.Transparent,
+            disabledContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
+        ),
+        shape = RoundedCornerShape(8.dp),
+    ) {
+        Text(title, fontSize = 15.sp, fontWeight = FontWeight.SemiBold,
+            textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+    }
+}
+
+@Composable
+fun pageBackground(): Brush = Brush.linearGradient(
+    colors = if (LocalFireSkyDark.current)
+        listOf(Color(0xFF0B1222), Color(0xFF121B2E), Color(0xFF080E18))
+    else listOf(Color(0xFFEEF3F8), Color(0xFFF8F5F0), Color(0xFFEBF1F6)),
+)
+
 enum class ChipState { Done, Failed, Interrupted, Pending }
 
 @Composable
 fun chipColors(state: ChipState): Pair<Color, Color> {
-    val dark = isSystemInDarkTheme()
+    val dark = LocalFireSkyDark.current
     val (fg, bgAlpha) = when (state) {
-        ChipState.Done -> if (dark) Color(0xFF33CC70) to 0.14f else Color(0xFF3B9C57) to 0.12f
-        ChipState.Failed -> if (dark) Color(0xFFFF6B52) to 0.14f else Color(0xFFC4574A) to 0.12f
-        ChipState.Interrupted -> if (dark) Color(0xFFFFB340) to 0.14f else Color(0xFFC9A23C) to 0.12f
-        ChipState.Pending -> if (dark) Color(0xFFE6EDF0) to 0.14f else Color(0xFF1B2224) to 0.12f
+        ChipState.Done -> if (dark) Color(0xFF63D6AB) to 0.15f else Color(0xFF1F6E5A) to 0.13f
+        ChipState.Failed -> if (dark) Color(0xFFFF8A7A) to 0.15f else Color(0xFFB83E38) to 0.13f
+        ChipState.Interrupted -> if (dark) Color(0xFFFFC273) to 0.15f else Color(0xFF8A6321) to 0.13f
+        ChipState.Pending -> if (dark) Color(0xFFD5DEEB) to 0.15f else Color(0xFF455364) to 0.13f
     }
     val bg = fg.copy(alpha = bgAlpha)
     return fg to bg
@@ -61,21 +105,34 @@ fun chipColors(state: ChipState): Pair<Color, Color> {
 
 private val DarkScheme = darkColorScheme(
     primary = WarmDark,
+    onPrimary = Color(0xFF241810),
+    primaryContainer = Color(0xFF50352D),
+    onPrimaryContainer = WarmDark,
     secondary = Teal,
-    // v1.9.3 暗色修正：夜空蓝黑体系。
-    background = Color(0xFF0D1420),
-    surface = Color(0xFF0D1420),
-    surfaceVariant = Color(0xFF16202E),
+    background = Color(0xFF0B1222),
+    surface = Color(0xFF1B2435),
+    surfaceVariant = Color(0xFF232E40),
+    onSurfaceVariant = Color(0xFFD5DEEB),
+    outline = Color(0xFF8292A8),
+    outlineVariant = Color(0xFF4B5D78),
+    error = Color(0xFFFF8A7A),
     onBackground = Color(0xFFE6EDF0),
     onSurface = Color(0xFFE6EDF0),
 )
 
 private val LightScheme = lightColorScheme(
     primary = WarmLight,
+    onPrimary = Color(0xFF241810),
+    primaryContainer = Color(0xFFF7E1D8),
+    onPrimaryContainer = Color(0xFF9B401F),
     secondary = Teal,
-    background = Color(0xFFE3EDEF),
-    surface = Color(0xFFE3EDEF),
-    surfaceVariant = Color(0xFFEDF3F2),
+    background = Color(0xFFEEF3F8),
+    surface = Color(0xFFFBFCFE),
+    surfaceVariant = Color(0xFFF2F6FA),
+    onSurfaceVariant = Color(0xFF455364),
+    outline = Color(0xFF687A90),
+    outlineVariant = Color(0xFFC9D5E1),
+    error = Color(0xFFB83E38),
     onBackground = Color(0xFF1B2224),
     onSurface = Color(0xFF1B2224),
 )
@@ -87,27 +144,20 @@ fun FireSkyTheme(appearance: String, content: @Composable () -> Unit) {
         "light" -> false
         else -> isSystemInDarkTheme()
     }
-    MaterialTheme(colorScheme = if (dark) DarkScheme else LightScheme, content = content)
+    CompositionLocalProvider(LocalFireSkyDark provides dark) {
+        MaterialTheme(colorScheme = if (dark) DarkScheme else LightScheme, content = content)
+    }
 }
 
-/** 玻璃卡片（WorkSurface 同构：圆角 8dp 半透明面 + 细描边）。 */
+/** Stable data surface; reserve platform glass for navigation and overlays. */
 @Composable
 fun WorkSurface(
     modifier: Modifier = Modifier,
     emphasized: Boolean = false,
     content: @Composable () -> Unit,
 ) {
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
-    val fill = if (dark) {
-        Color.White.copy(alpha = if (emphasized) 0.075f else 0.045f)
-    } else {
-        Color.White.copy(alpha = if (emphasized) 0.82f else 0.60f)
-    }
-    val border = if (dark) {
-        Color.White.copy(alpha = if (emphasized) 0.16f else 0.09f)
-    } else {
-        Color.White.copy(alpha = 0.80f)
-    }
+    val fill = MaterialTheme.colorScheme.surface
+    val border = if (emphasized) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant
     Surface(
         modifier = modifier,
         shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
@@ -139,6 +189,13 @@ fun StatusChip(state: String, title: String) {
         else -> ChipState.Pending
     }
     val (fg, bg) = chipColors(chipState)
+    val icon = when (state) {
+        "done" -> Icons.Filled.CheckCircle
+        "failed" -> Icons.Filled.Error
+        "interrupted" -> Icons.Filled.PauseCircle
+        "running" -> Icons.Filled.Schedule
+        else -> Icons.Filled.Download
+    }
     Row(
         Modifier
             .background(bg, RoundedCornerShape(6.dp))
@@ -146,6 +203,7 @@ fun StatusChip(state: String, title: String) {
         horizontalArrangement = Arrangement.spacedBy(4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(title, fontSize = 11.sp, fontWeight = FontWeight.Medium, color = fg)
+        Icon(icon, contentDescription = null, modifier = Modifier.size(14.dp), tint = fg)
+        Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = fg)
     }
 }

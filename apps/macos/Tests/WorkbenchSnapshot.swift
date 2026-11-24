@@ -8,16 +8,23 @@ struct WorkbenchSnapshot: App {
     @StateObject private var store = Store()
     @StateObject private var updater = Updater()
     @StateObject private var reminders = ReminderCenter()
+    @StateObject private var localServer = LocalServerController()
 
     var body: some Scene {
         WindowGroup("FireSky · UI Test Fixture") {
             WorkbenchRootView().environmentObject(store)
                 .environmentObject(updater)
                 .environmentObject(reminders)
+                .environmentObject(localServer)
                 .environment(\.locale, Locale(identifier:
                     ProcessInfo.processInfo.environment["FIRESKY_TEST_ENGLISH"] == "1" ? "en_US" : "zh_CN"))
-                .onAppear { delegate.capture(store, reminders) }
-        }.defaultSize(width: 1440, height: 1040)
+                .environment(\.dynamicTypeSize,
+                             ProcessInfo.processInfo.environment["FIRESKY_TEST_LARGE_TEXT"] == "1"
+                                ? .accessibility1 : .large)
+                .onAppear { delegate.capture(store, updater, reminders) }
+        }
+        .windowStyle(.hiddenTitleBar)
+        .defaultSize(width: 1440, height: 1040)
     }
 }
 
@@ -32,10 +39,17 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ notification: Notification) { store?.shutdown() }
 
-    func capture(_ store: Store, _ reminders: ReminderCenter) {
+    func capture(_ store: Store, _ updater: Updater, _ reminders: ReminderCenter) {
         guard !scheduled, let path = ProcessInfo.processInfo.environment["FIRESKY_NATIVE_SNAPSHOT"] else { return }
         scheduled = true
         self.store = store
+        if ProcessInfo.processInfo.environment["FIRESKY_TEST_UPDATE_SHEET"] == "1" {
+            updater.adoptTestAvailable(
+                version: "2.0.0",
+                notes: "• 窗口与全局格局：隐藏冗余标题栏，统一侧栏与顶栏空间层级。\n• 设置与更新弹层：改为顶部胶囊导航、图标行布局与独立软件更新弹层。\n• 首次空态与任务历史：收敛无结果占位卡片，修复空历史头部垂直偏移。\n• 地形下载与保留策略：移除下载确认误用红色按钮，补齐失败瓦片重试入口。"
+            )
+            store.showUpdateSheet = true
+        }
         store.name = "界面测试（非真实预测）"
         store.timezone = "Asia/Shanghai"
         store.date = ISO8601DateFormatter().date(from: "2026-11-09T04:00:00Z")!
@@ -121,7 +135,11 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
         precondition(store.payload()["elevation_source"] as? String == "auto")
         if ProcessInfo.processInfo.environment["FIRESKY_TEST_SETTINGS"] == "1" {
             store.page = .settings
-            store.settingsCategory = .general
+            store.settingsCategory = SettingsCategory(rawValue:
+                ProcessInfo.processInfo.environment["FIRESKY_TEST_SETTINGS_CATEGORY"] ?? "general") ?? .general
+        }
+        if let page = ProcessInfo.processInfo.environment["FIRESKY_TEST_PAGE"].flatMap(Page.init(rawValue:)) {
+            store.page = page
         }
         if ProcessInfo.processInfo.environment["FIRESKY_TEST_STALE"] == "1" {
             // UX #3：改参数保留旧结果并标注原始参数；新结果到来前徽标常亮。
@@ -185,6 +203,12 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
                 }
             }
             let env = ProcessInfo.processInfo.environment
+            if env["FIRESKY_TEST_REQUIRE_ENGINE"] == "1" {
+                for _ in 0..<200 where !store.online {
+                    try? await Task.sleep(for: .milliseconds(100))
+                }
+                guard store.online else { fputs("Screenshot engine did not connect\n", stderr); exit(1) }
+            }
             if env["FIRESKY_TEST_READ_PROFILE"] == "1" {
                 TaskHistoryChecks.run()
                 for _ in 0..<200 where !store.online {
@@ -321,6 +345,13 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
             if let bytes = bitmap.representation(using: .png, properties: [:]) {
                 try? bytes.write(to: URL(fileURLWithPath: path))
             }
+            if main.attachedSheet != nil {
+                store.showUpdateSheet = false
+                store.closePreflight()
+                try? await Task.sleep(for: .milliseconds(350))
+            }
+            store.shutdown()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { exit(0) }
             NSApp.terminate(nil)
         }
     }
@@ -411,6 +442,14 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
             "dominant_burnable_cloud_top_agl_mean_m": 6800,
             "forecast_mode": "point", "compute_backend": "cpu", "analysis_radius_km": 300,
             "timezone_name": "Asia/Shanghai", "cycle_time_utc": "2026-11-09T00:00:00Z",
+            "cloud_genus_proxy": [
+                "label": ec ? "altocumulus" : "cirrus",
+                "compatible_genera": ec ? ["altocumulus", "altostratus"] : ["cirrus", "cirrostratus"],
+                "candidate_scores": ec
+                    ? ["altocumulus": 0.68, "altostratus": 0.22, "nimbostratus": 0.10]
+                    : ["cirrus": 0.72, "cirrostratus": 0.19, "cirrocumulus": 0.09],
+                "confidence": ec ? 0.68 : 0.72,
+            ],
             "confidence_score_semantics": "input-and-geometry-support",
             "source_roles": ["primary": "numerical_model", "auxiliary": "satellite_observation"],
             "data_provenance": ["observation_used": false, "cams_cache_used": true],
@@ -420,16 +459,7 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
                                 "cloud_hole_closure_risk": 0.1,
                                 "comparison_start_local": "2026-11-09T17:00:00+08:00",
                                 "comparison_end_local": "2026-11-09T17:15:00+08:00"],
-            "cross_section": [
-                "solar_azimuth_deg": 240.0, "solar_elevation_deg": -2.0,
-                "distances_km": [0.0, 100.0, 200.0],
-                "required_illumination_base_agl_m": [1000.0, 2500.0, 4000.0],
-                "theoretical_targets": [
-                    ["distance_km": 0.0, "cloud_base_agl_m": 4200, "cloud_top_agl_m": 6800],
-                    ["distance_km": 100.0, "cloud_base_agl_m": 4300, "cloud_top_agl_m": 7000],
-                    ["distance_km": 200.0, "cloud_base_agl_m": 4400, "cloud_top_agl_m": 7200],
-                ],
-            ],
+            "cross_section": crossSection(model),
             "anchor_local": "2026-11-09T17:00:00+08:00",
             "aerosol": ["aod550": 0.21, "source": "cams-ads fixture", "quality": "cams"],
             "best_time_local": "2026-11-09T17:10:00+08:00",
@@ -452,6 +482,82 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
                  "dominant_burnable_cloud_top_agl_mean_m": 6800,
                  "quality_aod550": 0.21, "selected_regime": "burnable_cloud_field", "valid": true]
             },
+        ]
+    }
+
+    private static func crossSection(_ model: String) -> [String: Any] {
+        let distances = (0...24).map { Double($0) * 12.5 }
+        let levels = [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150]
+        let levelHeights = [180.0, 760, 1450, 3050, 4400, 5800, 7600, 9200, 10500, 11900, 13400]
+        let levelTemps = [15.0, 9, 3, -6, -14, -24, -35, -44, -50, -55, -60]
+        let terrain = distances.indices.map { sample in
+            let westRidge = 620 * exp(-pow((Double(sample) - 10) / 3.8, 2))
+            let eastRidge = 390 * exp(-pow((Double(sample) - 20) / 2.6, 2))
+            return 120 + westRidge + eastRidge
+        }
+        func family(_ level: Int) -> Int { level >= 7 ? 1 : level >= 4 ? 2 : 3 }
+        func cloudy(_ sample: Int, _ level: Int) -> Bool {
+            let shift = model == "ec" ? 3 : 0
+            switch family(level) {
+            case 1: return level >= 7 && (5 + shift...19 + shift).contains(sample)
+            case 2: return (2 + shift...14 + shift).contains(sample)
+            default: return level <= 2 && (14 - shift...24).contains(sample)
+            }
+        }
+        func grid(_ value: (Int, Int) -> Double) -> [[Double]] {
+            distances.indices.map { sample in levels.indices.map { level in value(sample, level) } }
+        }
+        func intGrid(_ value: (Int, Int) -> Int) -> [[Int]] {
+            distances.indices.map { sample in levels.indices.map { level in value(sample, level) } }
+        }
+        let baseByFamily: [Int: Double] = [1: 8200, 2: 3900, 3: 700]
+        let topByFamily: [Int: Double] = [1: 14600, 2: 8800, 3: 3400]
+        let fields: [String: Any] = [
+            "geopotential_height_asl_m": grid { sample, level in
+                levelHeights[level] + terrain[sample] + 70 * sin(Double(sample + level) * 0.4)
+            },
+            "temperature_c": grid { sample, level in
+                levelTemps[level] + 1.2 * sin(Double(sample) * 0.35)
+            },
+            "rh_percent": grid { sample, level in
+                cloudy(sample, level) ? 78 + Double((sample * 7 + level * 11) % 20)
+                    : 28 + Double((sample * 5 + level * 3) % 34)
+            },
+            "cloud_amount": grid { sample, level in
+                cloudy(sample, level) ? 0.32 + Double((sample + level * 3) % 5) * 0.12 : 0
+            },
+            "cloud_presence": grid { sample, level in cloudy(sample, level) ? 1 : 0 },
+            "cloud_fraction_percent": grid { sample, level in
+                cloudy(sample, level) ? 38 + Double((sample * 3 + level) % 6) * 10 : 0
+            },
+            "pressure_family_code": intGrid { _, level in family(level) },
+            "cloud_layer_status": intGrid { sample, level in
+                guard cloudy(sample, level) else { return 0 }
+                if (10...13).contains(sample) { return 3 }
+                if (14...16).contains(sample) { return 2 }
+                return 0
+            },
+            "cloud_layer_base_asl_m": grid { sample, level in
+                cloudy(sample, level) ? baseByFamily[family(level)] ?? 0 : 0
+            },
+            "cloud_layer_top_asl_m": grid { sample, level in
+                cloudy(sample, level) ? topByFamily[family(level)] ?? 0 : 0
+            },
+        ]
+        return [
+            "solar_azimuth_deg": 240.0,
+            "solar_elevation_deg": -2.0,
+            "analysis_radius_km": 300,
+            "spatial_sampling": "测试样例 · 非真实预测",
+            "distances_km": distances,
+            "pressure_levels_hpa": levels,
+            "terrain_elevation_asl_m": terrain,
+            "required_illumination_base_asl_m": distances.indices.map { 5200 + Double($0) * 115 },
+            "theoretical_targets": [
+                ["distance_km": 75.0, "cloud_base_asl_m": 8200.0, "cloud_top_asl_m": 14600.0],
+                ["distance_km": 175.0, "cloud_base_asl_m": 3900.0, "cloud_top_asl_m": 8800.0],
+            ],
+            "fields": fields,
         ]
     }
 }

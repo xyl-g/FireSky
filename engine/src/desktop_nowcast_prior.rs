@@ -484,12 +484,17 @@ pub(crate) fn features_at(grid: &DecodedGrid, geometry: &Geometry) -> Result<Vec
             {
                 cloud_value = high_cloud.map(|values| f64::from(values[index]));
             }
+            let rh = f64::from(humidity[index]);
             output.push(Feature {
                 lat: f64::from(grid.latitudes[index]),
                 lon: f64::from(grid.longitudes[index]),
                 pressure_hpa: level,
                 geopotential_height_m: f64::from(height[index]),
-                rh_percent: f64::from(humidity[index]),
+                rh_percent: if (-5.0..=120.0).contains(&rh) {
+                    rh.clamp(0.0, 100.0)
+                } else {
+                    rh
+                },
                 temperature_k: temperature.map(|values| f64::from(values[index])),
                 cloud_fraction_percent: cloud_value,
             });
@@ -767,9 +772,9 @@ pub(crate) fn build_prior(
             json!({
                 "pressure_hpa": level.pressure_hpa,
                 "height_asl_m": level.geopotential_height_m,
-                "temperature_k": level.temperature_k,
-                "rh_percent": level.rh_percent,
-                "model_cloud_fraction": level.cloud_fraction_percent.map(|value| (value / 100.0).clamp(0.0, 1.0)),
+                "temperature_k": level.temperature_k.filter(|value| value.is_finite() && (150.0..=350.0).contains(value)),
+                "rh_percent": level.rh_percent.is_finite().then(|| level.rh_percent.clamp(0.0, 100.0)),
+                "model_cloud_fraction": level.cloud_fraction_percent.filter(|value| value.is_finite()).map(|value| (value / 100.0).clamp(0.0, 1.0)),
             })
         })
         .collect();
@@ -1103,5 +1108,33 @@ mod tests {
         }
         let base = levels[0]["height_asl_m"].as_f64().unwrap();
         assert!(base > 1500.0 && base < 1550.0, "base was {base}");
+    }
+
+    #[test]
+    fn build_prior_clamps_supersaturated_and_negative_rh() {
+        let mut features = column(30.0, 120.0, 1500.0);
+        features[0].rh_percent = 103.5;
+        features[1].rh_percent = -0.2;
+        let valid_time = crate::time_contract::parse_utc("2026-11-10T08:00:00Z").unwrap();
+        let prior = build_prior(
+            &PriorContext {
+                valid_time,
+                cycle_time: valid_time,
+                forecast_hour: 0,
+                source: "gfs-interpolated-vertical-prior",
+                fraction: 0.0,
+                features: &features,
+            },
+            "gfs-prior:rh-clamp",
+            0.0,
+            0.0,
+            30.0,
+            120.0,
+        )
+        .unwrap();
+        let levels = prior["levels"].as_array().unwrap();
+        assert_eq!(levels[0]["rh_percent"].as_f64(), Some(100.0));
+        assert_eq!(levels[1]["rh_percent"].as_f64(), Some(0.0));
+        assert_eq!(levels[2]["rh_percent"].as_f64(), Some(60.0));
     }
 }

@@ -36,3 +36,9 @@ apps/mobile-android/app/src/main/assets/eccodes/
 apps/shared-web/tests/**/__screenshots__/
 # 旧 SvelteKit 前端已退役删除（2026-11-21）；本地磁盘残留不入库
 frontend/
+# 本地 macOS UI 截图图册二进制缓存（仅保留文档，不将数百 MB PNG 入库）
+docs/ui/macos/archive/
+docs/ui/macos/current/
+docs/ui/macos/interactions/
+docs/ui/macos/feedback/
+docs/ui/macos/references/

@@ -15,7 +15,7 @@ enum FSDesign {
         LinearGradient(
             colors: dark
                 ? [Color(0xFF, 0x9B, 0x6A), Color(0xFF, 0xC2, 0x73)]
-                : [Color(0xD9, 0x66, 0x3F), Color(0xE8, 0xA2, 0x48)],
+                : [Color(0xB8, 0x4B, 0x2E), Color(0x9B, 0x40, 0x1F)],
             startPoint: .topLeading, endPoint: .bottomTrailing
         )
     }
@@ -52,11 +52,11 @@ enum FSDesign {
     static func surfaceFill(role: FireSkySurfaceRole, dark: Bool) -> Color {
         switch role {
         case .content:
-            return dark ? Color(0x1B, 0x24, 0x35) : Color(0xFB, 0xFC, 0xFE)
+            return dark ? Color(0x18, 0x21, 0x32) : Color(0xFC, 0xFD, 0xFF)
         case .grouped, .overlay:
-            return dark ? Color(0x23, 0x2E, 0x40) : Color(0xF2, 0xF6, 0xFA)
+            return dark ? Color(0x20, 0x2A, 0x3D) : Color(0xF3, 0xF6, 0xFA)
         case .navigation:
-            return dark ? Color(0x14, 0x1D, 0x2D) : Color(0xF6, 0xF8, 0xFB)
+            return dark ? Color(0x11, 0x18, 0x26) : Color(0xF5, 0xF7, 0xFA)
         }
     }
 
@@ -206,10 +206,11 @@ struct AccentButton: View {
                 if let systemImage {
                     Image(systemName: systemImage).font(.system(size: 12, weight: .semibold))
                 }
-                Text(title).font(.system(size: 13, weight: .semibold))
+                Text(title).fireSkyFont(size: 13, weight: .semibold)
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 41)
+            .padding(.vertical, 8)
+            .frame(minHeight: 41)
             .background(
                 disabled
                     ? AnyShapeStyle(Color(0x94, 0xA3, 0xB4).opacity(0.28))
@@ -229,6 +230,28 @@ extension Color {
     init(_ red: Int, _ green: Int, _ blue: Int, _ alpha: Double = 1) {
         self.init(red: Double(red) / 255, green: Double(green) / 255,
                   blue: Double(blue) / 255, opacity: alpha)
+    }
+}
+
+extension View {
+    /// Scale text with the system's accessibility text size while keeping FireSky's type scale.
+    func fireSkyFont(size: CGFloat, weight: Font.Weight = .regular,
+                     relativeTo style: Font.TextStyle = .body) -> some View {
+        modifier(FireSkyFontModifier(size: size, weight: weight, relativeTo: style))
+    }
+}
+
+private struct FireSkyFontModifier: ViewModifier {
+    @ScaledMetric private var scaledSize: CGFloat
+    let weight: Font.Weight
+
+    init(size: CGFloat, weight: Font.Weight, relativeTo style: Font.TextStyle) {
+        self.weight = weight
+        _scaledSize = ScaledMetric(wrappedValue: size, relativeTo: style)
+    }
+
+    func body(content: Content) -> some View {
+        content.font(.system(size: scaledSize, weight: weight))
     }
 }
 

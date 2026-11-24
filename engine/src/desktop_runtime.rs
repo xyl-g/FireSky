@@ -18,7 +18,7 @@ use std::{
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc, Arc, Mutex,
+        mpsc, Arc, Condvar, Mutex,
     },
     thread,
     time::Instant,
@@ -317,7 +317,7 @@ impl Runtime {
             "cache_dir":hsd_cache_dir(&self.workspace),
             "reference_time_utc":context["lookup"],"lat":context["request"]["lat"],
             "lon":context["request"]["lon"],"radius_km":context["request"]["radius_km"],
-            "count":2,"max_age_minutes":30.0,"output_dir":null,
+            "count":6,"max_age_minutes":90.0,"output_dir":null,
         }))?)?;
         let frames = hsd["frames"]
             .as_array()
@@ -539,27 +539,68 @@ impl Runtime {
         if !params.is_object() {
             return Err("desktop params must be an object".into());
         }
-        // 看门狗：progress 包装更新最近事件时间；独立线程每 30s 检查。
+        // 看门狗：progress 包装更新最近事件时间；独立线程用 Condvar 每 30s 检查一次，
+        // 任务正常结束或提前返回/报错时由 Drop 立即唤醒并回收线程（杜绝 30 秒空等和线程泄漏）。
+        struct WatchdogGuard {
+            stop: Arc<(Mutex<bool>, Condvar)>,
+            handle: Option<std::thread::JoinHandle<()>>,
+        }
+        impl WatchdogGuard {
+            fn finish(&mut self) {
+                if let Ok(mut stopped) = self.stop.0.lock() {
+                    *stopped = true;
+                }
+                self.stop.1.notify_all();
+                if let Some(handle) = self.handle.take() {
+                    let _ = handle.join();
+                }
+            }
+        }
+        impl Drop for WatchdogGuard {
+            fn drop(&mut self) {
+                self.finish();
+            }
+        }
+
         let last_event = Arc::new(Mutex::new(Instant::now()));
         let stalled = Arc::new(AtomicBool::new(false));
-        let watchdog_stop = Arc::new(AtomicBool::new(false));
-        let watchdog = if Self::STALL_METHODS.contains(&method) {
+        let watchdog_stop = Arc::new((Mutex::new(false), Condvar::new()));
+        let mut watchdog = if Self::STALL_METHODS.contains(&method) {
             let last = Arc::clone(&last_event);
             let stalled = Arc::clone(&stalled);
             let cancel = Arc::clone(&cancel);
             let stop = Arc::clone(&watchdog_stop);
-            Some(std::thread::spawn(move || loop {
-                std::thread::sleep(std::time::Duration::from_secs(30));
-                if stop.load(Ordering::Acquire) {
-                    return;
-                }
-                let idle = last.lock().map(|t| t.elapsed()).unwrap_or_default();
-                if idle >= std::time::Duration::from_secs(Self::STALL_SECONDS) {
-                    stalled.store(true, Ordering::Release);
-                    cancel.store(true, Ordering::Release);
-                    return;
-                }
-            }))
+            Some(WatchdogGuard {
+                stop: Arc::clone(&watchdog_stop),
+                handle: Some(std::thread::spawn(move || {
+                    let (lock, cvar) = &*stop;
+                    let mut stopped = match lock.lock() {
+                        Ok(guard) => guard,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    loop {
+                        if *stopped {
+                            return;
+                        }
+                        let (next, _) = match cvar
+                            .wait_timeout(stopped, std::time::Duration::from_secs(30))
+                        {
+                            Ok(result) => result,
+                            Err(poisoned) => poisoned.into_inner(),
+                        };
+                        stopped = next;
+                        if *stopped {
+                            return;
+                        }
+                        let idle = last.lock().map(|t| t.elapsed()).unwrap_or_default();
+                        if idle >= std::time::Duration::from_secs(Self::STALL_SECONDS) {
+                            stalled.store(true, Ordering::Release);
+                            cancel.store(true, Ordering::Release);
+                            return;
+                        }
+                    }
+                })),
+            })
         } else {
             None
         };
@@ -587,6 +628,20 @@ impl Runtime {
             "cams_credentials" => Ok(desktop_credentials::status()),
             "retention_settings" => crate::retention_settings::status(&self.workspace),
             "save_retention_settings" => crate::retention_settings::save(&self.workspace, params),
+            "apply_retention_settings" => {
+                let _operation = self
+                    .operation
+                    .try_lock()
+                    .map_err(|_| "another prepare/forecast is active")?;
+                let _sync = self
+                    .sync
+                    .try_lock()
+                    .map_err(|_| "another data sync is active")?;
+                match crate::retention_settings::apply_configured(&self.workspace)? {
+                    Some(result) => Ok(json!({"configured": true, "result": result})),
+                    None => Ok(json!({"configured": false, "result": null})),
+                }
+            }
             "task_history" => {
                 let limit = match params.get("limit") {
                     None => 50,
@@ -870,8 +925,13 @@ impl Runtime {
             "publications" => {
                 let token = params["session"].as_str().ok_or("session is required")?;
                 let snapshot = self.session("get", token, json!({}))?;
+                let force_refresh = params
+                    .get("force_refresh")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
                 let value = desktop_publications::execute(decode(json!({
                     "sources":["gfs","ecmwf","cams"],"now_utc":null,"timeout_seconds":2.0,
+                    "force_refresh":force_refresh,
                 }))?)?;
                 check(&cancel)?;
                 let mut report = snapshot["report"].clone();
@@ -971,9 +1031,8 @@ impl Runtime {
         };
         // 停看门狗并检查空转触发：Err 结果若由看门狗取消所致，替换为
         // 明确的可重试错误（成功结果不受影响）。
-        watchdog_stop.store(true, Ordering::Release);
-        if let Some(handle) = watchdog {
-            let _ = handle.join();
+        if let Some(mut guard) = watchdog.take() {
+            guard.finish();
         }
         if stalled.load(Ordering::Acquire) {
             return Err(format!(
@@ -1297,10 +1356,7 @@ impl Runtime {
             "date":payload["target_date"],"phenomenon":payload["phenomenon"],
             "radius_km":context["common"]["radius_km"],"cycle_utc":context["cycle"],
             "cams_cache_dir":self.inventory.cams_cache_dir,
-            "derived_cache":{
-                "directory":if model == "gfs" {self.inventory.gfs_cache_dir.join("derived/rust-v1")} else {self.inventory.ecmwf_cache_dir.join("derived/rust-v1")},
-                "lock_timeout_seconds":30.0,
-            },
+            "derived_cache":null,
         });
         if model == "gfs" {
             request["points"] = json!([observer]);
@@ -1621,6 +1677,7 @@ impl Runtime {
         // past the bounded output size. Use the same buffered bbox for both
         // models; it covers every observer and the derived cloud fields.
         let model_bbox = decode(context["bbox"].clone())?;
+        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
         let request = json!({
             "model":if model == "gfs" {"gfs"} else {"ecmwf-basic"},
             "cycle_utc":context["cycle"],"date":payload["target_date"],
@@ -1633,10 +1690,9 @@ impl Runtime {
             "radius_km":context["common"]["radius_km"],"bbox":model_bbox,
             "include_point_core":false,"point_spacing_deg":payload["spacing_deg"].as_f64().unwrap_or(0.25),
             "compute_backend_requested":payload["compute_backend"].as_str().unwrap_or("auto"),
-            "derived_cache":null,
+            "derived_cache":regional_temp_derived_cache(dir.path()),
             "compact_results":true,
         });
-        let dir = tempfile::tempdir().map_err(|e| e.to_string())?;
         let path = dir.path().join("request.json");
         let output = dir.path().join("output");
         json_file(&path, &request)?;
@@ -1878,6 +1934,13 @@ impl Runtime {
             "items":rows,
         }))
     }
+}
+
+fn regional_temp_derived_cache(dir: &Path) -> Value {
+    json!({
+        "directory": dir.join("derived-cache"),
+        "lock_timeout_seconds": 30.0,
+    })
 }
 
 fn cache_key(payload: &Value, regional: bool) -> Result<String, String> {
@@ -2780,5 +2843,120 @@ mod tests {
             .begin_task("sync-wire-3", "save_data_sync_settings", &json!({}))
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn regional_temp_derived_cache_is_reused_by_cloned_city_request_and_cleaned_on_drop() {
+        let dir = tempfile::tempdir().unwrap();
+        let expected_cache_dir = dir.path().join("derived-cache");
+        let request = json!({
+            "model": "gfs",
+            "cycle_utc": "2026-11-11T00:00:00Z",
+            "derived_cache": regional_temp_derived_cache(dir.path()),
+        });
+        let mut city_request = request.clone();
+        city_request["points"] = json!([]);
+        assert_eq!(city_request["derived_cache"], request["derived_cache"]);
+        let config: crate::derived_cache::Config =
+            serde_json::from_value(city_request["derived_cache"].clone()).unwrap();
+        assert_eq!(config.directory.as_deref(), Some(expected_cache_dir.as_path()));
+        assert_eq!(config.lock_timeout_seconds, 30.0);
+        if let Ok(codes) = crate::grib::EcCodes::load() {
+            let source = dir.path().join("frame.grib2");
+            fs::write(&source, b"synthetic-grib-payload").unwrap();
+            let identity = tensor_bundle::source_identity(&source).unwrap();
+            let sample_data = || crate::derived_cache::Data {
+                latitudes: vec![30.0, 30.0, 31.0, 31.0],
+                longitudes: vec![110.0, 111.0, 110.0, 111.0],
+                surface: vec![100.0; 4],
+                derived: crate::native::derivation::DerivedGrid {
+                    levels: vec![300],
+                    columns: vec![[0.0; 36]; 4],
+                    profiles: vec![[0.0; 24]; 4],
+                },
+                boundary_semantics: "instantaneous".into(),
+                ec_proxy_coverage: None,
+                ec_native_grid_shape: None,
+            };
+            let mut primary =
+                crate::derived_cache::Session::new(Some(config.clone()), dir.path(), &codes)
+                    .unwrap();
+            primary
+                .frame(
+                    &source,
+                    &identity,
+                    assessment::Model::Gfs,
+                    "2026-11-11T00:00:00Z",
+                    6,
+                    None,
+                    || Ok(sample_data()),
+                )
+                .unwrap();
+            assert_eq!(primary.frames[0]["status"], "miss");
+            assert!(expected_cache_dir.is_dir());
+
+            let mut city_ranking =
+                crate::derived_cache::Session::new(Some(config), dir.path(), &codes).unwrap();
+            city_ranking
+                .frame(
+                    &source,
+                    &identity,
+                    assessment::Model::Gfs,
+                    "2026-11-11T00:00:00Z",
+                    6,
+                    None,
+                    || panic!("city ranking must hit temp derived cache without re-decoding"),
+                )
+                .unwrap();
+            assert_eq!(city_ranking.frames[0]["status"], "hit");
+        }
+        drop(dir);
+        assert!(!expected_cache_dir.exists());
+    }
+
+    #[test]
+    fn watchdog_exits_immediately_without_thirty_second_stall() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = Runtime::new(dir.path()).unwrap();
+        let started = Instant::now();
+        let cancel = Arc::new(AtomicBool::new(false));
+        let err = runtime
+            .dispatch_cancellable(
+                "check",
+                json!({"kind": "nowcast", "payload": {}}),
+                Arc::clone(&cancel),
+                &|_| Ok(()),
+                None,
+            )
+            .unwrap_err();
+        assert!(!err.is_empty());
+        let ok = runtime
+            .dispatch_cancellable(
+                "check",
+                json!({
+                    "kind": "nowcast",
+                    "payload": {
+                        "lat": 30.2741,
+                        "lon": 120.1551,
+                        "elevation_m": 30,
+                        "timezone_name": "Asia/Shanghai",
+                        "target_date": "2026-11-07",
+                        "phenomenon": "dusk",
+                        "radius_km": 900,
+                        "reference_time_utc": "2026-11-07T12:00:00Z",
+                        "_gfs_cycle_override": "2026-11-07T00:00:00Z",
+                    },
+                }),
+                cancel,
+                &|_| Ok(()),
+                None,
+            )
+            .unwrap();
+        assert!(ok.get("session").and_then(Value::as_str).is_some());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "dispatch_cancellable stalled for {:?}",
+            started.elapsed()
+        );
     }
 }

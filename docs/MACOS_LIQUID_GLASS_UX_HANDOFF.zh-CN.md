@@ -768,6 +768,9 @@ GFS/EC 双摘要、0–2.5 指数、档位、最佳时刻、推荐窗口、天�
 
 - 2026-11-22：初版。加入 Liquid Glass 材质/组件/动效规范，以及基于 v1.9.9 源码与文档的功能成熟度、核心流程差距、分阶段 backlog 和验收矩阵。后续 Agent 完成真机走查后，应更新证据边界与成熟度评分。
 - 2026-11-22：`feat/macos-liquid-glass-ui` 分支完成第一轮 UI 落地，记录见下节。
+- 2026-11-22：补充主工作台日期本地化、关键区域 Dynamic Type 和辅助功能文案；完成英文日期弹层与大文本窗口的本地点验，证据和未覆盖边界见 §20.15。
+- 2026-11-23：记录地形下载重试、保留清理、本地数据检查性能与剖面图反馈；新增设置界面视觉参考与移动端远端服务路线，见 §20.16 和 docs/MOBILE_NATIVE_PLAN.md。
+- 2026-11-24：修复多份文档断链与 `DESIGN.md` 重复章节/token 漂移；完成 macOS 窗口格局（`.windowStyle(.hiddenTitleBar)`、统一顶栏与快速主题切换）、设置页胶囊顶导航与语言切换、独立软件更新弹层、首次空态收敛、空历史头部对齐修复与地形重试体验优化，并刷新 34 张当前图册，见 §20.18。
 
 ---
 
@@ -895,3 +898,75 @@ GFS/EC 双摘要、0–2.5 指数、档位、最佳时刻、推荐窗口、天�
 - 验证样本：`output/ui-polish-20261122/export/{full,partial,stale}.txt` 与同名截图。full 覆盖双模式一致，partial 覆盖 EC 失败且保留 GFS，stale 覆盖旧参数说明；文本由与 UI 同一个导出函数生成，夹具只负责落盘。
 - 真机仍需手动确认 `NSSavePanel` 的保存路径选择和系统粘贴板权限行为；本机没有把弹窗自动化，也没有伪造导出成功。
 - `swift build --disable-sandbox --package-path apps/macos`：Build complete。
+
+### 20.15 日期本地化与大文本适配（本地 UI 收尾，部分完成）
+
+- `ObservationMonth` 按应用语言设置日历 locale、月份标题和星期简称，并保持周一为首日；日期选择 popover 显式继承 Dynamic Type 环境。
+- 工作台导航、结果摘要、状态提示、分段控件及预检等高频文本改用可随辅助字号缩放的字体；导航与操作控件改为最小高度约束，允许文字换行。辅助字号下，1120×720 工作台切换为单栏滚动布局，日期弹层扩至 380pt，日期选择目标为 44pt。
+- 英文模式的导航、预测提示、摘要和相关 VoiceOver 标签已补齐。英文详细诊断区仍有中文内容；本轮没有宣称完整本地化。
+- 本地交互点验使用标明为非真实预测的 fixture：英文日历周一开列、月份切换、选择 `2026-12-08` 后日期及结果标题回填，Escape 关闭弹层；辅助字号下检查 1120×720 单栏布局和扩大的日期弹层。未运行真实预测或下载。
+- 因 `ObservationDate.swift` 使用 `L10n`，`scripts/test_macos_swift_fixtures.sh` 已将 `L10n.swift` 加入对应 fixture 编译输入。
+- 最终源码修改后验证通过：`swift build --package-path apps/macos`；`FIRESKY_CLEAN_MACHINE_SMOKE=1 bash scripts/test_macos_native.sh "$PWD/dist/native-macos/FireSky.app"`；`git diff --check`。原生测试覆盖 FFI、Swift fixture、DMG 布局及 bundle smoke。构建仍输出 Command Line Tools 搜索路径警告，DMG 检查仍输出 `hdiutil` 弃用警告。
+- 全链路 VoiceOver、macOS 辅助功能系统设置矩阵、真实数据预测与下载仍待验收；本次 Dynamic Type 点验只覆盖上述工作台主流程，不代表全应用均已适配。
+
+### 20.16 用户反馈、视觉参考与后续路线（2026-11-23）
+
+#### 反馈记录
+
+- 地形数据：用户反馈下载失败后没有清晰的重试入口。源码已有失败项统计，重新运行会跳过已完成瓦片；尚未核实底层单瓦片请求的自动重试次数，也没有独立的“仅重试失败项”动作。后续验收应覆盖部分成功后再次运行、重复下载幂等性和失败项清单。
+- 数据保留：用户反馈设置没有删除旧数据。当前保存保留策略时会提示在下一次成功准备后执行清理；保存动作本身不立即触发清理。用户报告的具体数据目录和后续准备流程尚未复现，需验证清理触发后目录、索引和 UI 库存一致。
+- 本地数据检查：用户反馈检查过程过慢。目前未采集同一工作区上的阶段耗时，暂不能确定瓶颈属于磁盘扫描、缓存索引、完整性校验还是准备阶段。后续按阶段记录耗时与扫描项数，再比较缓存命中和冷启动场景。
+
+#### 大气剖面改进
+
+- 用户反馈图面高度固定、放大不跟随窗口，整体可读性差；同时希望把“高/中/低云”细化为卷云、高积云等云属。
+- 本轮把图表改为窗口宽度驱动的纵横比例，增加缩放、复位和横向查看；图例及诊断摘要按可用宽度换行。云体色块优先读取剖面返回的云底/云顶 ASL 高度，按地形裁切，并随缩放增加网格、线条与标注细节。
+- 点预测报告已有 cloud_genus_proxy 和 compatible_genera。剖面页展示报告提供的云属候选、候选排序与代理置信度，并标注其根据压力层、相态和几何推断，不是卫星或人工观测。剖面网格目前只有高/中/低压力族编码，未提供每个采样点的云属；因此图层仍明确显示压力族，不把压力族直接替换成卷云或高积云。区域剖面没有随图返回云属代理时仍只显示压力族。
+
+#### 设置界面参考
+
+- 用户提供的外观设置截图作为后续设置页的视觉参考，不复制其品牌内容或装饰素材。可借鉴顶部胶囊式分段导航、清晰的分类与内容层级、左侧图标加标题/说明的设置行，以及右侧对齐的分段选择、开关和滑杆。
+- 深色模式可采用接近黑色的底层、不同明度的中性灰表面和少量珊瑚色选中态；状态通过选中底色和短下划线共同表达。设置页维持紧凑、可扫描的原生桌面密度，避免为每一行套独立卡片。
+- 应用到 FireSky 时，优先用于外观、语言、数据源和网络连接等设置分类；现有工作台的地图、预测结论和专业指标继续使用 FireSky 自己的业务色彩与数据编码。
+
+#### 移动端本地/远端服务
+
+- 新增需求已记入 docs/MOBILE_NATIVE_PLAN.md：iOS 与 Android 增加“本地服务 / 远端服务”二选一；本地继续使用进程内引擎，远端填写服务地址并经 HTTP 访问；远端模式后续开放区域结果获取。
+- 服务端优先复用已有 Rust HTTP 路由；局域网监听、Cloudflare Tunnel 入口、身份认证、凭据保管和远端任务/区域 API 纳入单独阶段，不代表当前移动客户端已支持远端连接。
+
+### 20.17 macOS 优先与界面图册（2026-11-23）
+
+- 用户最新裁定：先把 macOS 优化好；Windows 和其他设备以后参考 macOS，iOS / Android 降为后续阶段。现有移动端修改保留为未完成、未验收工作，不继续投入新功能。远端服务路线保留规划。
+- 唯一图册入口：[macOS 界面图册](ui/macos/README.md)，[可直接打开的浏览图册](ui/macos/index.html)。本轮当前图、历史实验、用户设计参考与问题反馈分别归档，保留来源、尺寸、主题和哈希；不再仅将 UI 证据放在忽略目录或临时目录。
+- 详细分析页使用紧凑模式上下文，保留 GFS/EC 指数、最佳时刻、独立失败和旧参数提示。剖面图提前至诊断数值和云属代理之前；移除重复标题和图内第二层卡片边框，提升窄窗可见面积。完整模式摘要与时间轴仍在概览。
+- 图表辅助功能容器保留子按钮的独立名称，最佳时刻读出实际时间；图面支持辅助功能增减缩放。实际点击发现 250% 小数高度标签左侧裁切，已按文字测量宽度计算轴边距。
+- 截图与交互验收的具体记录见图册 [VALIDATION.zh-CN.md](ui/macos/VALIDATION.zh-CN.md)。合成数据视觉检查不替代真实天气链路、下载或云属识别验收。
+
+### 20.18 窗口格局、设置与更新弹层重构与文档修复（2026-11-24）
+
+- **文档异常清理**：合并 `DESIGN.md` 重复的 `## Components` 章节，校正“多端”表述、桌面端 `16pt` 圆角与 `coolAccent` 令牌；修复 `docs/MACOS_UI_BASELINE.zh-CN.md`、`docs/WIN_LINUX_DOCKER_PARITY.zh-CN.md`、`docs/DATA_SYNC_HELPER_DESIGN.zh-CN.md`、`docs/RELEASE_MACOS.zh-CN.md` 中 13 处已清理归档路径断链及转义异常。
+- **窗口与全局格局**：主窗口（`FireSkyApp` 与快照夹具）启用 `.windowStyle(.hiddenTitleBar)`，侧栏顶部为红绿灯留出安全区，顶栏压缩至 56pt 并新增右侧快速外观切换、离线重连与新版本入口；根容器及任务历史页补齐 `.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)`，彻底修复空历史页头部垂直居中偏移问题。
+- **单点工作台与首次空态**：左侧参数列收敛至 280pt 并微调小地图与卡片内边距，使 1120×720 窄窗下「编辑坐标」完整可见不裁切；首次无结果空态隐藏十余张空「—」指标占位卡，改为「四步引导 + 能力预览」双层结构；分析页签升级为左对齐胶囊条，详细页将 `GFS / EC` 切换合并到同行右侧，为大气剖面腾出额外垂直视口。
+- **设置页与独立更新弹层**：移除设置页双侧栏，改为顶部胶囊式分类切换（`通用 / 数据 / 高级`）+ 820pt 居中可读容器与图标行布局；补齐缺失的界面语言切换（`跟随系统 / 中文 / English`，实时绑定 `locale`）和开发构建版本兜底文案；新增参考 macOS 现代弹层设计的 `UpdateSheetView`（暖色顶光、版本对比、更新说明与下载进度）。
+- **用户反馈项闭环（UI 层）**：移除地形区域下载确认按钮误用的 `.destructive` 红色样式；记录上次区域下载失败瓦片数，失败后在地形面板直接展示「重试失败项（N）」入口；保留策略区增加生效规则计数徽标、明确清理触发时机并提供「去数据管理手动清理」直达按钮。
+- **验证证据**：`swift build --package-path apps/macos` 零警告通过；`scripts/test_macos_swift_fixtures.sh` 全绿；`scripts/capture_macos_ui.mjs` + `scripts/index_macos_ui.mjs` 刷新 34 张 `docs/ui/macos/current/*.png`（含 `update-sheet` 浅/深色，图册总索引 101 张）并完成人工视觉复核。真实下载重试、保留清理落盘与本地数据检查性能分析仍属后端/真机待验收项。
+
+### 20.19 Rust 引擎反馈根因修复与 macOS 区域/实况/多语言深化（2026-11-24）
+
+- **保留策略不删旧文件根因修复（`engine/src/cache_retention.rs`）**：定位到 `remove_file` / `remove_tree` 误用文件存在性检查（`sibling_lock || parent_lock`），而 `cache_lock::Lock` 设计上持久保留 `.lock` 文件，导致首次下载后所有旧周期/旧文件被永久 `deferred`。现改为与手动删除一致的真实 `flock` 占用校验（`download_lock_held` + `prune_lock_held` + `tree_has_active_lock`），且删除关联文件时保留 `.lock` 维持互斥契约；新增回归单测 `stale_unlocked_lock_file_does_not_block_retention`。
+- **本地数据检查与冷启动性能优化（`engine/src/gfs_data.rs`、`desktop_preflight.rs`、`timezone_lookup.rs`）**：
+  - `GfsClient::find_missing_hours` 在单次预检中只加载/校验目录时间戳一次，避免逐预报时次重复 stat 全目录树；
+  - `timezone_lookup::array` 改用单遍流式 `HashingReader` 读取并校验 `.npy` SHA-256，消除大文件（最高 512 MiB）冷启动时的 3 遍磁盘读取与双重哈希。
+- **地形 SRTM 瓦片重试与定向失败重拉（`engine/src/location.rs`、`Store.swift`、`DialogViews.swift`）**：为 `srtm_client` 增加 15s `connect_timeout`，为 `fetch_tile_bytes` 接入受 `request_attempts` / `retry_seconds` 约束的指数退避重试（跳过 404 海洋瓦片与取消）；`terrain_download` 批量结果新增 `failed_tiles` 清单并支持传入 `tiles` 参数定向重试，macOS 「重试失败项」按钮直接定向重拉失败瓦片。
+- **macOS 区域预测、卫星实况与英文覆盖**：
+  - 区域预测页顶部摘要条与右侧高值排行/网格详情纳入统一 `fireSkySurface` 卡片层级；
+  - 卫星实况页增加 4 小时观测窗口前置说明，无结果态改为精简引导卡，指标网格改为自适应列宽（`minimum: 185`）；
+  - 补齐旧参数提示条、逐时台账列头、区域页、实况页与任务历史状态/事件的英文 `L10n` 映射。
+- **验证证据**：Rust `cache_retention`、`location::tests`、`timezone_lookup`、`gfs_data`、`desktop_preflight` 单元测试全通过；`swift build` 零警告、`scripts/test_macos_swift_fixtures.sh` 通过；刷新全部 34 张 macOS 图册并复核区域/实况新图。
+
+### 20.20 v1.9.10 封版、真机验证与局域网/Cloudflare Tunnel 支持（2026-11-24）
+
+- **数据检查 30 秒卡顿根治**：实测发现 `desktop_runtime.rs` 看门狗线程使用 `sleep(30s)` 导致每次 `check`/`prepare`/`forecast` 结束时 `handle.join()` 空等近 30 秒；改为 `Condvar::wait_timeout` + `Drop` 守卫后，65 GB 真实工作区下单点检查降至 43–65 ms、区域中国检查降至 ~200 ms、卫星实况检查降至 25 ms。
+- **引擎关键修复与算法升级**：修复 EC/CAMS 周期解析导致 338 项保留清理失败；将「无明显火烧云」阈值提至 `0.02`；区域预测引入并行 GRIB/CAMS 解码、共享临时 `TempDir` 衍生缓存消除 `city_ranking` 重复解码、并放宽共享太阳方位角缓存至频次优先 128 桶；卫星实况扩至 90 分钟 / 6 帧平滑多对光流、真实拉格朗日趋势分与 B13–B15/B07–B13 剖面修正，并修复日落前 30 分钟–4 小时平流窗口报错与 GFS 过饱和 RH (>100%) 校验失败；所有计算临时中间产物在结束时立即自动删除。
+- **macOS UI / Logo / 局域网与 CF Tunnel**：启用全新火烧云矢量 Logo（`BrandMark.swift` + Retina `FireSky.icns`）；新增内置 HTTP 服务控制器 `LocalServerController.swift` 并内嵌 `Resources/web`，支持 `127.0.0.1`（Cloudflare Tunnel 推荐，带令牌鉴权时自动放行 Tunnel 域名 `Host`，浏览器登录用户名 `firesky` + 令牌）与 `0.0.0.0` 局域网模式及开机自启；同步助手最小间隔降至 5 分钟（轻量探测、有更新才下载）；完成概览云属代理、大气剖面图重绘、逐时台账过滤、区域中国默认+平滑过渡渲染、数据周期确认卡、数据管理结果与附加缓存面板、GitHub 403 更新回退、页面级错误隔离、跨页旧参数横幅/空态隔离以及内部 `native-nowcast-map-publication-not-requested` 警告屏蔽。
+- **验证证据**：`cargo test --manifest-path engine/Cargo.toml --locked --lib` 556+ 单测全绿，`build_app_resources.py --check` / Docker / Windows FFI / Swift 夹具 / `shared-web` 11 项单测 / macOS 签名打包与洁净机冒烟全绿，合入 `main` 并发布 `v1.9.10`。

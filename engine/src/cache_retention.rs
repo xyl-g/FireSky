@@ -236,21 +236,38 @@ pub(crate) fn walk(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(result)
 }
 
-pub(crate) fn sibling_lock(path: &Path) -> bool {
-    let candidates = [
-        PathBuf::from(format!("{}.lock", path.display())),
-        PathBuf::from(format!("{}.decode.lock", path.display())),
-        PathBuf::from(format!("{}.part", path.display())),
-        path.with_file_name(".prune.lock"),
-    ];
-    candidates.iter().any(|candidate| candidate.exists())
+fn lock_file_held(candidate: &Path) -> bool {
+    if !candidate.exists() {
+        return false;
+    }
+    let mut options = fs::OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let Ok(file) = options.open(candidate) else {
+        return true;
+    };
+    if file.metadata().is_ok_and(|meta| !meta.is_file()) {
+        return true;
+    }
+    match fs2::FileExt::try_lock_exclusive(&file) {
+        Ok(()) => {
+            let _ = fs2::FileExt::unlock(&file);
+            false
+        }
+        Err(error) if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() => true,
+        Err(_) => true,
+    }
 }
 
-/// Flock-verified occupancy check for manual deletion (phase C). A `.part`
+/// Flock-verified occupancy check for manual deletion and retention. A `.part`
 /// side file is always a live download. A `.lock` file whose flock is free is
-/// a crashed leftover: deletion may proceed, and the lock file itself stays on
-/// disk — lock/lease files are never unlinked, matching retention semantics,
-/// so flock mutual exclusion keeps working for in-flight holders.
+/// a normal post-download/crashed leftover: deletion may proceed, and the lock
+/// file itself stays on disk — lock/lease files are never unlinked so flock
+/// mutual exclusion keeps working for in-flight holders.
 pub(crate) fn download_lock_held(path: &Path) -> bool {
     if PathBuf::from(format!("{}.part", path.display())).exists() {
         return true;
@@ -259,54 +276,39 @@ pub(crate) fn download_lock_held(path: &Path) -> bool {
         PathBuf::from(format!("{}.lock", path.display())),
         PathBuf::from(format!("{}.decode.lock", path.display())),
     ] {
-        if !candidate.exists() {
-            continue;
-        }
-        let mut options = fs::OpenOptions::new();
-        options.read(true).write(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
-        }
-        let Ok(file) = options.open(&candidate) else {
+        if lock_file_held(&candidate) {
             return true;
-        };
-        if file.metadata().is_ok_and(|meta| !meta.is_file()) {
-            return true;
-        }
-        match fs2::FileExt::try_lock_exclusive(&file) {
-            Ok(()) => {
-                let _ = fs2::FileExt::unlock(&file);
-            }
-            Err(error)
-                if error.raw_os_error() == fs2::lock_contended_error().raw_os_error() =>
-            {
-                return true;
-            }
-            Err(_) => return true,
         }
     }
     false
 }
 
-fn parent_lock(path: &Path) -> bool {
-    let Some(parent) = path.parent() else {
+fn prune_lock_held(path: &Path) -> bool {
+    lock_file_held(&path.with_file_name(".prune.lock"))
+}
+
+fn tree_has_active_lock(path: &Path) -> bool {
+    let Ok(files) = walk(path) else {
         return false;
     };
-    fs::read_dir(parent)
-        .ok()
-        .into_iter()
-        .flatten()
-        .filter_map(Result::ok)
-        .any(|entry| {
-            let name = entry.file_name().to_string_lossy().to_ascii_lowercase();
-            name.ends_with(".lock") || name.contains(".lock")
-        })
+    files.iter().any(|file| {
+        let name = file
+            .file_name()
+            .and_then(|v| v.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if name.ends_with(".part") {
+            return true;
+        }
+        if name.ends_with(".lock") {
+            return lock_file_held(file);
+        }
+        false
+    })
 }
 
 fn remove_file(path: &Path, summary: &mut ResultSummary) {
-    if sibling_lock(path) || parent_lock(path) {
+    if download_lock_held(path) || prune_lock_held(path) {
         summary.add_deferred(path);
         return;
     }
@@ -325,7 +327,7 @@ fn remove_file(path: &Path, summary: &mut ResultSummary) {
 }
 
 fn remove_tree(path: &Path, summary: &mut ResultSummary) {
-    if sibling_lock(path) || parent_lock(path) {
+    if download_lock_held(path) || prune_lock_held(path) || tree_has_active_lock(path) {
         summary.add_deferred(path);
         return;
     }
@@ -359,7 +361,7 @@ fn parse_cycle(path: &Path, source: &str) -> Result<Option<DateTime<Utc>>, Strin
         return re
             .captures(name)
             .map(|captures| {
-                NaiveDateTime::parse_from_str(&captures[1], "%Y%m%d%H")
+                NaiveDateTime::parse_from_str(&format!("{}0000", &captures[1]), "%Y%m%d%H%M%S")
                     .map(|value| value.and_utc())
                     .map_err(|e| e.to_string())
             })
@@ -371,8 +373,8 @@ fn parse_cycle(path: &Path, source: &str) -> Result<Option<DateTime<Utc>>, Strin
     re.captures(name)
         .map(|captures| {
             NaiveDateTime::parse_from_str(
-                &format!("{}{}", &captures[1], &captures[2]),
-                "%Y-%m-%d%H%M",
+                &format!("{}{}00", &captures[1], &captures[2]),
+                "%Y-%m-%d%H%M%S",
             )
             .map(|value| value.and_utc())
             .map_err(|e| e.to_string())
@@ -400,7 +402,7 @@ pub(crate) fn related_files(path: &Path, source: &str, all: &[PathBuf]) -> Vec<P
             name.starts_with(prefix)
                 && matches!(
                     candidate.extension().and_then(|v| v.to_str()),
-                    Some("json" | "idx" | "lock" | "part")
+                    Some("json" | "idx" | "part")
                 )
         })
         .cloned()
@@ -767,6 +769,21 @@ pub fn apply(workspace: &Path, payload: &Value) -> Result<Value, String> {
     if let Some(days) = policy.map_days {
         summary.merge(age_cleanup(&map_root, days, policy.now, &preserve)?);
     }
+    // Always remove legacy intermediate scratch directories (derived tensors and
+    // exported HSD .rust-bundles / .rust-advection) so only final results and raw source caches remain.
+    for intermediate in [
+        roots(workspace, "FIRESKY_GFS_CACHE_DIR", ".cache/gfs").join("derived"),
+        roots(workspace, "FIRESKY_ECMWF_CACHE_DIR", ".cache/ecmwf").join("derived"),
+        roots(workspace, "FIRESKY_HSD_CACHE_DIR", ".cache/himawari-hsd").join(".rust-bundles"),
+        roots(workspace, "FIRESKY_HSD_CACHE_DIR", ".cache/himawari-hsd").join(".rust-advection"),
+    ] {
+        if intermediate.is_dir() && !tree_has_active_lock(&intermediate) {
+            let bytes = tree_bytes(&intermediate).unwrap_or(0);
+            if fs::remove_dir_all(&intermediate).is_ok() {
+                summary.add_removed(&intermediate, bytes);
+            }
+        }
+    }
     let mut result = summary.json();
     result["policy"] = json!({
         "gfs_cycles":policy.gfs_cycles,"ecmwf_cycles":policy.ecmwf_cycles,
@@ -833,10 +850,47 @@ mod tests {
             json!({"cycle":"2026-11-02T00:00:00Z"}).to_string(),
         )
         .unwrap();
-        fs::write(file.with_extension("grib2.lock"), b"lock").unwrap();
+        let lock_path = file.with_extension("grib2.lock");
+        let lock_file = fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .unwrap();
+        fs2::FileExt::lock_exclusive(&lock_file).unwrap();
         let result = model_cycles(root.path(), "gfs", 1).unwrap();
         assert!(result.deferred.iter().any(|v| v.ends_with("old.grib2")));
         assert!(file.exists());
+        drop(lock_file);
+    }
+
+    #[test]
+    fn stale_unlocked_lock_file_does_not_block_retention() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("old.grib2");
+        fs::write(&file, b"data").unwrap();
+        fs::write(
+            file.with_extension("grib2.json"),
+            json!({"cycle":"2026-11-01T00:00:00Z"}).to_string(),
+        )
+        .unwrap();
+        // Post-download persistent lock file (not currently flocked) must not block pruning.
+        fs::write(file.with_extension("grib2.lock"), b"").unwrap();
+        let newer = root.path().join("new.grib2");
+        fs::write(&newer, b"data").unwrap();
+        fs::write(
+            newer.with_extension("grib2.json"),
+            json!({"cycle":"2026-11-02T00:00:00Z"}).to_string(),
+        )
+        .unwrap();
+        fs::write(newer.with_extension("grib2.lock"), b"").unwrap();
+        let result = model_cycles(root.path(), "gfs", 1).unwrap();
+        assert!(result.deferred.is_empty());
+        assert!(!file.exists());
+        assert!(!file.with_extension("grib2.json").exists());
+        // Lock files themselves are preserved for flock mutual exclusion.
+        assert!(file.with_extension("grib2.lock").exists());
+        assert!(newer.exists());
     }
 
     #[test]
@@ -994,5 +1048,77 @@ mod tests {
             .unwrap()
             .iter()
             .any(|v| v.as_str().unwrap().ends_with(".json")));
+    }
+
+    #[test]
+    fn ecmwf_retention_deletes_old_cycles_with_sidecars_and_unlocked_locks() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("ecmwf");
+        fs::create_dir_all(&cache).unwrap();
+        let old = cache.join("ifs-basic-v2-2026112100-f009.grib2");
+        let new = cache.join("ifs-basic-v2-2026112200-f009.grib2");
+        for path in [&old, &new] {
+            fs::write(path, b"grib2").unwrap();
+            fs::write(path.with_extension("grib2.json"), b"{}").unwrap();
+            fs::write(path.with_extension("grib2.lock"), b"").unwrap();
+        }
+        let result = model_cycles(&cache, "ecmwf", 1).unwrap();
+        assert!(result.failed.is_empty(), "unexpected failures: {:?}", result.failed);
+        assert!(result.deferred.is_empty());
+        assert_eq!(result.removed.len(), 2);
+        assert!(!old.exists());
+        assert!(!old.with_extension("grib2.json").exists());
+        assert!(old.with_extension("grib2.lock").exists());
+        assert!(new.exists());
+        assert!(new.with_extension("grib2.json").exists());
+    }
+
+    #[test]
+    fn cams_retention_deletes_old_cycles_without_failures() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("cams");
+        fs::create_dir_all(&cache).unwrap();
+        let old = cache.join("cams-optics-v2-2026-11-21-1200-084-1c0e9c4c8ed5.grib");
+        let new = cache.join("cams-optics-v2-2026-11-22-0000-084-1c0e9c4c8ed5.grib");
+        fs::write(&old, b"old-grib").unwrap();
+        fs::write(&new, b"new-grib").unwrap();
+        let result = model_cycles(&cache, "cams", 1).unwrap();
+        assert!(result.failed.is_empty(), "unexpected failures: {:?}", result.failed);
+        assert!(result.deferred.is_empty());
+        assert_eq!(result.removed.len(), 1);
+        assert!(!old.exists());
+        assert!(new.exists());
+    }
+
+    #[test]
+    fn apply_removes_legacy_intermediate_directories() {
+        let workspace = tempfile::tempdir().unwrap();
+        let gfs_derived = workspace.path().join(".cache/gfs/derived");
+        let ecmwf_derived = workspace.path().join(".cache/ecmwf/derived");
+        let hsd_bundles = workspace.path().join(".cache/himawari-hsd/.rust-bundles");
+        let hsd_advection = workspace.path().join(".cache/himawari-hsd/.rust-advection");
+        for (dir, payload) in [
+            (&gfs_derived, b"gfs-tensor".as_slice()),
+            (&ecmwf_derived, b"ecmwf-tensor".as_slice()),
+            (&hsd_bundles, b"hsd-bundle".as_slice()),
+            (&hsd_advection, b"hsd-advection".as_slice()),
+        ] {
+            fs::create_dir_all(dir).unwrap();
+            fs::write(dir.join("artifact.bin"), payload).unwrap();
+        }
+        let result = apply(
+            workspace.path(),
+            &json!({"retention":{"report_days":30,"now_utc":"2030-01-01T00:00:00Z"}}),
+        )
+        .unwrap();
+        assert!(!gfs_derived.exists());
+        assert!(!ecmwf_derived.exists());
+        assert!(!hsd_bundles.exists());
+        assert!(!hsd_advection.exists());
+        assert!(result["freed_bytes"].as_u64().unwrap() > 0);
+        let removed = result["removed"].as_array().unwrap();
+        assert!(removed.iter().any(|v| v.as_str().unwrap().ends_with("gfs/derived")));
+        assert!(removed.iter().any(|v| v.as_str().unwrap().ends_with(".rust-bundles")));
+        assert!(removed.iter().any(|v| v.as_str().unwrap().ends_with(".rust-advection")));
     }
 }

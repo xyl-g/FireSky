@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -15,6 +16,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material3.Button
@@ -32,6 +34,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
@@ -95,12 +98,13 @@ private fun Section(title: String, content: @Composable () -> Unit) {
 @Composable
 private fun RadioRow(label: String, selected: Boolean, onSelect: () -> Unit) {
     Row(
-        Modifier.fillMaxWidth(),
+        Modifier.fillMaxWidth().heightIn(min = 48.dp)
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        RadioButton(selected = selected, onClick = onSelect)
+        RadioButton(selected = selected, onClick = null)
         Spacer(Modifier.width(8.dp))
-        Text(label, fontSize = 13.sp)
+        Text(label, fontSize = 15.sp)
     }
 }
 
@@ -109,15 +113,13 @@ private fun RadioRow(label: String, selected: Boolean, onSelect: () -> Unit) {
 private fun GeneralSection(store: WorkbenchStore, state: WorkbenchState) {
     val context = LocalContext.current
     Section(stringResource(R.string.section_appearance)) {
-        RadioRow(stringResource(R.string.theme_system), state.appearance == "system") {
-            store.setAppearance("system")
-        }
-        RadioRow(stringResource(R.string.theme_light), state.appearance == "light") {
-            store.setAppearance("light")
-        }
-        RadioRow(stringResource(R.string.theme_dark), state.appearance == "dark") {
-            store.setAppearance("dark")
-        }
+        Segmented(
+            options = listOf("system", "light", "dark"),
+            titles = listOf(stringResource(R.string.theme_system), stringResource(R.string.theme_light), stringResource(R.string.theme_dark)),
+            selection = state.appearance,
+            onSelect = store::setAppearance,
+            accent = true,
+        )
     }
     Section(stringResource(R.string.language_label)) {
         val current = L10n.language(context)

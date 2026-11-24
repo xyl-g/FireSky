@@ -5,8 +5,8 @@ import SwiftUI
 
 let warm = Color(uiColor: UIColor { trait in
     trait.userInterfaceStyle == .dark
-        ? UIColor(red: 1, green: 0.55, blue: 0.38, alpha: 1)
-        : UIColor(red: 0.74, green: 0.32, blue: 0.24, alpha: 1)
+        ? UIColor(red: 1, green: 155 / 255.0, blue: 106 / 255.0, alpha: 1)
+        : UIColor(red: 210 / 255.0, green: 90 / 255.0, blue: 54 / 255.0, alpha: 1)
 })
 let teal = Color(red: 0.26, green: 0.56, blue: 0.54)
 
@@ -14,9 +14,7 @@ struct WorkBackground: View {
     @Environment(\.colorScheme) private var scheme
     var body: some View {
         LinearGradient(
-            colors: scheme == .dark
-                ? [Color(red: 0.03, green: 0.05, blue: 0.09), Color(red: 0.05, green: 0.08, blue: 0.14), Color(red: 0.04, green: 0.06, blue: 0.11)]
-                : [Color(red: 0.89, green: 0.93, blue: 0.94), Color(red: 0.96, green: 0.92, blue: 0.90), Color(red: 0.89, green: 0.94, blue: 0.92)],
+            colors: FSDesign.pageBackground(dark: scheme == .dark),
             startPoint: .topLeading, endPoint: .bottomTrailing)
     }
 }
@@ -38,13 +36,15 @@ extension View {
 struct WorkSurface: ViewModifier {
     var emphasized = false
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     func body(content: Content) -> some View {
         content.background {
             RoundedRectangle(cornerRadius: 8)
-                .fill(scheme == .dark ? Color.white.opacity(emphasized ? 0.075 : 0.045) : Color.white.opacity(emphasized ? 0.82 : 0.60))
+                .fill(FSDesign.surface(dark: scheme == .dark))
         }.overlay {
             RoundedRectangle(cornerRadius: 8)
-                .stroke(scheme == .dark ? Color.white.opacity(emphasized ? 0.16 : 0.09) : Color.white.opacity(0.80), lineWidth: 1)
+                .strokeBorder(emphasized ? warm : FSDesign.border(dark: scheme == .dark),
+                              lineWidth: contrast == .increased ? 2 : 1)
         }
     }
 }
@@ -55,21 +55,27 @@ struct WorkSegments: View {
     @Binding var selection: String
     var accented = false
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.dynamicTypeSize) private var typeSize
     var body: some View {
-        HStack(spacing: 3) {
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(spacing: 3)) : AnyLayout(HStackLayout(spacing: 3))
+        layout {
             ForEach(Array(options.enumerated()), id: \.element) { index, value in
                 let selected = selection == value
                 Button { selection = value } label: {
                     Text(titles?[index] ?? value)
-                        .font(.system(size: 11, weight: selected ? .semibold : .regular))
+                        .font(.subheadline.weight(selected ? .semibold : .regular))
                         .foregroundStyle(selected && accented ? warm : selected ? Color.primary : Color.secondary)
-                        .frame(maxWidth: .infinity).frame(height: 26)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 4).padding(.vertical, 8)
+                        .frame(maxWidth: .infinity).frame(minHeight: 44)
                         .background {
                             RoundedRectangle(cornerRadius: 6)
                                 .fill(selected ? (accented ? warm.opacity(0.16) : scheme == .dark ? Color.white.opacity(0.10) : .white.opacity(0.85)) : .clear)
                         }
                         .contentShape(Rectangle())
                 }.buttonStyle(.plain)
+                    .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }.padding(3)
             .background(.black.opacity(scheme == .dark ? 0.12 : 0.035), in: RoundedRectangle(cornerRadius: 8))

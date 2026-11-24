@@ -81,7 +81,7 @@ pub fn quality_level(index: f64) -> &'static str {
         return "无明显火烧云";
     }
     for (upper, label) in [
-        (0.001, "无明显火烧云"),
+        (0.02, "无明显火烧云"),
         (0.05, "微微烧"),
         (0.20, "小烧"),
         (0.40, "小烧到中等烧"),
@@ -387,5 +387,16 @@ mod tests {
                     < 1e-14
             );
         }
+    }
+
+    #[test]
+    fn quality_level_low_threshold_distinguishes_none_from_faint() {
+        for value in [0.0, 0.004, 0.01, 0.019] {
+            assert_eq!(quality_level(value), "无明显火烧云", "value={value}");
+        }
+        for value in [0.02, 0.049] {
+            assert_eq!(quality_level(value), "微微烧", "value={value}");
+        }
+        assert_eq!(quality_level(0.05), "小烧");
     }
 }

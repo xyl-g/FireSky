@@ -508,6 +508,8 @@ enum PreparationActionsChecks {
             // 描边（1 个多边形），其余与 10_000 格点一一对应（9_999 bins + 1 缺测）。
             precondition(polygons.last?.polygons.count == 1)
             precondition(polygons.dropLast().reduce(0) { $0 + $1.polygons.count } == 10_000)
+            let smoothLayers = try! RegionalMapLayers.build(areas: [[100, 10, 124.75, 34.75]], cells: cells, smooth: true)
+            precondition(smoothLayers.overlays.contains { $0 is RegionalSmoothOverlay })
             let preview = try! RegionalMapLayers.build(areas: [[119.75, 29.75, 120.25, 30.25]],
                                                        cells: [], showGrid: true)
             precondition(preview.overlays.compactMap { $0 as? MKMultiPolyline }.first?.polylines.count == 8)

@@ -740,16 +740,81 @@ impl GfsClient {
         bbox: Option<[f64; 4]>,
         url: Option<&str>,
     ) -> Result<Option<PathBuf>, String> {
-        let bbox = bbox
-            .map(|b| canonical_bbox(b, &self.config.resolution))
-            .transpose()?;
-        let key = cycle_key(cycle);
-        let requested_schema = url.map(schema);
         let mut index = load_index(
             &self.config.cache_dir,
             self.config.lock_timeout_seconds,
             false,
         )?;
+        self.find_with_index(&mut index, cycle, hour, bbox, url)
+    }
+
+    /// Return `(indexed_file_count, latest_cycle_label)` directly from the
+    /// cached metadata index without re-reading or hashing sidecars on disk.
+    pub fn summary_from_index(&self) -> Result<(usize, Option<String>), String> {
+        if !self.config.cache_dir.is_dir() {
+            return Ok((0, None));
+        }
+        let index = load_index(
+            &self.config.cache_dir,
+            self.config.lock_timeout_seconds,
+            false,
+        )?;
+        let latest = index
+            .entries
+            .iter()
+            .filter_map(|entry| parse_cycle(&entry.cycle).ok())
+            .max()
+            .map(|cycle| cycle.format("%Y-%m-%d %HZ").to_string());
+        Ok((index.entries.len(), latest))
+    }
+
+    /// Check multiple `(hour, bbox, url)` queries while loading and validating
+    /// directory stamps once instead of once per forecast hour.
+    pub fn find_missing_hours(
+        &self,
+        cycle: DateTime<Utc>,
+        hours: &[u32],
+        segments: &[[f64; 4]],
+        diagnostic: bool,
+    ) -> Result<Vec<u32>, String> {
+        let mut index = load_index(
+            &self.config.cache_dir,
+            self.config.lock_timeout_seconds,
+            false,
+        )?;
+        let mut missing = Vec::new();
+        for &hour in hours {
+            let mut covered = true;
+            for &part in segments {
+                let url = build_url(cycle, hour, Some(part), &self.config.resolution, diagnostic)?;
+                if self
+                    .find_with_index(&mut index, cycle, hour, Some(part), Some(&url))?
+                    .is_none()
+                {
+                    covered = false;
+                    break;
+                }
+            }
+            if !covered {
+                missing.push(hour);
+            }
+        }
+        Ok(missing)
+    }
+
+    fn find_with_index(
+        &self,
+        index: &mut Arc<Index>,
+        cycle: DateTime<Utc>,
+        hour: u32,
+        bbox: Option<[f64; 4]>,
+        url: Option<&str>,
+    ) -> Result<Option<PathBuf>, String> {
+        let bbox = bbox
+            .map(|b| canonical_bbox(b, &self.config.resolution))
+            .transpose()?;
+        let key = cycle_key(cycle);
+        let requested_schema = url.map(schema);
         for attempt in 0..2 {
             let mut stale = false;
             for entry in &index.entries {
@@ -790,7 +855,7 @@ impl GfsClient {
                 }
             }
             if stale && attempt == 0 {
-                index = load_index(
+                *index = load_index(
                     &self.config.cache_dir,
                     self.config.lock_timeout_seconds,
                     true,
@@ -1292,5 +1357,58 @@ mod tests {
             [170.0, -170.0, 20.0, -20.0],
             [160.0, 170.0, 10.0, -10.0]
         ));
+    }
+
+    #[test]
+    fn summary_from_index_reports_count_and_latest_cycle_label() {
+        use super::{Config, GfsClient};
+        let dir = tempfile::tempdir().unwrap();
+        let missing_dir = dir.path().join("absent");
+        let empty_client = GfsClient::new(Config {
+            cache_dir: missing_dir.clone(),
+            resolution: "0p25".into(),
+            region: None,
+            timeout_seconds: 10.0,
+            lock_timeout_seconds: 10.0,
+            download_attempts: 1,
+        })
+        .unwrap();
+        assert_eq!(empty_client.summary_from_index().unwrap(), (0, None));
+        assert!(!missing_dir.exists());
+
+        let cache = dir.path().join("gfs");
+        std::fs::create_dir_all(&cache).unwrap();
+        for (name, cycle, hour) in [
+            ("a.grib2", "2026-11-21T06:00:00Z", 6),
+            ("b.grib2", "2026-11-22T12:00:00Z", 12),
+        ] {
+            let grib = cache.join(name);
+            std::fs::write(&grib, b"GRIB12347777").unwrap();
+            std::fs::write(
+                grib.with_extension("grib2.json"),
+                serde_json::json!({
+                    "cycle": cycle,
+                    "forecast_hour": hour,
+                    "file": name,
+                    "bbox": [70.0, 140.0, 55.0, 15.0],
+                    "url": "https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25.pl?file=x"
+                })
+                .to_string(),
+            )
+            .unwrap();
+        }
+        let client = GfsClient::new(Config {
+            cache_dir: cache,
+            resolution: "0p25".into(),
+            region: None,
+            timeout_seconds: 10.0,
+            lock_timeout_seconds: 10.0,
+            download_attempts: 1,
+        })
+        .unwrap();
+        assert_eq!(
+            client.summary_from_index().unwrap(),
+            (2, Some("2026-11-22 12Z".to_string()))
+        );
     }
 }

@@ -2,8 +2,8 @@
 
 更新日期：2026-11-14。依据用户决定：Windows/Linux/Docker 支持，桌面与 Web 页面
 均参考已验收的 macOS 那一套。本文记录该分支的范围、改动、验证证据与剩余
-目标机验收；对齐口径见[跨平台基线](NATIVE_UI_CROSS_PLATFORM_BASELINE\.zh\-CN\.md)，
-产品基准见[macOS 产品与 UI 基准](MACOS_UI_BASELINE\.zh\-CN\.md)。
+目标机验收；对齐口径见[跨平台基线](NATIVE_UI_CROSS_PLATFORM_BASELINE.zh-CN.md)，
+产品基准见[macOS 产品与 UI 基准](MACOS_UI_BASELINE.zh-CN.md)。
 
 ## 1. 范围与结论
 
@@ -13,7 +13,7 @@
   Windows 真机、Linux 桌面会话、双架构镜像发布的验收仍按第 4 节分列，
   不在本分支宣称完成。
 - shared-web 无代码改动：展示对齐已于 2026-11-13 批次完成
-  （[字段矩阵](archive/WEB_MACOS_FIELD_MATRIX.zh-CN.md)），本分支补齐页面级走查证据。
+  （对应已归档清理的历史字段矩阵 `WEB_MACOS_FIELD_MATRIX.zh-CN.md`），本分支补齐页面级走查证据。
 
 ## 2. 改动清单
 

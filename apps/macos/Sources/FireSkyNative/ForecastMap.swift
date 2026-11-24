@@ -126,11 +126,11 @@ struct ForecastMap: NSViewRepresentable {
             let bounds = "\(areas)"
             let first = lastBounds.isEmpty
             if lastBounds != bounds || fitVersion != store.regionalFitVersion {
-                let shouldFit = !first || store.regionalCamera == nil || fitVersion >= 0
+                let shouldFit = !first || store.regionalCamera == nil || fitVersion != store.regionalFitVersion
                 lastBounds = bounds
                 fitVersion = store.regionalFitVersion
                 if shouldFit, !areas.isEmpty {
-                    if let region = RegionalMapLayers.fitRegion(areas: areas) {
+                    if let region = RegionalMapLayers.fitRegion(areas: areas, paddingDegrees: 0.45) {
                         map.setRegion(region, animated: false)
                     }
                     publishCamera(map)
@@ -151,7 +151,8 @@ struct ForecastMap: NSViewRepresentable {
             cameraReady = true
             let showGrid = store.showRegionalGrid
             let showSamples = store.showRegionalSamples
-            let next = "\(bounds)-\(model)-\(store.resultVersion)-\(showGrid)-\(showSamples)"
+            let showSmooth = store.showRegionalSmooth
+            let next = "\(bounds)-\(model)-\(store.resultVersion)-\(showGrid)-\(showSamples)-\(showSmooth)"
             guard signature != next else { return }
             signature = next
             renderTask?.cancel()
@@ -161,7 +162,7 @@ struct ForecastMap: NSViewRepresentable {
             let cells = store.regionalForecast.model(model).cells
             renderTask = Task { [weak self, weak map] in
                 let worker = Task.detached(priority: .userInitiated) {
-                    try RegionalMapLayers.build(areas: areas, cells: cells, showGrid: showGrid)
+                    try RegionalMapLayers.build(areas: areas, cells: cells, showGrid: showGrid, smooth: showSmooth)
                 }
                 let layers = await withTaskCancellationHandler {
                     try? await worker.value
@@ -227,6 +228,9 @@ struct ForecastMap: NSViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let smooth = overlay as? RegionalSmoothOverlay {
+                return RegionalSmoothRenderer(overlay: smooth)
+            }
             if let line = overlay as? MKMultiPolyline {
                 let renderer = RegionalGridRenderer(multiPolyline: line)
                 renderer.strokeColor = .labelColor.withAlphaComponent(0.16)

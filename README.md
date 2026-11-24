@@ -7,15 +7,15 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 
 > English documentation: [README.en.md](README.en.md)
 
-> 当前版本 **v1.9.9**（见[下载安装](#下载安装releases)）：macOS DMG（双架构）
+> 当前版本 **v1.9.10**（见[下载安装](#下载安装releases)）：macOS DMG（双架构）
 > 与 Windows zip + 安装器（x64/ARM64）随 CI `v*` tag 自动直发 Release，
 > Android APK 自动发布已接入（mobile-release job，随 tag 构建），iOS 从源码
-> 构建（Xcode）。v1.9.5→v1.9.9 主线：界面多语言（四端，跟随系统/中文/
-> English）、任务历史可追溯预测详情（不可变结果快照 + 打开完整报告）、
-> 数据同步专项（GFS/EC 4 并发下载、ADS 断点续传与自适应超时、失败自动
-> 补齐、手动优先让路、空闲看门狗防卡死）、同步状态实时刷新与耗时/欠账
-> 可视化。UI 设计系统 v2（毛玻璃卡片 / 状态徽标 / 强调渐变 / 夜空蓝暗色）
-> 四端同构，token 见 [DESIGN.md](DESIGN.md)。
+> 构建（Xcode）。v1.9.10 主线：macOS Liquid Glass 格局与新火烧云 Logo、内置
+> 局域网与 Cloudflare Tunnel 外网映射服务、数据检查 30 秒看门狗卡顿根治
+> （本地预检降至 25–200 ms）、同步助手 5 分钟轻量更新监控（仅检测到新周期
+> 才下载）、卫星实况 6 帧多波段光流/剖面升级、中国区域并行解码与计算中间
+> 产物即时删除、EC/CAMS 保留清理与 GitHub 403 更新回退修复。UI 设计系统 v2
+> （毛玻璃卡片 / 状态徽标 / 强调渐变 / 夜空蓝暗色）token 见 [DESIGN.md](DESIGN.md)。
 > UI 以 [macOS 产品与 UI 基准](docs/MACOS_UI_BASELINE.zh-CN.md)为参照，移动端蓝图与验收状态见
 > [移动端双原生计划](docs/MOBILE_NATIVE_PLAN.md)。
 
@@ -69,7 +69,7 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 ## 下载安装（Releases）
 
 正式版统一从 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) 下载
-（当前 **v1.9.9**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
+（当前 **v1.9.10**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
 与各资产放在同一目录执行）：
 
 ```bash

@@ -5,11 +5,14 @@
 //! and the vertical display profile. Large output is written to a receipt-backed
 //! file rather than the 1 MiB RPC line.
 
-use crate::desktop_hsd_retrieval::{frame, FrameContract, HorizontalMetrics, OutputColumn, Prior};
+use crate::desktop_hsd_retrieval::{
+    frame, horizontal_metrics, FrameContract, HorizontalMetrics, Level, OutputColumn, Prior,
+};
 use crate::desktop_nowcast_retrieval::{
     execute_retrieval, ColumnSetRecord, FeatureRecord, Params as RetrievalParams,
 };
 use crate::request_file;
+use crate::tensor_bundle::{verify_files, F32Bundle};
 use crate::time_contract;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -18,7 +21,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, OpenOptions};
 use std::io::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const MAX_REQUEST_BYTES: u64 = 4 * 1024 * 1024;
 const MAX_RESULT_BYTES: usize = 128 * 1024 * 1024;
@@ -60,6 +63,8 @@ struct AdjustmentRequest {
     motion_correlation: f64,
     motion_quality: String,
     motion_age_minutes: Option<f64>,
+    #[serde(default)]
+    lagrangian_b13_trend_k_per_hour: Option<f64>,
     advection: Option<AdvectionPlan>,
     single_historical_observation: bool,
 }
@@ -399,6 +404,564 @@ fn motion_reliability_factor(request: &AdjustmentRequest) -> f64 {
     MOTION_RELIABILITY_FLOOR + (1.0 - MOTION_RELIABILITY_FLOOR) * normalized
 }
 
+const PIXEL_TOLERANCE_KM: f64 = 25.0;
+const EARTH_RADIUS_KM: f64 = 6371.0;
+const LATITUDE_BUCKET_DEG: f64 = 0.05;
+
+fn haversine_km(left: PointValue, right: PointValue) -> f64 {
+    let lat1 = left.lat.to_radians();
+    let lon1 = left.lon.to_radians();
+    let lat2 = right.lat.to_radians();
+    let lon2 = right.lon.to_radians();
+    let sin_lat = ((lat2 - lat1) / 2.0).sin();
+    let sin_lon = ((lon2 - lon1) / 2.0).sin();
+    let h = sin_lat.powi(2) + lat1.cos() * lat2.cos() * sin_lon.powi(2);
+    2.0 * EARTH_RADIUS_KM * h.sqrt().asin()
+}
+
+fn sample_hsd_bands(
+    manifest_path: &Path,
+    targets: &[(f64, f64, PointValue)],
+) -> Result<Vec<Option<[f64; 3]>>, String> {
+    let verified = verify_files(manifest_path, "hsd-compact-frame-v1")?;
+    let shape = verified
+        .shapes
+        .get("latitudes")
+        .ok_or("HSD band sampling missing latitudes shape")?;
+    if shape.len() != 2 || shape[0] == 0 || shape[1] == 0 {
+        return Ok(vec![None; targets.len()]);
+    }
+    let bundle = F32Bundle::<Value>::open(manifest_path, "hsd-compact-frame-v1", &verified.source)?;
+    let read_rows = |name: &str| -> Result<Vec<f32>, String> {
+        bundle
+            .rows::<1>(name, shape)
+            .map(|rows| rows.into_iter().map(|[value]| value).collect())
+    };
+    let latitudes = read_rows("latitudes")?;
+    let longitudes = read_rows("longitudes")?;
+    let b07 = read_rows("band_b07")?;
+    let b13 = read_rows("band_b13")?;
+    let b15 = read_rows("band_b15")?;
+    bundle.revalidate()?;
+
+    let mut buckets = BTreeMap::<i64, Vec<usize>>::new();
+    for (idx, (&lat, &lon)) in latitudes.iter().zip(&longitudes).enumerate() {
+        let lat = f64::from(lat);
+        let lon = f64::from(lon);
+        if lat.is_finite() && lon.is_finite() {
+            buckets
+                .entry((lat / LATITUDE_BUCKET_DEG).floor() as i64)
+                .or_default()
+                .push(idx);
+        }
+    }
+    let search_span = (PIXEL_TOLERANCE_KM / 111.0 / LATITUDE_BUCKET_DEG).ceil() as i64 + 1;
+    let mut sampled = Vec::with_capacity(targets.len());
+    for (_, _, target) in targets {
+        let target_bucket = (target.lat / LATITUDE_BUCKET_DEG).floor() as i64;
+        let mut best: Option<(usize, f64)> = None;
+        for bucket in (target_bucket - search_span)..=(target_bucket + search_span) {
+            let Some(indices) = buckets.get(&bucket) else {
+                continue;
+            };
+            for &idx in indices {
+                let lat = f64::from(latitudes[idx]);
+                let lon = f64::from(longitudes[idx]);
+                let dlon = (lon - target.lon + 180.0).rem_euclid(360.0) - 180.0;
+                let dist2 = (lat - target.lat).powi(2) + dlon.powi(2);
+                if best.is_none_or(|(_, old)| dist2 < old) {
+                    best = Some((idx, dist2));
+                }
+            }
+        }
+        let reading = best.and_then(|(idx, _)| {
+            let nearest = PointValue {
+                lat: f64::from(latitudes[idx]),
+                lon: f64::from(longitudes[idx]),
+            };
+            if haversine_km(*target, nearest) > PIXEL_TOLERANCE_KM {
+                return None;
+            }
+            let vals = [
+                f64::from(b07[idx]),
+                f64::from(b13[idx]),
+                f64::from(b15[idx]),
+            ];
+            vals.iter().all(|v| v.is_finite()).then_some(vals)
+        });
+        sampled.push(reading);
+    }
+    Ok(sampled)
+}
+
+fn surface_temperature_k(prior: &Prior) -> Option<f64> {
+    prior
+        .levels
+        .iter()
+        .filter(|level| level.temperature_k.is_some() && level.height_asl_m >= prior.terrain_asl_m)
+        .min_by(|a, b| a.height_asl_m.total_cmp(&b.height_asl_m))
+        .and_then(|level| level.temperature_k)
+}
+
+fn level_prior_support(level: &Level, rh_floor: f64) -> f64 {
+    let cloud = level.model_cloud_fraction.unwrap_or(0.0).clamp(0.0, 1.0);
+    let rh = level
+        .rh_percent
+        .map_or(0.0, |v| ((v - rh_floor) / (100.0 - rh_floor)).clamp(0.0, 1.0));
+    cloud.max(rh)
+}
+
+/// Refine a single sample's calibrated cloud columns and vertical features using
+/// Himawari AHI B13-B15 split-window (thin cirrus) and B07-B13 (warm low-cloud /
+/// fog) signatures fused with the same-cycle GFS vertical prior.
+///
+/// Never fabricates clear sky from unknown/missing pixels and never labels
+/// satellite posteriors as sounding or official cloud-height products.
+/// Returns `(updated_any, is_thin, is_thick, is_usable)` for horizontal metrics.
+fn refine_multispectral_sample(
+    columns: &mut [&mut OutputColumn],
+    features: &mut Vec<FeatureRecord>,
+    prior: &Prior,
+    bands: [f64; 3],
+    footprint: (f64, f64, f64),
+) -> (bool, bool, bool, bool) {
+    let [b07, b13, b15] = bands;
+    if columns.is_empty() || !b07.is_finite() || !b13.is_finite() || !b15.is_finite() {
+        return (false, false, false, false);
+    }
+    let Some(sfc_temp) = surface_temperature_k(prior) else {
+        return (false, false, false, false);
+    };
+    let btd_split = b13 - b15;
+    let btd_swir = b07 - b13;
+    let terrain = prior.terrain_asl_m;
+    let mut updated = false;
+
+    // 1. Thin cirrus split-window signature (B13 - B15 > 1.5..4.0 K) fused with
+    //    upper-tropospheric GFS prior so semi-transparent cirrus is not collapsed
+    //    into warm lower levels or dropped below the B13-only threshold.
+    let upper_levels: Vec<&Level> = prior
+        .levels
+        .iter()
+        .filter(|level| {
+            level.pressure_hpa <= 500
+                && level.height_asl_m >= terrain + 4500.0
+                && level.temperature_k.is_none_or(|t| t <= 260.0)
+        })
+        .collect();
+    let max_upper_prior = upper_levels
+        .iter()
+        .map(|level| level_prior_support(level, 45.0))
+        .fold(0.0, f64::max);
+    let split_signal = ((btd_split - 1.5) / 2.5).clamp(0.0, 1.0);
+    let cirrus_supported = split_signal > 0.0
+        && (max_upper_prior >= 0.15 || (btd_split >= 2.8 && (sfc_temp - b13) >= 2.0));
+    if cirrus_supported && !upper_levels.is_empty() {
+        let cirrus_prob = (split_signal * (0.45 + 0.55 * max_upper_prior)).clamp(0.0, 0.85);
+        if cirrus_prob >= 0.15 {
+            let peak_level = upper_levels
+                .iter()
+                .max_by(|a, b| {
+                    level_prior_support(a, 45.0)
+                        .total_cmp(&level_prior_support(b, 45.0))
+                        .then_with(|| {
+                            (b.height_asl_m - (terrain + 9000.0))
+                                .abs()
+                                .total_cmp(&(a.height_asl_m - (terrain + 9000.0)).abs())
+                        })
+                })
+                .copied()
+                .unwrap();
+            let peak_height = peak_level.height_asl_m;
+            let primary_col = &mut columns[0];
+            let prev_horiz = primary_col.horizontal_cloud_probability.unwrap_or(0.0);
+            let new_horiz = prev_horiz.max(cirrus_prob);
+            primary_col.horizontal_cloud_probability = Some(new_horiz);
+            primary_col.top_asl_m = Some(
+                primary_col
+                    .top_asl_m
+                    .map_or(peak_height, |old| old.max(peak_height)),
+            );
+            if primary_col.retrieval_quality == "unknown" {
+                primary_col.retrieval_quality = if cirrus_prob >= 0.35 && max_upper_prior >= 0.35 {
+                    "medium".into()
+                } else {
+                    "low".into()
+                };
+            }
+            if primary_col.cloud_type == "unknown" || primary_col.cloud_type == "clear" {
+                primary_col.cloud_type = "high_thin_cirrus_proxy".into();
+            }
+            if primary_col.base_source == "none" || primary_col.base_source == "unknown" {
+                primary_col.base_source = "hsd-b13-b15-split-window+gfs-upper-prior".into();
+            }
+            if primary_col.low_cloud_state == "clear" {
+                primary_col.low_cloud_state = "unknown".into();
+            }
+            for level in &upper_levels {
+                let vertical =
+                    (-0.5 * ((level.height_asl_m - peak_height) / 1800.0).powi(2)).exp();
+                let support = level_prior_support(level, 45.0).max(0.22);
+                let add_prob = (cirrus_prob * vertical * support).clamp(0.0, new_horiz);
+                if add_prob >= 0.08 {
+                    let key = level.height_asl_m.to_string();
+                    let old_p = primary_col
+                        .cloud_probability_by_height
+                        .get(&key)
+                        .copied()
+                        .unwrap_or(0.0);
+                    let fused = (1.0 - (1.0 - old_p) * (1.0 - add_prob)).min(new_horiz);
+                    primary_col.cloud_probability_by_height.insert(key, fused);
+                }
+            }
+            updated = true;
+        }
+    }
+
+    // 2. Warm low-cloud / fog contrast (B07 - B13 liquid-water emissivity/solar
+    //    signature) fused with low-level GFS prior so low stratus near surface
+    //    temperature is not underweighted when B13 alone is close to T_sfc.
+    let low_levels: Vec<&Level> = prior
+        .levels
+        .iter()
+        .filter(|level| {
+            level.height_asl_m >= terrain && level.height_asl_m - terrain <= 3500.0
+        })
+        .collect();
+    let max_low_prior = low_levels
+        .iter()
+        .map(|level| level_prior_support(level, 60.0))
+        .fold(0.0, f64::max);
+    let night_fog_signal = ((-btd_swir - 1.5) / 2.5).clamp(0.0, 1.0);
+    let day_stratus_signal = if (sfc_temp - b13) >= -1.0 {
+        ((btd_swir - 4.0) / 6.0).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
+    let low_btd_signal = night_fog_signal.max(day_stratus_signal);
+    if low_btd_signal > 0.0
+        && max_low_prior >= 0.35
+        && (sfc_temp - b13) <= 12.0
+        && !low_levels.is_empty()
+    {
+        let low_prob = (low_btd_signal * (0.40 + 0.60 * max_low_prior)).clamp(0.0, 0.85);
+        if low_prob >= 0.20 {
+            let peak_low = low_levels
+                .iter()
+                .max_by(|a, b| {
+                    level_prior_support(a, 60.0).total_cmp(&level_prior_support(b, 60.0))
+                })
+                .copied()
+                .unwrap();
+            let peak_height = peak_low.height_asl_m;
+            let primary_col = &mut columns[0];
+            let prev_horiz = primary_col.horizontal_cloud_probability.unwrap_or(0.0);
+            let new_horiz = prev_horiz.max(low_prob);
+            primary_col.horizontal_cloud_probability = Some(new_horiz);
+            primary_col.top_asl_m = Some(
+                primary_col
+                    .top_asl_m
+                    .map_or(peak_height, |old| old.max(peak_height)),
+            );
+            if primary_col.retrieval_quality == "unknown" {
+                primary_col.retrieval_quality = if low_prob >= 0.45 && max_low_prior >= 0.55 {
+                    "medium".into()
+                } else {
+                    "low".into()
+                };
+            }
+            if low_prob >= 0.50 && max_low_prior >= 0.55 && primary_col.low_cloud_state != "detected"
+            {
+                primary_col.low_cloud_state = "detected".into();
+            } else if primary_col.low_cloud_state == "clear" {
+                primary_col.low_cloud_state = "unknown".into();
+            }
+            if primary_col.base_source == "none" || primary_col.base_source == "unknown" {
+                primary_col.base_source = "hsd-b07-b13-low-contrast+gfs-low-prior".into();
+            }
+            for level in &low_levels {
+                let vertical =
+                    (-0.5 * ((level.height_asl_m - peak_height) / 950.0).powi(2)).exp();
+                let support = level_prior_support(level, 60.0).max(0.25);
+                let add_prob = (low_prob * vertical * support).clamp(0.0, new_horiz);
+                if add_prob >= 0.08 {
+                    let key = level.height_asl_m.to_string();
+                    let old_p = primary_col
+                        .cloud_probability_by_height
+                        .get(&key)
+                        .copied()
+                        .unwrap_or(0.0);
+                    let fused = (1.0 - (1.0 - old_p) * (1.0 - add_prob)).min(new_horiz);
+                    primary_col.cloud_probability_by_height.insert(key, fused);
+                }
+            }
+            updated = true;
+        }
+    }
+
+    // Keep feature records synchronized with refined cloud_probability_by_height
+    // so both satellite_vertical_profile and observed_features_by_offset see
+    // the multispectral refinement.
+    if updated {
+        let primary_col = &columns[0];
+        let horizontal = columns
+            .iter()
+            .filter_map(|col| col.horizontal_cloud_probability)
+            .filter(|v| v.is_finite())
+            .fold(0.0, f64::max);
+        if horizontal > 0.0 {
+            let round_lat = (primary_col.lat * 100_000.0).round() / 100_000.0;
+            let round_lon = (primary_col.lon * 100_000.0).round() / 100_000.0;
+            let round_dist = (primary_col.distance_km * 100.0).round() / 100.0;
+            let round_bearing = (primary_col.bearing_deg * 100.0).round() / 100.0;
+            let sample_ckey = column_key(round_lat, round_lon, round_dist, round_bearing);
+            for level in &prior.levels {
+                let mut merged_p = 0.0;
+                for col in columns.iter() {
+                    let p = col
+                        .cloud_probability_by_height
+                        .get(&level.height_asl_m.to_string())
+                        .copied()
+                        .unwrap_or(0.0);
+                    if p >= 0.08 {
+                        merged_p = 1.0 - (1.0 - merged_p) * (1.0 - p);
+                    }
+                }
+                if merged_p < 0.08 {
+                    continue;
+                }
+                let conditional = (merged_p / horizontal.max(1e-9)).clamp(0.0, 1.0);
+                if let Some(existing) = features.iter_mut().find(|f| {
+                    column_key(f.lat, f.lon, f.distance_km, f.bearing_deg) == sample_ckey
+                        && f.pressure_hpa == level.pressure_hpa
+                }) {
+                    existing.cloud_fraction_percent = Some(conditional * 100.0);
+                    existing.horizontal_cloud_probability = Some(horizontal);
+                    existing.cloud_probability_given_cloud = Some(conditional);
+                } else {
+                    features.push(FeatureRecord {
+                        lat: round_lat,
+                        lon: round_lon,
+                        distance_km: round_dist,
+                        bearing_deg: round_bearing,
+                        pressure_hpa: level.pressure_hpa,
+                        geopotential_height_m: level.height_asl_m,
+                        rh_percent: level.rh_percent.unwrap_or(70.0),
+                        temperature_k: level.temperature_k,
+                        omega_pa_s: None,
+                        u_ms: None,
+                        v_ms: None,
+                        cloud_fraction_percent: Some(conditional * 100.0),
+                        cloud_liquid_kg_kg: None,
+                        cloud_ice_kg_kg: None,
+                        source_lat: None,
+                        source_lon: None,
+                        source_distance_km: None,
+                        source_bearing_deg: None,
+                        surface_visibility_m: None,
+                        precip_rate_kg_m2_s: None,
+                        surface_temperature_k: None,
+                        surface_dewpoint_k: None,
+                        footprint_azimuth_width_deg: Some(footprint.0),
+                        footprint_near_distance_km: Some(footprint.1),
+                        footprint_far_distance_km: Some(footprint.2),
+                        horizontal_cloud_probability: Some(horizontal),
+                        cloud_probability_given_cloud: Some(conditional),
+                    });
+                }
+            }
+        }
+    }
+
+    let usable = columns.iter().any(|c| c.retrieval_quality != "unknown");
+    let horiz = columns
+        .iter()
+        .filter_map(|c| c.horizontal_cloud_probability)
+        .filter(|v| v.is_finite())
+        .fold(0.0, f64::max);
+    let is_thin = usable && horiz >= 0.20 && (btd_split >= 1.5 || (horiz < 0.60 && btd_split >= 1.0));
+    let is_thick = usable && horiz >= 0.65 && btd_split < 1.2;
+    (updated, is_thin, is_thick, usable)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn refine_multispectral_frame(
+    column_sets: &mut [ColumnSetRecord],
+    features: &mut Vec<FeatureRecord>,
+    metrics: &mut HorizontalMetrics,
+    sample_points: &[(f64, f64)],
+    priors: &[Option<Prior>],
+    bands: &[Option<[f64; 3]>],
+    azimuth_deg: f64,
+    radius_km: f64,
+) {
+    let mut distances: Vec<f64> = sample_points.iter().map(|(_, d)| *d).collect();
+    distances.sort_by(f64::total_cmp);
+    distances.dedup_by(|a, b| *a == *b);
+
+    let mut any_updated = false;
+    let mut thin_count = 0usize;
+    let mut thick_count = 0usize;
+    let mut usable_count = 0usize;
+
+    for (idx, &(bearing_deg, distance_km)) in sample_points.iter().enumerate() {
+        let Some(Some(prior)) = priors.get(idx) else {
+            continue;
+        };
+        let Some(Some(band_vals)) = bands.get(idx) else {
+            continue;
+        };
+        let dist_key = rounded_scaled(distance_km, 100.0);
+        let bearing_key = rounded_scaled(bearing_deg.rem_euclid(360.0), 100.0);
+        let d_idx = distances
+            .binary_search_by(|v| v.total_cmp(&distance_km))
+            .unwrap_or(0);
+        let prev_d = if d_idx == 0 { 0.0 } else { distances[d_idx - 1] };
+        let next_d = distances.get(d_idx + 1).copied().unwrap_or(radius_km);
+        let near = if d_idx == 0 {
+            0.0
+        } else {
+            0.5 * (prev_d + distance_km)
+        };
+        let far = radius_km.min(if d_idx + 1 == distances.len() {
+            distance_km
+        } else {
+            0.5 * (distance_km + next_d)
+        });
+        let width = if distance_km <= 120.0 { 15.0 } else { 14.0 };
+        let footprint = (width, near, near.max(far));
+
+        let mut matched: Vec<&mut OutputColumn> = column_sets
+            .iter_mut()
+            .flat_map(|set| set.columns.iter_mut())
+            .filter(|col| {
+                rounded_scaled(col.distance_km, 100.0) == dist_key
+                    && rounded_scaled(col.bearing_deg.rem_euclid(360.0), 100.0) == bearing_key
+            })
+            .collect();
+        if matched.is_empty() {
+            continue;
+        }
+        let (updated, is_thin, is_thick, usable) =
+            refine_multispectral_sample(&mut matched, features, prior, *band_vals, footprint);
+        any_updated |= updated;
+        if usable {
+            usable_count += 1;
+            if is_thin {
+                thin_count += 1;
+            }
+            if is_thick {
+                thick_count += 1;
+            }
+        }
+    }
+
+    if any_updated {
+        for set in column_sets.iter_mut() {
+            set.retrieval_quality = aggregate_quality(
+                set.columns.iter().map(|c| c.retrieval_quality.as_str()),
+                set.columns.len(),
+            );
+            set.low_cloud_state = low_state(
+                set.columns
+                    .iter()
+                    .filter(|c| c.distance_km <= 120.0)
+                    .map(|c| c.low_cloud_state.as_str()),
+            );
+        }
+        let grouped: Vec<Vec<OutputColumn>> = column_sets
+            .iter()
+            .map(|set| set.columns.clone())
+            .collect();
+        *metrics = horizontal_metrics(&grouped, azimuth_deg);
+    }
+    if usable_count > 0 {
+        metrics.thin_cloud_ratio = (thin_count as f64 / usable_count as f64).clamp(0.0, 1.0);
+        metrics.thick_cloud_ratio = (thick_count as f64 / usable_count as f64).clamp(0.0, 1.0);
+    }
+}
+
+/// Physically grounded Lagrangian trend score in `[0.0, 1.0]` combining:
+/// 1. `lagrangian_b13_trend_k_per_hour` (regime-aware: moderate cooling favors
+///    thin/mid-high canvas arrival when sky is open, while warming favors
+///    clearing/thinning when sky is overcast or horizon-blocked; rapid warming
+///    of sparse clouds or thickening of overcast scores `< 0.5`), and
+/// 2. Multi-frame cloud-ratio evolution across scoring frames (near-horizon
+///    clearing and far-cloud convergence toward the target band score `> 0.5`).
+/// Falls back cleanly to `0.5` when single-frame and no Lagrangian rate is given.
+fn compute_trend_score(
+    request: &AdjustmentRequest,
+    results: &[RetrievedFrame],
+    primary: &RetrievedFrame,
+) -> f64 {
+    let m = &primary.metrics;
+    let overcast_regime = ((m.local_cloud_ratio.max(m.cloud_blanket_score) - 0.55) / 0.25)
+        .clamp(0.0, 1.0);
+    let horizon_blocking_regime = ((m.horizon_cloud_ratio - 0.55) / 0.25).clamp(0.0, 1.0);
+    let blocking_regime = overcast_regime.max(horizon_blocking_regime);
+
+    let b13_delta = request
+        .lagrangian_b13_trend_k_per_hour
+        .filter(|rate| rate.is_finite())
+        .map(|rate| {
+            let sparse_signal = if rate <= 0.0 {
+                let cooling = (-rate / 6.0).tanh() * 0.35;
+                let convective_blowup = ((-rate - 10.0) / 10.0).clamp(0.0, 1.0) * 0.55;
+                cooling - convective_blowup
+            } else {
+                -(rate / 6.0).tanh() * 0.35
+            };
+            let overcast_signal = (rate / 6.0).tanh() * 0.38;
+            (1.0 - blocking_regime) * sparse_signal + blocking_regime * overcast_signal
+        });
+
+    let frame_delta = if results.len() >= 2 {
+        let earliest = results.iter().min_by_key(|frame| frame.valid_time);
+        let latest = results.iter().max_by_key(|frame| frame.valid_time);
+        match (earliest, latest) {
+            (Some(first), Some(last)) => {
+                let dt_hours =
+                    (last.valid_time - first.valid_time).num_seconds() as f64 / 3600.0;
+                if dt_hours >= 1.0 / 60.0 {
+                    let d_horizon_per_h =
+                        (last.metrics.horizon_cloud_ratio - first.metrics.horizon_cloud_ratio)
+                            / dt_hours;
+                    let horizon_term = (-d_horizon_per_h / 0.40).tanh() * 0.22;
+
+                    let before_err = (first.metrics.far_projected - 0.42).abs();
+                    let after_err = (last.metrics.far_projected - 0.42).abs();
+                    let target_improvement_per_h = (before_err - after_err) / dt_hours;
+                    let far_term = (target_improvement_per_h / 0.35).tanh() * 0.20;
+
+                    let d_local_per_h =
+                        (last.metrics.local_cloud_ratio - first.metrics.local_cloud_ratio)
+                            / dt_hours;
+                    let blanket_term =
+                        if last.metrics.local_cloud_ratio > 0.72 && d_local_per_h > 0.0 {
+                            -(d_local_per_h / 0.40).tanh() * 0.12
+                        } else {
+                            0.0
+                        };
+                    Some((horizon_term + far_term + blanket_term).clamp(-0.45, 0.45))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    let delta = match (b13_delta, frame_delta) {
+        (Some(b13), Some(frame_d)) => 0.65 * b13 + 0.35 * frame_d,
+        (Some(b13), None) => b13,
+        (None, Some(frame_d)) => frame_d,
+        (None, None) => 0.0,
+    };
+    (0.5 + delta).clamp(0.0, 1.0)
+}
+
 fn run_frame(
     frame: &Frame,
     request: &AdjustmentRequest,
@@ -428,7 +991,24 @@ fn run_frame(
         resolution: frame.retrieval.resolution.clone(),
         output_path: None,
     };
-    let result = execute_retrieval(&params)?;
+    let mut result = execute_retrieval(&params)?;
+    let origin = PointValue {
+        lat: request.point_lat,
+        lon: request.point_lon,
+    };
+    let targets = sample_targets(&result.sample_points, origin);
+    if let Ok(bands) = sample_hsd_bands(&frame.manifest_path, &targets) {
+        refine_multispectral_frame(
+            &mut result.column_sets,
+            &mut result.features,
+            &mut result.metrics,
+            &result.sample_points,
+            &result.priors,
+            &bands,
+            request.azimuth_deg,
+            request.radius_km,
+        );
+    }
     let offset_minutes = timeline_offset_minutes(valid_time, target);
     Ok(RetrievedFrame {
         valid_time,
@@ -779,6 +1359,9 @@ fn build_result(request: AdjustmentRequest) -> Result<Value, String> {
         || request
             .motion_age_minutes
             .is_some_and(|value| !value.is_finite() || value <= 0.0)
+        || request
+            .lagrangian_b13_trend_k_per_hour
+            .is_some_and(|value| !value.is_finite())
         || request.advection.as_ref().is_some_and(|plan| {
             !plan.horizon_hours.is_finite()
                 || plan.horizon_hours < 0.0
@@ -1028,6 +1611,7 @@ fn assemble_result(
         .advection
         .as_ref()
         .map_or_else(|| "unknown".to_string(), |plan| plan.motion_quality.clone());
+    let trend_score = compute_trend_score(request, results, primary);
     serde_json::to_value(AdjustmentOutput {
         contract: "rust-desktop-nowcast-adjustment-v1",
         runtime_python_used: false,
@@ -1040,7 +1624,7 @@ fn assemble_result(
         image_area: IMAGE_AREA,
         near_cloud_ratio: near,
         far_cloud_ratio: far,
-        trend_score: 0.5,
+        trend_score,
         visibility_penalty: (1.0 - clearance).clamp(0.0, 1.0),
         target_bonus: (1.0 - (far - 0.42).abs() / 0.42).clamp(0.0, 1.0),
         confidence,
@@ -1146,6 +1730,7 @@ mod tests {
             motion_correlation: 0.8,
             motion_quality: "strong".into(),
             motion_age_minutes: Some(10.0),
+            lagrangian_b13_trend_k_per_hour: None,
             advection: Some(AdvectionPlan {
                 horizon_hours: 0.25,
                 scale: 0.9,
@@ -1592,5 +2177,182 @@ mod tests {
         );
         request.motion_correlation = 5.0;
         assert_eq!(motion_reliability_factor(&request), 1.0);
+    }
+
+    #[test]
+    fn trend_score_responds_to_lagrangian_cooling_and_warming_by_regime() {
+        let target = parse_utc("2026-11-10T08:00:00Z", "target").unwrap();
+        // 1. Single frame with no Lagrangian rate falls back cleanly to 0.5.
+        let mut request = test_adjustment_request();
+        request.lagrangian_b13_trend_k_per_hour = None;
+        let open_frame = retrieved_test_frame(target, 0.30);
+        assert_eq!(
+            compute_trend_score(&request, std::slice::from_ref(&open_frame), &open_frame),
+            0.5
+        );
+
+        // 2. Open/moderate sky: moderate cooling (-4.5 K/h, mid-high cloud arrival) > 0.5,
+        //    warming (+4.5 K/h, target cloud dissipation) < 0.5.
+        request.lagrangian_b13_trend_k_per_hour = Some(-4.5);
+        let cooling_open =
+            compute_trend_score(&request, std::slice::from_ref(&open_frame), &open_frame);
+        request.lagrangian_b13_trend_k_per_hour = Some(4.5);
+        let warming_open =
+            compute_trend_score(&request, std::slice::from_ref(&open_frame), &open_frame);
+        assert!(
+            cooling_open > 0.6,
+            "expected favorable cooling on open sky, got {cooling_open}"
+        );
+        assert!(
+            warming_open < 0.4,
+            "expected unfavorable warming on open sky, got {warming_open}"
+        );
+
+        // 3. Overcast/blocking sky: warming (+4.5 K/h, clearing/thinning) > 0.5,
+        //    cooling (-4.5 K/h, thickening overcast) < 0.5.
+        let mut overcast_frame = retrieved_test_frame(target, 0.85);
+        overcast_frame.metrics.cloud_blanket_score = 0.82;
+        overcast_frame.metrics.horizon_cloud_ratio = 0.85;
+        request.lagrangian_b13_trend_k_per_hour = Some(4.5);
+        let warming_overcast = compute_trend_score(
+            &request,
+            std::slice::from_ref(&overcast_frame),
+            &overcast_frame,
+        );
+        request.lagrangian_b13_trend_k_per_hour = Some(-4.5);
+        let cooling_overcast = compute_trend_score(
+            &request,
+            std::slice::from_ref(&overcast_frame),
+            &overcast_frame,
+        );
+        assert!(
+            warming_overcast > 0.6,
+            "expected favorable clearing on overcast sky, got {warming_overcast}"
+        );
+        assert!(
+            cooling_overcast < 0.4,
+            "expected unfavorable thickening on overcast sky, got {cooling_overcast}"
+        );
+
+        // 4. Multi-frame clearing of near-horizon blocking clouds with no B13 rate > 0.5.
+        request.lagrangian_b13_trend_k_per_hour = None;
+        let earlier = retrieved_test_frame(target - chrono::Duration::minutes(20), 0.85);
+        let latest = retrieved_test_frame(target, 0.35);
+        let frames = [earlier, latest];
+        let clearing_multi = compute_trend_score(&request, &frames, &frames[1]);
+        assert!(
+            clearing_multi > 0.55,
+            "expected multi-frame clearing trend > 0.55, got {clearing_multi}"
+        );
+    }
+
+    #[test]
+    fn multispectral_refinement_recovers_thin_cirrus_and_warm_low_cloud_profile() {
+        let valid_time = parse_utc("2026-11-10T08:00:00Z", "valid").unwrap();
+        let prior = Prior {
+            valid_time_utc: time_contract::iso(valid_time),
+            source: "gfs-interpolated-vertical-prior".into(),
+            identity: "gfs-prior:multispectral".into(),
+            terrain_asl_m: 10.0,
+            target_lat: 30.2741,
+            target_lon: 120.1551,
+            levels: vec![
+                Level {
+                    pressure_hpa: 925,
+                    height_asl_m: 780.0,
+                    temperature_k: Some(288.0),
+                    rh_percent: Some(92.0),
+                    model_cloud_fraction: Some(0.65),
+                },
+                Level {
+                    pressure_hpa: 500,
+                    height_asl_m: 5600.0,
+                    temperature_k: Some(258.0),
+                    rh_percent: Some(50.0),
+                    model_cloud_fraction: Some(0.10),
+                },
+                Level {
+                    pressure_hpa: 300,
+                    height_asl_m: 9300.0,
+                    temperature_k: Some(232.0),
+                    rh_percent: Some(82.0),
+                    model_cloud_fraction: Some(0.55),
+                },
+            ],
+        };
+
+        // Case A: Thin cirrus with strong B13 - B15 split-window signature (+3.2 K)
+        // where B13 alone is near surface temperature so column initially collapsed.
+        let mut cirrus_col = OutputColumn::unknown(
+            valid_time,
+            30.2741,
+            120.1551,
+            180.0,
+            25.0,
+            Some(10.0),
+            "noaa-himawari9-hsd-calibrated:fixture",
+            &prior.identity,
+            &prior.source,
+            3.0,
+            -1.0,
+        );
+        let mut cirrus_features = Vec::new();
+        let (updated, is_thin, is_thick, usable) = refine_multispectral_sample(
+            &mut [&mut cirrus_col],
+            &mut cirrus_features,
+            &prior,
+            [284.0, 285.0, 281.8], // B13 - B15 = +3.2 K, B07 - B13 = -1.0 K
+            (14.0, 140.0, 220.0),
+        );
+        assert!(updated);
+        assert!(usable);
+        assert!(is_thin);
+        assert!(!is_thick);
+        assert!(
+            cirrus_col.cloud_probability_by_height.get("9300").copied().unwrap_or(0.0) > 0.25,
+            "expected upper-level thin cirrus posterior at 9300 m, got {:?}",
+            cirrus_col.cloud_probability_by_height
+        );
+        assert!(
+            cirrus_features.iter().any(|f| f.pressure_hpa == 300
+                && f.cloud_fraction_percent.is_some_and(|v| v > 25.0)),
+            "expected synchronized 300 hPa cirrus feature record"
+        );
+
+        // Case B: Warm nighttime fog/low stratus with B07 - B13 = -3.2 K and moist 925 hPa prior.
+        let mut fog_col = OutputColumn::unknown(
+            valid_time,
+            30.2741,
+            120.1551,
+            30.0,
+            25.0,
+            Some(10.0),
+            "noaa-himawari9-hsd-calibrated:fixture",
+            &prior.identity,
+            &prior.source,
+            3.0,
+            -1.0,
+        );
+        let mut fog_features = Vec::new();
+        let (updated_fog, _, _, usable_fog) = refine_multispectral_sample(
+            &mut [&mut fog_col],
+            &mut fog_features,
+            &prior,
+            [283.8, 287.0, 286.6], // B07 - B13 = -3.2 K, B13 - B15 = +0.4 K
+            (15.0, 15.0, 50.0),
+        );
+        assert!(updated_fog);
+        assert!(usable_fog);
+        assert_eq!(fog_col.low_cloud_state, "detected");
+        assert!(
+            fog_col.cloud_probability_by_height.get("780").copied().unwrap_or(0.0) > 0.25,
+            "expected low-level warm cloud posterior at 780 m, got {:?}",
+            fog_col.cloud_probability_by_height
+        );
+        assert!(
+            fog_features.iter().any(|f| f.pressure_hpa == 925
+                && f.cloud_fraction_percent.is_some_and(|v| v > 25.0)),
+            "expected synchronized 925 hPa low-cloud feature record"
+        );
     }
 }

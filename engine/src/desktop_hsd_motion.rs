@@ -33,9 +33,11 @@ const DEFAULT_MIN_OVERLAP: f64 = 0.85;
 const DEFAULT_MIN_CORRELATION: f64 = 0.35;
 const MAX_CELLS: usize = 16_000_000;
 const MAX_MOTION_CACHE: usize = 64;
-const MAX_FRAMES: usize = 4;
+const MAX_FRAMES: usize = 8;
+const MAX_BLOCK_FIELD_PAIRS: usize = 3;
 const VELOCITY_CONSISTENCY_FLOOR: f64 = 3.0;
 const VELOCITY_CONSISTENCY_RATIO: f64 = 0.6;
+const LAGRANGIAN_DELTA_BOUND_K: f64 = 50.0;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -269,7 +271,21 @@ fn shifted_bilinear(values: &[f64], shape: [usize; 2], shift_x: f64, shift_y: f6
     result
 }
 
-fn unknown(previous: &Frame, latest: &Frame, overlap_ratio: f64, age_minutes: f64) -> Value {
+fn hann_weight(index: usize, size: usize) -> f64 {
+    if size <= 1 {
+        1.0
+    } else {
+        0.5 * (1.0 - (2.0 * std::f64::consts::PI * index as f64 / (size - 1) as f64).cos())
+    }
+}
+
+fn unknown(
+    previous: &Frame,
+    latest: &Frame,
+    overlap_ratio: f64,
+    age_minutes: f64,
+    pair_count: usize,
+) -> Value {
     json!({
         "contract": "rust-desktop-nowcast-hsd-motion-v1",
         "runtime_python_used": false,
@@ -279,6 +295,8 @@ fn unknown(previous: &Frame, latest: &Frame, overlap_ratio: f64, age_minutes: f6
         "overlap_ratio": overlap_ratio,
         "age_minutes": age_minutes,
         "quality": "unknown",
+        "pair_count": pair_count,
+        "lagrangian_b13_trend_k_per_hour": Value::Null,
         "previous_time_utc": time_contract::iso(previous.valid_time),
         "latest_time_utc": time_contract::iso(latest.valid_time),
     })
@@ -412,18 +430,9 @@ fn pair_motion(
     let mut previous_fft = Vec::with_capacity(previous_work.len());
     let mut latest_fft = Vec::with_capacity(latest_work.len());
     for y in 0..height {
-        let wy = if height == 1 {
-            1.0
-        } else {
-            0.5 * (1.0 - (2.0 * std::f64::consts::PI * y as f64 / (height - 1) as f64).cos())
-        };
+        let wy = hann_weight(y, height);
         for x in 0..width {
-            let wx = if width == 1 {
-                1.0
-            } else {
-                0.5 * (1.0 - (2.0 * std::f64::consts::PI * x as f64 / (width - 1) as f64).cos())
-            };
-            let window = wy * wx;
+            let window = wy * hann_weight(x, width);
             previous_fft.push(Complex::new(previous_work[y * width + x] * window, 0.0));
             latest_fft.push(Complex::new(latest_work[y * width + x] * window, 0.0));
         }
@@ -535,8 +544,8 @@ fn pair_velocity(pair: &PairMotion) -> (f64, f64) {
 /// time, so the result stays close to the most recent observation while still
 /// averaging out sensor noise. Pairs that contradict the latest velocity are
 /// dropped as outliers; a latest pair contradicted by a majority of earlier
-/// pairs yields `None` (gated to `unknown`).
-fn refine_velocity(pairs: &[PairMotion]) -> Option<(f64, f64)> {
+/// pairs yields `None` (gated to `unknown`). Returns `(dx, dy, consistent_indices)`.
+fn refine_velocity(pairs: &[PairMotion]) -> Option<(f64, f64, Vec<usize>)> {
     let anchor = pairs.last()?;
     let (anchor_x, anchor_y) = pair_velocity(anchor);
     let anchor_speed = (anchor_x * anchor_x + anchor_y * anchor_y).sqrt();
@@ -545,7 +554,7 @@ fn refine_velocity(pairs: &[PairMotion]) -> Option<(f64, f64)> {
     let mut weight_sum = anchor.correlation;
     let mut sum_x = anchor.correlation * anchor_x;
     let mut sum_y = anchor.correlation * anchor_y;
-    let mut consistent = 0usize;
+    let mut consistent_indices = Vec::with_capacity(pairs.len());
     let mut inconsistent = 0usize;
     for (index, pair) in pairs.iter().enumerate().take(last) {
         if !pair.strong {
@@ -557,16 +566,18 @@ fn refine_velocity(pairs: &[PairMotion]) -> Option<(f64, f64)> {
             inconsistent += 1;
             continue;
         }
-        consistent += 1;
+        consistent_indices.push(index);
         let weight = pair.correlation * 2f64.powi(index as i32 - last as i32);
         weight_sum += weight;
         sum_x += weight * vx;
         sum_y += weight * vy;
     }
+    let consistent = consistent_indices.len();
     if inconsistent >= 2 && inconsistent > consistent {
         return None;
     }
-    Some((sum_x / weight_sum, sum_y / weight_sum))
+    consistent_indices.push(last);
+    Some((sum_x / weight_sum, sum_y / weight_sum, consistent_indices))
 }
 
 const FIELD_TARGET_BLOCK: usize = 96;
@@ -642,18 +653,9 @@ fn block_shift(
     let mut aligned_fft = Vec::with_capacity(cells);
     let mut latest_fft = Vec::with_capacity(cells);
     for y in 0..height {
-        let wy = if height == 1 {
-            1.0
-        } else {
-            0.5 * (1.0 - (2.0 * std::f64::consts::PI * y as f64 / (height - 1) as f64).cos())
-        };
+        let wy = hann_weight(y, height);
         for x in 0..width {
-            let wx = if width == 1 {
-                1.0
-            } else {
-                0.5 * (1.0 - (2.0 * std::f64::consts::PI * x as f64 / (width - 1) as f64).cos())
-            };
-            let window = wy * wx;
+            let window = wy * hann_weight(x, width);
             aligned_fft.push(Complex::new(aligned[y * width + x] * window, 0.0));
             latest_fft.push(Complex::new(latest_work[y * width + x] * window, 0.0));
         }
@@ -750,26 +752,168 @@ fn block_shift(
     ))
 }
 
-/// Estimate a coarse spatially-varying motion field from the latest frame pair.
-/// Each block is correlated independently; blocks that fail the local gate fall
-/// back to the global velocity with zero confidence so advection can blend
-/// smoothly back to the rigid estimate where the local match is unreliable.
+fn median_f64(values: &mut [f64]) -> f64 {
+    values.sort_by(f64::total_cmp);
+    let mid = values.len() / 2;
+    if values.len() % 2 == 1 {
+        values[mid]
+    } else {
+        0.5 * (values[mid - 1] + values[mid])
+    }
+}
+
+/// Reject isolated outlier block vectors via a 3×3 neighborhood median check
+/// and apply a center-weighted 3×3 spatial smoothing pass over valid blocks so
+/// advected fields stay spatially coherent without washing out real shear.
+fn smooth_block_field(
+    grid_y: usize,
+    grid_x: usize,
+    dx: &mut [f64],
+    dy: &mut [f64],
+    confidence: &mut [f64],
+    valid: &[bool],
+) {
+    let cells = grid_y * grid_x;
+    let mut cleaned_dx = dx.to_vec();
+    let mut cleaned_dy = dy.to_vec();
+    let mut cleaned_conf = confidence.to_vec();
+
+    // Pass 1: 3×3 neighborhood median outlier rejection across valid neighbors.
+    for by in 0..grid_y {
+        for bx in 0..grid_x {
+            let idx = by * grid_x + bx;
+            if !valid[idx] {
+                continue;
+            }
+            let mut nb_x = Vec::with_capacity(8);
+            let mut nb_y = Vec::with_capacity(8);
+            for oy in -1isize..=1 {
+                let ny = by as isize + oy;
+                if ny < 0 || ny >= grid_y as isize {
+                    continue;
+                }
+                for ox in -1isize..=1 {
+                    if oy == 0 && ox == 0 {
+                        continue;
+                    }
+                    let nx = bx as isize + ox;
+                    if nx < 0 || nx >= grid_x as isize {
+                        continue;
+                    }
+                    let n_idx = ny as usize * grid_x + nx as usize;
+                    if valid[n_idx] {
+                        nb_x.push(dx[n_idx]);
+                        nb_y.push(dy[n_idx]);
+                    }
+                }
+            }
+            if nb_x.len() < 3 {
+                continue;
+            }
+            let mut sorted_x = nb_x.clone();
+            let mut sorted_y = nb_y.clone();
+            let med_x = median_f64(&mut sorted_x);
+            let med_y = median_f64(&mut sorted_y);
+            let mut deviations: Vec<f64> = nb_x
+                .iter()
+                .zip(&nb_y)
+                .map(|(vx, vy)| (vx - med_x).hypot(vy - med_y))
+                .collect();
+            let mad = median_f64(&mut deviations);
+            let med_speed = med_x.hypot(med_y);
+            let threshold = VELOCITY_CONSISTENCY_FLOOR
+                .max(0.75 * med_speed)
+                .max(3.0 * mad);
+            let self_dev = (dx[idx] - med_x).hypot(dy[idx] - med_y);
+            if self_dev > threshold {
+                cleaned_dx[idx] = med_x;
+                cleaned_dy[idx] = med_y;
+                cleaned_conf[idx] = confidence[idx] * 0.5;
+            }
+        }
+    }
+
+    // Pass 2: confidence-weighted 3×3 spatial smoothing across valid blocks.
+    let mut smoothed_dx = vec![0.0; cells];
+    let mut smoothed_dy = vec![0.0; cells];
+    for by in 0..grid_y {
+        for bx in 0..grid_x {
+            let idx = by * grid_x + bx;
+            if !valid[idx] {
+                smoothed_dx[idx] = cleaned_dx[idx];
+                smoothed_dy[idx] = cleaned_dy[idx];
+                continue;
+            }
+            let mut w_sum = 0.0;
+            let mut sx = 0.0;
+            let mut sy = 0.0;
+            for oy in -1isize..=1 {
+                let ny = by as isize + oy;
+                if ny < 0 || ny >= grid_y as isize {
+                    continue;
+                }
+                for ox in -1isize..=1 {
+                    let nx = bx as isize + ox;
+                    if nx < 0 || nx >= grid_x as isize {
+                        continue;
+                    }
+                    let n_idx = ny as usize * grid_x + nx as usize;
+                    if !valid[n_idx] {
+                        continue;
+                    }
+                    let kernel = match (oy.abs(), ox.abs()) {
+                        (0, 0) => 4.0,
+                        (1, 0) | (0, 1) => 0.5,
+                        _ => 0.25,
+                    };
+                    let weight = kernel * cleaned_conf[n_idx].max(1e-3);
+                    w_sum += weight;
+                    sx += weight * cleaned_dx[n_idx];
+                    sy += weight * cleaned_dy[n_idx];
+                }
+            }
+            if w_sum > 0.0 {
+                smoothed_dx[idx] = sx / w_sum;
+                smoothed_dy[idx] = sy / w_sum;
+            } else {
+                smoothed_dx[idx] = cleaned_dx[idx];
+                smoothed_dy[idx] = cleaned_dy[idx];
+            }
+        }
+    }
+    dx.copy_from_slice(&smoothed_dx);
+    dy.copy_from_slice(&smoothed_dy);
+    confidence.copy_from_slice(&cleaned_conf);
+}
+
+/// Estimate a coarse spatially-varying motion field across up to the 3 most
+/// recent valid frame pairs (weighted by correlation quality and recency,
+/// converted to px/hour), followed by a 3×3 median outlier rejection and
+/// weighted spatial smoothing pass. Blocks that fail the local gate fall back
+/// to the global velocity with zero confidence.
 fn estimate_block_field(
-    previous: &Frame,
-    latest: &Frame,
-    hours: f64,
+    frames: &[Frame],
+    pairs: &[PairMotion],
+    consistent_indices: &[usize],
     global_dx: f64,
     global_dy: f64,
     min_correlation: f64,
 ) -> Value {
-    let [height, width] = previous.shape;
+    let [height, width] = frames[0].shape;
     let grid_y = field_grid_dim(height);
     let grid_x = field_grid_dim(width);
-    let global_shift_x = global_dx * hours;
-    let global_shift_y = global_dy * hours;
-    let mut dx = Vec::with_capacity(grid_y * grid_x);
-    let mut dy = Vec::with_capacity(grid_y * grid_x);
-    let mut confidence = Vec::with_capacity(grid_y * grid_x);
+    let cells = grid_y * grid_x;
+    let last_pair_idx = pairs.len() - 1;
+    let active_pairs: Vec<usize> = consistent_indices
+        .iter()
+        .rev()
+        .take(MAX_BLOCK_FIELD_PAIRS)
+        .copied()
+        .collect();
+    let mut raw_dx = Vec::with_capacity(cells);
+    let mut raw_dy = Vec::with_capacity(cells);
+    let mut raw_conf = Vec::with_capacity(cells);
+    let mut valid = Vec::with_capacity(cells);
     for by in 0..grid_y {
         let row0 = by * height / grid_y;
         let row1 = (by + 1) * height / grid_y;
@@ -778,46 +922,179 @@ fn estimate_block_field(
             let col0 = bx * width / grid_x;
             let col1 = (bx + 1) * width / grid_x;
             let block_width = col1 - col0;
-            let mut local = None;
+            let mut sum_w = 0.0;
+            let mut sum_vx = 0.0;
+            let mut sum_vy = 0.0;
+            let mut sum_recency = 0.0;
+            let mut sum_recency_corr = 0.0;
+            let mut anchor_block: Option<(f64, f64)> = None;
             if block_height >= FIELD_MIN_BLOCK && block_width >= FIELD_MIN_BLOCK {
                 let mut previous_block = Vec::with_capacity(block_height * block_width);
                 let mut latest_block = Vec::with_capacity(block_height * block_width);
-                for y in row0..row1 {
-                    for x in col0..col1 {
-                        previous_block.push(previous.values[y * width + x]);
-                        latest_block.push(latest.values[y * width + x]);
+                for &pair_idx in &active_pairs {
+                    let prev_frame = &frames[pair_idx];
+                    let next_frame = &frames[pair_idx + 1];
+                    let pair = &pairs[pair_idx];
+                    let hours = pair.age_minutes / 60.0;
+                    if !hours.is_finite() || hours <= 0.0 {
+                        continue;
+                    }
+                    previous_block.clear();
+                    latest_block.clear();
+                    for y in row0..row1 {
+                        for x in col0..col1 {
+                            previous_block.push(prev_frame.values[y * width + x]);
+                            latest_block.push(next_frame.values[y * width + x]);
+                        }
+                    }
+                    if let Some((shift_x, shift_y, correlation)) = block_shift(
+                        &previous_block,
+                        &latest_block,
+                        block_height,
+                        block_width,
+                        min_correlation,
+                        global_dx * hours,
+                        global_dy * hours,
+                    ) {
+                        let vx = shift_x / hours;
+                        let vy = shift_y / hours;
+                        if let Some((ax, ay)) = anchor_block {
+                            let tol = VELOCITY_CONSISTENCY_FLOOR
+                                .max(VELOCITY_CONSISTENCY_RATIO * ax.hypot(ay));
+                            if (vx - ax).hypot(vy - ay) > tol {
+                                continue;
+                            }
+                        } else {
+                            anchor_block = Some((vx, vy));
+                        }
+                        let recency = 2f64.powi(pair_idx as i32 - last_pair_idx as i32);
+                        let weight = correlation * recency;
+                        sum_w += weight;
+                        sum_vx += weight * vx;
+                        sum_vy += weight * vy;
+                        sum_recency += recency;
+                        sum_recency_corr += recency * correlation;
                     }
                 }
-                local = block_shift(
-                    &previous_block,
-                    &latest_block,
-                    block_height,
-                    block_width,
-                    min_correlation,
-                    global_shift_x,
-                    global_shift_y,
-                );
             }
-            match local {
-                Some((shift_x, shift_y, correlation)) => {
-                    dx.push((shift_x / hours) as f32);
-                    dy.push((shift_y / hours) as f32);
-                    confidence.push(correlation as f32);
-                }
-                None => {
-                    dx.push(global_dx as f32);
-                    dy.push(global_dy as f32);
-                    confidence.push(0.0);
-                }
+            if sum_w > 0.0 {
+                raw_dx.push(sum_vx / sum_w);
+                raw_dy.push(sum_vy / sum_w);
+                raw_conf.push((sum_recency_corr / sum_recency).clamp(0.0, 1.0));
+                valid.push(true);
+            } else {
+                raw_dx.push(global_dx);
+                raw_dy.push(global_dy);
+                raw_conf.push(0.0);
+                valid.push(false);
             }
         }
     }
+    smooth_block_field(
+        grid_y,
+        grid_x,
+        &mut raw_dx,
+        &mut raw_dy,
+        &mut raw_conf,
+        &valid,
+    );
+    let dx: Vec<f32> = raw_dx.into_iter().map(|v| v as f32).collect();
+    let dy: Vec<f32> = raw_dy.into_iter().map(|v| v as f32).collect();
+    let confidence: Vec<f32> = raw_conf.into_iter().map(|v| v as f32).collect();
     json!({
         "grid": [grid_y, grid_x],
         "dx_px_per_hour": dx,
         "dy_px_per_hour": dy,
         "confidence": confidence,
     })
+}
+
+/// Non-wrapping Lagrangian B13 evolution rate (K/hour): negative indicates
+/// cloud-top cooling/thickening/rising along the motion trajectory, positive
+/// indicates warming/thinning/dissipating. Aggregated across up to the 3 most
+/// recent consistent frame pairs weighted by correlation and recency.
+fn lagrangian_b13_trend(
+    frames: &[Frame],
+    pairs: &[PairMotion],
+    consistent_indices: &[usize],
+    global_dx: f64,
+    global_dy: f64,
+) -> Option<f64> {
+    let last_pair_idx = pairs.len().checked_sub(1)?;
+    let mut weight_sum = 0.0;
+    let mut rate_sum = 0.0;
+    for &pair_idx in consistent_indices.iter().rev().take(MAX_BLOCK_FIELD_PAIRS) {
+        let prev = &frames[pair_idx];
+        let next = &frames[pair_idx + 1];
+        let pair = &pairs[pair_idx];
+        let hours = pair.age_minutes / 60.0;
+        if !hours.is_finite() || hours <= 0.0 {
+            continue;
+        }
+        let [height, width] = prev.shape;
+        let shift_x = global_dx * hours;
+        let shift_y = global_dy * hours;
+        let mut delta_sum = 0.0;
+        let mut valid_count = 0usize;
+        for y in 0..height {
+            let source_y = y as f64 - shift_y;
+            let y0 = source_y.floor() as isize;
+            let y1 = y0 + 1;
+            if y0 < 0 || y1 >= height as isize {
+                continue;
+            }
+            let wy = source_y - y0 as f64;
+            let row0 = y0 as usize * width;
+            let row1 = y1 as usize * width;
+            for x in 0..width {
+                let source_x = x as f64 - shift_x;
+                let x0 = source_x.floor() as isize;
+                let x1 = x0 + 1;
+                if x0 < 0 || x1 >= width as isize {
+                    continue;
+                }
+                let next_val = next.values[y * width + x];
+                if !next_val.is_finite() {
+                    continue;
+                }
+                let c0 = x0 as usize;
+                let c1 = x1 as usize;
+                let v00 = prev.values[row0 + c0];
+                let v01 = prev.values[row0 + c1];
+                let v10 = prev.values[row1 + c0];
+                let v11 = prev.values[row1 + c1];
+                if !v00.is_finite() || !v01.is_finite() || !v10.is_finite() || !v11.is_finite() {
+                    continue;
+                }
+                let wx = source_x - x0 as f64;
+                let shifted_prev = (1.0 - wy) * (1.0 - wx) * v00
+                    + (1.0 - wy) * wx * v01
+                    + wy * (1.0 - wx) * v10
+                    + wy * wx * v11;
+                let delta_k = next_val - shifted_prev;
+                if delta_k.is_finite() && delta_k.abs() <= LAGRANGIAN_DELTA_BOUND_K {
+                    delta_sum += delta_k;
+                    valid_count += 1;
+                }
+            }
+        }
+        if valid_count * 4 < height * width {
+            continue;
+        }
+        let pair_rate = (delta_sum / valid_count as f64) / hours;
+        if pair_rate.is_finite() {
+            let recency = 2f64.powi(pair_idx as i32 - last_pair_idx as i32);
+            let weight = pair.correlation * recency;
+            weight_sum += weight;
+            rate_sum += weight * pair_rate;
+        }
+    }
+    if weight_sum > 0.0 {
+        let rate = rate_sum / weight_sum;
+        rate.is_finite().then_some(rate)
+    } else {
+        None
+    }
 }
 
 fn execute_uncached(params: &Params) -> Result<Value, String> {
@@ -853,24 +1130,28 @@ fn execute_uncached(params: &Params) -> Result<Value, String> {
             latest,
             latest_pair.overlap_ratio,
             latest_pair.age_minutes,
+            0,
         ));
     }
-    let Some((dx, dy)) = refine_velocity(&pairs) else {
+    let Some((dx, dy, consistent_indices)) = refine_velocity(&pairs) else {
         return Ok(unknown(
             previous,
             latest,
             latest_pair.overlap_ratio,
             latest_pair.age_minutes,
+            0,
         ));
     };
     let motion_field = estimate_block_field(
-        previous,
-        latest,
-        latest_pair.age_minutes / 60.0,
+        &frames,
+        &pairs,
+        &consistent_indices,
         dx,
         dy,
         params.min_correlation,
     );
+    let lagrangian_trend =
+        lagrangian_b13_trend(&frames, &pairs, &consistent_indices, dx, dy);
     Ok(json!({
         "contract": "rust-desktop-nowcast-hsd-motion-v1",
         "runtime_python_used": false,
@@ -880,6 +1161,8 @@ fn execute_uncached(params: &Params) -> Result<Value, String> {
         "overlap_ratio": latest_pair.overlap_ratio,
         "age_minutes": latest_pair.age_minutes,
         "quality": "strong",
+        "pair_count": consistent_indices.len(),
+        "lagrangian_b13_trend_k_per_hour": lagrangian_trend,
         "motion_field": motion_field,
         "previous_time_utc": time_contract::iso(previous.valid_time),
         "latest_time_utc": time_contract::iso(latest.valid_time),
@@ -1283,8 +1566,10 @@ mod tests {
         };
         let left = column_mean(0);
         let right = column_mean(grid_x - 1);
+        // Center-weighted 3x3 smoothing pulls edge columns slightly toward the
+        // middle column, so expect > 1.5 px per 10 min (9.0 px/h) across the 3-column grid.
         assert!(
-            right > left + 2.0 / HOURS,
+            right > left + 1.5 / HOURS,
             "left {left} should be slower than right {right}"
         );
         fs::remove_dir_all(directory).unwrap();
@@ -1295,6 +1580,107 @@ mod tests {
         let (result, directory) = estimate(noise_field(7), noise_field(91));
         assert_eq!(result["quality"], "unknown");
         assert!(result["motion_field"].is_null());
+        assert_eq!(result["pair_count"], 0);
+        assert!(result["lagrangian_b13_trend_k_per_hour"].is_null());
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn multipair_block_motion_and_spatial_smoothing_reject_outlier_block() {
+        // 5 frames = 4 consecutive pairs (exercises expanded MAX_FRAMES and multi-pair block aggregation).
+        let f0 = cloud_field();
+        let f1 = shifted_bilinear(&f0, SHAPE, 2.0, -1.0);
+        let f2 = shifted_bilinear(&f1, SHAPE, 2.0, -1.0);
+        let f3 = shifted_bilinear(&f2, SHAPE, 2.0, -1.0);
+        let f4 = shifted_bilinear(&f3, SHAPE, 2.0, -1.0);
+        let (result, directory) = estimate_sequence(&[
+            (f0, "2026-11-12T00:00:00+00:00"),
+            (f1, "2026-11-12T00:10:00+00:00"),
+            (f2, "2026-11-12T00:20:00+00:00"),
+            (f3, "2026-11-12T00:30:00+00:00"),
+            (f4, "2026-11-12T00:40:00+00:00"),
+        ]);
+        assert_eq!(result["quality"], "strong");
+        assert_eq!(result["pair_count"], 4);
+        let (x, y) = shift_estimate(&result);
+        assert!((x - 2.0).abs() < 0.25, "dx shift {x}");
+        assert!((y + 1.0).abs() < 0.25, "dy shift {y}");
+        // Verify motion_field still satisfies desktop_hsd_advection's strict deny_unknown_fields schema.
+        let _: crate::desktop_hsd_advection::MotionField =
+            serde_json::from_value(result["motion_field"].clone()).unwrap();
+        fs::remove_dir_all(directory).unwrap();
+
+        // Direct unit check on 3×3 median outlier rejection + weighted smoothing:
+        // center block has an isolated +90 px/h spike surrounded by coherent 12 px/h blocks.
+        let mut dx = vec![12.0; 9];
+        let mut dy = vec![-6.0; 9];
+        let mut conf = vec![0.9; 9];
+        let valid = vec![true; 9];
+        dx[4] = 90.0;
+        dy[4] = 45.0;
+        smooth_block_field(3, 3, &mut dx, &mut dy, &mut conf, &valid);
+        assert!(
+            (dx[4] - 12.0).abs() < 1.0,
+            "isolated outlier dx was not rejected: {}",
+            dx[4]
+        );
+        assert!(
+            (dy[4] + 6.0).abs() < 1.0,
+            "isolated outlier dy was not rejected: {}",
+            dy[4]
+        );
+        assert!(conf[4] < 0.9, "outlier confidence should be attenuated");
+    }
+
+    #[test]
+    fn lagrangian_b13_trend_detects_cooling_and_warming() {
+        let f0 = cloud_field();
+        let f1_cool: Vec<f64> = shifted_bilinear(&f0, SHAPE, 2.0, -1.0)
+            .into_iter()
+            .map(|v| v - 2.0)
+            .collect();
+        let f2_cool: Vec<f64> = shifted_bilinear(&f1_cool, SHAPE, 2.0, -1.0)
+            .into_iter()
+            .map(|v| v - 2.0)
+            .collect();
+        let (cool_result, cool_dir) = estimate_sequence(&[
+            (f0.clone(), "2026-11-12T00:00:00+00:00"),
+            (f1_cool, "2026-11-12T00:10:00+00:00"),
+            (f2_cool, "2026-11-12T00:20:00+00:00"),
+        ]);
+        assert_eq!(cool_result["quality"], "strong");
+        assert_eq!(cool_result["pair_count"], 2);
+        let cool_rate = cool_result["lagrangian_b13_trend_k_per_hour"]
+            .as_f64()
+            .unwrap();
+        // -2.0 K per 10 minutes = -12.0 K/hour.
+        assert!(
+            (cool_rate + 12.0).abs() < 0.8,
+            "expected cooling rate near -12.0 K/h, got {cool_rate}"
+        );
+        fs::remove_dir_all(cool_dir).unwrap();
+
+        let f1_warm: Vec<f64> = shifted_bilinear(&f0, SHAPE, 2.0, -1.0)
+            .into_iter()
+            .map(|v| v + 1.5)
+            .collect();
+        let f2_warm: Vec<f64> = shifted_bilinear(&f1_warm, SHAPE, 2.0, -1.0)
+            .into_iter()
+            .map(|v| v + 1.5)
+            .collect();
+        let (warm_result, warm_dir) = estimate_sequence(&[
+            (f0, "2026-11-12T00:00:00+00:00"),
+            (f1_warm, "2026-11-12T00:10:00+00:00"),
+            (f2_warm, "2026-11-12T00:20:00+00:00"),
+        ]);
+        let warm_rate = warm_result["lagrangian_b13_trend_k_per_hour"]
+            .as_f64()
+            .unwrap();
+        // +1.5 K per 10 minutes = +9.0 K/hour.
+        assert!(
+            (warm_rate - 9.0).abs() < 0.8,
+            "expected warming rate near +9.0 K/h, got {warm_rate}"
+        );
+        fs::remove_dir_all(warm_dir).unwrap();
     }
 }

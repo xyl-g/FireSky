@@ -508,7 +508,7 @@ fn request_parts(params: &Params) -> Result<RequestParts, String> {
         || !(-180.0..=180.0).contains(&params.lon)
         || !params.radius_km.is_finite()
         || !(100.0..=1000.0).contains(&params.radius_km)
-        || !(1..=4).contains(&params.count)
+        || !(1..=8).contains(&params.count)
         || !params.max_age_minutes.is_finite()
         || !(0.1..=1440.0).contains(&params.max_age_minutes)
     {

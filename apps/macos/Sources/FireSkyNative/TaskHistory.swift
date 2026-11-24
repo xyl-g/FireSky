@@ -95,11 +95,11 @@ struct NativeTaskHistoryItem: Identifiable {
 
     var statusTitle: String {
         switch status {
-        case "running": cancelRequested ? "取消中" : "运行中"
-        case "done": "已完成"
-        case "failed": "失败"
-        case "cancelled": "已取消"
-        case "interrupted": "已中断"
+        case "running": L10n.status(cancelRequested ? "取消中" : "运行中")
+        case "done": L10n.status("已完成")
+        case "failed": L10n.status("失败")
+        case "cancelled": L10n.status("已取消")
+        case "interrupted": L10n.status("已中断")
         default: status
         }
     }
@@ -107,7 +107,7 @@ struct NativeTaskHistoryItem: Identifiable {
     var contextTitle: String {
         guard let payload = retryRequest?.payload else {
             // UX #13：后台同步没有地点参数，给出明确说明而不是留白。
-            return isBackgroundSync ? "后台数据同步轮次" : ""
+            return isBackgroundSync ? L10n.text("后台数据同步轮次", "Background sync round") : ""
         }
         let name = payload["name"] as? String
             ?? (payload["regions"] as? [String])?.joined(separator: "、")
@@ -115,12 +115,12 @@ struct NativeTaskHistoryItem: Identifiable {
         let date = payload["target_date"] as? String ?? ""
         let phenomenon: String
         switch payload["phenomenon"] as? String {
-        case "dawn": phenomenon = "朝霞"
-        case "dusk": phenomenon = "晚霞"
+        case "dawn": phenomenon = L10n.t("朝霞")
+        case "dusk": phenomenon = L10n.t("晚霞")
         default: phenomenon = ""
         }
         let text = [name, date, phenomenon].filter { !$0.isEmpty }.joined(separator: " · ")
-        if text.isEmpty && isBackgroundSync { return "后台数据同步轮次" }
+        if text.isEmpty && isBackgroundSync { return L10n.text("后台数据同步轮次", "Background sync round") }
         return text
     }
 
@@ -141,14 +141,14 @@ struct NativeTaskEvent: Identifiable {
 
     var title: String {
         switch event {
-        case "running": "开始"
-        case "progress": "进度"
-        case "cancel_requested": "请求取消"
-        case "done": "完成"
-        case "failed": "失败"
-        case "cancelled": "已取消"
-        case "interrupted": "已中断"
-        default: "状态更新"
+        case "running": L10n.text("开始", "Started")
+        case "progress": L10n.text("进度", "Progress")
+        case "cancel_requested": L10n.text("请求取消", "Cancel requested")
+        case "done": L10n.text("完成", "Done")
+        case "failed": L10n.status("失败")
+        case "cancelled": L10n.status("已取消")
+        case "interrupted": L10n.status("已中断")
+        default: L10n.text("状态更新", "Status update")
         }
     }
 
@@ -196,12 +196,15 @@ struct NativeTaskHistoryView: View {
             Divider()
             HStack(alignment: .top, spacing: 0) {
                 listColumn
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 if store.selectedTaskHistoryID != nil {
                     Divider()
                     detailColumn
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task { store.loadTaskHistory() }
         .confirmationDialog(L10n.text("删除任务记录？", "Delete task record?"), isPresented: Binding(
             get: { store.pendingForgetTaskID != nil },
@@ -282,12 +285,16 @@ struct NativeTaskHistoryView: View {
             if store.taskHistoryLoading && store.taskHistory.isEmpty {
                 ProgressView(L10n.text("正在读取任务记录…", "Loading task records…")).frame(maxWidth: .infinity, minHeight: 140)
             } else if visibleHistory.isEmpty {
-                ContentUnavailableView(
-                    store.taskHistory.isEmpty ? L10n.text("暂无任务记录", "No task records") : L10n.text("没有符合筛选的任务", "No tasks match the filter"),
-                    systemImage: "clock.arrow.circlepath",
-                    description: Text(store.online
-                        ? (store.taskHistory.isEmpty ? L10n.text("完成一次检查或预测后会显示在这里。", "Shown after a check or forecast completes.") : L10n.text("换个筛选条件试试。", "Try a different filter."))
-                        : L10n.text("引擎未连接。", "Engine is offline.")))
+                emptyState(
+                    title: store.taskHistory.isEmpty
+                        ? L10n.text("暂无任务记录", "No task records")
+                        : L10n.text("没有符合筛选的任务", "No tasks match the filter"),
+                    message: store.online
+                        ? (store.taskHistory.isEmpty
+                           ? L10n.text("完成一次数据检查或预测后，任务记录与可恢复快照会显示在这里。", "Task records and restorable snapshots will appear here after a check or forecast.")
+                           : L10n.text("当前筛选条件下没有记录，可切换到「全部」查看。", "No records match this filter. Switch back to All to view everything."))
+                        : L10n.text("引擎未连接。", "Engine is offline.")
+                )
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
