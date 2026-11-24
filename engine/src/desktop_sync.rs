@@ -36,7 +36,7 @@ const MAX_BYTES: u64 = 16 * 1024;
 const SETTINGS_CONTRACT: &str = "rust-data-sync-settings-v1";
 const STATE_CONTRACT: &str = "rust-data-sync-state-v1";
 const SOURCES: [&str; 3] = ["cams", "gfs", "ec"];
-const MIN_INTERVAL_MINUTES: u32 = 30;
+const MIN_INTERVAL_MINUTES: u32 = 5;
 const MAX_INTERVAL_MINUTES: u32 = 1440;
 const MIN_LEAD_HORIZON_HOURS: u32 = 3;
 const MAX_LEAD_HORIZON_HOURS: u32 = 240;
@@ -743,11 +743,13 @@ fn publication_name(source: &str) -> &'static str {
 fn probe_publications(
     sources: &[&str],
     now_utc: Option<&str>,
+    force_refresh: bool,
 ) -> Result<Map<String, Value>, String> {
     let params: desktop_publications::Params = serde_json::from_value(json!({
         "sources": sources.iter().map(|name| publication_name(name)).collect::<Vec<_>>(),
         "now_utc": now_utc,
         "timeout_seconds": PROBE_TIMEOUT_SECONDS,
+        "force_refresh": force_refresh,
     }))
     .map_err(|e| e.to_string())?;
     let value = desktop_publications::execute(params)?;
@@ -778,7 +780,7 @@ pub fn due(workspace: &Path, busy: bool, now_utc: Option<&str>) -> Result<Value,
         settings
             .interval_minutes
             .ok_or("data sync interval is not configured")?;
-        probe_publications(&names, now_utc)?
+        probe_publications(&names, now_utc, false)?
     };
     let now = match now_utc {
         Some(value) => time_contract::parse_utc(value)?,
@@ -1053,7 +1055,7 @@ fn sync_cams(
             config: crate::ads::Config::default(),
             allow_download: true,
             require_exact_valid_time: true,
-            refresh_before_cycle: None,
+            refresh_before_cycle: Some(time_contract::iso(cycle)),
             all_leads: true,
             model_bbox: None,
         },
@@ -1310,6 +1312,7 @@ pub fn run(
     if !settings.enabled {
         return Err("data sync is not enabled".into());
     }
+    let force = params.get("force").and_then(Value::as_bool).unwrap_or(false);
     let requested = requested_sources(&params)?;
     for name in &requested {
         if !settings.sources.toggle(name) {
@@ -1372,7 +1375,7 @@ pub fn run(
     // The publication probe runs before ANY state write: a failed probe
     // consumes neither the interval gate nor the breaker budget, and the
     // per-source failed rows keep the state file consistent with reality.
-    let publications = match probe_publications(&requested, None) {
+    let publications = match probe_publications(&requested, None, force) {
         Ok(value) => value,
         Err(error) => {
             commit_probe_failure(&state_file, &requested, &error, task_id)?;
@@ -1497,7 +1500,7 @@ pub fn run(
                 .last_cycle
                 .as_deref()
                 .and_then(|value| time_contract::parse_utc(value).ok());
-            if let Some(last) = last.filter(|last| cycle <= *last && coverage_tracked) {
+            if let Some(last) = last.filter(|last| !force && cycle <= *last && coverage_tracked) {
                 is_current = true;
                 Ok(json!({
                     "files": [],
@@ -1782,7 +1785,7 @@ mod tests {
     fn invalid_values_and_unknown_fields_are_rejected() {
         let workspace = tempfile::tempdir().unwrap();
         for case in vec![
-            json!({"settings": {"interval_minutes": 29}}),
+            json!({"settings": {"interval_minutes": 4}}),
             json!({"settings": {"interval_minutes": 1441}}),
             json!({"settings": {"anchor_region": "atlantis"}}),
             json!({"settings": {"lead_horizon_hours": 121}}),

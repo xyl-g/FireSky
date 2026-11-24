@@ -360,7 +360,10 @@ fn aerosol_reading(
         "observer_lat":lat,"observer_lon":lon,"path_samples":samples}))
 }
 
-fn ordinary_payload(payload: &Value, cancel: &AtomicBool) -> Result<Value, String> {
+fn ordinary_payload(
+    payload: &Value,
+    cancel: &AtomicBool,
+) -> Result<(Value, tempfile::TempDir), String> {
     check_cancel(cancel)?;
     let mut normalized = payload.clone();
     let object = normalized
@@ -380,17 +383,23 @@ fn ordinary_payload(payload: &Value, cancel: &AtomicBool) -> Result<Value, Strin
     )?;
     let hsd_params = json!({"cache_dir":satellite,"reference_time_utc":context["lookup"],
         "lat":context["request"]["lat"],"lon":context["request"]["lon"],
-        "radius_km":context["request"]["radius_km"],"count":4,"max_age_minutes":30.0});
+        "radius_km":context["request"]["radius_km"],"count":6,"max_age_minutes":90.0});
     let cached = crate::desktop_hsd::execute(
         serde_json::from_value(hsd_params.clone()).map_err(|e| e.to_string())?,
     )?;
-    if cached["frames"].as_array().is_none_or(|v| v.len() < 2) && allow_download {
+    let cached_count = cached["frames"].as_array().map_or(0, Vec::len);
+    if cached_count < 4 && allow_download {
         check_cancel(cancel)?;
-        crate::hsd_provider::execute(hsd_params.clone())?;
+        if let Err(error) = crate::hsd_provider::execute(hsd_params.clone()) {
+            if cached_count < 2 {
+                return Err(error);
+            }
+        }
     }
     check_cancel(cancel)?;
+    let export_dir = tempfile::tempdir().map_err(|e| e.to_string())?;
     let mut export_params = hsd_params;
-    export_params["output_dir"] = json!(satellite.join(".rust-bundles"));
+    export_params["output_dir"] = json!(export_dir.path());
     let exported = crate::desktop_hsd::export(
         serde_json::from_value(export_params).map_err(|e| e.to_string())?,
     )
@@ -456,13 +465,18 @@ fn ordinary_payload(payload: &Value, cancel: &AtomicBool) -> Result<Value, Strin
     if horizon > 0.10 && !applied && quality != "diagnostic-only" && !historical {
         return Err("native nowcast requires fresh paired motion for a future event".into());
     }
-    let target = if horizon > 4.0 { latest_time } else { target };
+    let target = if horizon > 4.0 || (!applied && horizon > 0.5 && historical) {
+        latest_time
+    } else {
+        target
+    };
     let mut display = latest.clone();
     if applied {
         check_cancel(cancel)?;
-        fs::create_dir_all(satellite.join(".rust-advection")).map_err(|e| e.to_string())?;
+        let advection_dir = export_dir.path().join("advection");
+        fs::create_dir_all(&advection_dir).map_err(|e| e.to_string())?;
         display = crate::desktop_hsd_advection::execute(serde_json::from_value(json!({
-            "manifest_path":latest["manifest_path"],"output_dir":satellite.join(".rust-advection"),
+            "manifest_path":latest["manifest_path"],"output_dir":advection_dir,
             "target_time_utc":time_contract::iso(target),"horizon_hours":horizon,"scale":scale,"applied":true,
             "motion_dx_px_per_hour":motion["dx_px_per_hour"],"motion_dy_px_per_hour":motion["dy_px_per_hour"],
             "motion_quality":quality,"reason":reason,"motion_field":motion["motion_field"],
@@ -549,18 +563,43 @@ fn ordinary_payload(payload: &Value, cancel: &AtomicBool) -> Result<Value, Strin
         Ok((encoded, display))
     })?;
     check_cancel(cancel)?;
+    let scoring_frames = if applied {
+        let mut selected: Vec<Value> = encoded
+            .into_iter()
+            .filter(|frame| {
+                frame["valid_time_utc"]
+                    .as_str()
+                    .and_then(|s| utc(s).ok())
+                    .is_some_and(|valid| {
+                        let offset = ((valid - target).num_seconds() as f64 / 300.0)
+                            .round_ties_even() as i64
+                            * 5;
+                        (-30..=30).contains(&offset) && offset != 0
+                    })
+            })
+            .collect();
+        selected.push(display.clone());
+        selected
+    } else {
+        encoded
+    };
     let aerosol = aerosol_reading(payload, &context, azimuth, allow_download)?;
     let mut result = payload.clone();
     result["cached_nowcast"] = json!({
         "target_time_utc":time_contract::iso(target),"timezone_name":context["request"]["timezone_name"],
         "point_lat":lat,"point_lon":lon,"radius_km":radius,"azimuth_deg":azimuth,
-        "display_frame":display,"frames":encoded,
+        "display_frame":display,"frames":scoring_frames,
         "source_times_utc":frames.iter().rev().map(|v|v["valid_time_utc"].clone()).collect::<Vec<_>>(),
         "motion_dx_px_per_hour":if strong {motion["dx_px_per_hour"].clone()} else {json!(0.0)},
         "motion_dy_px_per_hour":if strong {motion["dy_px_per_hour"].clone()} else {json!(0.0)},
         "motion_correlation":motion.get("correlation").cloned().unwrap_or(json!(0.0)),
         "motion_quality":motion.get("quality").cloned().unwrap_or(json!("unknown")),
         "motion_age_minutes":motion.get("age_minutes").cloned().unwrap_or(Value::Null),
+        "lagrangian_b13_trend_k_per_hour":if strong {
+            motion.get("lagrangian_b13_trend_k_per_hour").cloned().unwrap_or(Value::Null)
+        } else {
+            Value::Null
+        },
         "advection":{"horizon_hours":horizon,"scale":scale,"applied":applied,"reason":reason,
             "motion_age_minutes":motion.get("age_minutes").cloned().unwrap_or(Value::Null),"motion_quality":quality},
         "single_historical_observation":horizon>0.10 && !applied && historical,
@@ -593,7 +632,7 @@ fn ordinary_payload(payload: &Value, cancel: &AtomicBool) -> Result<Value, Strin
                 json!(["cache-only 请求未获取雷达，雷达状态 unknown，不能解释为无降水。"]);
         }
     }
-    Ok(result)
+    Ok((result, export_dir))
 }
 const FEATURE_FIELDS: [&str; 27] = [
     "lat",
@@ -1079,10 +1118,14 @@ pub fn compute(payload: &Value) -> Result<Value, String> {
 pub fn compute_with_cancel(payload: &Value, cancel: &AtomicBool) -> Result<Value, String> {
     check_cancel(cancel)?;
     let prepared;
+    let _export_dir: Option<tempfile::TempDir>;
     let payload = if payload.get("cached_nowcast").is_some() {
+        _export_dir = None;
         payload
     } else {
-        prepared = ordinary_payload(payload, cancel)?;
+        let (value, dir) = ordinary_payload(payload, cancel)?;
+        prepared = value;
+        _export_dir = Some(dir);
         &prepared
     };
     let request = payload
@@ -1319,6 +1362,36 @@ mod tests {
             "allow_download":false,"_runtime_config":{"workspace":root.path()},
         }));
         assert!(result.unwrap_err().contains("calibrated HSD observations"));
+        assert!(
+            !root.path().join(".cache/himawari-hsd/.rust-bundles").exists(),
+            "ephemeral export must never leave a persistent .rust-bundles directory"
+        );
+        assert!(
+            !root.path().join(".cache/himawari-hsd/.rust-advection").exists(),
+            "ephemeral advection must never leave a persistent .rust-advection directory"
+        );
+    }
+
+    #[test]
+    fn ephemeral_export_dir_leaves_no_rust_bundles_after_drop() {
+        let workspace = tempfile::tempdir().unwrap();
+        let satellite = workspace.path().join(".cache/himawari-hsd");
+        fs::create_dir_all(&satellite).unwrap();
+        let export_path = {
+            let export_dir = tempfile::tempdir().unwrap();
+            let path = export_dir.path().to_path_buf();
+            fs::write(path.join("band_b13.npy"), b"ephemeral-bundle").unwrap();
+            assert!(path.join("band_b13.npy").exists());
+            path
+        };
+        assert!(
+            !export_path.exists(),
+            "ephemeral bundle directory must be removed immediately when dropped"
+        );
+        assert!(
+            !satellite.join(".rust-bundles").exists(),
+            ".rust-bundles must not exist in satellite cache"
+        );
     }
 
     #[test]

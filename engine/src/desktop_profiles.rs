@@ -11,10 +11,12 @@ use std::{
 
 const CONTRACT: &str = "rust-desktop-profile-source-v1";
 pub(crate) const MAX_OBSERVERS: usize = 100_000;
-const TTL_SECONDS: i64 = 1800;
-const MAX_SNAPSHOTS: usize = 8;
-const MAX_SNAPSHOT_BYTES: u64 = 8 * 1024 * 1024 * 1024;
-const MAX_TOTAL_BYTES: u64 = 16 * 1024 * 1024 * 1024;
+const TTL_SECONDS: i64 = 900;
+/// Only retain the active pair (e.g. GFS + EC) so superseded intermediate profile tensors
+/// are deleted immediately instead of accumulating across runs.
+const MAX_SNAPSHOTS: usize = 2;
+const MAX_SNAPSHOT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_RECEIPT_BYTES: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Deserialize, Serialize)]

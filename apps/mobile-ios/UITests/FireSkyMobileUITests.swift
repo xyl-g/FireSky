@@ -7,11 +7,57 @@ final class FireSkyMobileUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    func testAppearanceSwitching() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-engineTransport", "mock", "-appLanguage", "zh"]
+        app.launch()
+        let later = app.buttons["稍后"]
+        if later.waitForExistence(timeout: 10) { later.tap() }
+        app.tabBars.buttons["设置"].tap()
+        let appearance = app.segmentedControls["appearance-picker"]
+        XCTAssertTrue(appearance.waitForExistence(timeout: 10))
+        for title in ["浅色", "深色", "跟随系统"] {
+            let option = appearance.buttons[title]
+            option.tap()
+            XCTAssertTrue(option.isSelected)
+            let attachment = XCTAttachment(screenshot: app.screenshot())
+            attachment.name = "appearance-\(title)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
+        }
+    }
+
+    func testLargeTextPreparation() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-engineTransport", "mock", "-appLanguage", "en",
+                               "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        let later = app.buttons["稍后"]
+        if later.waitForExistence(timeout: 10) { later.tap() }
+        let start = app.buttons["Start Forecast"]
+        XCTAssertTrue(start.waitForExistence(timeout: 10))
+        for _ in 0..<8 {
+            if start.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(start.isHittable)
+        start.tap()
+        let download = app.buttons["Download missing data"]
+        XCTAssertTrue(download.waitForExistence(timeout: 10))
+        XCTAssertTrue(download.isHittable)
+        let attachment = XCTAttachment(screenshot: app.screenshot())
+        attachment.name = "preparation-large-text-en"
+        attachment.lifetime = .keepAlways
+        add(attachment)
+        app.buttons["Cancel"].tap()
+        XCTAssertFalse(download.exists)
+    }
+
     func testPointForecastChain() throws {
         let app = XCUIApplication()
         // v1.1.0 起 Store 默认 ffi 真引擎；UI 冒烟仍走 Mock 链路（确定性数据、
         // 无网络依赖）。经 UserDefaults argument domain 显式固定 mock 通道。
-        app.launchArguments += ["-engineTransport", "mock"]
+        app.launchArguments += ["-engineTransport", "mock", "-appLanguage", "zh"]
         app.launch()
 
         // 首启 CAMS 提醒（Mock hello 返回未配置）→ 稍后

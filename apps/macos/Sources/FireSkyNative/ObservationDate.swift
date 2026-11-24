@@ -58,12 +58,27 @@ struct ObservationMonth {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(identifier: timezone) ?? .current
         calendar.firstWeekday = 2
+        calendar.locale = Locale(identifier: L10n.effective == .english ? "en_US" : "zh_CN")
         self.calendar = calendar
         self.start = calendar.dateInterval(of: .month, for: date)!.start
     }
 
     var title: String {
-        "\(calendar.component(.year, from: start))年\(calendar.component(.month, from: start))月"
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = calendar.locale
+        formatter.timeZone = calendar.timeZone
+        formatter.dateFormat = L10n.effective == .english ? "LLLL yyyy" : "yyyy年M月"
+        return formatter.string(from: start)
+    }
+
+    var weekdaySymbols: [String] {
+        let formatter = DateFormatter()
+        formatter.calendar = calendar
+        formatter.locale = calendar.locale
+        let symbols = formatter.shortStandaloneWeekdaySymbols ?? formatter.shortWeekdaySymbols ?? []
+        let offset = max(0, calendar.firstWeekday - 1)
+        return Array(symbols.dropFirst(offset)) + Array(symbols.prefix(offset))
     }
 
     var days: [Date] {

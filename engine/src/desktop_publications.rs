@@ -41,6 +41,8 @@ pub struct Params {
     pub now_utc: Option<String>,
     #[serde(default = "default_timeout")]
     pub timeout_seconds: f64,
+    #[serde(default)]
+    pub force_refresh: bool,
 }
 
 fn default_timeout() -> f64 {
@@ -246,6 +248,9 @@ fn cached(source: &str, now: DateTime<Utc>) -> Option<Value> {
 }
 
 fn store(source: &str, now: DateTime<Utc>, value: Value) -> Value {
+    if value["verified"] != true {
+        return value;
+    }
     let key = format!("{source}:{}", now.format("%Y%m%d%H"));
     cache()
         .lock()
@@ -281,14 +286,23 @@ pub fn execute(params: Params) -> Result<Value, String> {
             .map(|source| {
                 let key = source.clone();
                 scope.spawn(move || {
-                    let value = if let Some(value) = cached(&key, now) {
+                    let cached_value = if params.force_refresh {
+                        None
+                    } else {
+                        cached(&key, now)
+                    };
+                    let value = if let Some(value) = cached_value {
                         value
                     } else {
                         let value = query(&key, now, timeout, params.timeout_seconds)
                             .unwrap_or_else(|_| {
                                 publication(heuristic(&key, now).unwrap_or(now), false)
                             });
-                        store(&key, now, value)
+                        if value["verified"] == true {
+                            store(&key, now, value)
+                        } else {
+                            value
+                        }
                     };
                     (key, value)
                 })
@@ -354,15 +368,42 @@ mod tests {
             sources: vec![],
             now_utc: Some("2026-11-10T15:30:00Z".into()),
             timeout_seconds: 0.0001,
+            force_refresh: false,
         });
         assert!(invalid.is_err());
         let result = execute(Params {
             sources: vec![],
             now_utc: Some("2026-11-10T15:30:00Z".into()),
             timeout_seconds: 0.2,
+            force_refresh: false,
         })
         .unwrap();
         assert_eq!(result["publications"], json!({}));
         assert_eq!(result["runtime_python_used"], false);
+    }
+
+    #[test]
+    fn unverified_publications_are_never_cached_and_force_refresh_defaults_false() {
+        let probe_time = Utc.with_ymd_and_hms(2026, 11, 18, 9, 0, 0).unwrap();
+        let cycle = Utc.with_ymd_and_hms(2026, 11, 18, 0, 0, 0).unwrap();
+        let unverified = store("gfs", probe_time, publication(cycle, false));
+        assert_eq!(unverified["verified"], false);
+        assert!(cached("gfs", probe_time).is_none());
+
+        let verified = store("gfs", probe_time, publication(cycle, true));
+        assert_eq!(verified["verified"], true);
+        assert_eq!(cached("gfs", probe_time).unwrap()["verified"], true);
+
+        let default_params: Params = serde_json::from_value(json!({
+            "sources": ["gfs"]
+        }))
+        .unwrap();
+        assert!(!default_params.force_refresh);
+        let forced_params: Params = serde_json::from_value(json!({
+            "sources": ["gfs"],
+            "force_refresh": true
+        }))
+        .unwrap();
+        assert!(forced_params.force_refresh);
     }
 }

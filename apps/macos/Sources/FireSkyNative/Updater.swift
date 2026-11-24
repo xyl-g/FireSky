@@ -167,19 +167,32 @@ final class Updater: ObservableObject {
     }
 
     private func fetchLatestRelease() async throws -> Info? {
+        let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        let userAgent = "FireSky/\(current.isEmpty ? "dev" : current) (macOS)"
+        let architecture = Self.machineArchitecture()
+
         var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(Self.repository)/releases/latest")!)
         request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 20
-        let (data, response) = try await makeSession().data(for: request)
-        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+
+        let session = makeSession()
+        let (data, response) = try await session.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        if status == 403 || status == 429 {
+            return try await fetchLatestReleaseFallback(
+                session: session,
+                userAgent: userAgent,
+                architecture: architecture,
+                current: current
+            )
+        }
+        guard status == 200 else {
             throw UpdateError.network("GitHub 返回状态 \(status)")
         }
         guard let release = try? JSONSerialization.jsonObject(with: data) as? JSONObject else {
             throw UpdateError.network("GitHub 响应无法解析")
         }
-        let architecture = Self.machineArchitecture()
-        let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
         guard let parsed = Self.parseRelease(release, architecture: architecture) else {
             throw UpdateError.network("最新 Release 没有适用于 \(architecture) 的安装包")
         }
@@ -187,6 +200,48 @@ final class Updater: ObservableObject {
             return nil
         }
         return parsed
+    }
+
+    private func fetchLatestReleaseFallback(
+        session: URLSession,
+        userAgent: String,
+        architecture: String,
+        current: String
+    ) async throws -> Info? {
+        var request = URLRequest(url: URL(string: "https://github.com/\(Self.repository)/releases/latest")!)
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 20
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw UpdateError.network("GitHub Releases 页面返回状态 \(status)")
+        }
+        guard let finalURL = response.url,
+              finalURL.path.contains("/releases/tag/") else {
+            throw UpdateError.network("未在 GitHub Releases 页面找到有效版本标签")
+        }
+        let tag = finalURL.lastPathComponent
+        let version = Self.normalizeTag(tag)
+        guard !version.isEmpty, version.count <= 32,
+              version.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "." }) else {
+            throw UpdateError.network("GitHub Releases 标签格式无效：\(tag)")
+        }
+        guard Self.compareVersions(version, current) == .orderedDescending else {
+            return nil
+        }
+        let assetName = Self.assetName(version: version, architecture: architecture)
+        guard let assetURL = URL(string: "https://github.com/\(Self.repository)/releases/download/\(tag)/\(assetName)") else {
+            throw UpdateError.network("无法构造 Release 安装包下载地址")
+        }
+        let checksumURL = URL(string: "https://github.com/\(Self.repository)/releases/download/\(tag)/SHA256SUMS.txt")
+        let notes = "由于 GitHub API 请求受限（403/429），本次通过 Releases 页面重定向回退检测到 v\(version)，未获取详细更新日志；请前往 GitHub Releases 页面查看完整说明。"
+        return Info(
+            version: version,
+            notes: notes,
+            assetURL: assetURL,
+            assetBytes: 0,
+            checksumURL: checksumURL
+        )
     }
 
     // MARK: - 下载 + 校验 + 安装
@@ -219,6 +274,19 @@ final class Updater: ObservableObject {
     func cancelDownload() {
         guard phase == .downloading else { return }
         downloadTask?.cancel()
+    }
+
+    /// 仅供界面图册快照夹具展示「发现新版本」弹层状态，不触发任何网络请求。
+    func adoptTestAvailable(version: String, notes: String) {
+        info = Info(
+            version: version,
+            notes: notes,
+            assetURL: URL(string: "https://github.com/\(Self.repository)/releases/download/v\(version)/FireSky-\(version)-macos-arm64.dmg")!,
+            assetBytes: 48 * 1_048_576,
+            checksumURL: nil
+        )
+        phase = .available
+        message = ""
     }
 
     /// 流式下载 DMG 到临时目录，按 1 MB 落盘并刷新进度。

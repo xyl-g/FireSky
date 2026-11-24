@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -20,6 +21,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -56,7 +59,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -79,6 +84,12 @@ fun WorkbenchApp(store: WorkbenchStore) {
         androidx.compose.material3.Scaffold(
             containerColor = MaterialTheme.colorScheme.background,
             bottomBar = {
+                Column(Modifier.background(MaterialTheme.colorScheme.surfaceVariant)) {
+                if (state.page == "workbench" && !state.showPreflight) {
+                    Box(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
+                        RunButton(store, state)
+                    }
+                }
                 androidx.compose.material3.NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceVariant) {
                     NavigationItem("workbench", stringResource(R.string.nav_point), Icons.Filled.Place, state.page) {
                         store.setPage("workbench")
@@ -93,9 +104,10 @@ fun WorkbenchApp(store: WorkbenchStore) {
                         store.setPage("settings")
                     }
                 }
+                }
             },
         ) { padding ->
-            Box(Modifier.fillMaxSize().padding(padding)) {
+            Box(Modifier.fillMaxSize().background(pageBackground()).padding(padding)) {
                 when (state.page) {
                     "settings" -> SettingsScreen(store, state)
                     "data" -> DataScreen(store, state)
@@ -149,7 +161,6 @@ fun WorkbenchScreen(store: WorkbenchStore, state: WorkbenchState) {
         if (!state.online) OfflineBanner(state) { store.connect() }
         LocationCard(store, state)
         ParametersCard(store, state)
-        RunButton(store, state)
         if (state.busy && !state.showPreflight) ProgressRow(store, state)
         ResultSection(store, state)
     }
@@ -409,26 +420,10 @@ private fun NumberField(label: String, value: Double, onChange: (Double) -> Unit
 
 @Composable
 private fun RunButton(store: WorkbenchStore, state: WorkbenchState) {
-    Button(
-        onClick = { store.beginCheck() },
+    AccentButton(
+        title = stringResource(R.string.start_forecast),
         enabled = !state.busy && state.online,
-        modifier = Modifier.fillMaxWidth().height(44.dp),
-        colors = ButtonDefaults.buttonColors(
-            containerColor = Color.Transparent,
-            contentColor = Color.White,
-        ),
-        shape = RoundedCornerShape(8.dp),
-    ) {
-        Box(
-            Modifier
-                .fillMaxWidth()
-                .height(44.dp)
-                .background(com.firesky.mobile.ui.accentGradientBrush(), RoundedCornerShape(8.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(stringResource(R.string.start_forecast), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-        }
-    }
+    ) { store.beginCheck() }
 }
 
 @Composable
@@ -466,10 +461,11 @@ fun Segmented(
     accent: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
-    val dark = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val dark = LocalFireSkyDark.current
     Row(
         modifier
             .fillMaxWidth()
+            .selectableGroup()
             .background(
                 if (dark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.05f),
                 RoundedCornerShape(8.dp),
@@ -490,13 +486,15 @@ fun Segmented(
                         },
                         RoundedCornerShape(6.dp),
                     )
-                    .clickable { onSelect(option) }
-                    .padding(vertical = 5.dp),
+                    .selectable(selected = selected, role = Role.Tab, onClick = { onSelect(option) })
+                    .heightIn(min = 48.dp)
+                    .padding(horizontal = 4.dp, vertical = 8.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     titles?.getOrNull(index) ?: option,
-                    fontSize = 11.sp,
+                    fontSize = 14.sp,
+                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                     fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                     color = when {
                         selected && accent -> MaterialTheme.colorScheme.primary
@@ -536,7 +534,8 @@ fun comparisonStatus(result: JSONObject?, model: String): String {
 
 @Composable
 fun PreflightSheet(store: WorkbenchStore, state: WorkbenchState) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 22.dp).padding(bottom = 24.dp)) {
+    val maxHeight = LocalConfiguration.current.screenHeightDp.dp * 0.85f
+    Column(Modifier.fillMaxWidth().heightIn(max = maxHeight).padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(stringResource(R.string.preflight_title), fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
@@ -553,6 +552,7 @@ fun PreflightSheet(store: WorkbenchStore, state: WorkbenchState) {
             }
         }
         Spacer(Modifier.height(16.dp))
+        Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
         if (state.rows.isEmpty()) {
             Row(
                 Modifier.fillMaxWidth().padding(vertical = 40.dp),
@@ -582,11 +582,9 @@ fun PreflightSheet(store: WorkbenchStore, state: WorkbenchState) {
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                         )
                     }
-                    Text(
-                        statusText(row.status),
-                        fontSize = 12.sp,
-                        color = if (!row.ready || row.old) MaterialTheme.colorScheme.onBackground
-                        else Color(0xFF3B9C57),
+                    StatusChip(
+                        state = if (!row.ready) "pending" else if (row.old) "interrupted" else "done",
+                        title = statusText(row.status),
                     )
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f))
@@ -625,31 +623,20 @@ fun PreflightSheet(store: WorkbenchStore, state: WorkbenchState) {
                 }
             }
         }
+        }
         Spacer(Modifier.height(14.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = { store.closePreflight() }) { Text(stringResource(R.string.cancel)) }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                if (!state.ready) {
-                    Button(onClick = { store.prepare() }, enabled = state.session != null && !state.busy) {
-                        Text(stringResource(R.string.download_missing))
-                    }
-                    OutlinedButton(onClick = {}, enabled = false, border = BorderStroke(1.dp, Color.Transparent)) {
-                        Text(stringResource(R.string.confirm_forecast))
-                    }
-                } else {
-                    OutlinedButton(onClick = { store.prepare() }, enabled = state.session != null && !state.busy) {
-                        Text(stringResource(R.string.update_data))
-                    }
-                    Button(
-                        onClick = { store.confirm() },
-                        enabled = state.session != null && state.ready && !state.busy,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.primary,
-                            contentColor = Color.White,
-                        ),
-                    ) { Text(stringResource(R.string.confirm_forecast)) }
-                }
+        AccentButton(
+            title = stringResource(if (state.ready) R.string.confirm_forecast else R.string.download_missing),
+            enabled = state.session != null && !state.busy,
+        ) { if (state.ready) store.confirm() else store.prepare() }
+        if (state.ready) {
+            TextButton(onClick = { store.prepare() }, enabled = state.session != null && !state.busy,
+                modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.update_data))
             }
+        }
+        TextButton(onClick = { store.closePreflight() }, modifier = Modifier.fillMaxWidth()) {
+            Text(stringResource(R.string.cancel))
         }
     }
 }

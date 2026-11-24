@@ -65,6 +65,7 @@ struct DownloadProbeView: View {
                 if store.downloadProbeDate != nil && !store.probingDownloads {
                     Button { store.copyDownloadProbeReport() } label: { Image(systemName: "doc.on.doc") }
                         .buttonStyle(.borderless).help("复制探测报告")
+                        .accessibilityLabel("复制探测报告")
                 }
             }.font(.caption).foregroundStyle(.secondary)
             if !store.downloadProbeError.isEmpty {

@@ -141,6 +141,11 @@ enum L10n {
         "确定预测": "Confirm forecast",
         "确定分析": "Confirm analysis",
         "下载缺失数据": "Download missing data",
+        "下载前先知道": "Before you download",
+        "首次下载耗时取决于本机缺失的数据集与网络。上方只列本次预测所需文件；已下载文件不会重复下载，过程中可取消，失败项会保留并提示重试。":
+            "First-download time depends on which datasets are missing and your network. The list above covers only this forecast; existing files are not downloaded twice. You can cancel, and failed items stay listed for retry.",
+        "CAMS Key 未配置时仍可使用本地缓存；如需气溶胶数据，可在设置中配置后重新预检。":
+            "Local caches remain usable without a CAMS key. Configure it in Settings and re-check if you need aerosol data.",
         "继续预测": "Forecast anyway",
         "预测准备": "Forecast preparation",
         "实况准备": "Nowcast preparation",
@@ -199,6 +204,8 @@ enum L10n {
             "No retention policy configured; the cache grows with sync. Set it under Storage & retention below.",
         "自动清理按周期、扫描或生成时间滚动保留；新数据校验成功后才会清理旧文件。留空表示不自动清理。":
             "Retention rolls by cycle, scan or generation time; old files are removed only after new data validates. Leave empty to disable.",
+        "自动清理按周期、扫描或生成时间滚动保留；保存策略后可点击「立即按策略清理」立刻释放空间，后续也会在新数据校验成功后自动清理旧文件。占用中的文件会自动跳过。":
+            "Retention rolls by cycle, scan, or generation time. Click Clean up now after saving to reclaim space immediately, or let it run after the next validated download. Busy files are skipped automatically.",
         "不限制": "Unlimited",
         "立即同步": "Sync now",
         "立即同步已启用的数据源（可解除失败熔断）":
@@ -295,6 +302,207 @@ enum L10n {
         "最近错误：%@": "Last error: %@",
         "缺 %d 个周期：%@": "Missing %d cycles: %@",
         "连续失败 %d 次": "%d consecutive failures",
+        // 点预测工作台 / 首次使用
+        "观测工作台": "Forecast workspace",
+        "显示侧栏": "Show sidebar",
+        "隐藏侧栏": "Hide sidebar",
+        "取消当前任务": "Cancel current task",
+        "观测点": "Observation point",
+        "地图": "Map",
+        "收藏": "Favorites",
+        "管理收藏位置": "Manage favorites",
+        "还没有收藏位置": "No saved places",
+        "搜索地名，如「西湖」或「杭州」": "Search for a place, such as West Lake or Hangzhou",
+        "搜索位置": "Search location",
+        "获取当前位置": "Use current location",
+        "搜索或在地图上选好地点后，点击下方「收藏当前点」。":
+            "Search for a place or choose one on the map, then save it below.",
+        "删除收藏": "Remove favorite",
+        "点击切换到此位置；右键可删除收藏": "Select this place; right-click to remove it",
+        "收藏当前点": "Save this place",
+        "大地图": "Open map",
+        "位置已确认 · 海拔 %d m · %@": "Location confirmed · %d m elevation · %@",
+        "位置待确认 · 展开「编辑坐标」获取海拔与时区":
+            "Location needs confirmation · Edit coordinates to look up elevation and time zone",
+        "位置已确认，海拔 %d 米，时区 %@": "Location confirmed, elevation %d m, time zone %@",
+        "位置待确认，请展开编辑坐标获取海拔与时区":
+            "Location needs confirmation; edit coordinates to look up elevation and time zone",
+        "海拔来源设置：%@；实际来源：%@": "Elevation source setting: %@; actual source: %@",
+        "确认海拔与时区后才能收藏该点并开始预测。":
+            "Confirm elevation and time zone before saving this place or starting a forecast.",
+        "观测参数": "Forecast settings",
+        "重置": "Reset",
+        "目标日期": "Target date",
+        "网格": "Grid",
+        "城市": "Cities",
+        "今天": "Today",
+        "明天": "Tomorrow",
+        "自定义": "Custom",
+        "选择目标日期": "Choose target date",
+        "目标日期 %@": "Target date %@",
+        "上个月": "Previous month",
+        "下个月": "Next month",
+        "关闭日历": "Close calendar",
+        "推荐窗口 %@": "Recommended window %@",
+        "观测现象": "Observation",
+        "朝霞": "Dawn glow",
+        "晚霞": "Dusk glow",
+        "编辑坐标": "Edit coordinates",
+        "名称": "Name",
+        "纬度": "Latitude",
+        "经度": "Longitude",
+        "时区": "Time zone",
+        "时区按经纬度自动计算": "Time zone is determined from coordinates",
+        "获取海拔与时区": "Look up elevation and time zone",
+        "已确认海拔与时区": "Elevation and time zone confirmed",
+        "地图选点": "Choose a place on the map",
+        "首次预测 · 四步完成": "First forecast · four steps",
+        "每一步都可稍后调整": "You can change these settings later",
+        "选好地点": "Choose a place",
+        "搜索、地图选点或选择收藏点": "Search, pick on the map, or choose a favorite",
+        "打开地图": "Open map",
+        "确认位置": "Confirm location",
+        "海拔与时区已确认": "Elevation and time zone confirmed",
+        "获取并确认海拔与时区": "Look up and confirm elevation and time zone",
+        "调整坐标": "Edit coordinates",
+        "数据源": "Data sources",
+        "CAMS 已配置": "CAMS is configured",
+        "CAMS 可选，仍可使用本地数据": "CAMS is optional; local data can still be used",
+        "查看配置": "View settings",
+        "配置 CAMS": "Set up CAMS",
+        "预检与下载": "Check data and download",
+        "逐项确认缺失数据，过程中可取消": "Review missing data; downloads can be cancelled",
+        "数据预检": "Check data",
+        "提示：首次下载量取决于本机缺失的数据集；预检会列出本次所需文件与状态，下载后可随时重新预检。":
+            "The first download depends on which datasets are missing. The check lists the files needed for this forecast; you can run it again after downloading.",
+        "首次下载量取决于本机缺失的数据集；预检会列出本次所需文件与状态，下载后可随时重新预检。":
+            "The first download depends on which datasets are missing. The check lists the files needed for this forecast; you can run it again after downloading.",
+        // 行动摘要 / 结果分层
+        "行动摘要": "Decision summary",
+        "模式结果": "Model results",
+        "概览": "Overview",
+        "大气剖面": "Atmospheric profile",
+        "诊断与时间窗": "Diagnostics & timing",
+        "逐时台账": "Hourly ledger",
+        "最佳时刻": "Best time",
+        "指数 %@ / 2.5": "Index %@ / 2.5",
+        "完成一次预测后，这里会给出是否值得外出、最佳时刻和主要限制。":
+            "Run a forecast to see whether conditions are worth a trip, the best time, and key limitations.",
+        "两个模式都未完成，暂不能给出观测建议。": "Neither model completed, so no recommendation is available yet.",
+        "未知原因": "Unknown reason",
+        "收藏该地点": "Save this place",
+        "起报 %@": "Run %@",
+        "尚未运行预测；完成一次预测后显示主导可烧压力族。":
+            "No forecast has run yet. The dominant burnable-cloud pressure family appears after a forecast.",
+        "主导可烧压力族（来自本次预测结果）":
+            "Dominant burnable-cloud pressure family from this forecast",
+        "无可烧目标云": "No burnable target cloud",
+        "高云压力族": "High-cloud pressure family",
+        "中云压力族": "Mid-level cloud pressure family",
+        "低云压力族": "Low-cloud pressure family",
+        "不可烧云挡光": "Non-burnable cloud blocking sunlight",
+        "无可烧云": "No burnable cloud",
+        "太阳入射阻挡已进入可烧云面积": "Solar obstruction is included in burnable-cloud area",
+        "云质与垂直厚度": "Cloud structure and vertical depth",
+        "太阳入射 AOD 削光": "AOD reduces incoming sunlight",
+        "观测光路 AOD 降低对比度": "AOD reduces contrast along the viewing path",
+        "可烧云绝对量": "Burnable-cloud amount",
+        "当前结果对应旧参数，可点「按新参数重算」更新。":
+            "This result uses earlier settings. Recalculate to update it.",
+        "当前有任务正在进行（%@），完成或取消后可开始新预测。":
+            "A task is already running (%@). Finish or cancel it before starting another forecast.",
+        "引擎未连接，请先在左下角重新连接。": "Engine is offline. Reconnect from the lower-left corner.",
+        "先预检本地数据，确认后开始预测。": "Check local data before starting the forecast.",
+        "预热卫星与数据": "Prepare satellite and forecast data",
+        "预测结果": "Forecast result",
+        "主压力族": "Dominant pressure family",
+        "结论：%@": "Conclusion: %@",
+        "时间与窗口：%@": "Timing and window: %@",
+        "导出摘要": "Export summary",
+        "保存为文本文件": "Save as text",
+        "复制摘要": "Copy summary",
+        "把当前观测点加入收藏": "Save the current place to Favorites",
+        "请先确认海拔与时区，再收藏该地点": "Confirm elevation and time zone before saving this place",
+        "云况与色彩": "Clouds & color",
+        "大气光学": "Atmospheric optics",
+        "时效与可靠性": "Freshness & reliability",
+        "有效可烧云量": "Visible burnable cloud",
+        "前向可烧云占视野比例": "Visible burnable cloud coverage",
+        "云质厚度": "Cloud depth",
+        "云体材质负载": "Cloud material load",
+        "亮度色彩": "Brightness & color",
+        "霞光亮度与色彩评分": "Glow brightness and color score",
+        "主要云层": "Main cloud layer",
+        "云底–云顶 AGL": "Cloud base–top AGL",
+        "气溶胶光学厚度 · 通透度": "Aerosol optical depth · clarity",
+        "入射受光": "Incoming illumination",
+        "太阳入射照亮云体的因子": "Sunlight reaching the cloud",
+        "返程对比度": "Viewing-path contrast",
+        "观测者视线大气对比因子": "Atmospheric contrast along the viewing path",
+        "持续时长": "Duration",
+        "核心观赏窗口 · 分钟": "Core viewing window · minutes",
+        "输入支持度": "Input support",
+        "输入覆盖与几何支持 · 非命中概率": "Input and geometry support · not a hit probability",
+        "对流风险": "Convective risk",
+        "模式对流风险指标 · 非事件概率": "Model convective-risk indicator · not event probability",
+        "评分组成": "Score breakdown",
+        "只读展示后端计算值 · 不在客户端重算": "Backend values shown as reported; no client-side recalculation",
+        "起报": "Run",
+        "预测完成": "Forecast complete",
+        "等待预测": "Waiting for forecast",
+        "暂无结果": "No result",
+        "未预测": "Not forecast",
+        "按新参数重算": "Recalculate with current settings",
+        "当前有任务正在进行，完成或取消后可开始新预测。":
+            "A task is running. Wait for it to finish or cancel it before starting another forecast.",
+        "引擎未连接，请重新连接后再开始。": "Reconnect the engine before starting a forecast.",
+        // 预检窗口
+        "预检数据": "Check data",
+        "%@ 的发布周期未核验或不是最新发布。可以继续预测（结果可能略有偏差），也可以返回并点击「更新数据」获取最新周期。":
+            "The publication cycle is unverified or not the latest. You can continue with a possible accuracy impact, or go back and update the data.",
+        "本次预测的必需数据": "Data required for this forecast",
+        // 格式化模板
+        "仅 %@ 可用：%@": "Only %@ available: %@",
+        "两个模式结论一致：%@": "Both models agree: %@",
+        "两个模式结论不同：GFS %@ · EC %@": "Models differ: GFS %@ · EC %@",
+        "最佳 %@ · 推荐窗口 %@": "Best time %@ · recommended window %@",
+        "%@ 最佳 %@ · 窗口 %@": "%@ best %@ · window %@",
+        "%@ 未完成：%@": "%@ incomplete: %@",
+        "%@ 暂无结果": "%@ has no result yet",
+        "%@ 主要限制：%@": "%@ main limitation: %@",
+        // 旧参数提示 / 逐时台账 / 区域 / 实况
+        "参数已变更 · 当前结果对应旧参数": "Parameters changed · showing previous result",
+        "时间": "Time",
+        "质量": "Quality",
+        "档位": "Level",
+        "可烧": "Burnable",
+        "可烧云量": "Burnable cloud",
+        "主导压力族": "Pressure family",
+        "云底–云顶 ASL": "Base–top ASL",
+        "云层 AGL": "Layer AGL",
+        "亮度颜色": "Brightness",
+        "可烧比例": "Burn ratio",
+        "回程透过率": "Return trans.",
+        "入射阻挡": "Solar block",
+        "太阳仰角": "Solar elev.",
+        "场景": "Regime",
+        "预测区域": "Region",
+        "绘制范围": "Draw bounds",
+        "取消绘制": "Cancel draw",
+        "自定义范围": "Custom bounds",
+        "质量指数": "Quality index",
+        "缺测": "Missing",
+        "高值排行": "Top cells",
+        "城市排名": "City ranking",
+        "搜索网格": "Search grid",
+        "搜索城市": "Search city",
+        "网格详情": "Cell detail",
+        "卫星实况": "Satellite nowcast",
+        "等待分析": "Waiting for analysis",
+        "分析完成": "Analysis complete",
+        "卫星云况": "Satellite clouds",
+        "运动采样": "Motion sampling",
+        "光学与雷达": "Optics & radar",
     ]
 
     // MARK: - 高频字符串
@@ -338,8 +546,39 @@ enum L10n {
         case "非最新发布周期": return "Not the latest cycle"
         case "本次预测数据不完整": return "Forecast data incomplete"
         case "尚未下载本次预测数据": return "Forecast data not downloaded"
+        case "未完成": return "Incomplete"
+        case "预测完成": return "Forecast complete"
+        case "等待预测": return "Waiting for forecast"
+        case "暂无结果": return "No result"
+        case "未预测": return "Not forecast"
         default: return chinese
         }
+    }
+
+    static func qualityLevel(_ value: String) -> String {
+        guard isEnglish else { return value }
+        switch value {
+        case "无明显火烧云": return "No prominent burnable clouds"
+        case "峰值质量指数": return "Peak quality index"
+        case "微微烧": return "Very faint glow"
+        case "小烧": return "Faint glow"
+        case "小烧到中等烧": return "Faint to moderate glow"
+        case "中等烧": return "Moderate glow"
+        case "中等烧到大烧": return "Moderate to strong glow"
+        case "不完美大烧": return "Strong glow, with limitations"
+        case "典型大烧": return "Typical strong glow"
+        case "优质大烧": return "Excellent glow"
+        case "世纪大烧": return "Exceptional glow"
+        case "测试峰值档位": return "Test peak category"
+        case "测试事件档位": return "Test event category"
+        case "测试档位": return "Test category"
+        default: return value
+        }
+    }
+
+    static func qualityLimit(_ value: String) -> String {
+        guard isEnglish else { return value }
+        return dictionary[value] ?? value
     }
 
     // 分类

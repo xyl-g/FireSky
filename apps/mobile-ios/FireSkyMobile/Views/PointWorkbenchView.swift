@@ -7,14 +7,16 @@ import SwiftUI
 struct PointWorkbenchView: View {
     @EnvironmentObject private var store: Store
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         Group {
-            if sizeClass == .regular {
+            if sizeClass == .regular && !typeSize.isAccessibilitySize {
                 HStack(alignment: .top, spacing: 16) {
-                    VStack(spacing: 12) { controls }.frame(width: 320)
-                    VStack(spacing: 12) { hero; results }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    ScrollView { VStack(spacing: 12) { controls; runControls }.padding(1) }.frame(width: 320)
+                    ScrollView {
+                        VStack(spacing: 12) { hero; results }.padding(1)
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 }.padding(18)
             } else {
                 ScrollView {
@@ -23,6 +25,10 @@ struct PointWorkbenchView: View {
                         hero
                         results
                     }.padding(.horizontal, 16).padding(.vertical, 12)
+                }
+                .safeAreaInset(edge: .bottom, spacing: 0) {
+                    runControls.padding(.horizontal, 16).padding(.vertical, 10)
+                        .background(.regularMaterial)
                 }
             }
         }
@@ -33,15 +39,14 @@ struct PointWorkbenchView: View {
         Group {
             WorkLocationView()
             WorkParametersView()
-            Button { store.beginCheck() } label: {
-                Text(L10n.start)
-                    .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.92))
-                    .frame(maxWidth: .infinity).frame(height: 44)
-                    .background(warm, in: RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    private var runControls: some View {
+        VStack(spacing: 8) {
+            AccentButton(title: L10n.start, systemImage: "sparkles", disabled: store.busy || !store.online) {
+                store.beginCheck()
             }.buttonStyle(.plain)
-                .opacity(store.busy || !store.online ? 0.45 : 1)
-                .disabled(store.busy || !store.online)
             if store.busy {
                 VStack(spacing: 6) {
                     ProgressView(value: store.percent, total: 100)
@@ -70,23 +75,31 @@ struct PointWorkbenchView: View {
 /// 观测点卡片（观测点管理 + 地图选点 + 收藏）。
 struct WorkLocationView: View {
     @EnvironmentObject private var store: Store
+    @Environment(\.dynamicTypeSize) private var typeSize
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text(L10n.text("观测点", "Observer")).font(.system(size: 13, weight: .semibold))
-                Spacer()
-                WorkSegments(options: ["地图", "收藏"], titles: [L10n.text("地图", "Map"), L10n.text("收藏", "Favorites")], selection: $store.locationTab).frame(width: 128)
+            let headerLayout = typeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10))
+                : AnyLayout(HStackLayout(spacing: 8))
+            headerLayout {
+                Text(L10n.text("观测点", "Observer")).font(.headline)
+                if !typeSize.isAccessibilitySize { Spacer() }
+                WorkSegments(options: ["地图", "收藏"], titles: [L10n.text("地图", "Map"), L10n.text("收藏", "Favorites")], selection: $store.locationTab)
+                    .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : 180)
             }
             HStack(spacing: 6) {
                 TextField(L10n.text("搜索地名，如「西湖」或「杭州」", "Search a place"), text: $store.query) {
                     store.search()
                 }
                 .textFieldStyle(.roundedBorder)
-                Button { store.search() } label: { Image(systemName: "magnifyingglass") }
+                Button { store.search() } label: { Image(systemName: "magnifyingglass").font(.system(size: 20)) }
+                    .frame(minWidth: 44, minHeight: 44)
+                    .accessibilityLabel(L10n.text("搜索", "Search"))
                 Button { store.locate() } label: {
                     if store.locating { ProgressView().frame(width: 16, height: 16) }
-                    else { Image(systemName: "location").frame(width: 16, height: 16) }
+                    else { Image(systemName: "location").font(.system(size: 20)).frame(width: 20, height: 20) }
                 }.accessibilityLabel(L10n.text("获取当前位置", "Use current location"))
+                    .frame(minWidth: 44, minHeight: 44)
                     .disabled(store.locating || store.busy)
             }.controlSize(.large)
             if store.locationTab == "地图" {
@@ -109,15 +122,15 @@ struct WorkLocationView: View {
             HStack(spacing: 9) {
                 Circle().fill(warm).frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(store.name).font(.system(size: 13, weight: .semibold))
+                    Text(store.name).font(.subheadline.weight(.semibold))
                     Text(String(format: "%.4f° N, %.4f° E", store.lat, store.lon))
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .font(.caption).monospacedDigit().foregroundStyle(.secondary)
                 }
             }
             HStack(spacing: 5) {
                 Text(store.metadataReady ? String(format: L10n.text("海拔 %.0f m", "Elevation %.0f m"), store.elevation) : L10n.text("海拔未确认", "Elevation unconfirmed")).workChip()
                 Text(store.timezone).lineLimit(1).workChip()
-            }.font(.system(size: 9)).foregroundStyle(.secondary)
+            }.font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button(L10n.text("收藏当前点", "Save current spot"), systemImage: "star") { store.starLocation() }
                 Spacer()
@@ -133,7 +146,7 @@ struct WorkParametersView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(L10n.text("观测参数", "Parameters")).font(.system(size: 13, weight: .semibold))
+                Text(L10n.text("观测参数", "Parameters")).font(.headline)
                 Spacer()
                 Button(L10n.reset) { store.chooseDate("今天"); store.phenomenon = "dusk" }
                     .buttonStyle(.borderless).font(.system(size: 11))

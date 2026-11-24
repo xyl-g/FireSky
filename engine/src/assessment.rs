@@ -9,6 +9,7 @@ use crate::tensor_bundle::{
 use crate::time_contract::{parse_date, parse_utc};
 use crate::{astronomy::Phenomenon, cams, ecmwf, grib::EcCodes, request_file};
 use chrono::{DateTime, Duration, Timelike, Utc};
+use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
@@ -515,11 +516,109 @@ fn expand_steps(result: &mut [f32], points: usize, start: usize, stop: usize) {
     }
 }
 
+const FRAME_DECODE_BATCH_MAX: usize = 4;
+const DERIVED_CACHE_PROBE_MISS: &str = "__firesky_derived_cache_probe_miss__";
+
+/// Thread-safe handle wrapper around `EcCodes`.
+///
+/// Desktop Unix builds (macOS Homebrew / Linux system ecCodes) compile ecCodes
+/// with `GRIB_PTHREADS=1`, so concurrent file handles decoded on independent
+/// `FILE*` streams are thread-safe. Windows (MSVC vcpkg) and mobile static
+/// builds compile without pthreads support, so those targets serialize only the
+/// C decoder calls while still running file hashing, derivation, and CAMS
+/// mapping in parallel.
+struct SharedDecoder<'a> {
+    codes: &'a EcCodes,
+    #[cfg(any(windows, mobile_decoder))]
+    lock: std::sync::Mutex<()>,
+}
+
+impl<'a> SharedDecoder<'a> {
+    fn new(codes: &'a EcCodes) -> Self {
+        Self {
+            codes,
+            #[cfg(any(windows, mobile_decoder))]
+            lock: std::sync::Mutex::new(()),
+        }
+    }
+
+    fn call<T>(&self, f: impl FnOnce(&EcCodes) -> Result<T, String>) -> Result<T, String> {
+        #[cfg(any(windows, mobile_decoder))]
+        let _guard = self
+            .lock
+            .lock()
+            .map_err(|_| "ecCodes decoder mutex poisoned".to_string())?;
+        f(self.codes)
+    }
+}
+
 struct OpticalCatalog {
     files: BTreeMap<DateTime<Utc>, Vec<PathBuf>>,
     mapped: BTreeMap<DateTime<Utc>, Mapped>,
 }
 impl OpticalCatalog {
+    fn preload_parallel(
+        &mut self,
+        times: &[DateTime<Utc>],
+        decoder: &SharedDecoder<'_>,
+        lats: &[f64],
+        lons: &[f64],
+        sources: &mut Vec<Source>,
+        cancel: &AtomicBool,
+    ) -> Result<(), String> {
+        let missing: Vec<DateTime<Utc>> = times
+            .iter()
+            .copied()
+            .filter(|time| !self.mapped.contains_key(time))
+            .collect();
+        if missing.is_empty() {
+            return Ok(());
+        }
+        let batch_size = std::thread::available_parallelism()
+            .map_or(1, usize::from)
+            .clamp(1, FRAME_DECODE_BATCH_MAX);
+        for chunk in missing.chunks(batch_size) {
+            cancelled(cancel)?;
+            let loaded = chunk
+                .par_iter()
+                .map(|&time| {
+                    cancelled(cancel)?;
+                    let paths = self
+                        .files
+                        .get(&time)
+                        .ok_or_else(|| format!("missing frozen CAMS bracket at {time}"))?;
+                    let mut loaded_sources = Vec::with_capacity(paths.len());
+                    for (index, path) in paths.iter().enumerate() {
+                        cancelled(cancel)?;
+                        loaded_sources.push(Source::capture(
+                            path.clone(),
+                            format!("cams:{time}:{index}"),
+                        )?);
+                    }
+                    cancelled(cancel)?;
+                    let optics = decoder.call(|codes| cams::decode_many(codes, paths))?;
+                    if optics.valid_time != time {
+                        return Err("CAMS actual valid time differs from stored catalog".into());
+                    }
+                    cancelled(cancel)?;
+                    let mapped = crate::native::cams::map(&optics.grid(), lats, lons)?;
+                    if mapped.covered.iter().any(|v| !v) {
+                        return Err("CAMS full profile does not cover every model cell".into());
+                    }
+                    for source in &loaded_sources {
+                        source.revalidate()?;
+                    }
+                    Ok((time, loaded_sources, mapped))
+                })
+                .collect::<Result<Vec<_>, String>>()?;
+            for (time, loaded_sources, mapped) in loaded {
+                sources.extend(loaded_sources);
+                self.mapped.insert(time, mapped);
+            }
+        }
+        Ok(())
+    }
+
     fn load(
         &mut self,
         time: DateTime<Utc>,
@@ -677,15 +776,15 @@ pub(crate) fn planned_service_to_files(
 
 #[allow(clippy::too_many_arguments)]
 fn prepare_frame(
-    codes: &EcCodes,
+    decoder: &SharedDecoder<'_>,
     path: &Path,
     extra_paths: &[PathBuf],
     input: &Input,
     hour: u32,
     cycle: DateTime<Utc>,
-    decode_ms: &mut f64,
-    derive_ms: &mut f64,
-) -> Result<crate::derived_cache::Data, String> {
+    cancel: &AtomicBool,
+) -> Result<(crate::derived_cache::Data, f64, f64), String> {
+    cancelled(cancel)?;
     let start = Instant::now();
     let mut ec_proxy_coverage = None;
     let mut ec_native_grid_shape = None;
@@ -712,32 +811,34 @@ fn prepare_frame(
             if hour > 384 {
                 return Err("GFS forecast hour exceeds 384".into());
             }
-            match base_bbox {
+            decoder.call(|codes| match base_bbox {
                 Some(bbox) => codes.decode_gfs_frame_subset(
                     path,
                     4096,
                     derivation::MAX_CELLS,
                     Some((cycle, hour)),
                     bbox,
-                )?,
+                ),
                 None => codes.decode_gfs_frame(
                     path,
                     4096,
                     derivation::MAX_CELLS,
                     Some((cycle, hour)),
-                )?,
-            }
+                ),
+            })?
         }
         Model::EcmwfBasic => {
-            let raw = ecmwf::decode_basic(
-                codes,
-                path,
-                input.bbox,
-                Some(&input.cycle_utc),
-                Some(i64::from(hour)),
-                4096,
-                5_000_000,
-            )?;
+            let raw = decoder.call(|codes| {
+                ecmwf::decode_basic(
+                    codes,
+                    path,
+                    input.bbox,
+                    Some(&input.cycle_utc),
+                    Some(i64::from(hour)),
+                    4096,
+                    5_000_000,
+                )
+            })?;
             ec_native_grid_shape = Some(
                 serde_json::from_value(raw.metadata()["native_grid_shape"].clone())
                     .map_err(|e| e.to_string())?,
@@ -747,30 +848,30 @@ fn prepare_frame(
             grid
         }
     };
-    *decode_ms += start.elapsed().as_secs_f64() * 1000.0;
+    let mut decode_ms = start.elapsed().as_secs_f64() * 1000.0;
     // Wrapped envelopes arrive as one file per longitude segment; decode each
     // against the shared bbox and stitch the rectangular grid before derive.
     for (index, extra) in extra_paths.iter().enumerate() {
+        cancelled(cancel)?;
         let part_bbox = segment_bboxes.get(index + 1).copied().or(input.bbox);
         let start = Instant::now();
-        let mut part = match part_bbox {
+        let mut part = decoder.call(|codes| match part_bbox {
             Some(bbox) => codes.decode_gfs_frame_subset(
                 extra,
                 4096,
                 derivation::MAX_CELLS,
                 Some((cycle, hour)),
                 bbox,
-            )?,
-            None => {
-                codes.decode_gfs_frame(extra, 4096, derivation::MAX_CELLS, Some((cycle, hour)))?
-            }
-        };
-        *decode_ms += start.elapsed().as_secs_f64() * 1000.0;
+            ),
+            None => codes.decode_gfs_frame(extra, 4096, derivation::MAX_CELLS, Some((cycle, hour))),
+        })?;
+        decode_ms += start.elapsed().as_secs_f64() * 1000.0;
         if matches!(input.model, Model::Gfs) {
             subset_gfs(&mut part, part_bbox)?;
         }
         merge_gfs_grids(&mut decoded, part)?;
     }
+    cancelled(cancel)?;
     let start = Instant::now();
     if matches!(input.model, Model::Gfs) {
         subset_gfs(&mut decoded, input.bbox)?;
@@ -815,16 +916,20 @@ fn prepare_frame(
     .to_owned();
     let raw = derivation::RawGrid::from_gfs(&decoded)?;
     let derived = derivation::derive(&raw)?;
-    *derive_ms += start.elapsed().as_secs_f64() * 1000.0;
-    Ok(crate::derived_cache::Data {
-        latitudes: decoded.latitudes,
-        longitudes: decoded.longitudes,
-        surface: terrain.clone(),
-        derived,
-        boundary_semantics,
-        ec_proxy_coverage,
-        ec_native_grid_shape,
-    })
+    let derive_ms = start.elapsed().as_secs_f64() * 1000.0;
+    Ok((
+        crate::derived_cache::Data {
+            latitudes: decoded.latitudes,
+            longitudes: decoded.longitudes,
+            surface: terrain.clone(),
+            derived,
+            boundary_semantics,
+            ec_proxy_coverage,
+            ec_native_grid_shape,
+        },
+        decode_ms,
+        derive_ms,
+    ))
 }
 
 /// Bounded main-bundle estimate. Compact regional runs publish only the
@@ -1036,144 +1141,232 @@ fn run_input(
             })
         })
         .transpose()?;
-    for (index, frame) in input.frames.iter().enumerate() {
+    let decoder = SharedDecoder::new(&codes);
+    let iso_cycle = crate::time_contract::iso(cycle);
+    let frame_batch_size = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .clamp(1, FRAME_DECODE_BATCH_MAX);
+    let total_frames = input.frames.len();
+    for chunk_start in (0..total_frames).step_by(frame_batch_size) {
         cancelled(cancel)?;
-        progress(1000 * index as u128 / input.frames.len() as u128);
-        let phase = Instant::now();
-        let source = Source::capture(
-            resolve(base, &frame.path),
-            format!("model:f{:03}", frame.hour),
-        )?;
-        decode_ms += phase.elapsed().as_secs_f64() * 1000.0;
-        let data = derived_cache.frame(
-            &source.path,
-            &source.identity,
-            input.model,
-            &crate::time_contract::iso(cycle),
-            frame.hour,
-            input.bbox,
-            || {
-                prepare_frame(
-                    &codes,
+        let chunk_end = (chunk_start + frame_batch_size).min(total_frames);
+        let chunk = &input.frames[chunk_start..chunk_end];
+        progress(1000 * chunk_start as u128 / total_frames as u128);
+        let captured = chunk
+            .par_iter()
+            .map(|frame| {
+                cancelled(cancel)?;
+                let phase = Instant::now();
+                let source = Source::capture(
+                    resolve(base, &frame.path),
+                    format!("model:f{:03}", frame.hour),
+                )?;
+                Ok((source, phase.elapsed().as_secs_f64() * 1000.0))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        cancelled(cancel)?;
+        let mut prepared: Vec<Option<(crate::derived_cache::Data, f64, f64, bool)>> =
+            (0..chunk.len()).map(|_| None).collect();
+        let mut missed_offsets = Vec::new();
+        if input.derived_cache.is_some() {
+            for (offset, (frame, (source, _))) in chunk.iter().zip(&captured).enumerate() {
+                cancelled(cancel)?;
+                match derived_cache.frame(
+                    &source.path,
+                    &source.identity,
+                    input.model,
+                    &iso_cycle,
+                    frame.hour,
+                    input.bbox,
+                    || Err(DERIVED_CACHE_PROBE_MISS.into()),
+                ) {
+                    Ok(data) => prepared[offset] = Some((data, 0.0, 0.0, true)),
+                    Err(error) if error == DERIVED_CACHE_PROBE_MISS => missed_offsets.push(offset),
+                    Err(error) => return Err(error),
+                }
+            }
+        } else {
+            missed_offsets.extend(0..chunk.len());
+        }
+        if !missed_offsets.is_empty() {
+            cancelled(cancel)?;
+            let decoded_misses = if missed_offsets.len() == 1 {
+                let offset = missed_offsets[0];
+                let frame = &chunk[offset];
+                let (source, _) = &captured[offset];
+                let (data, frame_decode_ms, frame_derive_ms) = prepare_frame(
+                    &decoder,
                     &source.path,
                     &frame.paths,
                     &input,
                     frame.hour,
                     cycle,
-                    &mut decode_ms,
-                    &mut derive_ms,
-                )
-            },
-        )?;
-        let mut coordinates = gfs::GfsGrid {
-            latitudes: data.latitudes.clone(),
-            longitudes: data.longitudes.clone(),
-            fields: Default::default(),
-        };
-        let geom = Geometry::canonicalize(&mut coordinates)?;
-        if let Some(coverage) = data.ec_proxy_coverage {
-            proxy_coverage.push(coverage);
-        }
-        if with_service {
-            ec_source_metadata.push(json!({
-                "file":source.path.canonicalize().map_err(|e|e.to_string())?,
-                "valid_time_utc":(cycle+chrono::Duration::hours(i64::from(frame.hour))).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),
-                "forecast_hour":frame.hour,"native_grid_shape":data.ec_native_grid_shape,
-                "selected_cell_count":data.latitudes.len(),"grid_spacing_deg":f64::from(geom.spacing),
-                "surface_geopotential_units":"m2 s-2","terrain_units":"m","tcc_units":"%",
-                "model_level_cloud_fields":"unavailable_in_public_basic_contract",
-            }));
-        }
-        let terrain = &data.surface;
-        if index == 0 {
-            geometry = Some(geom);
-            latitudes = data.latitudes.clone();
-            longitudes = data.longitudes.clone();
-            surface = terrain.clone();
-            let cells = latitudes.len() as u128;
-            let observers = input.points.len() as u128;
-            // Profiles live in independently bounded children; no temporal
-            // chunk is dropped merely to fit the main tensor-bundle limit.
-            let main_bytes = estimate_main_bundle_bytes(
-                cells,
-                input.frames.len() as u128,
-                observers,
-                with_quality,
-                with_diagnostics,
-                with_profiles,
-                input.compact_results,
-            );
-            if main_bytes > u128::from(MAX_BUNDLE_BYTES) {
-                return Err("assessment main bundle exceeds bounded output size".into());
+                    cancel,
+                )?;
+                vec![(offset, data, frame_decode_ms, frame_derive_ms)]
+            } else {
+                missed_offsets
+                    .par_iter()
+                    .map(|&offset| {
+                        cancelled(cancel)?;
+                        let frame = &chunk[offset];
+                        let (source, _) = &captured[offset];
+                        let (data, frame_decode_ms, frame_derive_ms) = prepare_frame(
+                            &decoder,
+                            &source.path,
+                            &frame.paths,
+                            &input,
+                            frame.hour,
+                            cycle,
+                            cancel,
+                        )?;
+                        Ok((offset, data, frame_decode_ms, frame_derive_ms))
+                    })
+                    .collect::<Result<Vec<_>, String>>()?
+            };
+            for (offset, data, frame_decode_ms, frame_derive_ms) in decoded_misses {
+                prepared[offset] = Some((data, frame_decode_ms, frame_derive_ms, false));
             }
-        } else if latitudes.len() != data.latitudes.len()
-            || longitudes.len() != data.longitudes.len()
-            || latitudes
-                .iter()
-                .zip(&data.latitudes)
-                .chain(longitudes.iter().zip(&data.longitudes))
-                .any(|(a, b)| {
+        }
+        for (offset, ((frame, (source, capture_ms)), entry)) in chunk
+            .iter()
+            .zip(captured.into_iter())
+            .zip(prepared.into_iter())
+            .enumerate()
+        {
+            cancelled(cancel)?;
+            let index = chunk_start + offset;
+            let (data, frame_decode_ms, frame_derive_ms, was_hit) =
+                entry.ok_or("missing prepared model frame")?;
+            decode_ms += capture_ms + frame_decode_ms;
+            derive_ms += frame_derive_ms;
+            let data = if was_hit {
+                data
+            } else {
+                derived_cache.frame(
+                    &source.path,
+                    &source.identity,
+                    input.model,
+                    &iso_cycle,
+                    frame.hour,
+                    input.bbox,
+                    || Ok(data),
+                )?
+            };
+            let mut coordinates = gfs::GfsGrid {
+                latitudes: data.latitudes.clone(),
+                longitudes: data.longitudes.clone(),
+                fields: Default::default(),
+            };
+            let geom = Geometry::canonicalize(&mut coordinates)?;
+            if let Some(coverage) = data.ec_proxy_coverage {
+                proxy_coverage.push(coverage);
+            }
+            if with_service {
+                ec_source_metadata.push(json!({
+                    "file":source.path.canonicalize().map_err(|e|e.to_string())?,
+                    "valid_time_utc":(cycle+chrono::Duration::hours(i64::from(frame.hour))).to_rfc3339_opts(chrono::SecondsFormat::Secs,true),
+                    "forecast_hour":frame.hour,"native_grid_shape":data.ec_native_grid_shape,
+                    "selected_cell_count":data.latitudes.len(),"grid_spacing_deg":f64::from(geom.spacing),
+                    "surface_geopotential_units":"m2 s-2","terrain_units":"m","tcc_units":"%",
+                    "model_level_cloud_fields":"unavailable_in_public_basic_contract",
+                }));
+            }
+            let terrain = &data.surface;
+            if index == 0 {
+                geometry = Some(geom);
+                latitudes = data.latitudes.clone();
+                longitudes = data.longitudes.clone();
+                surface = terrain.clone();
+                let cells = latitudes.len() as u128;
+                let observers = input.points.len() as u128;
+                // Profiles live in independently bounded children; no temporal
+                // chunk is dropped merely to fit the main tensor-bundle limit.
+                let main_bytes = estimate_main_bundle_bytes(
+                    cells,
+                    input.frames.len() as u128,
+                    observers,
+                    with_quality,
+                    with_diagnostics,
+                    with_profiles,
+                    input.compact_results,
+                );
+                if main_bytes > u128::from(MAX_BUNDLE_BYTES) {
+                    return Err("assessment main bundle exceeds bounded output size".into());
+                }
+            } else if latitudes.len() != data.latitudes.len()
+                || longitudes.len() != data.longitudes.len()
+                || latitudes
+                    .iter()
+                    .zip(&data.latitudes)
+                    .chain(longitudes.iter().zip(&data.longitudes))
+                    .any(|(a, b)| {
+                        (a - b).abs()
+                            > if matches!(input.model, Model::EcmwfBasic) {
+                                1e-6
+                            } else {
+                                0.0
+                            }
+                    })
+                || surface.iter().zip(terrain).any(|(a, b)| {
                     (a - b).abs()
                         > if matches!(input.model, Model::EcmwfBasic) {
-                            1e-6
+                            2.0
                         } else {
-                            0.0
+                            1e-4
                         }
                 })
-            || surface.iter().zip(terrain).any(|(a, b)| {
-                (a - b).abs()
-                    > if matches!(input.model, Model::EcmwfBasic) {
-                        2.0
-                    } else {
-                        1e-4
-                    }
-            })
-        {
-            return Err("model frames do not share coordinates and surface orography".into());
-        }
-        if index == 0 && with_profiles {
-            boundary_semantics = data.boundary_semantics;
-        }
-        let derived = data.derived;
-        if index == 0 {
-            levels = derived.levels.clone();
-        } else if levels != derived.levels {
-            return Err("model frames do not share pressure levels".into());
-        }
-        if with_profile_bundles {
-            let phase = Instant::now();
-            let child = output.join(format!("profiles_{index:03}"));
-            let mut profile = BundleWriter::create(
-                &child,
-                "regional-profiles-v1",
-                source.identity.clone(),
-                json!({"frame_index":index,"hour":frame.hour,"pressure_levels":levels,"profile_fields":24}),
-            )?;
-            profile.f32(
-                "profiles",
-                &[latitudes.len() as u64, levels.len() as u64, 24],
-                derived.profiles.iter().flatten().copied(),
-            )?;
-            source.revalidate()?;
-            let manifest = profile.commit(&source.path)?;
-            children.owned.push(child);
-            let identity = source_identity(&manifest)?;
-            if with_profiles {
-                profile_sources.push(ProfileTensor::open(
-                    &manifest,
-                    identity.clone(),
-                    latitudes.len(),
-                    levels.len(),
-                )?);
+            {
+                return Err("model frames do not share coordinates and surface orography".into());
             }
-            profiles.push(
-                json!({"manifest":format!("profiles_{index:03}/manifest.json"),"identity":identity}),
-            );
-            profile_write_ms += phase.elapsed().as_secs_f64() * 1000.0;
+            if index == 0 && with_profiles {
+                boundary_semantics = data.boundary_semantics;
+            }
+            let derived = data.derived;
+            if index == 0 {
+                levels = derived.levels.clone();
+            } else if levels != derived.levels {
+                return Err("model frames do not share pressure levels".into());
+            }
+            if with_profile_bundles {
+                let phase = Instant::now();
+                let child = output.join(format!("profiles_{index:03}"));
+                let mut profile = BundleWriter::create(
+                    &child,
+                    "regional-profiles-v1",
+                    source.identity.clone(),
+                    json!({"frame_index":index,"hour":frame.hour,"pressure_levels":levels,"profile_fields":24}),
+                )?;
+                profile.f32(
+                    "profiles",
+                    &[latitudes.len() as u64, levels.len() as u64, 24],
+                    derived.profiles.iter().flatten().copied(),
+                )?;
+                source.revalidate()?;
+                let manifest = profile.commit(&source.path)?;
+                children.owned.push(child);
+                let identity = source_identity(&manifest)?;
+                if with_profiles {
+                    profile_sources.push(ProfileTensor::open(
+                        &manifest,
+                        identity.clone(),
+                        latitudes.len(),
+                        levels.len(),
+                    )?);
+                }
+                profiles.push(
+                    json!({"manifest":format!("profiles_{index:03}/manifest.json"),"identity":identity}),
+                );
+                profile_write_ms += phase.elapsed().as_secs_f64() * 1000.0;
+            }
+            grid.extend(derived.columns);
+            sources.push(source);
+            progress(1000 * (index + 1) as u128 / total_frames as u128);
         }
-        grid.extend(derived.columns);
-        sources.push(source);
     }
+    derived_cache
+        .frames
+        .sort_by_key(|frame| frame["hour"].as_u64().unwrap_or(u64::MAX));
     let geom = geometry.unwrap();
     let cells = latitudes.len();
     let points = input
@@ -1241,6 +1434,39 @@ fn run_input(
         row[25] = 0.0;
         row[26] = f32::NAN;
     }
+    let mut required_cams_times = Vec::new();
+    let mut seen_cams_times = BTreeSet::new();
+    for &index in &time_indices {
+        let target = cycle
+            .checked_add_signed(Duration::hours(i64::from(input.frames[index].hour)))
+            .ok_or("forecast time overflow")?;
+        let (left, right, _) = bracket(target)?;
+        if seen_cams_times.insert(left) {
+            required_cams_times.push(left);
+        }
+        if seen_cams_times.insert(right) {
+            required_cams_times.push(right);
+        }
+    }
+    for row in &solar.rows {
+        let target = from_epoch(row.anchor)?;
+        let (left, right, _) = bracket(target)?;
+        if seen_cams_times.insert(left) {
+            required_cams_times.push(left);
+        }
+        if seen_cams_times.insert(right) {
+            required_cams_times.push(right);
+        }
+    }
+    progress(1000);
+    catalog.preload_parallel(
+        &required_cams_times,
+        &decoder,
+        &lats,
+        &lons,
+        &mut sources,
+        cancel,
+    )?;
     for index in time_indices {
         cancelled(cancel)?;
         progress(1000 + 200 * index as u128 / input.frames.len().max(1) as u128);

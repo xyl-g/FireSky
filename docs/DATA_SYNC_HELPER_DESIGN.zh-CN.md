@@ -3,7 +3,7 @@
 日期：2026-11-13。状态：**已定案（实现合同基线）**——6 个决策点按第 16 节提案
 于 2026-11-13 采纳（用户委托按推荐口径执行，后续可经设置更改）；本文只新增设计，
 不修改任何现有代码。所有引用基于当前工作区实际代码审计（`文件:行号`），下载能力的前提
-沿用 [CAMS 双路线提案](archive/CAMS_DUAL_ROUTE_PROPOSAL.zh-CN.md) 第 0 节决定 5
+沿用历史 `CAMS_DUAL_ROUTE_PROPOSAL.zh-CN.md` 第 0 节决定 5
 （整周期/洲包络下载已实现并经 2026-11-13 真实验收）。
 
 ## 实现与验收状态（2026-11-13 复核）
@@ -15,8 +15,8 @@
   后者通过关闭端口代理模拟发布探测失败，不进行真实下载。
 - 第 14 节 A1–A8 没有在本文记录完整真实执行证据，继续按待验收处理。
   CAMS 手动 prepare 的亚洲整周期/跨点复用证据不能代替后台同步轮次验收。
-- 本次只核对源码和文档，未重跑测试、启用同步或下载数据；后续顺序见
-  [最新接续计划](archive/NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。以下章节保留为实现合同，
+- 本次只核对源码和文档，未重跑测试、启用同步或下载数据；最新执行优先级见
+  [macOS 交接规范](MACOS_LIQUID_GLASS_UX_HANDOFF.zh-CN.md)。以下章节保留为实现合同，
   其中拟实施措辞/旧行号不代表当前缺实现；第 15 节第 8 项组锁风险仍须实测。
 
 ### 守护进程化 / 应用无关同步落地（2026-11-13）
@@ -39,8 +39,8 @@
    引擎在后台把最新已发布周期一次性拉齐到本地缓存，使后续手动预测几乎零排队。
 2. 引擎侧 Rust 实现（跨平台）；macOS 设置页提供开关与调度配置；**默认关闭，
    不擅设默认值**，用户显式启用。
-3. Windows「如果有就更好」：平台开发整体处于暂停（见
-   [RUST_REMAINING_WORK.zh-CN.md](archive/RUST_REMAINING_WORK.zh-CN.md) 头部暂停声明），
+3. Windows「如果有就更好」：平台开发当时处于暂停（原记录见已归档清理的
+   `RUST_REMAINING_WORK.zh-CN.md` 头部暂停声明），
    本设计只保证**引擎侧跨平台**（同一套 IPC 方法、同一 FFI ABI），不写 Windows UI。
 4. 卫星（HSD）**不在本设计范围内**：沿用 Q07（2026-11-11，已确认）——
    「不常驻后台定时下载/处理卫星数据；发起实况预测时进入统一预检弹窗」
@@ -168,7 +168,7 @@
 | --- | --- | --- | --- |
 | `enabled` | bool | — | `false`（**默认关闭**） |
 | `sources` | object | `cams/gfs/ec` 三个 bool | 全 `false`（启用 `enabled` 时至少一个为 true，否则保存报错） |
-| `interval_minutes` | u32 | 启用时必填，30..=1440 | 无（启用时缺值报错，不替用户选） |
+| `interval_minutes` | u32 | 启用时必填，5..=1440（推荐 10–15 分钟轻量监控更新） | 无（启用时缺值报错，不替用户选） |
 | `anchor_region` | string | 必须命中 `desktop_context::REGIONS` 代码（`engine/src/desktop_context.rs:20-31`，查找 `:144`） | 无（启用时必填） |
 | `lead_horizon_hours` | u32 | 启用 gfs/ec 时必填，3..=240 且 3 的倍数；CAMS 不使用此字段（全时效来自 ADS 约束） | 无 |
 | `ecmwf_source` | string | `ecmwf/aws/google`（同 `ecmwf_data.rs:76`），UI 保存时预填当前 `store.ecmwfSource`（`Store.swift:130-138`） | 启用 ec 时必填 |

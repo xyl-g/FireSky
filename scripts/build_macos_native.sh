@@ -95,6 +95,9 @@ install_name_tool -add_rpath "@executable_path/../Frameworks" "$APP/Contents/Mac
 python3 "$ROOT/scripts/build_app_resources.py" \
   --root "$ROOT/resources/app-data" --check
 cp -R "$ROOT/resources/app-data" "$APP/Contents/Resources/app-data"
+if [ -f "$ROOT/apps/shared-web/dist/index.html" ]; then
+    cp -R "$ROOT/apps/shared-web/dist" "$APP/Contents/Resources/web"
+fi
 bash "$ROOT/scripts/bundle_macos_eccodes.sh" "$APP/Contents/Resources"
 cp "$ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 sign_nested "$APP/Contents/Resources/firesky-engine"

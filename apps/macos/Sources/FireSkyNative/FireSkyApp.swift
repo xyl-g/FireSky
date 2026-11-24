@@ -1,46 +1,62 @@
 import AppKit
 import SwiftUI
+import UserNotifications
 
 @main
 struct FireSkyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var store = Store()
     @StateObject private var updater = Updater()
+    @StateObject private var reminders = ReminderCenter()
+    @StateObject private var localServer = LocalServerController()
     var body: some Scene {
         WindowGroup("FireSky") {
             WorkbenchRootView().environmentObject(store)
                 .environmentObject(updater)
-                .environment(\.locale, Locale(identifier: "zh_CN"))
+                .environmentObject(reminders)
+                .environmentObject(localServer)
+                .environment(\.locale, store.appLocale)
                 .onAppear {
                     delegate.store = store
+                    delegate.localServer = localServer
                     delegate.scheduleSnapshot()
+                    localServer.refreshTokenPreview(workspace: store.workspace)
+                    if !store.isSnapshotRun && localServer.autoStart && !localServer.running && !localServer.starting {
+                        localServer.start(workspace: store.workspace, customEngineBinary: store.engineBinary)
+                    }
                 }
         }
+        .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1440, height: 900)
         .commands {
             CommandGroup(replacing: .newItem) {
                 // UX #5：⌘1-5 切页不再被全局 busy 锁死；任务继续，顶栏可见进度。
-                Button("单点预测") { store.page = .point }
+                Button(L10n.t("单点预测")) { store.page = .point }
                     .keyboardShortcut("1")
-                Button("区域预测") { store.page = .regional }
+                Button(L10n.t("区域预测")) { store.page = .regional }
                     .keyboardShortcut("2")
-                Button("卫星实况") { store.page = .nowcast }
+                Button(L10n.t("卫星实况")) { store.page = .nowcast }
                     .keyboardShortcut("3")
-                Button("数据管理") { store.page = .data }
+                Button(L10n.t("数据管理")) { store.page = .data }
                     .keyboardShortcut("4")
-                Button("任务历史") { store.page = .history }
+                Button(L10n.t("任务历史")) { store.page = .history }
                     .keyboardShortcut("5")
             }
             CommandGroup(replacing: .appSettings) {
-                Button("设置…") { store.page = .settings }.keyboardShortcut(",")
+                Button(L10n.text("设置…", "Settings…")) { store.page = .settings }.keyboardShortcut(",")
+                Button(L10n.text("检查更新…", "Check for Updates…")) {
+                    store.showUpdateSheet = true
+                    updater.checkForUpdates(interactive: true)
+                }
             }
         }
     }
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
     weak var store: Store?
+    weak var localServer: LocalServerController?
     private var scheduled = false
     /// v1.9.7 退出守卫防循环：用户本轮已确认过「继续运行」的时间戳——
     /// 系统注销/关机会反复发起 terminate，不再每次都弹确认框（5s 内
@@ -50,6 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var forceTerminate = false
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.activate(ignoringOtherApps: true)
+        UNUserNotificationCenter.current().delegate = self
         // Intel CI cold start: SwiftUI .onAppear can fail to fire on older
         // macOS runner images; schedule here too (idempotent via `scheduled`).
         scheduleSnapshot()
@@ -59,7 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // 兜底，避免与截图流程竞争窗口状态。
         if ProcessInfo.processInfo.environment["FIRESKY_NATIVE_SNAPSHOT"] == nil {
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
-                guard let self,
+                guard self != nil,
                       NSApp.windows.first(where: { $0.isVisible && !$0.isSheet }) == nil
                 else { return }
                 NSApp.activate(ignoringOtherApps: true)
@@ -153,7 +170,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         return .terminateCancel
     }
-    func applicationWillTerminate(_ notification: Notification) { store?.shutdown() }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            willPresent notification: UNNotification,
+                                            withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        if #available(macOS 11.0, *) {
+            completionHandler([.banner, .sound])
+        } else {
+            completionHandler([.alert, .sound])
+        }
+    }
+    func applicationWillTerminate(_ notification: Notification) {
+        localServer?.stop()
+        store?.shutdown()
+    }
     func scheduleSnapshot() {
         guard !scheduled, let path = ProcessInfo.processInfo.environment["FIRESKY_NATIVE_SNAPSHOT"] else { return }
         scheduled = true

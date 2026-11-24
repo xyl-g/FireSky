@@ -95,11 +95,11 @@ struct NativeTaskHistoryItem: Identifiable {
 
     var statusTitle: String {
         switch status {
-        case "running": cancelRequested ? "取消中" : "运行中"
-        case "done": "已完成"
-        case "failed": "失败"
-        case "cancelled": "已取消"
-        case "interrupted": "已中断"
+        case "running": L10n.status(cancelRequested ? "取消中" : "运行中")
+        case "done": L10n.status("已完成")
+        case "failed": L10n.status("失败")
+        case "cancelled": L10n.status("已取消")
+        case "interrupted": L10n.status("已中断")
         default: status
         }
     }
@@ -107,7 +107,7 @@ struct NativeTaskHistoryItem: Identifiable {
     var contextTitle: String {
         guard let payload = retryRequest?.payload else {
             // UX #13：后台同步没有地点参数，给出明确说明而不是留白。
-            return isBackgroundSync ? "后台数据同步轮次" : ""
+            return isBackgroundSync ? L10n.text("后台数据同步轮次", "Background sync round") : ""
         }
         let name = payload["name"] as? String
             ?? (payload["regions"] as? [String])?.joined(separator: "、")
@@ -115,12 +115,12 @@ struct NativeTaskHistoryItem: Identifiable {
         let date = payload["target_date"] as? String ?? ""
         let phenomenon: String
         switch payload["phenomenon"] as? String {
-        case "dawn": phenomenon = "朝霞"
-        case "dusk": phenomenon = "晚霞"
+        case "dawn": phenomenon = L10n.t("朝霞")
+        case "dusk": phenomenon = L10n.t("晚霞")
         default: phenomenon = ""
         }
         let text = [name, date, phenomenon].filter { !$0.isEmpty }.joined(separator: " · ")
-        if text.isEmpty && isBackgroundSync { return "后台数据同步轮次" }
+        if text.isEmpty && isBackgroundSync { return L10n.text("后台数据同步轮次", "Background sync round") }
         return text
     }
 
@@ -141,14 +141,14 @@ struct NativeTaskEvent: Identifiable {
 
     var title: String {
         switch event {
-        case "running": "开始"
-        case "progress": "进度"
-        case "cancel_requested": "请求取消"
-        case "done": "完成"
-        case "failed": "失败"
-        case "cancelled": "已取消"
-        case "interrupted": "已中断"
-        default: "状态更新"
+        case "running": L10n.text("开始", "Started")
+        case "progress": L10n.text("进度", "Progress")
+        case "cancel_requested": L10n.text("请求取消", "Cancel requested")
+        case "done": L10n.text("完成", "Done")
+        case "failed": L10n.status("失败")
+        case "cancelled": L10n.status("已取消")
+        case "interrupted": L10n.status("已中断")
+        default: L10n.text("状态更新", "Status update")
         }
     }
 
@@ -166,19 +166,27 @@ struct NativeTaskEvent: Identifiable {
     }
 }
 
+/// 历史页筛选状态。CommandLineTools 环境无 SwiftUIMacros，使用普通 ObservableObject。
+private final class HistoryFilterState: ObservableObject {
+    @Published var showSyncRounds = false
+    @Published var kindFilter = "all"
+}
+
+private final class HistoryRestoreConfirmation: ObservableObject {
+    @Published var taskID: String?
+}
+
 /// 任务历史独立侧栏页面：左侧列表 + 右侧详情区，支持类型/状态筛选。
 struct NativeTaskHistoryView: View {
     @EnvironmentObject private var store: Store
-    /// UX #13：后台同步轮次默认折叠。
-    @State private var showSyncRounds = false
-    /// 任务类型筛选：all / 主动任务 / 后台同步。
-    @State private var kindFilter = "all"
+    @StateObject private var filters = HistoryFilterState()
+    @StateObject private var restoreConfirmation = HistoryRestoreConfirmation()
 
     private var visibleHistory: [NativeTaskHistoryItem] {
-        switch kindFilter {
+        switch filters.kindFilter {
         case "active": store.taskHistory.filter { !$0.isBackgroundSync }
         case "sync": store.taskHistory.filter(\.isBackgroundSync)
-        default: showSyncRounds ? store.taskHistory : store.taskHistory.filter { !$0.isBackgroundSync }
+        default: filters.showSyncRounds ? store.taskHistory : store.taskHistory.filter { !$0.isBackgroundSync }
         }
     }
 
@@ -188,12 +196,15 @@ struct NativeTaskHistoryView: View {
             Divider()
             HStack(alignment: .top, spacing: 0) {
                 listColumn
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 if store.selectedTaskHistoryID != nil {
                     Divider()
                     detailColumn
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task { store.loadTaskHistory() }
         .confirmationDialog(L10n.text("删除任务记录？", "Delete task record?"), isPresented: Binding(
             get: { store.pendingForgetTaskID != nil },
@@ -208,6 +219,22 @@ struct NativeTaskHistoryView: View {
             Button(L10n.text("保留记录", "Keep record"), role: .cancel) { store.pendingForgetTaskID = nil }
         } message: {
             Text(L10n.text("只删除状态和事件，不删除已发布报告或天气数据。", "Only status and events are removed; published reports and weather data are kept."))
+        }
+        .confirmationDialog(L10n.text("查看该次结果？", "View this result?"), isPresented: Binding(
+            get: { restoreConfirmation.taskID != nil },
+            set: { if !$0 { restoreConfirmation.taskID = nil } }
+        )) {
+            Button(L10n.text("恢复并查看", "Restore and view")) {
+                if let taskID = restoreConfirmation.taskID,
+                   let item = store.taskHistory.first(where: { $0.taskID == taskID }) {
+                    store.restoreTaskResult(item)
+                }
+                restoreConfirmation.taskID = nil
+            }
+            .disabled(store.busy || store.restoringTaskHistoryID != nil)
+            Button(L10n.text("取消", "Cancel"), role: .cancel) { restoreConfirmation.taskID = nil }
+        } message: {
+            Text(L10n.text("工作台会切到该次已发布结果并回填其原始参数；当前未保存的输入会被替换。恢复结果不会重新检查数据。", "The workbench switches to this published result and restores its original parameters; unsaved inputs will be replaced. No data check is re-run."))
         }
     }
 
@@ -234,7 +261,7 @@ struct NativeTaskHistoryView: View {
             }
             Spacer()
             // 筛选：主动任务 / 后台同步轮次。
-            Picker("", selection: $kindFilter) {
+            Picker("", selection: $filters.kindFilter) {
                 Text(L10n.text("全部", "All")).tag("all")
                 Text(L10n.text("主动任务", "Active")).tag("active")
                 Text(L10n.text("后台同步", "Sync")).tag("sync")
@@ -244,6 +271,7 @@ struct NativeTaskHistoryView: View {
             Button { store.loadTaskHistory() } label: {
                 Image(systemName: "arrow.clockwise")
             }.help(L10n.text("刷新任务历史", "Refresh task history"))
+                .accessibilityLabel(L10n.text("刷新任务历史", "Refresh task history"))
                 .disabled(!store.online || store.taskHistoryLoading)
         }.padding(.horizontal, 20).padding(.vertical, 10)
     }
@@ -257,12 +285,16 @@ struct NativeTaskHistoryView: View {
             if store.taskHistoryLoading && store.taskHistory.isEmpty {
                 ProgressView(L10n.text("正在读取任务记录…", "Loading task records…")).frame(maxWidth: .infinity, minHeight: 140)
             } else if visibleHistory.isEmpty {
-                ContentUnavailableView(
-                    store.taskHistory.isEmpty ? L10n.text("暂无任务记录", "No task records") : L10n.text("没有符合筛选的任务", "No tasks match the filter"),
-                    systemImage: "clock.arrow.circlepath",
-                    description: Text(store.online
-                        ? (store.taskHistory.isEmpty ? L10n.text("完成一次检查或预测后会显示在这里。", "Shown after a check or forecast completes.") : L10n.text("换个筛选条件试试。", "Try a different filter."))
-                        : L10n.text("引擎未连接。", "Engine is offline.")))
+                emptyState(
+                    title: store.taskHistory.isEmpty
+                        ? L10n.text("暂无任务记录", "No task records")
+                        : L10n.text("没有符合筛选的任务", "No tasks match the filter"),
+                    message: store.online
+                        ? (store.taskHistory.isEmpty
+                           ? L10n.text("完成一次数据检查或预测后，任务记录与可恢复快照会显示在这里。", "Task records and restorable snapshots will appear here after a check or forecast.")
+                           : L10n.text("当前筛选条件下没有记录，可切换到「全部」查看。", "No records match this filter. Switch back to All to view everything."))
+                        : L10n.text("引擎未连接。", "Engine is offline.")
+                )
             } else {
                 ScrollViewReader { proxy in
                     ScrollView {
@@ -317,9 +349,43 @@ struct NativeTaskHistoryView: View {
                         Spacer()
                         Button { store.clearTaskHistorySelection() } label: {
                             Image(systemName: "xmark")
-                        }.help(L10n.text("关闭详情", "Close details")).buttonStyle(.borderless)
+                        }.help(L10n.text("关闭详情", "Close details"))
+                            .accessibilityLabel(L10n.text("关闭详情", "Close details"))
+                            .buttonStyle(.borderless)
                     }
                     summaryCard(selected)
+                    if selected.canRestoreResult || fullReportPath(for: selected) != nil {
+                        VStack(alignment: .leading, spacing: 7) {
+                            HStack(spacing: 8) {
+                                if selected.canRestoreResult {
+                                    Button {
+                                        restoreConfirmation.taskID = selected.taskID
+                                    } label: {
+                                        Label(L10n.text("查看该次结果", "View this result"),
+                                              systemImage: "arrow.right.circle.fill")
+                                            .frame(maxWidth: .infinity)
+                                    }
+                                    .buttonStyle(.borderedProminent)
+                                    .controlSize(.small)
+                                    .disabled(store.busy || store.restoringTaskHistoryID != nil)
+                                    .help(L10n.text("从已发布快照恢复结果，不修改当前参数、不重新检查数据。", "Restore the published result without changing current parameters or re-checking data."))
+                                }
+                                if let path = fullReportPath(for: selected) {
+                                    Button {
+                                        openFullReport(path)
+                                    } label: {
+                                        Label(L10n.text("完整报告", "Full report"), systemImage: "doc.text")
+                                    }
+                                    .buttonStyle(.borderless)
+                                    .controlSize(.small)
+                                    .help(L10n.text("打开该次预测的 HTML 报告。", "Open this forecast's HTML report."))
+                                }
+                            }
+                            Text(L10n.text("恢复结果只回到已发布快照；「恢复参数并重新检查数据」仍在任务动作菜单中。", "Restoring returns to the published snapshot; restore-and-re-check stays in task actions."))
+                                .font(.caption2).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
                     if selected.method == "forecast", selected.status == "done" {
                         Divider()
                         forecastResultCard(selected)
@@ -330,6 +396,21 @@ struct NativeTaskHistoryView: View {
             }
         }.background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
             .frame(width: 360)
+    }
+
+    /// 已选任务的 HTML 报告路径只从已加载快照读取，不在 SwiftUI 重新计算。
+    private func fullReportPath(for item: NativeTaskHistoryItem) -> String? {
+        guard store.taskResultTaskID == item.taskID,
+              let models = store.taskResult?["model_results"] as? JSONObject else { return nil }
+        return ["gfs", "ec"].compactMap { model in
+            (models[model] as? JSONObject)?["html_report_path"] as? String
+        }.first { !$0.isEmpty }
+    }
+
+    private func openFullReport(_ path: String) {
+        let url = URL(fileURLWithPath: path, relativeTo: URL(
+            fileURLWithPath: FileManager.default.currentDirectoryPath))
+        NSWorkspace.shared.open(url)
     }
 
     /// 摘要卡：状态、原始 UTC、进度、恢复说明；动作按钮集中在列表行。
@@ -532,12 +613,16 @@ struct NativeTaskHistoryView: View {
                 // 方案 D9：动作收进「…」菜单，命中区 36、危险项红字隔离。
                 Menu {
                     if item.canRestoreResult {
-                        Button(L10n.text("恢复已发布结果", "Restore published result")) { store.restoreTaskResult(item) }
-                            .disabled(store.busy || store.restoringTaskHistoryID != nil)
+                        Button(L10n.text("查看该次结果", "View this result")) {
+                            restoreConfirmation.taskID = item.taskID
+                        }
+                        .disabled(store.busy || store.restoringTaskHistoryID != nil)
+                        .help(L10n.text("从已发布快照恢复结果，不修改当前参数、不重新检查数据。", "Restore the published result without changing current parameters or re-checking data."))
                     }
                     if item.retryRequest != nil {
                         Button(L10n.text("恢复参数并重新检查数据", "Restore parameters & re-check")) { store.restoreTaskParameters(item) }
                             .disabled(store.busy || item.status == "running" || store.restoringTaskHistoryID != nil)
+                            .help(L10n.text("回到预检并回填该次参数，不会直接恢复结果。", "Return to preflight with these parameters; the result is not restored."))
                     }
                     Divider()
                     Button(role: .destructive) { store.pendingForgetTaskID = item.taskID } label: {
@@ -551,6 +636,7 @@ struct NativeTaskHistoryView: View {
                 .menuIndicator(.hidden)
                 .fixedSize()
                 .help(L10n.text("任务动作", "Task actions"))
+                .accessibilityLabel(L10n.text("任务动作", "Task actions"))
                 .disabled(store.forgettingTaskHistoryID != nil)
             }
             .padding(.horizontal, 16).padding(.vertical, 12)
@@ -558,6 +644,7 @@ struct NativeTaskHistoryView: View {
             .background(store.selectedTaskHistoryID == item.taskID
                         ? Color(nsColor: .selectedContentBackgroundColor).opacity(0.18) : Color.clear)
         }.buttonStyle(.plain)
+            .accessibilityAddTraits(store.selectedTaskHistoryID == item.taskID ? .isSelected : [])
     }
 
     private func statusSymbol(_ status: String) -> String {

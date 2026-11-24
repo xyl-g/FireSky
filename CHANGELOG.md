@@ -8,6 +8,31 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v1.9.10 (2026-11-24)
+
+macOS Liquid Glass UI 全面升级、新品牌 Logo、局域网与 Cloudflare Tunnel 外网映射、数据检查 30 秒空等根治、卫星实况多帧/多波段算法升级、中国区域预测加速与中间产物自动清理。
+Major macOS Liquid Glass UI refresh, new FireSky logo, built-in LAN & Cloudflare Tunnel HTTP server, 30-second preflight watchdog stall fix, multi-frame / multispectral satellite nowcast upgrades, China regional speedup, and immediate intermediate-artifact cleanup.
+
+**Rust 引擎 / Rust Engine**
+
+- **数据检查 30 秒卡顿根治（150×–690× 提速）**：`desktop_runtime.rs` 看门狗由不可中断 `sleep(30s)` 改为 `Condvar::wait_timeout` + `Drop` 守卫，消除每次 `check`/`prepare`/`forecast`/`data_sync_run` 结束时的 30 秒空等与早退线程泄漏；单点/区域/实况本地检查降至 25–200 ms。
+  Replaced the uninterruptible `sleep(30s)` watchdog with a `Condvar` + `Drop` guard in `desktop_runtime.rs`, eliminating the ~30 s tail stall on every `check`/`prepare`/`forecast`/`data_sync_run` RPC (local checks now complete in 25–200 ms).
+- **中国区域预测加速与中间产物即时删除**：`assessment.rs` 引入线程安全 `EcCodes` 封装与 `rayon` 并行解码/推导；`desktop_runtime.rs` 让区域主网格与 `city_ranking` 共享本次 `TempDir` 临时衍生缓存，消除重复整轮 GRIB2 解码并在结束时自动销毁；`national.rs` 突破 `MAX_BEARINGS = 16` 截断为频次优先 + 内存受控缓存；单点预测与卫星实况临时 `.rust-bundles`/`.rust-advection` 均改为计算结束即删，保留策略同时清扫旧版遗留 `derived/` 目录。
+  Added parallel GRIB/CAMS decoding (`assessment.rs`), shared ephemeral `TempDir` derived cache between regional grid and `city_ranking` (`desktop_runtime.rs`), frequency-ranked bounded multi-bearing solar-path cache (`national.rs`), and immediate deletion of temporary intermediate artifacts (`derived/`, `.rust-bundles/`, `.rust-advection/`).
+- **卫星实况多帧光流、多波段剖面与稳定性修复**：采样窗口由 30 分钟 / 2 帧扩至 90 分钟 / 最多 6 帧（`desktop_hsd.rs` / `hsd_provider.rs` 上限扩至 `1..=8`）；块光流引入 2D Hanning 窗、近 3 对帧聚合与 3×3 空间平滑，计算拉格朗日云顶亮温变化率 `lagrangian_b13_trend_k_per_hour` 替换硬编码 `trend_score: 0.5`，并融合 B13–B15 薄卷云与 B07–B13 低云特征修正实况垂直剖面；修复日落前 30 分钟–4 小时平流帧未入评分窗口导致的 `outside the supported five-minute nowcast window` 报错，以及 GFS 过饱和相对湿度（>100%）触发的 `HSD retrieval prior level is invalid` 报错。
+  Expanded nowcast window to 90 min / up to 6 scans with windowed multi-pair smoothed block motion, Lagrangian `dB13/dt` `trend_score`, and B13–B15 / B07–B13 vertical profile refinement; fixed both the 30 min–4 h advected scoring-window crash and GFS supersaturated RH (>100%) validation failures.
+- **保留策略、同步与质量档位修复**：修复 `cache_retention.rs` 真实 `flock` 检测与 EC/CAMS 周期文件名解析（解决 EC 338 项清理失败不删旧周期）；修复 `sync_cams` 刷新周期与 `desktop_publications` 缓存 `verified=false` 污染问题，支持手动同步 `force: true` 强制核验；同步助手最小监控间隔下调至 **5 分钟**（`5–1440` 分钟轻量探测更新，仅检测到新周期才下载）；`empirical.rs` 将「无明显火烧云」阈值上调至 `0.02`（`0.00`/`0.01` 不再误标「微微烧」）。
+  Fixed `cache_retention.rs` real `flock` checks and EC/CAMS cycle parsing, prevented unverified publication probe caching, added `force: true` manual sync, lowered background sync polling minimum to 5 min (`5–1440` min), and raised the "no glow" cutoff to `0.02`.
+
+**macOS 原生桌面 / macOS Native Client**
+
+- **全新火烧云矢量 Logo 与 Liquid Glass 格局升级**：按深蓝紫红底 + 立体火烧云重绘 `BrandMark.swift` 与全套 Retina `FireSky.icns`；隐藏冗余标题栏、56pt 顶栏集成快速外观/重连/更新入口；设置页改为顶部胶囊分类（通用/数据/高级）与独立 `UpdateSheetView` 弹层；更新器补充 `User-Agent` 及 GitHub API 403/429 自动回退 `releases/latest` 重定向解析。
+  Shipped the new sculpted sunset-cloud vector logo & Retina `FireSky.icns`, hidden-titlebar Liquid Glass chrome, top-capsule Settings, dedicated `UpdateSheetView`, and GitHub 403/429 release-check fallback.
+- **局域网与 Cloudflare Tunnel 内置服务**：新增 `LocalServerController.swift` 并打包内嵌 Web 前端资源（`Contents/Resources/web`），支持 `127.0.0.1`（CF Tunnel 推荐，开启鉴权时自动放行 Tunnel 公网域名 `Host`）与 `0.0.0.0`（局域网）、开机自启、Bearer/Basic 访问令牌（浏览器登录用户名 `firesky` + 令牌）与一键复制 `cloudflared` 命令。
+  Added built-in `LocalServerController` with bundled Web UI assets, `127.0.0.1` (Cloudflare Tunnel with remote-host support when token auth is on) and `0.0.0.0` LAN modes, auto-start, token management (`firesky` + token), and one-click `cloudflared` command copy.
+- **工作台体验全面打磨**：概览页展示模型云属代理（`cloud_genus_proxy`）；重绘大气剖面图（天空渐变、受光走廊、圆角云层与山地轮廓）；逐时台账默认隐藏未判断/缺测行并可一键展开；区域预测默认中国、支持设默认与平滑热力过渡渲染；数据周期确认改为自定义详情卡片；数据管理页展示结果与附加缓存并说明中间产物自动删除；实现页面级错误隔离、跨页旧参数横幅/空态隔离并屏蔽内部 `native-nowcast-map-publication-not-requested` 警告。
+  Surfaced overview cloud genus proxy, redesigned the atmospheric cross-section canvas, filtered unevaluated hourly ledger rows by default, defaulted regional forecast to China with saved default + smooth Mercator heatmap overlay, upgraded cycle-age confirmation & Data Management views, isolated errors/stale banners per page, and suppressed internal nowcast map-publication status codes.
+
 ## Unreleased（Windows 对齐，随下一版本发布）
 
 Windows 成正式发布目标：UI 对齐至 v1.5.0 macOS 基准（v1.2.0 信息架构 +

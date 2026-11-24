@@ -11,6 +11,7 @@ use geo::{
 };
 use serde::Deserialize;
 use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
 use std::{
     collections::BTreeMap,
     fs,
@@ -77,6 +78,23 @@ fn directory(path: &Path) -> Result<(), String> {
         "timezone source must be a nonsymlink directory",
     )
 }
+struct HashingReader<R> {
+    inner: R,
+    hasher: Sha256,
+    bytes: u64,
+}
+
+impl<R: Read> Read for HashingReader<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let count = self.inner.read(buf)?;
+        if count > 0 {
+            self.hasher.update(&buf[..count]);
+            self.bytes = self.bytes.saturating_add(count as u64);
+        }
+        Ok(count)
+    }
+}
+
 fn array<T: npyz::Deserialize>(
     root: &Path,
     name: &str,
@@ -102,14 +120,6 @@ fn array<T: npyz::Deserialize>(
         "timezone array exceeds bounds",
     )?;
     let path = root.join(&entry.file);
-    let expected = SourceIdentity {
-        bytes: entry.bytes,
-        sha256: entry.sha256.clone(),
-    };
-    require(
-        regular_identity(&path)? == expected,
-        "timezone array checksum mismatch",
-    )?;
     let mut options = fs::OpenOptions::new();
     options.read(true);
     #[cfg(unix)]
@@ -118,6 +128,11 @@ fn array<T: npyz::Deserialize>(
         options.custom_flags(libc::O_NOFOLLOW);
     }
     let mut file = options.open(&path).map_err(|e| e.to_string())?;
+    let metadata = file.metadata().map_err(|e| e.to_string())?;
+    require(
+        metadata.is_file() && metadata.len() == entry.bytes,
+        "timezone array checksum mismatch",
+    )?;
     let mut prefix = [0u8; 12];
     file.read_exact(&mut prefix).map_err(|e| e.to_string())?;
     require(&prefix[..6] == b"\x93NUMPY", "invalid timezone NPY magic")?;
@@ -137,7 +152,12 @@ fn array<T: npyz::Deserialize>(
         "invalid timezone NPY extent",
     )?;
     file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-    let npy = npyz::NpyFile::new(BufReader::new(file)).map_err(|e| e.to_string())?;
+    let mut reader = BufReader::new(HashingReader {
+        inner: file,
+        hasher: Sha256::new(),
+        bytes: 0,
+    });
+    let npy = npyz::NpyFile::new(&mut reader).map_err(|e| e.to_string())?;
     require(
         npy.shape() == entry.shape
             && npy.order() == npyz::Order::C
@@ -150,9 +170,19 @@ fn array<T: npyz::Deserialize>(
         ),
     )?;
     let data = npy.into_vec::<T>().map_err(|e| e.to_string())?;
+    // Drain any trailing bytes (none expected) so the digest covers the entire file descriptor.
+    let mut tail = [0u8; 64];
+    while reader.read(&mut tail).map_err(|e| e.to_string())? > 0 {}
+    let inner = reader.into_inner();
+    let digest: String = inner
+        .hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
     require(
-        regular_identity(&path)? == expected,
-        "timezone array changed during load",
+        inner.bytes == entry.bytes && digest == entry.sha256,
+        "timezone array checksum mismatch",
     )?;
     Ok(data)
 }

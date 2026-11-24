@@ -354,20 +354,6 @@ impl CamsCatalog {
     }
 }
 
-fn scan(
-    source: &str,
-    root: &Path,
-    local: &mut BTreeMap<String, Value>,
-    cancel: &AtomicBool,
-) -> Result<(), String> {
-    if !local.contains_key(source) {
-        local.insert(
-            source.into(),
-            desktop_inventory::local_snapshot(source, root, cancel)?.0,
-        );
-    }
-    Ok(())
-}
 fn report(
     plan: &ResolvedPlan,
     config: &desktop_inventory::Config,
@@ -396,25 +382,10 @@ fn report(
             lock_timeout_seconds: 300.0,
             download_attempts: 4,
         })?;
-        for hour in hours {
-            check(cancel)?;
-            // Wrapped envelopes are served as two longitude segments; the
-            // hour is ready only when every segment has a covering cache.
-            let mut covered = true;
-            for part in gfs_data::request_bboxes(plan.input.bbox, "0p25")? {
-                let url = gfs_data::build_url(plan.cycle, hour, Some(part), "0p25", false)?;
-                if client
-                    .find(plan.cycle, hour, Some(part), Some(&url))?
-                    .is_none()
-                {
-                    covered = false;
-                    break;
-                }
-            }
-            if !covered {
-                missing.push(hour);
-            }
-        }
+        check(cancel)?;
+        let segments = gfs_data::request_bboxes(plan.input.bbox, "0p25")?;
+        let hour_list: Vec<u32> = hours.iter().copied().collect();
+        missing = client.find_missing_hours(plan.cycle, &hour_list, &segments, false)?;
     } else {
         let matched = local[source]["cycles"].as_object().and_then(|cycles| {
             cycles
@@ -598,16 +569,54 @@ pub(crate) fn execute_cancellable(params: Params, cancel: &AtomicBool) -> Result
     if plans.len() == 2 && plans[0].input.model_source == plans[1].input.model_source {
         return Err("desktop preflight model plans must be distinct".into());
     }
+    let need_gfs = plans.iter().any(|p| p.input.model_source == "gfs");
+    let need_ec = plans.iter().any(|p| p.input.model_source == "ec");
+    let gfs_dir = &params.config.gfs_cache_dir;
+    let ecmwf_dir = &params.config.ecmwf_cache_dir;
+    let cams_dir = &params.config.cams_cache_dir;
+    let (gfs_res, ec_res, cams_res) = std::thread::scope(|scope| {
+        let gfs_handle = need_gfs.then(|| {
+            scope.spawn(move || -> Result<Value, String> {
+                check(cancel)?;
+                let client = GfsClient::new(gfs_data::Config {
+                    cache_dir: gfs_dir.clone(),
+                    resolution: "0p25".into(),
+                    region: None,
+                    timeout_seconds: 45.0,
+                    lock_timeout_seconds: 300.0,
+                    download_attempts: 4,
+                })?;
+                let (file_count, latest_cycle) = client.summary_from_index()?;
+                Ok(json!({
+                    "file_count": file_count,
+                    "latest_cycle": latest_cycle.unwrap_or_default(),
+                }))
+            })
+        });
+        let ec_handle = need_ec.then(|| {
+            scope.spawn(move || desktop_inventory::local_snapshot("ecmwf", ecmwf_dir, cancel))
+        });
+        let cams_res = desktop_inventory::local_snapshot("cams", cams_dir, cancel);
+        let gfs_res = gfs_handle.map(|handle| {
+            handle
+                .join()
+                .map_err(|_| "GFS preflight summary worker panicked".to_string())?
+        });
+        let ec_res = ec_handle.map(|handle| {
+            handle
+                .join()
+                .map_err(|_| "ECMWF preflight inventory worker panicked".to_string())?
+        });
+        (gfs_res, ec_res, cams_res)
+    });
     let mut local = BTreeMap::new();
-    for plan in &plans {
-        if plan.input.model_source == "gfs" {
-            scan("gfs", &params.config.gfs_cache_dir, &mut local, cancel)?;
-        } else {
-            scan("ecmwf", &params.config.ecmwf_cache_dir, &mut local, cancel)?;
-        }
+    if let Some(gfs) = gfs_res {
+        local.insert("gfs".into(), gfs?);
     }
-    let (cams, paths) =
-        desktop_inventory::local_snapshot("cams", &params.config.cams_cache_dir, cancel)?;
+    if let Some(ec) = ec_res {
+        local.insert("ecmwf".into(), ec?.0);
+    }
+    let (cams, paths) = cams_res?;
     local.insert("cams".into(), cams);
     let mut catalog = CamsCatalog::new(paths);
     let reports = plans

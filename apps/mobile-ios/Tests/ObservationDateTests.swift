@@ -3,6 +3,16 @@ import XCTest
 
 /// ObservationDate / PreparationActions 纯逻辑迁移验证。
 final class ObservationDateTests: XCTestCase {
+    func testEnglishSettingsTranslations() {
+        let saved = L10n.language
+        defer { L10n.language = saved }
+        L10n.language = .english
+        XCTAssertEqual(L10n.t("同步"), "Sync")
+        XCTAssertEqual(L10n.t("卫星数据"), "Satellite data")
+        XCTAssertEqual(L10n.t("数据已齐，可更新 %@"), "Data ready — can update %@")
+        XCTAssertEqual(L10n.navSettings, "Settings")
+    }
+
     func testLabelFormatting() throws {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]

@@ -240,7 +240,6 @@ enum L10n {
         "立即同步已启用的数据源（可解除失败熔断）":
             "Syncs the enabled sources now (also clears a failure suspension)",
         "同步状态": "Sync status",
-        "同步": "Sync",
         "先启用并保存后台同步": "Enable and save background sync first",
         "已同步": "Synced",
         "已是最新": "Up to date",
@@ -271,7 +270,6 @@ enum L10n {
         // 数据管理 / 库存
         "本地数据": "Local data",
         "刷新本地清单": "Refresh inventory",
-        "卫星数据": "Satellite data",
         "已统计占用仅覆盖模式数据（GFS / EC / CAMS）；地形与卫星以目录为准。":
             "Usage stats cover model data (GFS / EC / CAMS); terrain and satellite are per-directory.",
         "完成一次预测或在设置中配置数据源后，这里会显示库存。":
@@ -306,7 +304,6 @@ enum L10n {
             "Size cannot be estimated right now (network or service unavailable); actual usage shows once started.",
         // 格式化模板（tf）：与 Android values-en 同口径
         "需下载 %@": "Download needed: %@",
-        "数据已齐，可更新 %@": "Data ready — can update %@",
         "删除 %@ 的周期 %@：共 %d 个文件，预计释放 %.1f MB。占用中的文件会跳过；报告与任务记录不受影响。":
             "Deletes cycle %@ of %@: %d files, about %.1f MB. Files in use are skipped; reports and task records are unaffected.",
         "清空 %@ 的全部本地数据：共 %d 个文件，预计释放 %.1f MB。占用中的文件会跳过。":

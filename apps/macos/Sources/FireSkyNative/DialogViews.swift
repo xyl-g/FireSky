@@ -4,8 +4,10 @@ import SwiftUI
 struct PreflightView: View {
     @EnvironmentObject private var store: Store
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private var isNowcast: Bool { store.requestKind == .nowcast }
-    private var confirmTitle: String { isNowcast ? "确定分析" : "确定预测" }
+    private var confirmTitle: String { L10n.t(isNowcast ? "确定分析" : "确定预测") }
     private var actions: PreparationActions {
         PreparationActions(ready: store.ready, busy: store.busy, hasSession: store.session != nil)
     }
@@ -29,7 +31,8 @@ struct PreflightView: View {
                 }
                 Spacer()
                 Button { store.refreshCheck() } label: { Image(systemName: "arrow.clockwise") }
-                    .help(L10n.t("重新检查")).buttonStyle(.borderless).disabled(store.busy)
+                    .help(L10n.t("重新检查")).accessibilityLabel(L10n.t("重新检查"))
+                    .buttonStyle(.borderless).disabled(store.busy)
             }.padding(.bottom, 16)
             if store.rows.isEmpty {
                 HStack { ProgressView().controlSize(.small); Text(L10n.t("正在检查本地数据")) }
@@ -48,9 +51,32 @@ struct PreflightView: View {
                             status: !row.ready ? "pending" : row.old ? "interrupted" : "done",
                             title: row.status,
                         )
-                    }.frame(height: 64)
+                    }.frame(minHeight: 64, alignment: .leading)
                     if row.id != store.rows.last?.id { Divider() }
                 }
+            }
+            if !store.rows.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(L10n.t("下载前先知道"), systemImage: "info.circle")
+                        .fireSkyFont(size: 11, weight: .semibold, relativeTo: .caption)
+                        .foregroundStyle(.primary)
+                    Text(L10n.t("首次下载耗时取决于本机缺失的数据集与网络。上方只列本次预测所需文件；已下载文件不会重复下载，过程中可取消，失败项会保留并提示重试。"))
+                        .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !store.camsConfigured {
+                        Text(L10n.t("CAMS Key 未配置时仍可使用本地缓存；如需气溶胶数据，可在设置中配置后重新预检。"))
+                            .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(10)
+                .background(Color.primary.opacity(scheme == .dark ? 0.05 : 0.035),
+                            in: RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .strokeBorder(warm.opacity(0.18), lineWidth: 1)
+                }
+                .padding(.top, 10)
             }
             VStack(alignment: .leading, spacing: 8) {
                 if store.checking {
@@ -86,19 +112,89 @@ struct PreflightView: View {
                         .keyboardShortcut(.defaultAction)
                 }
             }.padding(.top, 14)
-                .animation(.easeInOut(duration: 0.18), value: store.ready)
-        }.padding(26).frame(width: 490)
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.ready)
+        }.padding(26).frame(width: dynamicTypeSize.isAccessibilitySize ? 620 : 490)
             .background(Color(nsColor: .windowBackgroundColor))
-            .confirmationDialog(
-                "数据周期确认",
-                isPresented: $store.showCycleAgeConfirm,
-                titleVisibility: .visible
-            ) {
-                Button(L10n.t("继续预测")) { store.confirmCycleAgeAndForecast() }
-                Button(L10n.t("返回更新数据"), role: .cancel) {}
-            } message: {
-                Text("\(store.cycleAgeSummary) 的发布周期未核验或不是最新发布。可以继续预测（结果可能略有偏差），也可以返回并点击「更新数据」获取最新周期。")
+            .sheet(isPresented: $store.showCycleAgeConfirm) {
+                CycleAgeConfirmSheet()
+                    .environmentObject(store)
             }
+    }
+}
+
+private struct CycleAgeConfirmSheet: View {
+    @EnvironmentObject private var store: Store
+    @Environment(\.colorScheme) private var scheme
+
+    private var flaggedRows: [DataRow] {
+        store.rows.filter { $0.ready && (!$0.verified || !$0.latest) }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(warm.opacity(scheme == .dark ? 0.18 : 0.12))
+                        .frame(width: 42, height: 42)
+                    Image(systemName: "clock.badge.exclamationmark")
+                        .font(.system(size: 19, weight: .semibold))
+                        .foregroundStyle(warm)
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(L10n.t("数据周期确认"))
+                        .font(.title3.weight(.semibold))
+                    Text(L10n.text(
+                        "以下本地数据源尚未核验为最新发布周期；使用旧周期可立即出图，但临近起报切换时结果可能略有偏差。",
+                        "The datasets below are unverified or behind the latest published cycle. Continuing now uses local cache and may slightly differ near a cycle switch."
+                    ))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            VStack(spacing: 0) {
+                ForEach(Array(flaggedRows.enumerated()), id: \.element.id) { index, row in
+                    HStack(spacing: 10) {
+                        Image(systemName: row.source == "hsd" ? "antenna.radiowaves.left.and.right" : "externaldrive")
+                            .font(.callout).foregroundStyle(.secondary).frame(width: 22)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(row.title).font(.callout.weight(.semibold))
+                            Text(row.detail).font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        StatusChip(status: row.old ? "interrupted" : "pending", title: row.status)
+                    }
+                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    if index < flaggedRows.count - 1 { Divider().opacity(0.5) }
+                }
+            }
+            .fireSkySurface(role: .content, cornerRadius: 12)
+
+            HStack(spacing: 10) {
+                Button(L10n.t("返回")) {
+                    store.showCycleAgeConfirm = false
+                }
+                .keyboardShortcut(.cancelAction)
+                Spacer()
+                Button(L10n.text("使用当前缓存继续", "Continue with Cache")) {
+                    store.confirmCycleAgeAndForecast()
+                }
+                Button {
+                    store.showCycleAgeConfirm = false
+                    store.prepare()
+                } label: {
+                    Label(L10n.text("更新到最新数据", "Update to Latest"), systemImage: "arrow.down.circle.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .foregroundStyle(scheme == .dark ? Color.black : Color.white)
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 470)
+        .background(Color(nsColor: .windowBackgroundColor))
     }
 }
 
@@ -124,12 +220,14 @@ struct InventoryView: View {
                     .help(L10n.t("后台同步与下载探测已移到「设置 → 数据」"))
                     Button { Task { await store.loadInventory() } } label: {
                         Image(systemName: "arrow.clockwise")
-                    }.help(L10n.t("刷新本地清单"))
+                    }.help(L10n.t("刷新本地清单")).accessibilityLabel(L10n.t("刷新本地清单"))
                     Button {
                         if !store.workspace.isEmpty {
                             NSWorkspace.shared.open(URL(fileURLWithPath: store.workspace))
                         }
-                    } label: { Image(systemName: "folder") }.help(L10n.t("在访达中打开数据目录"))
+                    } label: { Image(systemName: "folder") }
+                    .help(L10n.t("在访达中打开数据目录"))
+                    .accessibilityLabel(L10n.t("在访达中打开数据目录"))
                 }
                 if !store.dataDeleteMessage.isEmpty {
                     Text(store.dataDeleteMessage)
@@ -154,11 +252,14 @@ struct InventoryView: View {
                                 if let path = dataset["path"] as? String {
                                     NSWorkspace.shared.open(URL(fileURLWithPath: path))
                                 }
-                            } label: { Image(systemName: "folder") }.help(L10n.t("在访达中打开"))
+                            } label: { Image(systemName: "folder") }
+                            .help(L10n.t("在访达中打开"))
+                            .accessibilityLabel(L10n.t("在访达中打开"))
                             Button {
                                 store.beginDataDelete(source: source, cycle: nil)
                             } label: { Image(systemName: "trash") }
                                 .help(L10n.t("清空该数据源"))
+                                .accessibilityLabel("\(L10n.t("清空该数据源"))：\(title)")
                                 .disabled(store.busy || !store.online || store.dataDeleteRunning)
                         }
                         DisclosureGroup("\(cycles.count) 个周期", isExpanded: Binding(
@@ -176,6 +277,7 @@ struct InventoryView: View {
                                     } label: { Image(systemName: "trash") }
                                         .buttonStyle(.borderless)
                                         .help(L10n.t("删除该周期"))
+                                        .accessibilityLabel("\(L10n.t("删除该周期"))：\(title) \(key)")
                                         .disabled(store.busy || !store.online || store.dataDeleteRunning)
                                 }.font(.callout).padding(.vertical, 5)
                             }
@@ -184,7 +286,7 @@ struct InventoryView: View {
                     .padding(16)
                     .glassCard()
                 }
-                if store.inventory.isEmpty && store.error.isEmpty && !store.layoutLoading {
+                if store.inventory.isEmpty && store.errorText(for: .data).isEmpty && !store.layoutLoading {
                     VStack(spacing: 10) {
                         FireSkyMarkScene(size: 64)
                         Text(L10n.t("本地缓存为空")).font(.system(size: 13, weight: .medium))
@@ -195,7 +297,16 @@ struct InventoryView: View {
                     .padding(.vertical, 24)
                     .glassCard()
                 }
-                if !store.error.isEmpty { Text(store.error).foregroundStyle(.red) }
+                intermediateCachesSection
+                let dataError = store.errorText(for: .data)
+                if !dataError.isEmpty {
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(dataError).foregroundStyle(.red).textSelection(.enabled)
+                        Spacer()
+                        Button { store.clearError() } label: { Image(systemName: "xmark") }
+                            .buttonStyle(.borderless).foregroundStyle(.secondary)
+                    }
+                }
             }.padding(30)
         }
         .confirmationDialog(L10n.t("删除本地数据？"), isPresented: Binding(
@@ -207,6 +318,97 @@ struct InventoryView: View {
             Button(L10n.t("取消"), role: .cancel) { store.cancelDataDelete() }
         } message: {
             Text(deleteConfirmationText)
+        }
+    }
+
+    @ViewBuilder
+    private var intermediateCachesSection: some View {
+        if !store.inventoryCategories.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Image(systemName: "tray.2").font(.title3).foregroundStyle(warm)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.text("预测结果与附加缓存", "Forecast Results & Auxiliary Data"))
+                            .font(.headline)
+                        Text(L10n.text(
+                            "计算过程中的中间产物（衍生张量、卫星解包帧、临时排行缓存）会在计算结束后立即自动删除，磁盘仅保留最终结果与原始气象/地形数据。",
+                            "Temporary intermediate artifacts (derived tensors, unpacked satellite bundles, ranking scratch) are deleted immediately after computation; only final results and raw meteorological/terrain data are kept."
+                        ))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer()
+                }
+                Divider().opacity(0.5)
+                ForEach(Array(store.inventoryCategories.enumerated()), id: \.offset) { index, item in
+                    let key = item["category"] as? String ?? ""
+                    let files = (item["file_count"] as? NSNumber)?.intValue ?? 0
+                    let bytes = (item["bytes"] as? NSNumber)?.int64Value ?? 0
+                    let path = item["path"] as? String ?? ""
+                    HStack(spacing: 10) {
+                        Image(systemName: categoryIcon(key))
+                            .font(.callout).foregroundStyle(.secondary).frame(width: 22)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(categoryTitle(key)).font(.callout.weight(.medium))
+                            Text(categorySubtitle(key)).font(.caption2).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Text(L10n.text("\(files) 个文件", "\(files) files"))
+                            .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        Text(ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file))
+                            .font(.caption.weight(.medium)).monospacedDigit()
+                            .frame(minWidth: 68, alignment: .trailing)
+                        if !path.isEmpty {
+                            Button {
+                                NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                            } label: { Image(systemName: "folder") }
+                            .buttonStyle(.borderless)
+                            .help(L10n.t("在访达中打开"))
+                            .accessibilityLabel(L10n.t("在访达中打开"))
+                        }
+                    }
+                    .padding(.vertical, 4)
+                    if index < store.inventoryCategories.count - 1 { Divider().opacity(0.35) }
+                }
+            }
+            .padding(16)
+            .glassCard()
+        }
+    }
+
+    private func categoryTitle(_ key: String) -> String {
+        switch key {
+        case "point-forecasts": return L10n.text("单点预测结果缓存", "Point Forecast Cache")
+        case "regional-forecasts": return L10n.text("区域预测结果缓存", "Regional Forecast Results")
+        case "map-frames": return L10n.text("地图渲染帧缓存", "Map Frame Cache")
+        case "reports": return L10n.text("历史报告产物", "Forecast Reports")
+        case "satellite": return L10n.text("卫星实况帧（Himawari HSD）", "Satellite Frames (Himawari HSD)")
+        case "srtm": return L10n.text("SRTM 地形瓦片", "SRTM Terrain Tiles")
+        default: return key
+        }
+    }
+
+    private func categorySubtitle(_ key: String) -> String {
+        switch key {
+        case "point-forecasts": return L10n.text("按地点与起报周期复用单点计算结果", "Reused for matching point + model cycle")
+        case "regional-forecasts": return L10n.text("按区域范围、模式与周期复用计算结果", "Reused for matching region + model cycle")
+        case "map-frames": return L10n.text("地图与剖面可视化中间帧", "Intermediate rendered frames")
+        case "reports": return L10n.text("已归档预测报告与快照", "Archived forecast reports")
+        case "satellite": return L10n.text("葵花卫星多波段观测帧", "Himawari multi-band scan frames")
+        case "srtm": return L10n.text("离线高程与地形遮挡计算瓦片", "Offline elevation & horizon blocking tiles")
+        default: return ""
+        }
+    }
+
+    private func categoryIcon(_ key: String) -> String {
+        switch key {
+        case "point-forecasts": return "location.circle"
+        case "regional-forecasts": return "map"
+        case "map-frames": return "photo.stack"
+        case "reports": return "doc.text"
+        case "satellite": return "antenna.radiowaves.left.and.right"
+        case "srtm": return "mountain.2"
+        default: return "folder"
         }
     }
 
@@ -267,6 +469,17 @@ struct TerrainPanelView: View {
                     }
                     .disabled(!store.online || store.busy)
                     .help(L10n.t("确认估算后下载所选区域的 SRTM 瓦片（跳过已有；可随时取消续传）"))
+                    if store.terrainLastFailedCount > 0 {
+                        Button(L10n.text("重试失败项（\(store.terrainLastFailedCount)）",
+                                         "Retry failed (\(store.terrainLastFailedCount))"),
+                               systemImage: "arrow.clockwise.circle") {
+                            store.retryFailedTerrainTiles()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(!store.online || store.busy)
+                        .help(L10n.text("定向重试上次失败的 SRTM 瓦片，自动跳过已完成瓦片",
+                                        "Retry only the failed SRTM tiles from the previous run"))
+                    }
                     Button(L10n.t("仅当前地点"), systemImage: "arrow.down.to.line") {
                         store.downloadTerrainPoint()
                     }
@@ -276,6 +489,7 @@ struct TerrainPanelView: View {
                 }
                 Button { store.loadTerrain() } label: { Image(systemName: "arrow.clockwise") }
                     .help(L10n.t("刷新地形状态"))
+                    .accessibilityLabel(L10n.t("刷新地形状态"))
                     .disabled(!store.online || store.terrainDownloading)
             }
             if store.terrainDownloading {
@@ -297,7 +511,7 @@ struct TerrainPanelView: View {
                 get: { store.showGlobalTerrainConfirm },
                 set: { if !$0 { store.showGlobalTerrainConfirm = false } }
             )) {
-                Button(L10n.t("开始下载"), role: .destructive) {
+                Button(L10n.t("开始下载")) {
                     store.downloadTerrain(region: store.terrainRegion)
                 }
                 Button(L10n.t("取消"), role: .cancel) { store.showGlobalTerrainConfirm = false }
@@ -431,36 +645,74 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     @EnvironmentObject private var store: Store
     @EnvironmentObject private var updater: Updater
+    @EnvironmentObject private var localServer: LocalServerController
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var categoryIndicator
     /// 分类与卸载确认状态都在 store：跨分区动作（CAMS 提醒跳转、助手卸载）可直接落位。
     private var category: Binding<SettingsCategory> {
         Binding(get: { store.settingsCategory }, set: { store.settingsCategory = $0 })
     }
 
+    private var currentVersionLabel: String {
+        let raw = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        return raw.isEmpty ? L10n.text("开发构建", "Dev Build") : "v\(raw)"
+    }
+
     var body: some View {
-        HStack(spacing: 0) {
-            // 固定宽度分类栏；窄窗口仍可用，分类切换只显示一个分类的内容。
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(SettingsCategory.allCases) { item in
-                    Button {
-                        category.wrappedValue = item
-                    } label: {
-                        HStack(spacing: 9) {
-                            Image(systemName: item.symbol)
-                                .font(.system(size: 13)).frame(width: 18)
-                            Text(item.title).font(.system(size: 13,
-                                weight: category.wrappedValue == item ? .semibold : .regular))
-                            Spacer(minLength: 0)
+        VStack(spacing: 0) {
+            // 顶部胶囊式分类导航：消除双侧栏挤压，让设置区聚焦可读宽度。
+            HStack {
+                Spacer(minLength: 0)
+                HStack(spacing: 4) {
+                    ForEach(SettingsCategory.allCases) { item in
+                        let selected = category.wrappedValue == item
+                        Button {
+                            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                                category.wrappedValue = item
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: item.symbol)
+                                    .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                                Text(L10n.t(item.title))
+                                    .fireSkyFont(size: 12, weight: selected ? .semibold : .regular)
+                            }
+                            .padding(.horizontal, 16).padding(.vertical, 7)
+                            .foregroundStyle(selected ? Color.primary : Color.secondary)
+                            .background {
+                                if selected {
+                                    Capsule()
+                                        .fill(scheme == .dark ? Color.white.opacity(0.11) : Color.white.opacity(0.95))
+                                        .matchedGeometryEffect(id: "settings-cat-pill", in: categoryIndicator)
+                                }
+                            }
+                            .overlay(alignment: .bottom) {
+                                if selected {
+                                    Capsule().fill(warm).frame(width: 22, height: 2.5)
+                                        .offset(y: -2)
+                                        .matchedGeometryEffect(id: "settings-cat-line", in: categoryIndicator)
+                                }
+                            }
+                            .contentShape(Capsule())
                         }
-                        .padding(.horizontal, 10).frame(height: 34)
-                        .foregroundStyle(category.wrappedValue == item ? warm : Color.primary.opacity(0.72))
-                        .background(category.wrappedValue == item ? warm.opacity(0.12) : Color.clear,
-                                    in: RoundedRectangle(cornerRadius: 7))
-                    }.buttonStyle(.plain)
-                        .accessibilityAddTraits(category.wrappedValue == item ? .isSelected : [])
+                        .buttonStyle(.plain)
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                    }
+                }
+                .padding(4)
+                .background(
+                    Capsule().fill(scheme == .dark ? Color(0x16, 0x1E, 0x2E) : Color(0xEA, 0xF0, 0xF6))
+                )
+                .overlay {
+                    Capsule().strokeBorder(FSDesign.surfaceBorder(role: .grouped, dark: scheme == .dark, emphasized: false), lineWidth: 1)
                 }
                 Spacer(minLength: 0)
-            }.padding(.horizontal, 12).padding(.top, 16).frame(width: 150)
-            Divider()
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 14)
+            .padding(.bottom, 10)
+
             // 切换分类保留各表单草稿：所有分区都常驻在 store，不随视图销毁。
             ScrollView {
                 Group {
@@ -469,9 +721,16 @@ struct SettingsView: View {
                     case .data: dataSection
                     case .advanced: advancedSection
                     }
-                }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxWidth: 820, alignment: .leading)
+                .padding(.horizontal, 28)
+                .padding(.top, 10)
+                .padding(.bottom, 32)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
+            .defaultScrollAnchor(.top)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .confirmationDialog(L10n.t("卸载后台同步助手？"), isPresented: $store.confirmUninstallHelper) {
             Button(L10n.t("卸载助手"), role: .destructive) { store.uninstallHelper() }
             Button(L10n.t("保留助手"), role: .cancel) {}
@@ -483,90 +742,380 @@ struct SettingsView: View {
     // MARK: - 通用
 
     private var generalSection: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            settingsHeader("通用")
-            VStack(alignment: .leading, spacing: 8) {
-                Text(L10n.t("主题")).font(.callout.weight(.medium))
-                Picker("", selection: $store.appearance) {
-                    Text(L10n.t("跟随系统")).tag("system")
-                    Text(L10n.t("浅色")).tag("light")
-                    Text(L10n.t("深色")).tag("dark")
-                }.pickerStyle(.segmented).frame(width: 300)
-                    .onChange(of: store.appearance) { _, _ in store.saveAppearance() }
-                    .accessibilityLabel("主题")
+        VStack(alignment: .leading, spacing: 20) {
+            settingsHeader(L10n.text("外观与通用", "Appearance & General"),
+                           subtitle: L10n.text("本机显示偏好、语言与应用更新", "Display preferences, language and updates"))
+            settingsStatusSummary
+
+            VStack(alignment: .leading, spacing: 0) {
+                settingsSectionLabel(L10n.text("界面", "Interface"))
+                VStack(spacing: 0) {
+                    settingsRow(
+                        symbol: "paintpalette",
+                        title: L10n.text("外观", "Appearance"),
+                        subtitle: appearanceSubtitle
+                    ) {
+                        Picker("", selection: $store.appearance) {
+                            Text(L10n.t("浅色")).tag("light")
+                            Text(L10n.t("深色")).tag("dark")
+                            Text(L10n.t("跟随系统")).tag("system")
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 224)
+                        .onChange(of: store.appearance) { _, _ in store.saveAppearance() }
+                        .accessibilityLabel(L10n.t("主题"))
+                    }
+                    Divider().opacity(0.55).padding(.leading, 48)
+                    settingsRow(
+                        symbol: "globe",
+                        title: L10n.text("语言", "Language"),
+                        subtitle: store.appLanguage.label
+                    ) {
+                        Picker("", selection: $store.appLanguage) {
+                            Text(L10n.text("跟随系统", "System")).tag(L10n.Language.system)
+                            Text("中文").tag(L10n.Language.chinese)
+                            Text("English").tag(L10n.Language.english)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(width: 224)
+                        .accessibilityLabel(L10n.text("语言", "Language"))
+                    }
+                }
+                .padding(.horizontal, 16)
+                .fireSkySurface(role: .content, cornerRadius: 14)
             }
-            Divider()
-            updaterBlock
+
+            VStack(alignment: .leading, spacing: 0) {
+                settingsSectionLabel(L10n.text("局域网与外网映射（Cloudflare Tunnel）", "LAN & Cloudflare Tunnel Access"))
+                localServerBlock
+                    .padding(.horizontal, 16)
+                    .fireSkySurface(role: .content, cornerRadius: 14)
+            }
+
+            VStack(alignment: .leading, spacing: 0) {
+                settingsSectionLabel(L10n.t("软件更新"))
+                updaterBlock
+                    .padding(.horizontal, 16)
+                    .fireSkySurface(role: .content, cornerRadius: 14)
+            }
         }
     }
 
-    /// 软件更新块：当前版本、检查/下载/安装状态与自动检查开关。
+    private var localServerBlock: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            settingsRow(
+                symbol: localServer.running ? "network" : "network.slash",
+                title: L10n.text("内置 Web 与 API 服务", "Built-in Web & API Server"),
+                subtitle: localServer.running
+                    ? localServer.statusMessage
+                    : (localServer.starting
+                        ? L10n.text("正在启动…", "Starting…")
+                        : L10n.text("启动后可在局域网访问或配合 cloudflared 映射公网",
+                                    "Serve Web UI & API on LAN or expose via Cloudflare Tunnel"))
+            ) {
+                HStack(spacing: 8) {
+                    if localServer.starting {
+                        ProgressView().controlSize(.small)
+                    }
+                    StatusChip(
+                        status: localServer.running ? "done" : "pending",
+                        title: localServer.running ? L10n.text("运行中", "Running") : L10n.text("未启动", "Stopped")
+                    )
+                    if localServer.running {
+                        Button(L10n.text("停止服务", "Stop")) {
+                            localServer.stop()
+                        }
+                        .controlSize(.small)
+                    } else {
+                        Button(L10n.text("启动服务", "Start")) {
+                            localServer.start(workspace: store.workspace, customEngineBinary: store.engineBinary)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(localServer.starting || store.workspace.isEmpty)
+                    }
+                }
+            }
+            Divider().opacity(0.55).padding(.leading, 48)
+            settingsRow(
+                symbol: "antenna.radiowaves.left.and.right",
+                title: L10n.text("监听模式", "Bind Mode"),
+                subtitle: localServer.bindLAN
+                    ? L10n.text("监听 0.0.0.0：局域网设备与本机均可访问（强制开启令牌鉴权）",
+                                "Listening on 0.0.0.0 for LAN & local devices (Bearer token required)")
+                    : L10n.text("仅监听 127.0.0.1：推荐配合 Cloudflare Tunnel 反向代理到外网",
+                                "Loopback 127.0.0.1 only: recommended for Cloudflare Tunnel")
+            ) {
+                Picker("", selection: $localServer.bindLAN) {
+                    Text(L10n.text("仅本机 (CF Tunnel)", "Local (CF Tunnel)")).tag(false)
+                    Text(L10n.text("局域网 (0.0.0.0)", "LAN (0.0.0.0)")).tag(true)
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 248)
+                .disabled(localServer.running || localServer.starting)
+            }
+            Divider().opacity(0.55).padding(.leading, 48)
+            settingsRow(
+                symbol: "number",
+                title: L10n.text("监听端口与自启动", "Port & Auto-Start"),
+                subtitle: L10n.text("修改端口或监听模式需先停止服务后生效", "Stop service before changing port or bind mode")
+            ) {
+                HStack(spacing: 12) {
+                    TextField("8765", value: $localServer.port, format: .number.grouping(.never))
+                        .textFieldStyle(.roundedBorder)
+                        .frame(width: 72)
+                        .disabled(localServer.running || localServer.starting)
+                    Toggle(L10n.text("打开应用时自动启动", "Auto-start on launch"), isOn: $localServer.autoStart)
+                        .toggleStyle(.checkbox)
+                }
+            }
+            Divider().opacity(0.55).padding(.leading, 48)
+            settingsRow(
+                symbol: "key.fill",
+                title: L10n.text("访问令牌鉴权", "Access Token Auth"),
+                subtitle: L10n.text("浏览器弹窗登录时：用户名固定填 firesky，密码粘贴下方令牌。令牌以 0600 权限保存于本地 state/http-token；局域网强制启用，仅本机使用可关闭免密。",
+                                    "Browser login: username is firesky, password is the token below. Stored locally at state/http-token (0600); required on LAN, optional for local-only.")
+            ) {
+                HStack(spacing: 8) {
+                    Toggle("", isOn: Binding(
+                        get: { localServer.bindLAN || localServer.requireToken },
+                        set: { localServer.requireToken = $0 }
+                    ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.small)
+                    .disabled(localServer.bindLAN || localServer.running || localServer.starting)
+                    if !localServer.token.isEmpty {
+                        Button(L10n.text("复制令牌", "Copy Token")) {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(localServer.token, forType: .string)
+                        }
+                        .controlSize(.small)
+                    }
+                    Button(L10n.text("重置令牌", "Regenerate")) {
+                        localServer.regenerateToken(workspace: store.workspace)
+                    }
+                    .controlSize(.small)
+                    .disabled(localServer.running || localServer.starting)
+                }
+            }
+
+            Divider().opacity(0.55).padding(.leading, 48)
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text(L10n.text("本机地址", "Local URL"))
+                        .font(.caption).foregroundStyle(.secondary).frame(width: 72, alignment: .leading)
+                    Text(localServer.localURL).font(.caption.monospaced()).textSelection(.enabled)
+                    Spacer()
+                    Button(L10n.text("打开", "Open")) {
+                        if let url = URL(string: localServer.localURL) { NSWorkspace.shared.open(url) }
+                    }
+                    .controlSize(.mini).disabled(!localServer.running)
+                    Button(L10n.text("复制", "Copy")) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(localServer.localURL, forType: .string)
+                    }
+                    .controlSize(.mini)
+                }
+                if localServer.bindLAN, let lan = localServer.lanURL {
+                    HStack(spacing: 8) {
+                        Text(L10n.text("局域网地址", "LAN URL"))
+                            .font(.caption).foregroundStyle(.secondary).frame(width: 72, alignment: .leading)
+                        Text(lan).font(.caption.monospaced()).textSelection(.enabled)
+                        Spacer()
+                        Button(L10n.text("复制", "Copy")) {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(lan, forType: .string)
+                        }
+                        .controlSize(.mini)
+                    }
+                }
+                HStack(spacing: 8) {
+                    Text("CF Tunnel")
+                        .font(.caption).foregroundStyle(.secondary).frame(width: 72, alignment: .leading)
+                    Text(localServer.cloudflaredCommand)
+                        .font(.caption.monospaced())
+                        .lineLimit(1).truncationMode(.middle)
+                        .textSelection(.enabled)
+                    Spacer()
+                    Button(L10n.text("复制命令", "Copy Cmd")) {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(localServer.cloudflaredCommand, forType: .string)
+                    }
+                    .controlSize(.mini)
+                }
+                if !localServer.errorMessage.isEmpty {
+                    Text(localServer.errorMessage)
+                        .font(.caption).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                if !localServer.webRootAvailable {
+                    Text(L10n.text("提示：未检测到内置 Web 前端静态资源，当前仍可访问 HTTP API。",
+                                   "Note: Bundled Web UI assets were not found; HTTP API remains available."))
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }
+            .padding(.vertical, 12)
+            .padding(.leading, 48)
+        }
+        .onAppear {
+            localServer.refreshTokenPreview(workspace: store.workspace)
+            localServer.refreshLANAddress()
+        }
+    }
+
+    private var appearanceSubtitle: String {
+        switch store.appearance {
+        case "light": return L10n.t("浅色")
+        case "dark": return L10n.t("深色")
+        default: return L10n.t("跟随系统")
+        }
+    }
+
+    /// 只读状态摘要：把引擎、数据源和后台助手状态放在设置入口，
+    /// 并给出回到数据管理分区的明确入口；不新增任何不可用开关。
+    private var settingsStatusSummary: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(L10n.text("运行状态摘要", "Runtime Summary")).fireSkyFont(size: 13, weight: .semibold)
+                Spacer()
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                        store.settingsCategory = .data
+                    }
+                } label: {
+                    Label(L10n.text("管理数据源与同步", "Manage data & sync"),
+                          systemImage: "arrow.right.circle")
+                        .fireSkyFont(size: 11, weight: .medium, relativeTo: .caption)
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(L10n.text("查看数据管理与连接状态", "Open data & connection settings"))
+            }
+            HStack(spacing: 10) {
+                statusBadge(title: L10n.text("本地引擎", "Engine"),
+                            value: store.online ? L10n.text("已连接", "Connected") : L10n.text("未连接", "Offline"),
+                            healthy: store.online)
+                statusBadge(title: L10n.text("数据源与同步", "Data & Sync"),
+                            value: store.dataSyncConfigured ? L10n.text("已配置", "Configured") : L10n.text("按需准备", "On-demand"),
+                            healthy: store.dataSyncConfigured || store.camsConfigured)
+                statusBadge(title: L10n.text("后台助手", "Helper"),
+                            value: store.helperLoaded ? L10n.text("运行中", "Running")
+                                : store.helperInstalled ? L10n.text("未加载", "Not loaded")
+                                : L10n.text("未安装", "Not installed"),
+                            healthy: store.helperLoaded)
+                statusBadge(title: L10n.text("局域网服务", "LAN / Tunnel"),
+                            value: localServer.running ? ":\(localServer.port)" : L10n.text("未启动", "Stopped"),
+                            healthy: localServer.running)
+            }
+        }
+        .padding(16)
+        .fireSkySurface(role: .content, cornerRadius: 14)
+    }
+
+    private func statusBadge(title: String, value: String, healthy: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(title).fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
+            HStack(spacing: 6) {
+                Circle().fill(healthy ? Color.green : Color.orange).frame(width: 6, height: 6)
+                Text(value).fireSkyFont(size: 12, weight: .semibold).lineLimit(1)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 12).padding(.vertical, 10)
+        .background(Color.primary.opacity(scheme == .dark ? 0.045 : 0.03),
+                    in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Color.secondary.opacity(0.14), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(title)：\(value)")
+    }
+
+    /// 软件更新块：当前版本、检查/弹窗详情与自动检查开关。
     @ViewBuilder
     private var updaterBlock: some View {
-        let currentVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
-        VStack(alignment: .leading, spacing: 10) {
-            Text(L10n.t("软件更新")).font(.callout.weight(.medium))
-            HStack {
-                Text(L10n.tf("当前版本 %@", currentVersion)).font(.caption).foregroundStyle(.secondary)
-                if updater.phase == .checking { ProgressView().controlSize(.small) }
-                Spacer()
-                Button(L10n.t("检查更新")) { updater.checkForUpdates(interactive: true) }
-                    .disabled(updater.phase == .checking || updater.phase == .downloading
-                              || updater.phase == .installing)
-            }
-            switch updater.phase {
-            case .current:
-                Text(updater.message).font(.caption).foregroundStyle(.secondary)
-            case .idle, .checking:
-                EmptyView()
-            case .available:
-                if let info = updater.info {
-                    Text(L10n.tf("发现新版本 %@，可在下载后自动安装。", info.version))
-                        .font(.callout.weight(.medium)).foregroundStyle(Color.green)
-                    if !info.notes.isEmpty {
-                        DisclosureGroup("发布说明") {
-                            Text(info.notes)
-                                .font(.caption).foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+        VStack(spacing: 0) {
+            settingsRow(
+                symbol: updater.phase == .available ? "arrow.up.circle.fill" : "arrow.triangle.2.circlepath",
+                title: L10n.tf("当前版本 %@", currentVersionLabel),
+                subtitle: updaterSummarySubtitle
+            ) {
+                HStack(spacing: 8) {
+                    if updater.phase == .checking || updater.phase == .installing {
+                        ProgressView().controlSize(.small)
+                    }
+                    if updater.phase == .available || updater.phase == .downloading || updater.phase == .failed {
+                        Button(L10n.text("查看更新", "View Update")) {
+                            store.showUpdateSheet = true
                         }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
                     }
-                    Button(L10n.t("下载并安装"), systemImage: "arrow.down.circle.fill") {
-                        updater.downloadAndInstall()
+                    Button(L10n.t("检查更新")) {
+                        updater.checkForUpdates(interactive: true)
+                        store.showUpdateSheet = true
                     }
-                    .help(L10n.t("下载 DMG、校验 SHA256 后自动安装到「应用程序」并重启"))
+                    .controlSize(.small)
+                    .disabled(updater.phase == .checking || updater.phase == .downloading || updater.phase == .installing)
                 }
-            case .downloading:
+            }
+            if updater.phase == .downloading {
+                Divider().opacity(0.55).padding(.leading, 48)
                 VStack(alignment: .leading, spacing: 6) {
                     ProgressView(value: max(Double(updater.receivedBytes), 1),
                                  total: max(Double(updater.totalBytes), 1))
                     HStack {
-                        Text(L10n.tf("已下载 %@ / %@", ByteCountFormatter.string(fromByteCount: updater.receivedBytes, countStyle: .file), ByteCountFormatter.string(fromByteCount: updater.totalBytes, countStyle: .file)))
+                        Text(L10n.tf("已下载 %@ / %@",
+                                     ByteCountFormatter.string(fromByteCount: updater.receivedBytes, countStyle: .file),
+                                     ByteCountFormatter.string(fromByteCount: updater.totalBytes, countStyle: .file)))
                             .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                         Spacer()
                         Button(L10n.t("取消")) { updater.cancelDownload() }
+                            .controlSize(.small)
                     }
                 }
-            case .installing:
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text(L10n.t("正在安装，完成后应用将自动重启。")).font(.caption).foregroundStyle(.secondary)
-                }
-            case .failed:
-                Text(updater.message).font(.caption).foregroundStyle(.red)
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
-                Button(L10n.t("重试")) { updater.checkForUpdates(interactive: true) }
+                .padding(.vertical, 10)
             }
-            Toggle(L10n.t("启动时自动检查更新"), isOn: $updater.autoCheck)
-                .font(.caption)
-                .disabled(updater.phase == .downloading || updater.phase == .installing)
+            Divider().opacity(0.55).padding(.leading, 48)
+            settingsRow(
+                symbol: "sparkles",
+                title: L10n.t("启动时自动检查更新"),
+                subtitle: L10n.text("启动 8 秒后静默检查 GitHub Releases，失败不打扰",
+                                    "Silently check GitHub Releases after launch")
+            ) {
+                Toggle("", isOn: $updater.autoCheck)
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .disabled(updater.phase == .downloading || updater.phase == .installing)
+                    .accessibilityLabel(L10n.t("启动时自动检查更新"))
+            }
+        }
+    }
+
+    private var updaterSummarySubtitle: String {
+        switch updater.phase {
+        case .idle:
+            return L10n.text("点击检查 GitHub Releases 最新版本", "Check GitHub Releases for updates")
+        case .checking:
+            return L10n.text("正在检查更新…", "Checking for updates…")
+        case .current:
+            return updater.message.isEmpty ? L10n.text("已是最新版本", "Up to date") : updater.message
+        case .available:
+            return L10n.tf("发现新版本 %@，可在下载后自动安装。", updater.info?.version ?? "")
+        case .downloading:
+            return L10n.t("下载中…")
+        case .installing:
+            return L10n.t("正在安装，完成后应用将自动重启。")
+        case .failed:
+            return updater.message.isEmpty ? L10n.text("更新检查失败", "Update check failed") : updater.message
         }
     }
 
     // MARK: - 数据
 
-    /// 数据分类锚点（方案 D7）：6 大块超 5 屏滚动，chips 点击直达。
+    /// 数据分类锚点（方案 D7）：6 大块快速定位。
     private let dataAnchors: [(String, String)] = [
         ("下载源", "anchor-sources"), ("CAMS", "anchor-cams"),
         ("连通性", "anchor-probe"), ("同步", "anchor-sync"),
@@ -575,42 +1124,60 @@ struct SettingsView: View {
 
     private var dataSection: some View {
         ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment: .leading, spacing: 26) {
-                    settingsHeader("数据")
-                    HStack(spacing: 6) {
-                        ForEach(dataAnchors, id: \.1) { anchor in
-                            Button {
+            VStack(alignment: .leading, spacing: 18) {
+                settingsHeader(L10n.text("数据与同步", "Data & Sync"),
+                               subtitle: L10n.text("下载源、Copernicus ADS 凭据、连通性探测、后台同步与保留策略",
+                                                   "Sources, ADS credentials, connectivity probes, background sync and retention"))
+                HStack(spacing: 6) {
+                    ForEach(dataAnchors, id: \.1) { anchor in
+                        Button {
+                            if reduceMotion {
+                                proxy.scrollTo(anchor.1, anchor: .top)
+                            } else {
                                 withAnimation { proxy.scrollTo(anchor.1, anchor: .top) }
-                            } label: {
-                                Text(anchor.0)
-                                    .font(.system(size: 11, weight: .medium))
-                                    .padding(.horizontal, 8).padding(.vertical, 4)
-                                    .background(Color(nsColor: .controlBackgroundColor).opacity(0.72),
-                                                in: RoundedRectangle(cornerRadius: 6))
                             }
-                            .buttonStyle(.plain)
-                            .foregroundStyle(.secondary)
+                        } label: {
+                            Text(L10n.t(anchor.0))
+                                .fireSkyFont(size: 11, weight: .medium, relativeTo: .caption)
+                                .padding(.horizontal, 11).padding(.vertical, 5)
+                                .background(Color.primary.opacity(scheme == .dark ? 0.06 : 0.045),
+                                            in: Capsule())
+                                .overlay {
+                                    Capsule().strokeBorder(Color.secondary.opacity(0.16), lineWidth: 1)
+                                }
                         }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(.secondary)
                     }
-                    dataSourcesBlock
-                        .id("anchor-sources")
-                    Divider()
-                    camsBlock
-                        .id("anchor-cams")
-                    Divider()
-                    DownloadProbeView()
-                        .id("anchor-probe")
-                    Divider()
-                    dataSyncBlock
-                        .id("anchor-sync")
-                    Divider()
-                    retentionBlock
-                        .id("anchor-retention")
-                    Divider()
-                    dataDirectoryBlock
-                        .id("anchor-directory")
                 }
+                dataSourcesBlock
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(18)
+                    .fireSkySurface(role: .content, cornerRadius: 14)
+                    .id("anchor-sources")
+                camsBlock
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(18)
+                    .fireSkySurface(role: .content, cornerRadius: 14)
+                    .id("anchor-cams")
+                DownloadProbeView()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .id("anchor-probe")
+                dataSyncBlock
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(18)
+                    .fireSkySurface(role: .content, cornerRadius: 14)
+                    .id("anchor-sync")
+                retentionBlock
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(18)
+                    .fireSkySurface(role: .content, cornerRadius: 14)
+                    .id("anchor-retention")
+                dataDirectoryBlock
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(18)
+                    .fireSkySurface(role: .content, cornerRadius: 14)
+                    .id("anchor-directory")
             }
         }
     }
@@ -640,6 +1207,7 @@ struct SettingsView: View {
                 Button { Task { await store.refreshCAMSConfiguration() } } label: {
                     Image(systemName: "arrow.clockwise")
                 }.buttonStyle(.borderless).help(L10n.t("重新检查 CAMS 配置"))
+                    .accessibilityLabel(L10n.t("重新检查 CAMS 配置"))
                     .disabled(!store.online || store.savingCAMS)
             }
             HStack(spacing: 10) {
@@ -708,7 +1276,10 @@ struct SettingsView: View {
                         .tag(region["code"] as? String ?? "")
                 }
             }
-            Text(L10n.t("间隔 30–1440 分钟；时效上限仅 GFS/EC 需要（3–240 小时、3 的倍数），CAMS 自动拉齐全部时效；锚定区域决定 CAMS 洲包络与 GFS/EC 下载范围。"))
+            Text(L10n.text(
+                "监控间隔 5–1440 分钟（建议设为 10–15 分钟轻量监控上游更新，仅检测到新起报周期才下载，无更新不占带宽）；时效上限仅 GFS/EC 需要（3–240 小时、3 的倍数），CAMS 自动拉齐全部时效；锚定区域决定 CAMS 洲包络与 GFS/EC 下载范围。",
+                "Polling interval 5–1440 min (10–15 min recommended for lightweight upstream monitoring; downloads only when a newer cycle is published). Lead horizon applies to GFS/EC (3–240 h, multiples of 3)."
+            ))
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack {
@@ -800,9 +1371,23 @@ struct SettingsView: View {
     }
 
     private var retentionBlock: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            settingsBlockTitle(L10n.t("存储与保留"))
-            Text(L10n.t("自动清理按周期、扫描或生成时间滚动保留；新数据校验成功后才会清理旧文件。留空表示不自动清理。"))
+        let activeRulesCount = [
+            store.retentionGFS, store.retentionECMWF, store.retentionCAMS,
+            store.retentionSatelliteDays, store.retentionReportDays, store.retentionMapDays,
+        ].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.count
+        return VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                settingsBlockTitle(L10n.t("存储与保留"))
+                Spacer()
+                if activeRulesCount > 0 {
+                    Text(L10n.text("已设 \(activeRulesCount) 项规则", "\(activeRulesCount) rules active"))
+                        .fireSkyFont(size: 10, weight: .medium, relativeTo: .caption)
+                        .foregroundStyle(warm)
+                        .padding(.horizontal, 8).padding(.vertical, 3)
+                        .background(warm.opacity(0.12), in: Capsule())
+                }
+            }
+            Text(L10n.t("自动清理按周期、扫描或生成时间滚动保留；保存策略后可点击「立即按策略清理」立刻释放空间，后续也会在新数据校验成功后自动清理旧文件。占用中的文件会自动跳过。"))
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 12) {
@@ -815,8 +1400,8 @@ struct SettingsView: View {
                 retentionField("历史报告", text: $store.retentionReportDays, suffix: "天")
                 retentionField("报告地图", text: $store.retentionMapDays, suffix: "天")
             }
-            HStack {
-                if store.savingRetention { ProgressView().controlSize(.small) }
+            HStack(spacing: 10) {
+                if store.savingRetention || store.applyingRetention { ProgressView().controlSize(.small) }
                 if !store.retentionMessage.isEmpty {
                     Text(store.retentionMessage)
                         .font(.caption)
@@ -826,10 +1411,18 @@ struct SettingsView: View {
                     Text(L10n.t("已启用自定义保留策略")).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
+                Button(L10n.text("立即按策略清理", "Clean up now"), systemImage: "sparkles") {
+                    store.applyRetentionNow()
+                }
+                .disabled(!store.online || !store.retentionConfigured || store.busy || store.savingRetention || store.applyingRetention)
+                .help(store.retentionConfigured
+                      ? L10n.text("立即按已保存规则清理超出保留范围的旧文件（跳过占用中文件）",
+                                  "Immediately prune old files beyond saved retention rules (skips busy files)")
+                      : L10n.text("请先填写并保存至少一项保留规则", "Save at least one retention rule first"))
                 Button(L10n.t("保存保留设置"), systemImage: "externaldrive.badge.checkmark") {
                     store.saveRetentionSettings()
                 }
-                .disabled(!store.online || store.savingRetention || store.busy)
+                .disabled(!store.online || store.savingRetention || store.applyingRetention || store.busy)
             }
         }
     }
@@ -934,21 +1527,117 @@ struct SettingsView: View {
     // MARK: - 高级
 
     private var advancedSection: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            settingsHeader("高级")
-            VStack(alignment: .leading, spacing: 8) {
-                Text(L10n.t("Rust 引擎")).font(.callout.weight(.medium))
-                TextField(L10n.t("留空使用内置引擎"), text: $store.engineBinary)
-                Text(L10n.t("自定义引擎路径仅供开发调试；日常使用保持留空即可。"))
-                    .font(.caption).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 20) {
+            settingsHeader(L10n.text("高级与调试", "Advanced & Diagnostics"),
+                           subtitle: L10n.text("开发调试与底层引擎覆写选项", "Developer overrides and engine diagnostics"))
+            VStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 12) {
+                        settingsIconBadge("cpu")
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.t("Rust 引擎")).fireSkyFont(size: 13, weight: .semibold)
+                            Text(L10n.t("自定义引擎路径仅供开发调试；日常使用保持留空即可。"))
+                                .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if !store.engineBinary.isEmpty {
+                            Button(L10n.text("恢复内置", "Use Built-in")) {
+                                store.engineBinary = ""
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                    TextField(L10n.t("留空使用内置引擎"), text: $store.engineBinary)
+                        .textFieldStyle(.roundedBorder)
+                }
+                .padding(.vertical, 14)
+
+                Divider().opacity(0.55).padding(.leading, 48)
+
+                settingsRow(
+                    symbol: "folder.badge.gearshape",
+                    title: L10n.text("当前工作区", "Active Workspace"),
+                    subtitle: store.workspace.isEmpty ? L10n.t("数据目录未设置") : store.workspace
+                ) {
+                    Button(L10n.t("在访达中打开")) {
+                        if !store.workspace.isEmpty {
+                            NSWorkspace.shared.open(URL(fileURLWithPath: store.workspace))
+                        }
+                    }
+                    .controlSize(.small)
+                    .disabled(store.workspace.isEmpty)
+                }
+
+                Divider().opacity(0.55).padding(.leading, 48)
+
+                settingsRow(
+                    symbol: "bolt.horizontal.circle",
+                    title: L10n.text("引擎连接", "Engine Connection"),
+                    subtitle: store.online
+                        ? L10n.text("已连接到本地 Rust FFI 引擎", "Connected to local Rust FFI engine")
+                        : L10n.text("当前未连接，可尝试重新建立连接", "Offline — reconnect to restore engine")
+                ) {
+                    Button(L10n.t("重新连接")) {
+                        Task { await store.connect() }
+                    }
+                    .controlSize(.small)
+                    .disabled(store.busy || store.probingDownloads)
+                }
             }
+            .padding(.horizontal, 16)
+            .fireSkySurface(role: .content, cornerRadius: 14)
         }
     }
 
     // MARK: - 共用小组件
 
-    private func settingsHeader(_ title: String) -> some View {
-        Text(title).font(.title2.weight(.semibold))
+    private func settingsHeader(_ title: String, subtitle: String? = nil) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).fireSkyFont(size: 22, weight: .bold, relativeTo: .title2)
+            if let subtitle {
+                Text(subtitle).fireSkyFont(size: 12, relativeTo: .caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func settingsSectionLabel(_ title: String) -> some View {
+        Text(title)
+            .fireSkyFont(size: 12, weight: .semibold, relativeTo: .caption)
+            .foregroundStyle(.secondary)
+            .padding(.leading, 4)
+            .padding(.bottom, 8)
+    }
+
+    private func settingsIconBadge(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 14, weight: .medium))
+            .foregroundStyle(Color.primary.opacity(0.82))
+            .frame(width: 34, height: 34)
+            .background(Color.primary.opacity(scheme == .dark ? 0.07 : 0.05),
+                        in: RoundedRectangle(cornerRadius: 8))
+    }
+
+    private func settingsRow<Control: View>(
+        symbol: String,
+        title: String,
+        subtitle: String,
+        @ViewBuilder control: () -> Control
+    ) -> some View {
+        HStack(alignment: .center, spacing: 14) {
+            settingsIconBadge(symbol)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).fireSkyFont(size: 13, weight: .medium)
+                Text(subtitle)
+                    .fireSkyFont(size: 11, relativeTo: .caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .truncationMode(.middle)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 16)
+            control()
+        }
+        .padding(.vertical, 13)
     }
 
     private func settingsBlockTitle(_ title: String) -> some View {
@@ -1021,7 +1710,9 @@ struct SettingsView: View {
         }
         if failures > 0 { details.append(L10n.tf("连续失败 %d 次", failures)) }
         if suspended { details.append("已暂停：立即同步或重新保存设置可解锁") }
-        let live = store.dataSyncRunning ? (store.dataSyncProgress[name] as? JSONObject) : nil
+        let live = (store.dataSyncRunning && store.dataSyncActiveSource == name)
+            ? (store.dataSyncProgress[name] as? JSONObject)
+            : nil
         let livePercent = (live?["percent"] as? NSNumber)?.doubleValue ?? 0
         let liveMessage = live?["message"] as? String ?? ""
         return HStack(alignment: .top, spacing: 10) {
@@ -1063,6 +1754,264 @@ struct SettingsView: View {
                 Text(title).font(.callout.weight(.medium))
                 Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 action().font(.caption)
+            }
+        }
+    }
+}
+
+/// 独立软件更新弹窗：参考 macOS 现代更新弹层层级（顶光、状态图标、版本对比、更新说明与进度操作）。
+struct UpdateSheetView: View {
+    @EnvironmentObject private var store: Store
+    @EnvironmentObject private var updater: Updater
+    @Environment(\.colorScheme) private var scheme
+
+    private var currentVersion: String {
+        let raw = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        return raw.isEmpty ? "Dev" : raw
+    }
+
+    private var progressFraction: Double {
+        guard updater.totalBytes > 0 else { return 0 }
+        return min(max(Double(updater.receivedBytes) / Double(updater.totalBytes), 0), 1)
+    }
+
+    private var progressPercent: Int { Int((progressFraction * 100).rounded()) }
+
+    private var headerIcon: String {
+        switch updater.phase {
+        case .available: return "arrow.up"
+        case .downloading: return "arrow.down.to.line"
+        case .installing: return "shippingbox.fill"
+        case .current: return "checkmark"
+        case .failed: return "exclamationmark.triangle"
+        default: return "arrow.triangle.2.circlepath"
+        }
+    }
+
+    private var headerTitle: String {
+        switch updater.phase {
+        case .available: return L10n.text("发现新版本", "Update Available")
+        case .downloading: return L10n.text("正在下载更新", "Downloading Update")
+        case .installing: return L10n.text("正在安装更新", "Installing Update")
+        case .current: return L10n.text("已是最新版本", "You're Up to Date")
+        case .failed: return L10n.text("更新未完成", "Update Failed")
+        case .checking: return L10n.text("正在检查更新", "Checking for Updates")
+        case .idle: return L10n.t("软件更新")
+        }
+    }
+
+    private var headerSubtitle: String {
+        switch updater.phase {
+        case .available:
+            return L10n.tf("%@ 已准备好下载与 SHA256 校验", updater.info?.version ?? "")
+        case .downloading:
+            return L10n.text("\(progressPercent)% · 下载完成后自动校验并安装",
+                             "\(progressPercent)% · Verifies SHA256 & installs automatically")
+        case .installing:
+            return L10n.t("正在安装，完成后应用将自动重启。")
+        case .current:
+            return updater.message.isEmpty ? L10n.tf("当前版本 %@", currentVersion) : updater.message
+        case .failed:
+            return L10n.text("可重新检查，或前往 GitHub Releases 手动下载。",
+                             "Retry check or download manually from GitHub Releases.")
+        case .checking:
+            return L10n.text("正在连接 GitHub Releases…", "Contacting GitHub Releases…")
+        case .idle:
+            return L10n.tf("当前版本 %@", currentVersion)
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 18) {
+            ZStack(alignment: .topTrailing) {
+                VStack(spacing: 12) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 14)
+                            .fill(
+                                updater.phase == .available
+                                    ? AnyShapeStyle(FSDesign.accentGradient(dark: scheme == .dark))
+                                    : AnyShapeStyle(Color.primary.opacity(scheme == .dark ? 0.08 : 0.06))
+                            )
+                            .frame(width: 52, height: 52)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 14)
+                                    .strokeBorder(warm.opacity(updater.phase == .downloading ? 0.4 : 0.16), lineWidth: 1)
+                            }
+                        if updater.phase == .checking || updater.phase == .installing {
+                            ProgressView().controlSize(.regular)
+                        } else {
+                            Image(systemName: headerIcon)
+                                .font(.system(size: 20, weight: .semibold))
+                                .foregroundStyle(
+                                    updater.phase == .available
+                                        ? (scheme == .dark ? Color(0x1E, 0x15, 0x10) : Color.white)
+                                        : (updater.phase == .failed ? Color.orange : warm)
+                                )
+                        }
+                    }
+                    VStack(spacing: 5) {
+                        Text(headerTitle).fireSkyFont(size: 20, weight: .bold, relativeTo: .title2)
+                        Text(headerSubtitle)
+                            .fireSkyFont(size: 12, relativeTo: .caption)
+                            .foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, 8)
+
+                Button {
+                    store.showUpdateSheet = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                        .background(Color.primary.opacity(scheme == .dark ? 0.07 : 0.05), in: Circle())
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.cancelAction)
+                .help(L10n.text("关闭", "Close"))
+                .accessibilityLabel(L10n.text("关闭更新窗口", "Close update sheet"))
+            }
+
+            if let info = updater.info {
+                HStack(spacing: 18) {
+                    VStack(spacing: 4) {
+                        Text(L10n.text("当前版本", "Current"))
+                            .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
+                        Text(currentVersion)
+                            .font(.system(size: 15, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack(spacing: 5) {
+                        Circle().fill(warm.opacity(0.45)).frame(width: 4, height: 4)
+                        Circle().fill(warm.opacity(0.72)).frame(width: 4, height: 4)
+                        Circle().fill(warm).frame(width: 4, height: 4)
+                    }
+                    VStack(spacing: 4) {
+                        Text(L10n.text("最新版本", "Latest"))
+                            .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
+                        Text(info.version)
+                            .font(.system(size: 19, weight: .bold, design: .monospaced))
+                            .foregroundStyle(warm)
+                    }
+                }
+                .padding(.vertical, 4)
+            }
+
+            if updater.phase == .downloading {
+                VStack(spacing: 6) {
+                    ProgressView(value: max(Double(updater.receivedBytes), 1),
+                                 total: max(Double(updater.totalBytes), 1))
+                        .tint(warm)
+                    HStack {
+                        Text(ByteCountFormatter.string(fromByteCount: updater.receivedBytes, countStyle: .file))
+                        Spacer()
+                        Text(ByteCountFormatter.string(fromByteCount: updater.totalBytes, countStyle: .file))
+                    }
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                }
+            }
+
+            if let info = updater.info, !info.notes.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "sparkles").font(.system(size: 11, weight: .semibold)).foregroundStyle(warm)
+                        Text(L10n.text("更新说明", "Release Notes"))
+                            .fireSkyFont(size: 12, weight: .semibold)
+                        Spacer()
+                        if info.assetBytes > 0 {
+                            Text(ByteCountFormatter.string(fromByteCount: info.assetBytes, countStyle: .file))
+                                .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                        }
+                    }
+                    ScrollView {
+                        Text(info.notes)
+                            .fireSkyFont(size: 12)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .frame(maxHeight: 190)
+                }
+                .padding(14)
+                .background(Color.primary.opacity(scheme == .dark ? 0.04 : 0.03),
+                            in: RoundedRectangle(cornerRadius: 12))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12)
+                        .strokeBorder(FSDesign.surfaceBorder(role: .grouped, dark: scheme == .dark, emphasized: false), lineWidth: 1)
+                }
+            }
+
+            if updater.phase == .failed && !updater.message.isEmpty {
+                Text(updater.message)
+                    .fireSkyFont(size: 11, relativeTo: .caption)
+                    .foregroundStyle(.red)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+            }
+
+            HStack(spacing: 10) {
+                Button {
+                    updater.checkForUpdates(interactive: true)
+                } label: {
+                    Label(L10n.text("重新检查", "Check Again"), systemImage: "arrow.clockwise")
+                        .fireSkyFont(size: 12, weight: .medium)
+                        .padding(.horizontal, 16).padding(.vertical, 9)
+                        .background(Color.primary.opacity(scheme == .dark ? 0.08 : 0.06), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(updater.phase == .checking || updater.phase == .downloading || updater.phase == .installing)
+
+                if updater.phase == .available {
+                    Button {
+                        updater.downloadAndInstall()
+                    } label: {
+                        Label(L10n.text("立即下载", "Download & Install"), systemImage: "arrow.down.to.line")
+                            .fireSkyFont(size: 12, weight: .semibold)
+                            .foregroundStyle(scheme == .dark ? Color(0x1E, 0x15, 0x10) : Color.white)
+                            .padding(.horizontal, 20).padding(.vertical, 9)
+                            .background(FSDesign.accentGradient(dark: scheme == .dark), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .keyboardShortcut(.defaultAction)
+                } else if updater.phase == .downloading {
+                    Button {
+                        updater.cancelDownload()
+                    } label: {
+                        Text(L10n.text("取消下载 · \(progressPercent)%", "Cancel · \(progressPercent)%"))
+                            .fireSkyFont(size: 12, weight: .semibold).monospacedDigit()
+                            .padding(.horizontal, 18).padding(.vertical, 9)
+                            .background(Color.primary.opacity(scheme == .dark ? 0.12 : 0.08), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Button {
+                        store.showUpdateSheet = false
+                    } label: {
+                        Text(L10n.text("完成", "Done"))
+                            .fireSkyFont(size: 12, weight: .semibold)
+                            .padding(.horizontal, 20).padding(.vertical, 9)
+                            .background(Color.primary.opacity(scheme == .dark ? 0.12 : 0.08), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+            .padding(.top, 4)
+        }
+        .padding(24)
+        .frame(width: 450)
+        .background {
+            ZStack {
+                FSDesign.surfaceFill(role: .content, dark: scheme == .dark)
+                RadialGradient(
+                    colors: [warm.opacity(scheme == .dark ? 0.22 : 0.14), Color.clear],
+                    center: .top, startRadius: 10, endRadius: 240
+                )
             }
         }
     }

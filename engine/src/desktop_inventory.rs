@@ -389,11 +389,63 @@ fn area(
     }
     let mut entries = memo.lock().ok()?;
     entries.retain(|(k, _)| k.path != key.path);
-    entries.push_back((key, value));
+    entries.push_back((key.clone(), value));
     while entries.len() > 4096 {
         entries.pop_front();
     }
+    drop(entries);
+    if cached.is_none() {
+        persist_area_sidecar(parent, entry, &key, value, sidecars);
+    }
     Some(value)
+}
+
+/// Best-effort atomic persistence of `.cams-area-index-v1.json` so cold starts
+/// and subsequent preflight/inventory checks skip ecCodes GRIB header decoding.
+fn persist_area_sidecar(
+    parent: &Path,
+    entry: &Entry,
+    key: &AreaKey,
+    value: [f64; 4],
+    sidecars: &mut Option<(PathBuf, Value)>,
+) {
+    let Some(filename) = entry.path.file_name().and_then(|v| v.to_str()) else {
+        return;
+    };
+    let Ok(modified) = u64::try_from(key.modified_ns) else {
+        return;
+    };
+    let index_path = parent.join(".cams-area-index-v1.json");
+    if fs::symlink_metadata(&index_path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return;
+    }
+    let mut map = sidecars
+        .as_ref()
+        .and_then(|(dir, val)| (dir == parent).then_some(val))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
+    if map.len() >= 4096 && !map.contains_key(filename) {
+        return;
+    }
+    map.insert(
+        filename.to_string(),
+        json!({"m": modified, "s": entry.bytes, "a": value}),
+    );
+    let updated = Value::Object(map);
+    if let Ok(bytes) = serde_json::to_vec(&updated) {
+        if bytes.len() as u64 <= MAX_SIDECAR {
+            if let Ok(mut temp) = tempfile::Builder::new()
+                .prefix(".cams-area-index-")
+                .tempfile_in(parent)
+            {
+                use std::io::Write;
+                if temp.write_all(&bytes).is_ok() && temp.persist(&index_path).is_ok() {
+                    *sidecars = Some((parent.into(), updated));
+                }
+            }
+        }
+    }
 }
 fn scan(source: Source, root: &Path, cancel: &AtomicBool) -> Result<Value, String> {
     let mut files = Vec::new();

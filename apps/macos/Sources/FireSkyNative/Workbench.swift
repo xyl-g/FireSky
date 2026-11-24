@@ -5,39 +5,58 @@ import SwiftUI
 // Shared brand accent; used by the workbench and the settings category rail.
 let warm = Color(nsColor: NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        ? NSColor(calibratedRed: 1, green: 0.55, blue: 0.38, alpha: 1)
-        : NSColor(calibratedRed: 0.74, green: 0.32, blue: 0.24, alpha: 1)
+        ? NSColor(calibratedRed: 1.00, green: 0.61, blue: 0.42, alpha: 1)
+        : NSColor(calibratedRed: 0.82, green: 0.35, blue: 0.21, alpha: 1)
 })
-private let teal = Color(red: 0.26, green: 0.56, blue: 0.54)
-// Trend ratio series colors, following the Web chart tokens in frontend/src/app.css
-// (--chart-coverage / --chart-illumination / --chart-transmission, light & dark pairs).
+private let coolAccent = Color(nsColor: NSColor(name: nil) { appearance in
+    appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        ? NSColor(calibratedRed: 0.56, green: 0.72, blue: 1.00, alpha: 1)
+        : NSColor(calibratedRed: 0.31, green: 0.46, blue: 0.72, alpha: 1)
+})
+// Trend ratio series colors: same semantics as the Web chart tokens, with macOS palette calibration.
 private let coverageColor = Color(nsColor: NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        ? NSColor(calibratedRed: 0.20, green: 0.83, blue: 0.60, alpha: 1)
-        : NSColor(calibratedRed: 0.02, green: 0.40, blue: 0.29, alpha: 1)
+        ? NSColor(calibratedRed: 0.28, green: 0.84, blue: 0.68, alpha: 1)
+        : NSColor(calibratedRed: 0.04, green: 0.44, blue: 0.34, alpha: 1)
 })
 private let illuminationColor = Color(nsColor: NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        ? NSColor(calibratedRed: 0.98, green: 0.75, blue: 0.14, alpha: 1)
-        : NSColor(calibratedRed: 0.56, green: 0.33, blue: 0.02, alpha: 1)
+        ? NSColor(calibratedRed: 1.00, green: 0.76, blue: 0.45, alpha: 1)
+        : NSColor(calibratedRed: 0.62, green: 0.40, blue: 0.12, alpha: 1)
 })
 private let transmissionColor = Color(nsColor: NSColor(name: nil) { appearance in
     appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
-        ? NSColor(calibratedRed: 0.22, green: 0.74, blue: 0.97, alpha: 1)
+        ? NSColor(calibratedRed: 0.25, green: 0.74, blue: 0.97, alpha: 1)
         : NSColor(calibratedRed: 0.04, green: 0.36, blue: 0.56, alpha: 1)
 })
+
+/// 侧栏显示状态。语义与 NavigationSplitViewVisibility 对齐；本机工具链下
+/// 直接替换根容器会让 1120×720 窗口裁掉品牌行和顶栏，因此继续由自定根布局消费。
+private final class SidebarVisibility: ObservableObject {
+    @Published var column: NavigationSplitViewVisibility = .all
+
+    var visible: Bool { column != .detailOnly }
+}
 
 struct WorkbenchRootView: View {
     @EnvironmentObject private var store: Store
     @EnvironmentObject private var updater: Updater
+    @EnvironmentObject private var reminders: ReminderCenter
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// 本机工具链无 SwiftUIMacros，使用普通 ObservableObject 代替 @State。
+    @StateObject private var sidebarState = SidebarVisibility()
 
     var body: some View {
         HStack(spacing: 0) {
-            sidebar
-            Divider()
+            if sidebarState.visible {
+                sidebar
+                Divider().opacity(0.6)
+            }
             VStack(spacing: 0) {
                 topbar
+                Divider().opacity(0.45)
                 Group {
                     if store.page == .data { InventoryView() }
                     else if store.page == .history { NativeTaskHistoryView() }
@@ -45,14 +64,25 @@ struct WorkbenchRootView: View {
                     else if store.page == .regional { WorkRegionPage() }
                     else { workbench }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .font(.system(size: 12))
         .environment(\.timeZone, TimeZone(identifier: store.timezone) ?? .current)
         .background {
-            LinearGradient(
-                colors: FSDesign.pageBackground(dark: scheme == .dark),
-                startPoint: .topLeading, endPoint: .bottomTrailing)
+            ZStack {
+                LinearGradient(
+                    colors: FSDesign.pageBackground(dark: scheme == .dark),
+                    startPoint: .topLeading, endPoint: .bottomTrailing)
+                RadialGradient(
+                    colors: [FSDesign.ambientGlow(dark: scheme == .dark), Color.clear],
+                    center: .topTrailing, startRadius: 120, endRadius: 820)
+                RadialGradient(
+                    colors: [FSDesign.coolGlow(dark: scheme == .dark), Color.clear],
+                    center: .bottomLeading, startRadius: 80, endRadius: 720)
+            }
+            .ignoresSafeArea()
         }
         .tint(warm)
         .frame(minWidth: 1120, minHeight: 720)
@@ -60,6 +90,9 @@ struct WorkbenchRootView: View {
         .sheet(isPresented: $store.showPreflight, onDismiss: {
             if store.checking || store.session != nil && !store.busy { store.closePreflight() }
         }) { PreflightView().tint(warm).interactiveDismissDisabled(store.busy) }
+        .sheet(isPresented: $store.showUpdateSheet) {
+            UpdateSheetView().tint(warm)
+        }
         .sheet(isPresented: $store.showMapPicker) {
             VStack(spacing: 0) {
                 HStack {
@@ -102,152 +135,378 @@ struct WorkbenchRootView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 11) {
-                FireSkyMark().frame(width: 36, height: 36)
-                Text("FireSky").font(.system(size: 17, weight: .semibold))
-            }.padding(.leading, 6).padding(.bottom, 30)
-            Text("观测工作台").font(.system(size: 10, weight: .semibold))
-                .foregroundStyle(.secondary).padding(.bottom, 9)
+            HStack(spacing: 10) {
+                FireSkyMark().frame(width: 32, height: 32)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("FireSky").fireSkyFont(size: 16, weight: .semibold, relativeTo: .title3)
+                    Text(L10n.text("朝晚霞观测台", "Twilight Workbench"))
+                        .fireSkyFont(size: 10, relativeTo: .caption)
+                        .foregroundStyle(.secondary)
+                }
+            }.padding(.leading, 6).padding(.bottom, 22)
+            Text(L10n.t("观测工作台")).fireSkyFont(size: 10, weight: .semibold, relativeTo: .caption)
+                .foregroundStyle(.secondary).padding(.leading, 6).padding(.bottom, 8)
             ForEach([Page.point, .regional, .nowcast, .data, .history]) { page in
+                let selected = store.page == page
                 Button {
                     // UX #5：切页不再被全局 busy 锁死；运行中的任务继续，顶栏可见进度。
                     store.page = page
                 } label: {
-                    HStack(spacing: 11) {
+                    HStack(spacing: 10) {
                         Image(systemName: page.symbol).symbolRenderingMode(.hierarchical)
-                            .font(.system(size: 17, weight: .regular)).frame(width: 22, height: 22)
-                        Text(page.title).font(.system(size: 13, weight: store.page == page ? .semibold : .regular))
+                            .font(.system(size: 15, weight: selected ? .medium : .regular))
+                            .foregroundStyle(selected ? warm : Color.primary.opacity(0.68))
+                            .frame(width: 22, height: 22)
+                        Text(page.title)
+                            .fireSkyFont(size: 13, weight: selected ? .semibold : .regular)
+                            .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
+                        if selected {
+                            Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(warm.opacity(0.85))
+                        }
                     }
-                    .padding(.horizontal, 12).frame(height: 46)
-                    .foregroundStyle(store.page == page ? warm : Color.primary.opacity(0.72))
-                    .background(store.page == page ? warm.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8))
-                }.buttonStyle(.plain).padding(.bottom, 3)
-                    .accessibilityAddTraits(store.page == page ? .isSelected : [])
+                    .padding(.horizontal, 11).frame(minHeight: 40)
+                    .foregroundStyle(selected ? Color.primary : Color.primary.opacity(0.76))
+                    .background {
+                        RoundedRectangle(cornerRadius: 9)
+                            .fill(selected ? warm.opacity(scheme == .dark ? 0.16 : 0.12) : Color.clear)
+                    }
+                    .overlay(alignment: .leading) {
+                        if selected {
+                            RoundedRectangle(cornerRadius: 1.5)
+                                .fill(warm)
+                                .frame(width: 3, height: 20)
+                                .padding(.leading, 2)
+                        }
+                    }
+                    .contentShape(RoundedRectangle(cornerRadius: 9))
+                }
+                .buttonStyle(.plain)
+                .padding(.bottom, 3)
+                .accessibilityLabel(selected ? "\(page.title)，当前页面" : page.title)
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
-            Spacer(minLength: 20)
-            Button("设置", systemImage: "gearshape") {
+            Spacer(minLength: 16)
+            Divider().opacity(0.45).padding(.bottom, 10)
+            Button {
                 store.page = .settings
-            }.buttonStyle(.plain).frame(maxWidth: .infinity).padding(.vertical, 18)
-                .overlay(alignment: .topTrailing) {
-                    // 发现新版本时在设置入口显示绿色徽标（更新入口在设置 → 通用）。
+            } label: {
+                HStack(spacing: 10) {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 15, weight: store.page == .settings ? .medium : .regular))
+                        .foregroundStyle(store.page == .settings ? warm : Color.primary.opacity(0.68))
+                        .frame(width: 22, height: 22)
+                    Text(L10n.navSettings)
+                        .fireSkyFont(size: 13, weight: store.page == .settings ? .semibold : .regular)
+                    Spacer(minLength: 0)
                     if updater.phase == .available {
-                        Circle().fill(Color.green).frame(width: 8, height: 8)
-                            .help("发现新版本 \(updater.info?.version ?? "")")
+                        Circle().fill(Color.green).frame(width: 7, height: 7)
+                            .accessibilityLabel("发现新版本 \(updater.info?.version ?? "")")
                     }
                 }
+                .padding(.horizontal, 11).frame(minHeight: 40)
+                .foregroundStyle(store.page == .settings ? Color.primary : Color.primary.opacity(0.76))
+                .background {
+                    RoundedRectangle(cornerRadius: 9)
+                        .fill(store.page == .settings ? warm.opacity(scheme == .dark ? 0.16 : 0.12) : Color.clear)
+                }
+                .overlay(alignment: .leading) {
+                    if store.page == .settings {
+                        RoundedRectangle(cornerRadius: 1.5)
+                            .fill(warm)
+                            .frame(width: 3, height: 20)
+                            .padding(.leading, 2)
+                    }
+                }
+                .contentShape(RoundedRectangle(cornerRadius: 9))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(store.page == .settings
+                                ? L10n.text("设置，当前页面", "Settings, current page")
+                                : L10n.navSettings)
+            .accessibilityAddTraits(store.page == .settings ? .isSelected : [])
         }
-        .padding(.horizontal, 15).padding(.top, 24).padding(.bottom, 16)
-        .frame(width: 196)
-        .modifier(SidebarGlass())
+        .padding(.horizontal, 13).padding(.top, 38).padding(.bottom, 14)
+        .frame(width: dynamicTypeSize.isAccessibilitySize ? 244 : 196)
+        .fireSkySurface(role: .navigation)
+    }
+
+    private var appearanceIcon: String {
+        switch store.appearance {
+        case "light": return "sun.max"
+        case "dark": return "moon.fill"
+        default: return "circle.lefthalf.filled"
+        }
+    }
+
+    private var appearanceHelpText: String {
+        switch store.appearance {
+        case "light": return L10n.text("当前：浅色外观（点击切换深色）", "Light appearance (click for Dark)")
+        case "dark": return L10n.text("当前：深色外观（点击跟随系统）", "Dark appearance (click for System)")
+        default: return L10n.text("当前：跟随系统外观（点击切换浅色）", "System appearance (click for Light)")
+        }
     }
 
     private var topbar: some View {
-        HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text(store.page.title).font(.system(size: 22, weight: .bold))
+        HStack(alignment: .center, spacing: 12) {
+            Button {
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
+                    sidebarState.column = sidebarState.visible ? .detailOnly : .all
+                }
+            } label: {
+                Image(systemName: "sidebar.left")
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 28, height: 28)
+                    .background(Color.primary.opacity(scheme == .dark ? 0.06 : 0.045),
+                                in: RoundedRectangle(cornerRadius: 7))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help(L10n.t(sidebarState.visible ? "隐藏侧栏" : "显示侧栏"))
+            .accessibilityLabel(L10n.t(sidebarState.visible ? "隐藏侧栏" : "显示侧栏"))
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(store.page.title).fireSkyFont(size: 18, weight: .semibold, relativeTo: .title2)
                 // 副标题只在该页面有地点语义时显示；管理页不借用预测地点上下文。
                 if store.page.showsLocationSubtitle {
                     Text(store.page == .regional ? store.regionalTitle
                          : String(format: "%@ · %.4f° N, %.4f° E", store.name, store.lat, store.lon))
-                        .font(.system(size: 11)).foregroundStyle(.secondary).lineLimit(1)
+                        .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
-            Spacer()
+            Spacer(minLength: 8)
             // UX #5：任务运行中切页后，顶栏仍能看到进度与取消入口。
             if store.busy {
-                HStack(spacing: 7) {
+                HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text(store.status).font(.system(size: 10)).foregroundStyle(.secondary)
-                        .lineLimit(1).frame(maxWidth: 220)
+                    Text(store.status).fireSkyFont(size: 11, relativeTo: .caption)
+                        .foregroundStyle(.secondary).lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true).frame(maxWidth: 220)
                     Button { store.cancel() } label: { Image(systemName: "xmark.circle") }
-                        .buttonStyle(.borderless).help("取消当前任务")
+                        .buttonStyle(.borderless)
+                        .help(L10n.t("取消当前任务"))
+                        .accessibilityLabel(L10n.t("取消当前任务"))
                 }.workChip()
             }
-        }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 10).frame(height: 72)
+            if updater.phase == .available, let version = updater.info?.version {
+                Button {
+                    store.showUpdateSheet = true
+                } label: {
+                    HStack(spacing: 5) {
+                        Circle().fill(Color.green).frame(width: 6, height: 6)
+                        Text(L10n.text("新版本 \(version)", "Update \(version)"))
+                            .fireSkyFont(size: 11, weight: .medium, relativeTo: .caption)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 5)
+                    .background(Color.green.opacity(scheme == .dark ? 0.16 : 0.12), in: Capsule())
+                    .overlay { Capsule().strokeBorder(Color.green.opacity(0.32), lineWidth: 1) }
+                }
+                .buttonStyle(.plain)
+                .help(L10n.text("查看新版本详情并更新", "View update details"))
+                .accessibilityLabel(L10n.text("发现新版本 \(version)，打开更新说明", "New version \(version) available, open update details"))
+            }
+            if !store.online {
+                Button {
+                    Task { await store.connect() }
+                } label: {
+                    HStack(spacing: 5) {
+                        Circle().fill(Color.orange).frame(width: 6, height: 6)
+                        Text(L10n.t("引擎未连接"))
+                            .fireSkyFont(size: 11, weight: .medium, relativeTo: .caption)
+                    }
+                    .padding(.horizontal, 9).padding(.vertical, 5)
+                    .background(Color.orange.opacity(0.14), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .help(L10n.t("点击重新连接引擎"))
+                .accessibilityLabel(L10n.t("引擎未连接，点击重新连接"))
+            }
+            Button {
+                store.cycleAppearance()
+            } label: {
+                Image(systemName: appearanceIcon)
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 28, height: 28)
+                    .background(Color.primary.opacity(scheme == .dark ? 0.06 : 0.045),
+                                in: RoundedRectangle(cornerRadius: 7))
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help(appearanceHelpText)
+            .accessibilityLabel(appearanceHelpText)
+        }
+        .padding(.leading, sidebarState.visible ? 18 : 76)
+        .padding(.trailing, 18)
+        .padding(.vertical, 9)
+        .frame(minHeight: 56)
+        .fireSkySurface(role: .navigation)
+    }
+
+    private var startAccessibilityHint: String {
+        if store.busy { return L10n.t("当前有任务正在进行，完成或取消后可开始新预测。") }
+        if !store.online { return L10n.t("引擎未连接，请重新连接后再开始。") }
+        return L10n.t("先预检本地数据，确认后开始预测。")
     }
 
     private var workbench: some View {
-        HStack(alignment: .top, spacing: 16) {
-            VStack(spacing: 10) {
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
                 ScrollView {
-                    VStack(spacing: 14) {
+                    VStack(alignment: .leading, spacing: 14) {
                         WorkLocationView()
                         WorkParametersView()
-                    }.padding(.trailing, 2)
-                }.defaultScrollAnchor(.top).scrollIndicators(.hidden)
-                Button { store.beginCheck() } label: {
-                    Text(L10n.text(store.page == .nowcast ? "开始实况分析" : "开始预测", store.page == .nowcast ? "Start Nowcast" : "Start Forecast"))
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(scheme == .dark ? Color(0x14, 0x14, 0x14) : Color.white)
-                        .frame(maxWidth: .infinity).frame(height: 41)
-                        .background(FSDesign.accentGradient(dark: scheme == .dark), in: RoundedRectangle(cornerRadius: 8))
-                }.buttonStyle(.plain)
-                    .opacity(store.busy || !store.online ? 0.45 : 1)
-                    .disabled(store.busy || !store.online)
-                    .help(store.busy ? "当前有任务正在进行（\(store.status)），完成或取消后可开始新预测。"
-                          : !store.online ? "引擎未连接，请先在左下角重新连接。"
-                          : "先预检本地数据，确认后开始预测。")
-                if store.page == .nowcast {
-                    Button("预热卫星与数据", systemImage: "arrow.down.to.line") { store.beginCheck() }
-                        .buttonStyle(.borderless).font(.system(size: 10))
-                        .disabled(store.busy || !store.online)
-                }
-                if store.busy {
-                    ProgressView(value: store.percent, total: 100)
-                    HStack {
-                        Text(store.status).font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(2)
-                        Spacer()
-                        Button { store.cancel() } label: { Image(systemName: "xmark") }.help("取消任务")
+                        workbenchActions
+                        workbenchResults
                     }
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                    .padding(.horizontal, 18).padding(.vertical, 14)
                 }
-                if !store.online && !store.error.isEmpty {
-                    Label("引擎未连接", systemImage: "exclamationmark.triangle")
-                        .font(.system(size: 10)).foregroundStyle(.red)
-                    Text(store.error)
-                        .font(.system(size: 9))
-                        .foregroundStyle(.red.opacity(0.9))
-                        .lineLimit(3)
-                        .textSelection(.enabled)
-                    Button("重新连接") { Task { await store.connect() } }.buttonStyle(.borderless)
+                .defaultScrollAnchor(.top)
+                .scrollIndicators(.hidden)
+            } else {
+                HStack(alignment: .top, spacing: 16) {
+                    workbenchControls
+                    workbenchResults
                 }
-            }.frame(width: 292)
-            VStack(spacing: 12) {
-                if store.page == .nowcast {
-                    WorkNowcastHeroView()
-                    WorkNowcastResultsView()
-                } else {
-                    WorkHeroView()
-                    WorkResultsView()
+                .padding(.leading, 18).padding(.trailing, 20)
+                .padding(.top, 14).padding(.bottom, 18)
+            }
+        }
+    }
+
+    private var workbenchControls: some View {
+        VStack(spacing: 10) {
+            ScrollView {
+                VStack(spacing: 12) {
+                    WorkLocationView()
+                    WorkParametersView()
+                }.padding(.trailing, 2)
+            }
+            .defaultScrollAnchor(.top)
+            .scrollIndicators(.hidden)
+            workbenchActions
+        }
+        .frame(width: 280)
+    }
+
+    private var workbenchActions: some View {
+        VStack(spacing: 10) {
+            Button { store.beginCheck() } label: {
+                Text(L10n.text(store.page == .nowcast ? "开始实况分析" : "开始预测",
+                               store.page == .nowcast ? "Start Nowcast" : "Start Forecast"))
+                    .fireSkyFont(size: 12, weight: .semibold)
+                    .foregroundStyle(scheme == .dark ? Color(0x14, 0x14, 0x14) : Color.white)
+                    .frame(maxWidth: .infinity).padding(.vertical, 11)
+                    .background(FSDesign.accentGradient(dark: scheme == .dark),
+                                in: RoundedRectangle(cornerRadius: 8))
+            }
+            .buttonStyle(.plain)
+            .opacity(store.busy || !store.online ? 0.45 : 1)
+            .disabled(store.busy || !store.online)
+            .help(store.busy
+                  ? L10n.tf("当前有任务正在进行（%@），完成或取消后可开始新预测。", store.status)
+                  : !store.online ? L10n.t("引擎未连接，请先在左下角重新连接。")
+                  : L10n.t("先预检本地数据，确认后开始预测。"))
+            .accessibilityHint(startAccessibilityHint)
+            if store.page == .nowcast {
+                Button(L10n.t("预热卫星与数据"), systemImage: "arrow.down.to.line") {
+                    store.beginCheck()
                 }
-            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        }.padding(.leading, 18).padding(.trailing, 20).padding(.top, 14).padding(.bottom, 18)
+                .buttonStyle(.borderless).fireSkyFont(size: 10, relativeTo: .caption)
+                .disabled(store.busy || !store.online)
+            }
+            if store.busy {
+                ProgressView(value: store.percent, total: 100)
+                HStack {
+                    Text(store.status).fireSkyFont(size: 11, relativeTo: .caption)
+                        .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button { store.cancel() } label: { Image(systemName: "xmark") }
+                        .help(L10n.t("取消任务"))
+                        .accessibilityLabel(L10n.t("取消任务"))
+                }
+            }
+            if !store.online && !store.error.isEmpty {
+                Label(L10n.t("引擎未连接"), systemImage: "exclamationmark.triangle")
+                    .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.red)
+                Text(store.error).fireSkyFont(size: 11, relativeTo: .caption)
+                    .foregroundStyle(.red.opacity(0.9))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                Button(L10n.t("重新连接")) { Task { await store.connect() } }
+                    .buttonStyle(.borderless)
+            }
+        }
+    }
+
+    private var workbenchResults: some View {
+        VStack(spacing: 12) {
+            if store.page == .nowcast {
+                WorkNowcastHeroView()
+                WorkNowcastResultsView()
+            } else {
+                WorkHeroView()
+                WorkResultsView()
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
     }
 }
 
 struct WorkLocationView: View {
     @EnvironmentObject private var store: Store
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text(store.page == .regional ? "预测区域" : "观测点").font(.system(size: 13, weight: .semibold))
+                Text(L10n.t(store.page == .regional ? "预测区域" : "观测点"))
+                    .fireSkyFont(size: 13, weight: .semibold)
                 Spacer()
                 if store.page != .regional {
-                    WorkSegments(options: ["地图", "收藏"], selection: $store.locationTab).frame(width: 128)
+                    WorkSegments(options: ["地图", "收藏"], selection: $store.locationTab)
+                        .frame(width: dynamicTypeSize.isAccessibilitySize ? 180 : 112)
+                    if store.locationTab == "收藏" {
+                        Menu {
+                            if store.favorites.isEmpty {
+                                Text(L10n.t("还没有收藏位置"))
+                            } else {
+                                ForEach(Array(store.favorites.enumerated()), id: \.offset) { _, item in
+                                    Button(role: .destructive) {
+                                        store.removeFavorite(item)
+                                    } label: {
+                                        Label(L10n.text("删除 \(item["name"] as? String ?? "收藏位置")",
+                                                        "Remove \(item["name"] as? String ?? "favorite")"), systemImage: "trash")
+                                    }
+                                }
+                            }
+                        } label: {
+                            Image(systemName: "ellipsis.circle")
+                                .font(.system(size: 13))
+                                .frame(width: 22, height: 22)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .help(L10n.t("管理收藏位置"))
+                        .accessibilityLabel(L10n.t("管理收藏位置"))
+                    }
                 }
             }
             HStack(spacing: 6) {
-                TextField("搜索地名，如「西湖」或「杭州」", text: $store.query).onSubmit { store.search() }
+                TextField(L10n.t("搜索地名，如「西湖」或「杭州」"), text: $store.query).onSubmit { store.search() }
                     .textFieldStyle(.roundedBorder).controlSize(.large)
                 Button { store.search() } label: {
                     if store.searching { ProgressView().controlSize(.mini).frame(width: 16, height: 16) }
                     else { Image(systemName: "magnifyingglass").frame(width: 16, height: 16) }
                 }
-                    .help("搜索位置").controlSize(.large).disabled(store.searching)
+                    .help(L10n.t("搜索位置")).accessibilityLabel(L10n.t("搜索位置"))
+                    .controlSize(.large).disabled(store.searching)
                 Button { store.locate() } label: {
                     if store.locating { ProgressView().controlSize(.mini).frame(width: 16, height: 16) }
                     else { Image(systemName: "location").frame(width: 16, height: 16) }
-                }.help("获取当前位置").accessibilityLabel("获取当前位置")
+                }.help(L10n.t("获取当前位置")).accessibilityLabel(L10n.t("获取当前位置"))
                     .controlSize(.large).disabled(store.locating)
             }
             if store.page == .regional {
@@ -259,7 +518,7 @@ struct WorkLocationView: View {
                     Text("0.25° × 0.25°").foregroundStyle(.secondary).frame(maxWidth: .infinity)
                 }
             } else if store.locationTab == "地图" {
-                ForecastMap(store: store, mini: true).frame(height: 176)
+                ForecastMap(store: store, mini: true).frame(height: 158)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             } else {
                 // UX #7：收藏可删除（右键菜单），空收藏给出引导而不是空白。
@@ -267,9 +526,10 @@ struct WorkLocationView: View {
                     if store.favorites.isEmpty {
                         VStack(spacing: 6) {
                             Image(systemName: "star").foregroundStyle(.secondary)
-                            Text("还没有收藏位置").font(.system(size: 11, weight: .medium))
-                            Text("搜索或在地图上选好地点后，点击下方「收藏当前点」。")
-                                .font(.system(size: 9)).foregroundStyle(.secondary)
+                            Text(L10n.t("还没有收藏位置"))
+                                .fireSkyFont(size: 11, weight: .medium, relativeTo: .caption)
+                            Text(L10n.t("搜索或在地图上选好地点后，点击下方「收藏当前点」。"))
+                                .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
                         }.frame(maxWidth: .infinity, minHeight: 160)
                     } else {
@@ -278,33 +538,41 @@ struct WorkLocationView: View {
                                 Button(item["name"] as? String ?? "收藏位置") { store.applyLocation(item) }
                                     .buttonStyle(.borderless).frame(maxWidth: .infinity, alignment: .leading)
                                     .contextMenu {
-                                        Button("删除收藏", role: .destructive) { store.removeFavorite(item) }
+                                        Button(L10n.t("删除收藏"), role: .destructive) { store.removeFavorite(item) }
                                     }
-                                    .help("点击切换到此位置；右键可删除收藏")
+                                    .help(L10n.t("点击切换到此位置；右键可删除收藏"))
                             }
                         }.padding(8)
                     }
                 }.frame(height: 176)
             }
             HStack(spacing: 9) {
-                Circle().fill(warm).frame(width: 8, height: 8)
+                Circle().fill(store.metadataReady ? warm : Color.orange).frame(width: 8, height: 8)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(store.name).font(.system(size: 13, weight: .semibold))
+                    Text(store.name).fireSkyFont(size: 13, weight: .semibold)
                     Text(String(format: "%.4f° N, %.4f° E", store.lat, store.lon))
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
                 }
             }
-            HStack(spacing: 5) {
-                Text(store.metadataReady ? String(format: "海拔 %.0f m", store.elevation) : "海拔未确认").workChip()
-                    .help("海拔来源设置：\(store.elevationSourceLabel)；实际来源：\(store.elevationSourceActualLabel)")
-                Text(store.timezone).lineLimit(1).workChip()
-            }.font(.system(size: 9)).foregroundStyle(.secondary)
+            Text(store.metadataReady
+                 ? L10n.tf("位置已确认 · 海拔 %d m · %@", Int(store.elevation), store.timezone)
+                 : L10n.t("位置待确认 · 展开「编辑坐标」获取海拔与时区"))
+                .fireSkyFont(size: 11, relativeTo: .caption)
+                .foregroundStyle(store.metadataReady ? Color.secondary : Color.orange)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .help(store.metadataReady
+                      ? L10n.tf("海拔来源设置：%@；实际来源：%@", store.elevationSourceLabel, store.elevationSourceActualLabel)
+                      : L10n.t("确认海拔与时区后才能收藏该点并开始预测。"))
+                .accessibilityLabel(store.metadataReady
+                                    ? L10n.tf("位置已确认，海拔 %d 米，时区 %@", Int(store.elevation), store.timezone)
+                                    : L10n.t("位置待确认，请展开编辑坐标获取海拔与时区"))
             HStack {
-                Button("收藏当前点", systemImage: "star") { store.starLocation() }
+                Button(L10n.t("收藏当前点"), systemImage: "star") { store.starLocation() }
                 Spacer()
-                Button("大地图", systemImage: "arrow.up.left.and.arrow.down.right") { store.showMapPicker = true }
-            }.buttonStyle(.borderless).font(.system(size: 10))
-        }.padding(15).workSurface()
+                Button(L10n.t("大地图"), systemImage: "arrow.up.left.and.arrow.down.right") { store.showMapPicker = true }
+            }.buttonStyle(.borderless).fireSkyFont(size: 11, relativeTo: .caption)
+        }.padding(13).workSurface()
     }
     private func coordinate(_ title: String, _ value: Binding<Double>) -> some View {
         HStack {
@@ -321,46 +589,60 @@ struct WorkParametersView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("观测参数").font(.system(size: 13, weight: .semibold))
+                Text(L10n.t("观测参数")).fireSkyFont(size: 13, weight: .semibold)
                 Spacer()
-                Button("重置") { store.chooseDate("今天"); store.phenomenon = "dusk" }
-                    .buttonStyle(.borderless).font(.system(size: 10))
+                Button(L10n.t("重置")) { store.chooseDate("今天"); store.phenomenon = "dusk" }
+                    .buttonStyle(.borderless).fireSkyFont(size: 11, relativeTo: .caption)
             }
-            Text("目标日期").font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(L10n.t("目标日期")).fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
             WorkSegments(options: ["今天", "明天", "自定义"],
                          selection: Binding(get: { store.dateTab }, set: { store.chooseDate($0) }))
             if store.dateTab == "自定义" {
                 WorkDateButton()
             }
-            Text("观测现象").font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(L10n.t("观测现象")).fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
             WorkSegments(options: ["dawn", "dusk"], titles: ["朝霞", "晚霞"],
                          selection: $store.phenomenon, accented: true)
-            Button("编辑坐标", systemImage: "slider.horizontal.3") { store.editingCoordinates.toggle() }
-                .buttonStyle(.borderless).font(.system(size: 10)).frame(maxWidth: .infinity)
+            Button(L10n.t("编辑坐标"), systemImage: "slider.horizontal.3") {
+                store.editingCoordinates.toggle()
+            }
+            .buttonStyle(.borderless).fireSkyFont(size: 11, relativeTo: .caption)
+            .frame(maxWidth: .infinity).padding(.vertical, 4)
             if store.editingCoordinates {
                 VStack(spacing: 8) {
-                    TextField("名称", text: $store.name)
-                    number("纬度", $store.lat)
-                    number("经度", $store.lon)
+                    TextField(L10n.t("名称"), text: $store.name)
+                    number(L10n.t("纬度"), $store.lat)
+                    number(L10n.t("经度"), $store.lon)
                     number("海拔 (m)", $store.elevation)
                     HStack {
-                        Text("时区").foregroundStyle(.secondary)
+                        Text(L10n.t("时区")).foregroundStyle(.secondary)
                         Spacer()
-                        Text(store.timezone).monospaced()
+                        Text(store.timezone).monospaced().fireSkyFont(size: 12)
                     }
-                    Text("时区按经纬度自动计算").font(.system(size: 9)).foregroundStyle(.secondary)
-                    Button("获取海拔与时区") { store.lookupMetadata() }.buttonStyle(.borderless)
-                    Toggle("已确认位置数据", isOn: $store.metadataReady).font(.system(size: 10))
+                    Text(L10n.t("时区按经纬度自动计算"))
+                        .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
+                    Button(L10n.t("获取海拔与时区")) { store.lookupMetadata() }
+                        .buttonStyle(.borderless).fireSkyFont(size: 12)
+                    Toggle(L10n.t("已确认海拔与时区"), isOn: $store.metadataReady)
+                        .fireSkyFont(size: 11, relativeTo: .caption)
                 }.textFieldStyle(.roundedBorder)
             }
-            if !store.error.isEmpty {
-                Text(store.error).font(.system(size: 10)).foregroundStyle(.red).textSelection(.enabled)
+            let pageError = store.errorText(for: store.page)
+            if !pageError.isEmpty {
+                HStack(alignment: .top, spacing: 6) {
+                    Text(pageError).font(.system(size: 11)).foregroundStyle(.red)
+                        .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                    Spacer(minLength: 4)
+                    Button { store.clearError() } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.borderless).font(.system(size: 10)).foregroundStyle(.secondary)
+                        .help(L10n.t("关闭"))
+                }
             }
-        }.padding(15).workSurface()
+        }.padding(13).workSurface()
     }
     private func number(_ title: String, _ value: Binding<Double>) -> some View {
         HStack {
-            Text(title).foregroundStyle(.secondary)
+            Text(title).fireSkyFont(size: 12).foregroundStyle(.secondary)
             Spacer()
             TextField(title, value: value, format: .number).labelsHidden().frame(width: 130)
         }
@@ -369,6 +651,7 @@ struct WorkParametersView: View {
 
 private struct WorkDateButton: View {
     @EnvironmentObject private var store: Store
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var body: some View {
         Button {
             store.calendarMonth = store.date
@@ -379,35 +662,47 @@ private struct WorkDateButton: View {
                 Text(store.targetDateLabel).monospacedDigit()
                 Spacer(minLength: 4)
                 Image(systemName: "chevron.down").font(.system(size: 9, weight: .medium)).foregroundStyle(.secondary)
-            }.font(.system(size: 12)).padding(.horizontal, 11).frame(height: 34)
+            }
+            .fireSkyFont(size: 12)
+            .padding(.horizontal, 11).padding(.vertical, 6).frame(minHeight: 34)
                 .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
                 .contentShape(Rectangle())
-        }.buttonStyle(.plain).help("选择目标日期")
-            .accessibilityLabel("目标日期 \(store.targetDateLabel)")
-            .popover(isPresented: $store.showDatePicker, arrowEdge: .bottom) { WorkCalendarView() }
+        }.buttonStyle(.plain).help(L10n.t("选择目标日期"))
+            .accessibilityLabel(L10n.tf("目标日期 %@", store.targetDateLabel))
+            .popover(isPresented: $store.showDatePicker, arrowEdge: .bottom) {
+                WorkCalendarView().environment(\.dynamicTypeSize, dynamicTypeSize)
+            }
     }
 }
 
 private struct WorkCalendarView: View {
     @EnvironmentObject private var store: Store
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private var month: ObservationMonth { ObservationMonth(containing: store.calendarMonth, timezone: store.timezone) }
-    private let columns = Array(repeating: GridItem(.fixed(30), spacing: 4), count: 7)
+    private var columns: [GridItem] { Array(repeating: GridItem(.flexible(), spacing: 4), count: 7) }
+    private var dayCellSize: CGFloat { dynamicTypeSize.isAccessibilitySize ? 44 : 30 }
     var body: some View {
         VStack(spacing: 12) {
             HStack {
-                Text(month.title).font(.system(size: 13, weight: .semibold))
+                Text(month.title).fireSkyFont(size: 13, weight: .semibold, relativeTo: .headline)
                 Spacer()
                 Button { store.calendarMonth = month.moved(-1) } label: {
-                    Image(systemName: "chevron.left").frame(width: 24, height: 24)
-                }.help("上个月")
+                    Image(systemName: "chevron.left")
+                        .frame(width: dynamicTypeSize.isAccessibilitySize ? 38 : 24,
+                               height: dynamicTypeSize.isAccessibilitySize ? 38 : 24)
+                }.help(L10n.t("上个月")).accessibilityLabel(L10n.t("上个月"))
                 Button { store.calendarMonth = month.moved(1) } label: {
-                    Image(systemName: "chevron.right").frame(width: 24, height: 24)
-                }.help("下个月")
+                    Image(systemName: "chevron.right")
+                        .frame(width: dynamicTypeSize.isAccessibilitySize ? 38 : 24,
+                               height: dynamicTypeSize.isAccessibilitySize ? 38 : 24)
+                }.help(L10n.t("下个月")).accessibilityLabel(L10n.t("下个月"))
             }.buttonStyle(.plain)
             LazyVGrid(columns: columns, spacing: 4) {
-                ForEach(["一", "二", "三", "四", "五", "六", "日"], id: \.self) { day in
-                    Text(day).font(.system(size: 10)).foregroundStyle(.secondary).frame(width: 30, height: 22)
+                ForEach(month.weekdaySymbols, id: \.self) { day in
+                    Text(day).fireSkyFont(size: 10, relativeTo: .caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: dynamicTypeSize.isAccessibilitySize ? 38 : 22)
                 }
                 ForEach(month.days, id: \.self) { day in
                     let selected = month.calendar.isDate(day, inSameDayAs: store.date)
@@ -415,10 +710,11 @@ private struct WorkCalendarView: View {
                     let today = month.calendar.isDate(day, inSameDayAs: .now)
                     Button { select(day) } label: {
                         Text("\(month.calendar.component(.day, from: day))")
-                            .font(.system(size: 11, weight: selected ? .semibold : .regular)).monospacedDigit()
+                            .fireSkyFont(size: 11, weight: selected ? .semibold : .regular, relativeTo: .caption)
+                            .monospacedDigit()
                             .foregroundStyle(selected ? (scheme == .dark ? Color.black : Color.white)
                                              : current ? Color.primary : Color.secondary.opacity(0.55))
-                            .frame(width: 30, height: 30)
+                            .frame(maxWidth: .infinity).frame(height: dayCellSize)
                             .background(selected ? warm : .clear, in: Circle())
                             .overlay { Circle().stroke(today && !selected ? warm.opacity(0.7) : .clear, lineWidth: 1) }
                             .contentShape(Circle())
@@ -428,14 +724,15 @@ private struct WorkCalendarView: View {
             }
             Divider()
             HStack {
-                Button("今天") { select(.now) }.buttonStyle(.plain).foregroundStyle(warm)
+                Button(L10n.t("今天")) { select(.now) }.buttonStyle(.plain).foregroundStyle(warm)
                 Spacer()
                 Button { store.showDatePicker = false } label: {
                     Image(systemName: "xmark").frame(width: 24, height: 24)
-                }.buttonStyle(.plain).help("关闭日历").keyboardShortcut(.cancelAction)
-            }.font(.system(size: 11))
-        }.padding(14).frame(width: 262)
-            .tint(warm).background(.regularMaterial)
+                }.buttonStyle(.plain).help(L10n.t("关闭日历"))
+                    .accessibilityLabel(L10n.t("关闭日历")).keyboardShortcut(.cancelAction)
+            }.fireSkyFont(size: 11, relativeTo: .caption)
+        }.padding(14).frame(width: dynamicTypeSize.isAccessibilitySize ? 380 : 262)
+            .tint(warm).fireSkySurface(role: .overlay, cornerRadius: 10)
     }
     private func select(_ day: Date) {
         store.date = day
@@ -451,11 +748,11 @@ struct WorkStaleResultBanner: View {
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.arrow.triangle.2.circlepath")
                     .foregroundStyle(.orange)
-                Text("参数已变更 · 当前结果对应旧参数")
+                Text(L10n.t("参数已变更 · 当前结果对应旧参数"))
                     .font(.system(size: 10, weight: .medium)).foregroundStyle(.orange)
                     .help(store.resultParamsSummary)
                 Spacer(minLength: 4)
-                Button("按新参数重算") { store.beginCheck() }
+                Button(L10n.t("按新参数重算")) { store.beginCheck() }
                     .buttonStyle(.borderless).font(.system(size: 10))
                     .disabled(store.busy || !store.online)
                     .help(store.busy ? "当前有任务正在进行，完成或取消后可重算。" : store.resultParamsSummary)
@@ -467,21 +764,502 @@ struct WorkStaleResultBanner: View {
     }
 }
 
+/// 首次成功路径：不替代预检窗口，只把用户下一步要做的四件事放到可见位置。
+private struct WorkFirstRunGuide: View {
+    @EnvironmentObject private var store: Store
+    @Environment(\.colorScheme) private var scheme
+
+    private struct Step: View {
+        @Environment(\.colorScheme) private var scheme
+        let number: String
+        let symbol: String
+        let title: String
+        let detail: String
+        let action: String
+        var disabled = false
+        let run: () -> Void
+
+        var body: some View {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 7) {
+                    Image(systemName: symbol)
+                        .fireSkyFont(size: 13, weight: .semibold, relativeTo: .caption)
+                        .foregroundStyle(warm)
+                    Text(number).fireSkyFont(size: 10, weight: .bold, relativeTo: .caption).monospacedDigit()
+                        .foregroundStyle(.secondary)
+                    Spacer(minLength: 0)
+                }
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title).fireSkyFont(size: 12, weight: .semibold)
+                    Text(detail).fireSkyFont(size: 10, relativeTo: .caption)
+                        .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 2)
+                Button(action) { run() }
+                    .buttonStyle(.borderless)
+                    .fireSkyFont(size: 11, weight: .medium, relativeTo: .caption)
+                    .disabled(disabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(10)
+            .frame(minHeight: 116, alignment: .leading)
+            .background(Color.primary.opacity(scheme == .dark ? 0.045 : 0.035),
+                        in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.secondary.opacity(0.16), lineWidth: 1)
+            }
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Image(systemName: "sparkles")
+                    .fireSkyFont(size: 13, weight: .semibold, relativeTo: .caption).foregroundStyle(warm)
+                Text(L10n.t("首次预测 · 四步完成")).fireSkyFont(size: 12, weight: .semibold)
+                Spacer(minLength: 8)
+                Text(L10n.t("每一步都可稍后调整"))
+                    .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 158), spacing: 10)], spacing: 10) {
+                Step(number: "01", symbol: "map", title: L10n.t("选好地点"),
+                     detail: L10n.t("搜索、地图选点或选择收藏点"), action: L10n.t("打开地图")) {
+                    store.showMapPicker = true
+                }
+                Step(number: "02", symbol: "location", title: L10n.t("确认位置"),
+                     detail: L10n.t(store.metadataReady ? "海拔与时区已确认" : "获取并确认海拔与时区"),
+                     action: L10n.t(store.metadataReady ? "调整坐标" : "编辑坐标")) {
+                    store.editingCoordinates.toggle()
+                }
+                Step(number: "03", symbol: "key.horizontal", title: L10n.t("数据源"),
+                     detail: L10n.t(store.camsConfigured ? "CAMS 已配置" : "CAMS 可选，仍可使用本地数据"),
+                     action: L10n.t(store.camsConfigured ? "查看配置" : "配置 CAMS")) {
+                    store.openCAMSSetup()
+                }
+                Step(number: "04", symbol: "arrow.down.circle", title: L10n.t("预检与下载"),
+                     detail: L10n.t("逐项确认缺失数据，过程中可取消"), action: L10n.t("数据预检"),
+                     disabled: store.busy || !store.online) {
+                    store.beginCheck()
+                }
+            }
+            Text(L10n.t("提示：首次下载量取决于本机缺失的数据集；预检会列出本次所需文件与状态，下载后可随时重新预检。"))
+                .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityLabel(L10n.t("首次下载量取决于本机缺失的数据集，预检会列出本次所需文件与状态。"))
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fireSkySurface(role: .content, emphasized: true)
+    }
+}
+
+/// 行动摘要（交接文档 P0-2）：只读取 Rust 报告字段，不在 SwiftUI 重算科学结果。
+/// 双模式并列展示，不平均、不互相填补；缺测与单模式失败都有独立文案。
+private struct WorkActionSummaryView: View {
+    @EnvironmentObject private var store: Store
+    @EnvironmentObject private var reminders: ReminderCenter
+    let comparison: ForecastComparison
+
+    private struct ModelSnapshot {
+        let model: String
+        let level: String
+        let best: String
+        let window: String
+        let limit: String?
+    }
+
+    private var snapshots: [ModelSnapshot] {
+        ForecastComparison.models.compactMap { model in
+            guard let report = comparison.report(model) else { return nil }
+            let level = report["peak_quality_level"] as? String
+                ?? report["quality_level"] as? String
+                ?? L10n.tf("指数 %@ / 2.5", format(comparison.peak(model), digits: 2))
+            let rawLimit = (report["quality_components"] as? JSONObject)?["quality_limiting_factor"] as? String
+            return ModelSnapshot(model: model,
+                                 level: level,
+                                 best: timeLabel(report["best_time_local"] as? String),
+                                 window: windowLabel(report),
+                                 limit: rawLimit?.isEmpty == true ? nil : rawLimit)
+        }
+    }
+
+    private var failedModels: [String] {
+        ForecastComparison.models.filter { comparison.error($0) != nil }
+    }
+
+    /// 提醒只读取已发布报告的原始最佳时刻；多模型存在时明确标注依据的模式。
+    private var reminderBest: (model: String, time: String)? {
+        for model in ForecastComparison.models {
+            guard let report = comparison.report(model),
+                  let time = report["best_time_local"] as? String, !time.isEmpty else { continue }
+            return (model, time)
+        }
+        return nil
+    }
+
+    private var levelsAgree: Bool {
+        snapshots.count == 2 && Set(snapshots.map(\.level)).count == 1
+    }
+
+    private var headline: String {
+        if snapshots.isEmpty {
+            return failedModels.isEmpty
+                ? L10n.t("完成一次预测后，这里会给出是否值得外出、最佳时刻和主要限制。")
+                : L10n.t("两个模式都未完成，暂不能给出观测建议。")
+        }
+        if snapshots.count == 1 {
+            return L10n.tf("仅 %@ 可用：%@",
+                           snapshots[0].model.uppercased(),
+                           L10n.qualityLevel(snapshots[0].level))
+        }
+        return levelsAgree
+            ? L10n.tf("两个模式结论一致：%@", L10n.qualityLevel(snapshots[0].level))
+            : L10n.tf("两个模式结论不同：GFS %@ · EC %@",
+                      L10n.qualityLevel(snapshots[0].level),
+                      L10n.qualityLevel(snapshots[1].level))
+    }
+
+    private var timingText: String {
+        guard let first = snapshots.first else { return "" }
+        if levelsAgree, snapshots.allSatisfy({ $0.best == first.best && $0.window == first.window }) {
+            return L10n.tf("最佳 %@ · 推荐窗口 %@", first.best, first.window)
+        }
+        return snapshots.map {
+            L10n.tf("%@ 最佳 %@ · 窗口 %@", $0.model.uppercased(), $0.best, $0.window)
+        }
+            .joined(separator: "   ·   ")
+    }
+
+    private var notes: [String] {
+        var result: [String] = []
+        for model in failedModels {
+            result.append(L10n.tf("%@ 未完成：%@",
+                                  model.uppercased(),
+                                  comparison.error(model) ?? L10n.t("未知原因")))
+        }
+        for snapshot in snapshots {
+            if let limit = snapshot.limit {
+                result.append(L10n.tf("%@ 主要限制：%@",
+                                      snapshot.model.uppercased(),
+                                      L10n.qualityLimit(limit)))
+            }
+        }
+        if store.resultParametersStale {
+            result.append(L10n.t("当前结果对应旧参数，可点「按新参数重算」更新。"))
+        }
+        return result
+    }
+
+    private var exportFilename: String { SummaryExport.suggestedFilename(store) }
+
+    private var exportText: String { SummaryExport.summaryText(store: store, comparison: comparison) }
+
+    private var statusSymbol: String {
+        if snapshots.isEmpty { return failedModels.isEmpty ? "sparkles" : "exclamationmark.triangle" }
+        return levelsAgree && failedModels.isEmpty ? "checkmark.circle.fill" : "exclamationmark.triangle"
+    }
+
+    var body: some View {
+        Group {
+            if snapshots.isEmpty && failedModels.isEmpty && comparison.result == nil {
+                WorkFirstRunGuide()
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(spacing: 8) {
+                        Image(systemName: statusSymbol)
+                            .fireSkyFont(size: 13, weight: .semibold, relativeTo: .caption)
+                            .foregroundStyle(warm)
+                        Text(L10n.t("行动摘要"))
+                            .fireSkyFont(size: 11, weight: .semibold, relativeTo: .caption)
+                            .foregroundStyle(.secondary)
+                        Spacer(minLength: 8)
+                        if !snapshots.isEmpty {
+                            Menu {
+                                Button(L10n.text("保存为文本文件", "Save as text")) {
+                                    SummaryExport.save(exportText, suggestedFilename: exportFilename)
+                                }
+                                Button(L10n.text("复制摘要", "Copy summary")) {
+                                    SummaryExport.copy(exportText)
+                                }
+                            } label: {
+                                Label(L10n.text("导出摘要", "Export summary"), systemImage: "square.and.arrow.up")
+                            }
+                            .buttonStyle(.borderless)
+                            .font(.system(size: 11))
+                            .help(L10n.text("导出地点、日期、模型状态、来源时效与缺测说明；不重算科学结论。",
+                                            "Export location, date, model status, source timeliness and missing-data notes without recomputing results."))
+                            Button {
+                                store.starLocation()
+                            } label: {
+                                Label(L10n.t("收藏该地点"), systemImage: "star")
+                            }
+                            .buttonStyle(.borderless)
+                            .fireSkyFont(size: 11, relativeTo: .caption)
+                            .disabled(!store.metadataReady)
+                            .help(L10n.t(store.metadataReady
+                                         ? "把当前观测点加入收藏"
+                                         : "请先确认海拔与时区，再收藏该地点"))
+                        }
+                    }
+                    Text(headline)
+                        .fireSkyFont(size: 15, weight: .semibold, relativeTo: .title3)
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel(L10n.tf("结论：%@", headline))
+                    if !timingText.isEmpty {
+                        Text(timingText)
+                            .fireSkyFont(size: 12).monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityLabel(L10n.tf("时间与窗口：%@", timingText))
+                    }
+                    if let reminderBest {
+                        WorkReminderControl(bestTime: reminderBest.time,
+                                            model: reminderBest.model,
+                                            detail: timingText)
+                    }
+                    ForEach(notes, id: \.self) { note in
+                        Text(note)
+                            .fireSkyFont(size: 11, relativeTo: .caption)
+                            .foregroundStyle(.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityLabel(note)
+                    }
+                }
+                .padding(14)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fireSkySurface(role: .content, emphasized: !snapshots.isEmpty)
+            }
+        }
+    }
+}
+
+private struct WorkReminderControl: View {
+    @EnvironmentObject private var store: Store
+    @EnvironmentObject private var reminders: ReminderCenter
+    let bestTime: String?
+    let model: String
+    let detail: String
+
+    private final class ActionState: ObservableObject {
+        @Published var busy = false
+        @Published var message: String?
+    }
+    @StateObject private var action = ActionState()
+
+    private let minutesBefore = 30
+
+    private var timeZone: TimeZone { TimeZone(identifier: store.timezone) ?? .current }
+    private var reminderKey: String {
+        [store.name, String(store.lat), String(store.lon),
+         store.targetDateLabel, store.phenomenon, model, bestTime ?? ""].joined(separator: "|")
+    }
+    private var isCurrentScheduled: Bool { reminders.scheduled?.key == reminderKey }
+
+    var body: some View {
+        Group {
+            if let fireDate = parsedBestTime {
+                if fireDate.addingTimeInterval(-Double(minutesBefore * 60)) <= Date() {
+                    Text(L10n.text("该结果的最佳时刻已过，无法设置提醒。", "This result's best time has passed; no reminder can be set."))
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                } else {
+                    reminderContent(fireDate: fireDate)
+                }
+            } else {
+                EmptyView()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func reminderContent(fireDate: Date) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            switch reminders.permission {
+            case .authorized:
+                if isCurrentScheduled, let scheduled = reminders.scheduled {
+                    HStack(spacing: 8) {
+                        Image(systemName: "bell.badge.fill").foregroundStyle(warm)
+                        Text(String(format: L10n.text("已设置提醒 · %1$@ 前 %2$d 分钟",
+                                                       "Reminder set · %1$@ · %2$d min before"),
+                                    scheduledTime(scheduled.fireDate), minutesBefore))
+                            .font(.system(size: 10))
+                        Button(L10n.text("取消提醒", "Cancel reminder")) { reminders.cancel() }
+                            .buttonStyle(.borderless).font(.system(size: 10))
+                            .accessibilityLabel(L10n.text("取消提醒", "Cancel reminder"))
+                    }
+                } else {
+                    Button {
+                        schedule(fireDate: fireDate)
+                    } label: {
+                        Label(reminders.scheduled == nil
+                              ? L10n.text("设置最佳时刻提醒", "Remind me before the best time")
+                              : L10n.text("替换为当前结果提醒", "Replace with this result reminder"),
+                              systemImage: "bell")
+                            .font(.system(size: 10))
+                    }
+                    .buttonStyle(.borderless)
+                    .disabled(action.busy)
+                }
+            case .denied:
+                Text(L10n.text("通知权限已关闭。可在系统设置中开启后再设置提醒。",
+                               "Notifications are off. Enable them in System Settings to use reminders."))
+                    .font(.system(size: 10)).foregroundStyle(.secondary)
+                Button(L10n.text("打开系统通知设置", "Open notification settings")) {
+                    reminders.openSystemSettings()
+                }
+                .buttonStyle(.borderless).font(.system(size: 10))
+            case .unknown, .notDetermined:
+                Button {
+                    requestAndSchedule(fireDate: fireDate)
+                } label: {
+                    Label(L10n.text("开启最佳时刻提醒", "Enable best-time reminder"), systemImage: "bell.badge")
+                        .font(.system(size: 10))
+                }
+                .buttonStyle(.borderless)
+                .disabled(action.busy)
+            }
+            Text(String(format: L10n.text("依据 %1$@ 最佳时刻，提前 %2$d 分钟通知；时区 %3$@。可在此取消，也可在系统通知设置中关闭。",
+                                          "Based on %1$@ best time, notify %2$d min earlier; time zone %3$@. Cancel here or in Notification settings."),
+                         model.uppercased(), minutesBefore, store.timezone))
+                .font(.system(size: 9)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let message = action.message {
+                Text(message).font(.system(size: 9)).foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.top, 2)
+    }
+
+    private var parsedBestTime: Date? {
+        guard let bestTime else { return nil }
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = formatter.date(from: bestTime) { return date }
+        formatter.formatOptions = .withInternetDateTime
+        return formatter.date(from: bestTime)
+    }
+
+    private func scheduledTime(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.timeZone = timeZone
+        formatter.dateStyle = .short
+        formatter.timeStyle = .short
+        return formatter.string(from: date)
+    }
+
+    private func requestAndSchedule(fireDate: Date) {
+        action.busy = true
+        action.message = nil
+        reminders.requestAuthorization { [weak action] granted in
+            guard granted else {
+                action?.busy = false
+                action?.message = L10n.text("未获得通知权限；可在系统设置中开启。",
+                                            "Notification permission was not granted; enable it in System Settings.")
+                return
+            }
+            schedule(fireDate: fireDate)
+        }
+    }
+
+    private func schedule(fireDate: Date) {
+        action.busy = true
+        action.message = nil
+        let body = "\(store.name) · \(store.resultPhenomenonLabel)\(detail.isEmpty ? "" : "\n\(detail)")"
+        reminders.schedule(
+            key: reminderKey,
+            title: L10n.text("FireSky 观测提醒", "FireSky observation reminder"),
+            body: body,
+            fireDate: fireDate,
+            minutesBefore: minutesBefore,
+            timeZone: timeZone
+        ) { [weak action] success, message in
+            action?.busy = false
+            action?.message = success ? nil : message
+        }
+    }
+}
+
 struct WorkHeroView: View {
     @EnvironmentObject private var store: Store
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private var comparison: ForecastComparison { store.pointComparison }
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            // UX #1/#3：标题跟随结果原始参数，而不是当前表单。
-            Text("\(store.resultTitle) \(store.resultPhenomenonLabel)")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-            WorkStaleResultBanner()
-            HStack(alignment: .top, spacing: 18) {
-                summary("gfs")
-                Divider().frame(height: 124).opacity(0.5)
-                summary("ec")
+        VStack(alignment: .leading, spacing: 12) {
+            if store.result != nil && store.resultTab != "概览" {
+                analysisContext
+            } else {
+                WorkActionSummaryView(comparison: comparison)
+                if store.result != nil {
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack {
+                            Text(L10n.t("模式结果")).fireSkyFont(size: 12, weight: .semibold)
+                            Spacer()
+                        }
+                        // 标题跟随结果原始参数，而不是当前表单。
+                        Text("\(store.resultTitle) \(L10n.t(store.resultPhenomenonLabel))")
+                            .fireSkyFont(size: 11, relativeTo: .caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        WorkStaleResultBanner()
+                        HStack(alignment: .top, spacing: 18) {
+                            summary("gfs").frame(maxWidth: .infinity, alignment: .leading)
+                            Divider().opacity(0.5)
+                            summary("ec").frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                    }
+                    .padding(16)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .workSurface()
+                }
             }
-        }.padding(18).frame(maxWidth: .infinity).workSurface(emphasized: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var analysisContext: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(store.resultTitle) \(L10n.t(store.resultPhenomenonLabel))")
+                .fireSkyFont(size: 11, relativeTo: .caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            WorkStaleResultBanner()
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .leading),
+                                    count: dynamicTypeSize.isAccessibilitySize ? 1 : 2),
+                      alignment: .leading, spacing: 8) {
+                ForEach(ForecastComparison.models, id: \.self) { model in
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack(spacing: 8) {
+                            Text(model.uppercased()).foregroundStyle(modelColor(model))
+                            Text(format(comparison.peak(model), digits: 2) + " / 2.5")
+                                .monospacedDigit()
+                            Spacer(minLength: 0)
+                            Text(timeLabel(comparison.report(model)?["best_time_local"] as? String))
+                                .monospacedDigit()
+                                .help(L10n.t("最佳时刻"))
+                                .accessibilityLabel(L10n.t("最佳时刻") + " " +
+                                    timeLabel(comparison.report(model)?["best_time_local"] as? String))
+                        }
+                        .fireSkyFont(size: 12, weight: .semibold)
+                        Text(L10n.status(comparison.status(model)))
+                            .fireSkyFont(size: 11, relativeTo: .caption)
+                            .foregroundStyle(comparison.error(model) == nil ? Color.secondary : Color.red)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if let error = comparison.error(model) {
+                            Text(error).fireSkyFont(size: 11, relativeTo: .caption)
+                                .foregroundStyle(.red).textSelection(.enabled)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .help(modelSourceNote(model))
+                    .accessibilityElement(children: .combine)
+                }
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .workSurface()
     }
 
     private func summary(_ model: String) -> some View {
@@ -490,48 +1268,102 @@ struct WorkHeroView: View {
         return VStack(alignment: .leading, spacing: 9) {
             HStack {
                 Circle().fill(modelColor(model)).frame(width: 6, height: 6)
-                Text(model.uppercased()).font(.system(size: 12, weight: .semibold))
+                Text(model.uppercased()).fireSkyFont(size: 12, weight: .semibold)
                 Spacer(minLength: 4)
-                Text(comparison.status(model)).font(.system(size: 9))
+                Text(L10n.status(comparison.status(model)))
+                    .fireSkyFont(size: 11, relativeTo: .caption)
                     .foregroundStyle(comparison.error(model) == nil ? Color.secondary : Color.red)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             HStack(alignment: .top, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Text(format(quality, digits: 2)).font(.system(size: 32, weight: .semibold))
+                        Text(format(quality, digits: 2)).fireSkyFont(size: 32, weight: .semibold, relativeTo: .largeTitle)
                             .monospacedDigit().foregroundStyle(quality == nil ? Color.secondary : modelColor(model))
                             .lineLimit(1).minimumScaleFactor(0.8)
-                        Text("/ 2.5").font(.system(size: 10)).foregroundStyle(.secondary)
+                        Text("/ 2.5").fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
                     }
-                    Text(report?["peak_quality_level"] as? String ?? report?["quality_level"] as? String ?? "峰值质量指数")
-                        .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(2)
+                    Text(L10n.qualityLevel(report?["peak_quality_level"] as? String
+                        ?? report?["quality_level"] as? String ?? L10n.t("峰值质量指数")))
+                        .fireSkyFont(size: 11, relativeTo: .caption)
+                        .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
                 VStack(alignment: .leading, spacing: 5) {
-                    Text("最佳时刻").font(.system(size: 9)).foregroundStyle(.secondary)
+                    Text(L10n.t("最佳时刻")).fireSkyFont(size: 11, relativeTo: .caption)
+                        .foregroundStyle(.secondary)
                     Text(timeLabel(report?["best_time_local"] as? String))
-                        .font(.system(size: 22, weight: .semibold)).monospacedDigit()
+                        .fireSkyFont(size: 22, weight: .semibold, relativeTo: .title2).monospacedDigit()
                 }
             }
             SkyTimeline(report: report, timezone: store.timezone)
-            HStack(spacing: 5) {
-                if let cycle = cycleLabel(model, report) {
-                    Text("起报 \(cycle)").workChip()
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 5) {
+                    if let cycle = cycleLabel(model, report) {
+                        Text(L10n.tf("起报 %@", cycle))
+                            .lineLimit(2).fixedSize(horizontal: false, vertical: true).workChip()
+                    }
+                    pressureFamilyChip(model, report)
+                    cloudGenusChip(report)
                 }
-                Text(report == nil ? "未预测" : familyLabel(report?["dominant_burnable_pressure_family"])).workChip()
-                    .help(report == nil ? "尚未运行预测；完成一次预测后显示主导可烧压力族。"
-                          : "主导可烧压力族（来自本次预测结果）")
-            }.font(.system(size: 9)).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 5) {
+                    if let cycle = cycleLabel(model, report) {
+                        Text(L10n.tf("起报 %@", cycle)).workChip()
+                    }
+                    HStack(spacing: 5) {
+                        pressureFamilyChip(model, report)
+                        cloudGenusChip(report)
+                    }
+                }
+            }
+            .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
             Text(modelSourceNote(model))
-                .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(2)
+                .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if let message = comparison.error(model) {
-                Text(message).font(.system(size: 10)).foregroundStyle(.red).lineLimit(2)
+                Text(message).fireSkyFont(size: 11, relativeTo: .caption)
+                    .foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                     .help(message).textSelection(.enabled)
             }
-        }.frame(maxWidth: .infinity, minHeight: 124, alignment: .topLeading)
+        }
+        .frame(maxWidth: .infinity, minHeight: 124, alignment: .topLeading)
+        .fixedSize(horizontal: false, vertical: true)
             .accessibilityElement(children: .contain).accessibilityLabel(model.uppercased())
     }
+
+    private func pressureFamilyChip(_ model: String, _ report: JSONObject?) -> some View {
+        Text(L10n.t(report == nil ? "未预测" : familyLabel(report?["dominant_burnable_pressure_family"])))
+            .lineLimit(2).fixedSize(horizontal: false, vertical: true).workChip()
+            .help(L10n.t(report == nil
+                         ? "尚未运行预测；完成一次预测后显示主导可烧压力族。"
+                         : "主导可烧压力族（来自本次预测结果）"))
+    }
+
+    @ViewBuilder
+    private func cloudGenusChip(_ report: JSONObject?) -> some View {
+        if let text = cloudGenusBrief(report?["cloud_genus_proxy"] as? JSONObject) {
+            Text(text)
+                .lineLimit(1).fixedSize(horizontal: false, vertical: true).workChip()
+                .help(L10n.text("依据压力层、相态与云层几何的模型云属代理，不代表卫星或人工云属观测。",
+                                "Model-based cloud genus proxy from pressure, phase, and layer geometry; not a satellite or human observation."))
+        }
+    }
+}
+
+private func cloudGenusBrief(_ proxy: JSONObject?) -> String? {
+    guard let proxy else { return nil }
+    let label = proxy["label"] as? String ?? "unknown"
+    let pct: String = {
+        guard let conf = proxy["confidence"] as? NSNumber, conf.doubleValue.isFinite else { return "" }
+        return " \(Int((conf.doubleValue * 100).rounded()))%"
+    }()
+    if label != "unknown", !label.isEmpty {
+        return "\(genusLabel(label))（代理\(pct)）"
+    }
+    if let compatible = proxy["compatible_genera"] as? [String], let first = compatible.first, !first.isEmpty {
+        return "\(genusLabel(first))等（代理）"
+    }
+    return nil
 }
 
 private let metricSpec: [(String, String, String)] = [
@@ -549,111 +1381,225 @@ private let metricSpec: [(String, String, String)] = [
 
 struct WorkResultsView: View {
     @EnvironmentObject private var store: Store
+    @Environment(\.colorScheme) private var scheme
     private var comparison: ForecastComparison { store.pointComparison }
     private var report: JSONObject? { comparison.report(store.selectedModel) }
     private let groups = [("云况与色彩", 0..<4), ("大气光学", 4..<7), ("时效与可靠性", 7..<10)]
     var body: some View {
-        VStack(spacing: 12) {
-            WorkAnalysisTabs()
-            if store.resultTab != "概览" {
-                HStack {
-                    WorkSegments(options: ForecastComparison.models, titles: ["GFS", "EC"], selection: $store.selectedModel)
-                        .frame(width: 150)
-                    Spacer()
-                    Text(comparison.status(store.selectedModel)).font(.system(size: 10)).foregroundStyle(.secondary)
+        if comparison.result == nil {
+            firstRunEmptyCanvas
+        } else {
+            VStack(spacing: 12) {
+                HStack(alignment: .center, spacing: 12) {
+                    WorkAnalysisTabs()
+                    Spacer(minLength: 8)
+                    if store.resultTab != "概览" {
+                        HStack(spacing: 8) {
+                            Text(L10n.status(comparison.status(store.selectedModel)))
+                                .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
+                            WorkSegments(options: ForecastComparison.models, titles: ["GFS", "EC"], selection: $store.selectedModel)
+                                .frame(width: 132)
+                        }
+                    }
                 }
-            }
-            ScrollView {
-                VStack(spacing: 12) {
-                    if store.resultTab == "概览" {
-                        ForEach(groups, id: \.0) { title, range in
-                            VStack(alignment: .leading, spacing: 7) {
-                                Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
-                                HStack(alignment: .top, spacing: 10) {
-                                    ForEach(Array(metricSpec[range]), id: \.0) { spec in
-                                        VStack(alignment: .leading, spacing: 7) {
-                                            Text(spec.1).font(.system(size: 12)).foregroundStyle(.primary.opacity(0.8))
-                                            if spec.0 == "aod" {
-                                                WorkAODValue(summary: comparison.aod)
-                                            } else if spec.0 == "cloud_layer" {
-                                                VStack(alignment: .leading, spacing: 4) {
-                                                    ForEach(ForecastComparison.models, id: \.self) { model in
-                                                        HStack(spacing: 5) {
-                                                            Text(model.uppercased()).font(.system(size: 9, weight: .medium))
-                                                                .foregroundStyle(modelColor(model)).frame(width: 25, alignment: .leading)
-                                                            Text(metricValue(spec.0, comparison.report(model)))
-                                                                .font(.system(size: 14, weight: .semibold)).monospacedDigit()
-                                                                .lineLimit(1).minimumScaleFactor(0.65)
+                ScrollView {
+                    VStack(spacing: 12) {
+                        if store.resultTab == "概览" {
+                            ForEach(groups, id: \.0) { title, range in
+                                VStack(alignment: .leading, spacing: 7) {
+                                    Text(L10n.t(title))
+                                        .fireSkyFont(size: 11, weight: .medium, relativeTo: .caption)
+                                        .foregroundStyle(.secondary)
+                                    // 自适应列数：宽屏多列，窄窗口自动降列，不靠继续缩小字号。
+                                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 165), spacing: 10)],
+                                              alignment: .leading, spacing: 10) {
+                                        ForEach(Array(metricSpec[range]), id: \.0) { spec in
+                                            VStack(alignment: .leading, spacing: 7) {
+                                                Text(L10n.t(spec.1)).fireSkyFont(size: 12)
+                                                    .foregroundStyle(.primary.opacity(0.8))
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                                if spec.0 == "aod" {
+                                                    WorkAODValue(summary: comparison.aod)
+                                                } else if spec.0 == "cloud_layer" {
+                                                    VStack(alignment: .leading, spacing: 4) {
+                                                        ForEach(ForecastComparison.models, id: \.self) { model in
+                                                            let modelReport = comparison.report(model)
+                                                            let genus = cloudGenusBrief(modelReport?["cloud_genus_proxy"] as? JSONObject)
+                                                            VStack(alignment: .leading, spacing: 1) {
+                                                                HStack(spacing: 5) {
+                                                                    Text(model.uppercased())
+                                                                        .fireSkyFont(size: 10, weight: .medium, relativeTo: .caption)
+                                                                        .foregroundStyle(modelColor(model)).frame(width: 25, alignment: .leading)
+                                                                    Text(metricValue(spec.0, modelReport))
+                                                                        .fireSkyFont(size: 14, weight: .semibold).monospacedDigit()
+                                                                        .lineLimit(1).minimumScaleFactor(0.65)
+                                                                }
+                                                                if let genus {
+                                                                    Text(genus)
+                                                                        .fireSkyFont(size: 10, relativeTo: .caption)
+                                                                        .foregroundStyle(.secondary)
+                                                                        .padding(.leading, 30)
+                                                                        .lineLimit(1)
+                                                                }
+                                                            }
+                                                        }
+                                                    }.frame(maxWidth: .infinity, alignment: .leading)
+                                                } else {
+                                                    HStack(spacing: 10) {
+                                                        ForEach(ForecastComparison.models, id: \.self) { model in
+                                                            VStack(alignment: .leading, spacing: 3) {
+                                                                Text(model.uppercased())
+                                                                    .fireSkyFont(size: 10, weight: .medium, relativeTo: .caption)
+                                                                    .foregroundStyle(modelColor(model))
+                                                                Text(metricValue(spec.0, comparison.report(model)))
+                                                                    .fireSkyFont(size: 19, weight: .semibold, relativeTo: .title3).monospacedDigit()
+                                                                    .foregroundStyle(comparison.report(model) == nil ? Color.secondary : Color.primary)
+                                                                    .lineLimit(1).minimumScaleFactor(0.8)
+                                                            }.frame(maxWidth: .infinity, alignment: .leading)
                                                         }
                                                     }
-                                                }.frame(maxWidth: .infinity, alignment: .leading)
-                                            } else {
-                                                HStack(spacing: 10) {
-                                                    ForEach(ForecastComparison.models, id: \.self) { model in
-                                                        VStack(alignment: .leading, spacing: 3) {
-                                                            Text(model.uppercased()).font(.system(size: 9, weight: .medium))
-                                                                .foregroundStyle(modelColor(model))
-                                                            Text(metricValue(spec.0, comparison.report(model)))
-                                                                .font(.system(size: 19, weight: .semibold)).monospacedDigit()
-                                                                .foregroundStyle(comparison.report(model) == nil ? Color.secondary : Color.primary)
-                                                                .lineLimit(1).minimumScaleFactor(0.8)
-                                                        }.frame(maxWidth: .infinity, alignment: .leading)
-                                                    }
                                                 }
-                                            }
-                                            Text(spec.0 == "aod" ? comparison.aod.caption : spec.2)
-                                                .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(2)
-                                        }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                                            .frame(height: 112).workSurface()
+                                                Text(L10n.t(spec.0 == "aod" ? comparison.aod.caption : spec.2))
+                                                    .fireSkyFont(size: 10, relativeTo: .caption)
+                                                    .foregroundStyle(.secondary)
+                                                    .fixedSize(horizontal: false, vertical: true)
+                                            }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                                                .frame(minHeight: 116, alignment: .topLeading).workSurface()
+                                        }
                                     }
                                 }
                             }
+                            WorkQualityBreakdownView(comparison: comparison)
+                            WorkComparisonCurveView(comparison: comparison, timezone: store.timezone)
+                        } else if let message = comparison.error(store.selectedModel) {
+                            Text(L10n.tf("%@ 未完成：%@", store.selectedModel.uppercased(), message))
+                                .fireSkyFont(size: 12).foregroundStyle(.red)
+                                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                                .padding(18).frame(maxWidth: .infinity, alignment: .leading).workSurface()
+                        } else if report == nil, comparison.result != nil {
+                            Text(L10n.tf("%@ 暂无结果", store.selectedModel.uppercased()))
+                                .fireSkyFont(size: 12)
+                                .foregroundStyle(.secondary).padding(30)
+                        } else if store.resultTab == "逐时台账" {
+                            WorkLedgerView(report: report,
+                                           bestTime: report?["best_time_local"] as? String,
+                                           selectedTime: $store.pointSelectedTime)
+                        } else {
+                            WorkDiagnosticView(report: report, profile: store.resultTab == "大气剖面")
                         }
-                        WorkQualityBreakdownView(comparison: comparison)
-                        WorkComparisonCurveView(comparison: comparison, timezone: store.timezone)
-                    } else if let message = comparison.error(store.selectedModel) {
-                        Text("\(store.selectedModel.uppercased()) 未完成：\(message)")
-                            .font(.system(size: 12)).foregroundStyle(.red).textSelection(.enabled)
-                            .padding(18).frame(maxWidth: .infinity, alignment: .leading).workSurface()
-                    } else if report == nil, comparison.result != nil {
-                        Text("\(store.selectedModel.uppercased()) 暂无结果")
-                            .foregroundStyle(.secondary).padding(30)
-                    } else if store.resultTab == "逐时台账" {
-                        WorkLedgerView(report: report,
-                                       bestTime: report?["best_time_local"] as? String,
-                                       selectedTime: $store.pointSelectedTime)
-                    } else {
-                        WorkDiagnosticView(report: report, profile: store.resultTab == "大气剖面")
-                    }
-                }.padding(.trailing, 2)
-            }.defaultScrollAnchor(.top).scrollIndicators(.hidden)
+                    }.padding(.trailing, 2)
+                }.defaultScrollAnchor(.top).scrollIndicators(.hidden)
+            }
+        }
+    }
+
+    /// 首次无结果空态：隐藏十余张空「—」占位卡，聚焦行动路径与将展示的专业能力。
+    private var firstRunEmptyCanvas: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 14) {
+                FireSkyMarkScene(size: 52)
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(L10n.text("准备就绪，开始首次朝晚霞预测", "Ready for your first twilight forecast"))
+                        .fireSkyFont(size: 15, weight: .semibold, relativeTo: .title3)
+                    Text(L10n.text("预测完成后，这里会依次展示双模式行动结论、GFS 与 EC 独立指数、大气垂直剖面和逐时台账。",
+                                   "Once complete, you will see the action summary, independent GFS/EC scores, atmospheric cross-section, and hourly ledger here."))
+                        .fireSkyFont(size: 12).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+            }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), spacing: 10)], spacing: 10) {
+                emptyPreviewItem(
+                    symbol: "chart.bar.xaxis",
+                    title: L10n.text("双模式独立对比", "Independent GFS & EC"),
+                    detail: L10n.text("GFS 0.25° 与 EC 公开数据各自评分（0–2.5），不平均、不互相填补。",
+                                      "GFS 0.25° and EC Open Data scored independently on 0–2.5 without blending.")
+                )
+                emptyPreviewItem(
+                    symbol: "cloud.sun",
+                    title: L10n.text("太阳方向大气剖面", "Solar Atmospheric Profile"),
+                    detail: L10n.text("沿太阳光路查看高中低云层、地形遮挡与理论受光高度。",
+                                      "Inspect cloud layers, terrain masking, and illuminated altitudes along the solar path.")
+                )
+                emptyPreviewItem(
+                    symbol: "clock.badge.checkmark",
+                    title: L10n.text("最佳时刻与窗口", "Best Time & Window"),
+                    detail: L10n.text("给出推荐到达时段、主要限制因素，并支持设置提醒或导出摘要。",
+                                      "Recommended viewing window, limiting factors, reminders, and text summary export.")
+                )
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .workSurface()
+    }
+
+    private func emptyPreviewItem(symbol: String, title: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 7) {
+                Image(systemName: symbol)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(warm)
+                Text(title).fireSkyFont(size: 12, weight: .semibold)
+            }
+            Text(detail)
+                .fireSkyFont(size: 11, relativeTo: .caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, minHeight: 84, alignment: .topLeading)
+        .background(Color.primary.opacity(scheme == .dark ? 0.04 : 0.03),
+                    in: RoundedRectangle(cornerRadius: 10))
+        .overlay {
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Color.secondary.opacity(0.14), lineWidth: 1)
         }
     }
 }
 
 private struct WorkAnalysisTabs: View {
     @EnvironmentObject private var store: Store
+    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var tabIndicator
     var body: some View {
-        HStack(spacing: 20) {
-            Spacer(minLength: 0)
+        HStack(spacing: 4) {
             ForEach(["概览", "大气剖面", "诊断与时间窗", "逐时台账"], id: \.self) { tab in
+                let selected = store.resultTab == tab
                 Button {
                     withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { store.resultTab = tab }
                 } label: {
-                    Text(tab).font(.system(size: 13, weight: store.resultTab == tab ? .semibold : .regular))
-                        .foregroundStyle(store.resultTab == tab ? warm : Color.secondary)
-                        .padding(.horizontal, 4).frame(height: 44)
-                        .overlay(alignment: .bottom) {
-                            if store.resultTab == tab {
-                                Rectangle().fill(warm).frame(height: 3)
-                                    .matchedGeometryEffect(id: "active-tab", in: tabIndicator)
+                    Text(L10n.t(tab))
+                        .fireSkyFont(size: 12, weight: selected ? .semibold : .regular)
+                        .foregroundStyle(selected ? Color.primary : Color.secondary)
+                        .padding(.horizontal, 13).padding(.vertical, 7)
+                        .background {
+                            if selected {
+                                Capsule()
+                                    .fill(scheme == .dark ? Color.white.opacity(0.11) : Color.white.opacity(0.95))
+                                    .matchedGeometryEffect(id: "active-tab-pill", in: tabIndicator)
                             }
                         }
-                }.buttonStyle(.plain).accessibilityAddTraits(store.resultTab == tab ? .isSelected : [])
+                        .overlay(alignment: .bottom) {
+                            if selected {
+                                Capsule().fill(warm).frame(width: 20, height: 2.5)
+                                    .offset(y: -2)
+                                    .matchedGeometryEffect(id: "active-tab-line", in: tabIndicator)
+                            }
+                        }
+                        .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(selected ? .isSelected : [])
             }
-            Spacer(minLength: 0)
+        }
+        .padding(3)
+        .background(
+            Capsule().fill(scheme == .dark ? Color(0x16, 0x1E, 0x2E) : Color(0xEA, 0xF0, 0xF6))
+        )
+        .overlay {
+            Capsule().strokeBorder(FSDesign.surfaceBorder(role: .grouped, dark: scheme == .dark, emphasized: false), lineWidth: 1)
         }
     }
 }
@@ -662,7 +1608,7 @@ private struct WorkAODValue: View {
     let summary: AODSummary
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(summary.source).font(.system(size: 9, weight: .medium)).foregroundStyle(teal)
+            Text(summary.source).font(.system(size: 9, weight: .medium)).foregroundStyle(coolAccent)
             Text(summary.value).font(.system(size: 19, weight: .semibold)).monospacedDigit()
                 .foregroundStyle(summary.available ? Color.primary : Color.secondary)
                 .lineLimit(1).minimumScaleFactor(0.8)
@@ -678,9 +1624,9 @@ private struct WorkQualityBreakdownView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .firstTextBaseline) {
-                Text("评分组成").font(.system(size: 13, weight: .semibold))
-                Text("只读展示后端计算值 · 不在客户端重算")
-                    .font(.system(size: 9)).foregroundStyle(.secondary)
+                Text(L10n.t("评分组成")).fireSkyFont(size: 13, weight: .semibold)
+                Text(L10n.t("只读展示后端计算值 · 不在客户端重算"))
+                    .fireSkyFont(size: 9, relativeTo: .caption).foregroundStyle(.secondary)
                 Spacer()
             }
             ForEach(ForecastComparison.models, id: \.self) { model in
@@ -690,8 +1636,8 @@ private struct WorkQualityBreakdownView: View {
                     Text("\(model.uppercased()) 未完成：\(message)")
                         .font(.system(size: 10)).foregroundStyle(.red).lineLimit(2)
                 } else {
-                    Text("\(model.uppercased()) 暂无结果")
-                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text(L10n.tf("%@ 暂无结果", model.uppercased()))
+                        .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
                 }
             }
         }.padding(16).frame(maxWidth: .infinity, alignment: .leading).workSurface()
@@ -839,7 +1785,7 @@ struct WorkComparisonCurveView: View {
                 Spacer()
                 HStack(spacing: 10) {
                     lineSwatch("GFS", warm, dashed: false)
-                    lineSwatch("EC", teal, dashed: true)
+                    lineSwatch("EC", coolAccent, dashed: true)
                 }.font(.system(size: 10)).foregroundStyle(.secondary)
             }
             summaryChips(points: points, peak: peak)
@@ -939,7 +1885,7 @@ struct WorkComparisonCurveView: View {
                             .font(.system(size: 9, weight: .medium))
                         Text("质量 \(String(format: "%.3f", hovered.quality))")
                             .font(.system(size: 9)).monospacedDigit()
-                    }.padding(4).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 4))
+                    }.padding(4).fireSkySurface(role: .overlay, cornerRadius: 4)
                         .accessibilityHidden(true)
                 }
         }
@@ -1021,6 +1967,7 @@ struct WorkComparisonCurveView: View {
                         .lineStyle(StrokeStyle(lineWidth: 1.8, dash: point.model == "ec" ? [4, 3] : []))
                 }
             }
+            .accessibilityLabel("覆盖率、照明与透过率趋势，共 \(ratios.count) 个采样点；EC 为虚线。")
             .chartYScale(domain: 0...1)
             .chartYAxis {
                 AxisMarks(position: .trailing, values: [0, 0.5, 1]) { value in
@@ -1276,6 +2223,7 @@ struct WorkCurveView: View {
                         .lineStyle(StrokeStyle(lineWidth: 1.8))
                 }
             }
+            .accessibilityLabel("卫星实况比率趋势，共 \(ratios.count) 个采样点；缺测序列不会补零。")
             .chartYScale(domain: 0...1)
             .chartYAxis {
                 AxisMarks(position: .leading, values: [0, 0.5, 1]) { value in
@@ -1367,48 +2315,85 @@ struct WorkCurveView: View {
     }
 }
 
+private final class LedgerFilterState: ObservableObject {
+    @Published var showInvalid = false
+}
+
 struct WorkLedgerView: View {
     @EnvironmentObject private var store: Store
+    @StateObject private var filter = LedgerFilterState()
     let report: JSONObject?
     let bestTime: String?
     @Binding var selectedTime: String?
+    private var allSteps: [JSONObject] { report?["steps"] as? [JSONObject] ?? [] }
+    private var visibleSteps: [JSONObject] {
+        filter.showInvalid ? allSteps : allSteps.filter { $0["valid"] as? Bool != false }
+    }
+    private var hiddenInvalidCount: Int {
+        allSteps.filter { $0["valid"] as? Bool == false }.count
+    }
     var body: some View {
-        ScrollView(.horizontal, showsIndicators: false) {
-            VStack(spacing: 0) {
-                header
-                Divider()
-                ForEach(Array((report?["steps"] as? [JSONObject] ?? []).enumerated()), id: \.offset) { _, item in
-                    row(item)
-                    Divider().opacity(0.5)
+        VStack(spacing: 0) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                VStack(spacing: 0) {
+                    header
+                    Divider()
+                    ForEach(Array(visibleSteps.enumerated()), id: \.offset) { _, item in
+                        row(item)
+                        Divider().opacity(0.5)
+                    }
+                    if report == nil {
+                        Text(L10n.t("等待预测")).foregroundStyle(.secondary).padding(40)
+                    } else if visibleSteps.isEmpty {
+                        Text(L10n.text("当前时段内没有有效判断时次。", "No valid evaluated time steps in this window."))
+                            .font(.callout).foregroundStyle(.secondary).padding(28)
+                    }
                 }
-                if report == nil { Text("等待预测").foregroundStyle(.secondary).padding(40) }
-                Text("云底–云顶为海拔 ASL 口径，「云层 AGL」为离地口径；— 表示缺测，无效时次不展示数值；点击行仅切换本地选中时刻，不驱动地图。")
-                    .font(.system(size: 9)).foregroundStyle(.secondary)
-                    .padding(.horizontal, 14).padding(.vertical, 8)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(minWidth: 1284, alignment: .leading)
             }
-            .frame(minWidth: 1284, alignment: .leading)
+            Divider().opacity(0.45)
+            HStack(spacing: 10) {
+                Text("云底–云顶为海拔 ASL 口径，「云层 AGL」为离地口径；— 表示缺测，默认仅展示有效判断时次；点击行仅切换本地选中时刻，不驱动地图。")
+                    .font(.system(size: 9)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 8)
+                if hiddenInvalidCount > 0 {
+                    Button {
+                        filter.showInvalid.toggle()
+                    } label: {
+                        Label(
+                            filter.showInvalid
+                                ? L10n.text("隐藏 \(hiddenInvalidCount) 个未判断时次", "Hide \(hiddenInvalidCount) unevaluated")
+                                : L10n.text("显示 \(hiddenInvalidCount) 个未判断时次", "Show \(hiddenInvalidCount) unevaluated"),
+                            systemImage: filter.showInvalid ? "eye.slash" : "eye"
+                        )
+                        .font(.system(size: 10, weight: .medium))
+                    }
+                    .buttonStyle(.borderless)
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
         }
         .workSurface()
     }
 
     private var header: some View {
         HStack(spacing: 0) {
-            Text("时间").frame(width: 88, alignment: .leading)
-            Text("质量").frame(width: 68, alignment: .leading)
-            Text("档位").frame(width: 92, alignment: .leading)
-            Text("可烧").frame(width: 52, alignment: .leading)
-            Text("可烧云量").frame(width: 84, alignment: .leading)
-            Text("主导压力族").frame(width: 96, alignment: .leading)
-            Text("云底–云顶 ASL").frame(width: 120, alignment: .leading)
-            Text("云层 AGL").frame(width: 112, alignment: .leading)
-            Text("亮度颜色").frame(width: 68, alignment: .leading)
-            Text("可烧比例").frame(width: 68, alignment: .leading)
-            Text("回程透过率").frame(width: 76, alignment: .leading)
-            Text("入射阻挡").frame(width: 72, alignment: .leading)
+            Text(L10n.t("时间")).frame(width: 88, alignment: .leading)
+            Text(L10n.t("质量")).frame(width: 68, alignment: .leading)
+            Text(L10n.t("档位")).frame(width: 92, alignment: .leading)
+            Text(L10n.t("可烧")).frame(width: 52, alignment: .leading)
+            Text(L10n.t("可烧云量")).frame(width: 84, alignment: .leading)
+            Text(L10n.t("主导压力族")).frame(width: 96, alignment: .leading)
+            Text(L10n.t("云底–云顶 ASL")).frame(width: 120, alignment: .leading)
+            Text(L10n.t("云层 AGL")).frame(width: 112, alignment: .leading)
+            Text(L10n.t("亮度颜色")).frame(width: 68, alignment: .leading)
+            Text(L10n.t("可烧比例")).frame(width: 68, alignment: .leading)
+            Text(L10n.t("回程透过率")).frame(width: 76, alignment: .leading)
+            Text(L10n.t("入射阻挡")).frame(width: 72, alignment: .leading)
             Text("AOD 550").frame(width: 72, alignment: .leading)
-            Text("太阳仰角").frame(width: 78, alignment: .leading)
-            Text("场景").frame(width: 138, alignment: .leading)
+            Text(L10n.t("太阳仰角")).frame(width: 78, alignment: .leading)
+            Text(L10n.t("场景")).frame(width: 138, alignment: .leading)
         }
         .font(.system(size: 10, weight: .semibold))
         .foregroundStyle(.secondary)
@@ -1446,7 +2431,7 @@ struct WorkLedgerView: View {
                     .frame(width: 92, alignment: .leading)
                 Image(systemName: !valid || burnable == nil ? "minus"
                       : burnable == true ? "checkmark" : "xmark")
-                    .foregroundStyle(!valid || burnable == nil ? Color.secondary : burnable == true ? teal : Color.orange)
+                    .foregroundStyle(!valid || burnable == nil ? Color.secondary : burnable == true ? coolAccent : Color.orange)
                     .frame(width: 52, alignment: .leading)
                     .accessibilityLabel(!valid ? "缺测" : burnable == true ? "可烧" : burnable == false ? "不可烧" : "未提供")
                 Text(valid ? percent(item["burnable_cloud_coverage"]) : "—")
@@ -1508,11 +2493,16 @@ struct WorkDiagnosticView: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(profile ? "太阳方向大气剖面" : "诊断与时间窗").font(.system(size: 13, weight: .semibold))
             if let report {
-                Text(summaryText(report))
-                    .textSelection(.enabled)
-                    .fixedSize(horizontal: false, vertical: true)
+                if !profile {
+                    Text(summaryText(report))
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if profile {
-                    WorkCrossSectionView(section: report["cross_section"] as? JSONObject)
+                    WorkCrossSectionView(
+                        section: report["cross_section"] as? JSONObject,
+                        genusProxy: report["cloud_genus_proxy"] as? JSONObject
+                    )
                     if let source = report["profile_source"] as? JSONObject,
                        source["available"] as? Bool == true {
                         let model = source["model_source"] as? String ?? "gfs"
@@ -1620,6 +2610,8 @@ private struct CrossSectionData {
     let fractions: [[Double?]]
     let familyCodes: [[Int]]
     let statuses: [[Int]]
+    let layerBases: [[Double?]]
+    let layerTops: [[Double?]]
     let terrain: [Double]
     let requiredASL: [Double]
     let targets: [JSONObject]
@@ -1648,6 +2640,8 @@ private struct CrossSectionData {
         self.fractions = grid("cloud_fraction_percent")
         self.familyCodes = ints("pressure_family_code")
         self.statuses = ints("cloud_layer_status")
+        self.layerBases = grid("cloud_layer_base_asl_m")
+        self.layerTops = grid("cloud_layer_top_asl_m")
         self.terrain = (section["terrain_elevation_asl_m"] as? [Any])?.compactMap(number) ?? []
         self.requiredASL = (section["required_illumination_base_asl_m"] as? [Any])?.compactMap(number) ?? []
         self.targets = section["theoretical_targets"] as? [JSONObject] ?? []
@@ -1656,26 +2650,20 @@ private struct CrossSectionData {
 
 private struct WorkCrossSectionView: View {
     let section: JSONObject?
+    let genusProxy: JSONObject?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("太阳方向剖面").font(.system(size: 12, weight: .semibold))
-                Spacer()
-                Text(section == nil ? "暂无冻结剖面" : "沿光路高度 · 海拔口径")
-                    .font(.system(size: 9)).foregroundStyle(.secondary)
-            }
             if let section {
-                CrossSectionFigureView(section: section)
+                CrossSectionFigureView(section: section, genusProxy: genusProxy)
             } else {
                 Text("此结果没有可查询的冻结模式剖面。")
                     .font(.system(size: 10)).foregroundStyle(.secondary)
             }
         }
-        .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .workSurface()
-        .accessibilityLabel("太阳方向大气剖面：温度层线、相对湿度与云量色块、地形填充、云层状态描边和理论照明基准，高度轴为海拔 0 到 18 公里")
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("太阳方向大气剖面")
     }
 }
 
@@ -1684,26 +2672,63 @@ private struct WorkCrossSectionView: View {
 /// 理论照明基准与理论目标云底/云顶；缺测层不绘制、不解释成晴空。
 struct CrossSectionFigureView: View {
     let section: JSONObject
+    let genusProxy: JSONObject?
     @Environment(\.colorScheme) private var scheme
+    @State private var zoomScale = 1.0
+
+    init(section: JSONObject, genusProxy: JSONObject? = nil) {
+        self.section = section
+        self.genusProxy = genusProxy
+    }
+
+    private let plotAspectRatio: CGFloat = 2.45
 
     private var data: CrossSectionData? { CrossSectionData(section: section) }
 
+    private var canvasAccessibilityLabel: String {
+        guard let data else { return "大气剖面图不可用" }
+        let low = Int(data.terrain.min() ?? 0)
+        let high = Int(data.terrain.max() ?? 0)
+        return "大气剖面图，\(data.distances.count) 个距离采样点，\(data.levels.count) 个气压层，地形高度 \(low) 至 \(high) 米，\(data.targets.count) 个目标云层标记"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 12) {
-                diagnosticChip("太阳高度", section["solar_elevation_deg"], suffix: "°")
-                diagnosticChip("太阳方位", section["solar_azimuth_deg"], suffix: "°")
-                diagnosticChip("剖面范围", section["analysis_radius_km"], suffix: " km")
-                diagnosticChip("相对时刻", offsetLabel(section["offset_minutes"]))
-                diagnosticChip("有效时次", timeLabel(section["valid_time_local"] as? String))
-                diagnosticChip("采样", section["spatial_sampling"])
-            }
             if let data {
-                Canvas { context, size in
-                    draw(context: context, size: size, data: data)
+                plotControls
+                GeometryReader { geometry in
+                    let plotWidth = geometry.size.width * CGFloat(zoomScale)
+                    ScrollView(.horizontal) {
+                        Canvas { context, size in
+                            draw(context: context, size: size, data: data, scale: zoomScale)
+                        }
+                        .frame(width: plotWidth, height: geometry.size.height)
+                    }
+                    .frame(height: geometry.size.height)
+                    .scrollIndicators(zoomScale > 1 ? .automatic : .hidden)
                 }
-                .frame(height: 252)
+                .aspectRatio(plotAspectRatio / CGFloat(zoomScale), contentMode: .fit)
+                .accessibilityLabel(canvasAccessibilityLabel)
+                .accessibilityHint("使用放大和缩小按钮查看细节，或选择适配窗口恢复完整剖面。")
+                .accessibilityAdjustableAction { direction in
+                    switch direction {
+                    case .increment: zoomScale = min(2.5, zoomScale + 0.25)
+                    case .decrement: zoomScale = max(1, zoomScale - 0.25)
+                    @unknown default: break
+                    }
+                }
+                .accessibilityValue("\(Int((zoomScale * 100).rounded()))%")
                 legend
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 112), alignment: .leading)],
+                          alignment: .leading, spacing: 8) {
+                    diagnosticChip("太阳高度", section["solar_elevation_deg"], suffix: "°")
+                    diagnosticChip("太阳方位", section["solar_azimuth_deg"], suffix: "°")
+                    diagnosticChip("剖面范围", section["analysis_radius_km"], suffix: " km")
+                    diagnosticChip("相对时刻", offsetLabel(section["offset_minutes"]))
+                    diagnosticChip("有效时次", timeLabel(section["valid_time_local"] as? String))
+                    diagnosticChip("采样", section["spatial_sampling"])
+                }
+                genusSummary
                 targetStrip(data.targets)
             } else {
                 Text("后端未返回可绘制的剖面字段；可在诊断中查看理论目标与照明基准。")
@@ -1713,25 +2738,181 @@ struct CrossSectionFigureView: View {
         }
     }
 
+    private var plotControls: some View {
+        HStack(spacing: 7) {
+            Text("沿光路高度 · 海拔口径")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text("\(Int((zoomScale * 100).rounded()))%")
+                .font(.system(size: 11, weight: .medium).monospacedDigit())
+                .foregroundStyle(.secondary)
+                .frame(width: 38, alignment: .trailing)
+                .accessibilityLabel("剖面缩放")
+                .accessibilityValue("\(Int((zoomScale * 100).rounded()))%")
+            Button {
+                zoomScale = max(1, zoomScale - 0.25)
+            } label: {
+                Image(systemName: "minus.magnifyingglass").frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .help("缩小剖面")
+            .accessibilityLabel("缩小剖面")
+            .disabled(zoomScale <= 1)
+            Button {
+                zoomScale = min(2.5, zoomScale + 0.25)
+            } label: {
+                Image(systemName: "plus.magnifyingglass").frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .help("放大剖面")
+            .accessibilityLabel("放大剖面")
+            .disabled(zoomScale >= 2.5)
+            Button {
+                zoomScale = 1
+            } label: {
+                Image(systemName: "arrow.counterclockwise").frame(width: 24, height: 24)
+            }
+            .buttonStyle(.borderless)
+            .help("适配窗口")
+            .accessibilityLabel("适配窗口")
+            .disabled(zoomScale == 1)
+        }
+    }
+
+    @ViewBuilder
+    private var genusSummary: some View {
+        if let genusProxy {
+            let label = genusProxy["label"] as? String ?? "unknown"
+            let compatible = (genusProxy["compatible_genera"] as? [String] ?? [])
+                .map(genusLabel).joined(separator: "、")
+            let candidates = genusCandidates(genusProxy["candidate_scores"])
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: "cloud").foregroundStyle(coolAccent)
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text("云属候选（代理）").font(.system(size: 10, weight: .semibold))
+                        if label != "unknown" {
+                            Text(genusLabel(label)).font(.system(size: 10, weight: .semibold))
+                        } else {
+                            Text(compatible.isEmpty ? "未定" : "兼容：\(compatible)")
+                                .font(.system(size: 10, weight: .medium))
+                        }
+                        Spacer(minLength: 4)
+                        if let confidence = genusProxy["confidence"] as? NSNumber,
+                           confidence.doubleValue.isFinite {
+                            Text("\(Int((confidence.doubleValue * 100).rounded()))%")
+                                .font(.system(size: 9, weight: .medium).monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    if let candidates {
+                        Text("候选：\(candidates)")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Text("依据压力层、相态与云层几何的模型代理，不代表卫星或人工云属观测。")
+                        .font(.system(size: 9))
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.horizontal, 9)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.055), in: RoundedRectangle(cornerRadius: 6))
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private func genusCandidates(_ scores: Any?) -> String? {
+        guard let scores = scores as? JSONObject else { return nil }
+        let ranked = scores.sorted {
+            (($0.value as? NSNumber)?.doubleValue ?? -1) > (($1.value as? NSNumber)?.doubleValue ?? -1)
+        }
+        let labels = ranked.prefix(3).compactMap { key, value -> String? in
+            guard let score = value as? NSNumber, score.doubleValue.isFinite else { return nil }
+            return "\(genusLabel(key)) \(Int((score.doubleValue * 100).rounded()))%"
+        }
+        return labels.isEmpty ? nil : labels.joined(separator: " · ")
+    }
+
     // MARK: drawing
 
-    private func draw(context: GraphicsContext, size: CGSize, data: CrossSectionData) {
-        let left = 40.0, right = size.width - 12, top = 10.0, bottom = size.height - 24
-        guard right > left + 20, bottom > top + 20 else { return }
-        let maxDistance = max(1, data.distances.last ?? 1)
+    private func draw(context: GraphicsContext, size: CGSize, data: CrossSectionData, scale: Double) {
+        let top = 10.0, bottom = size.height - 24
+        guard bottom > top + 20 else { return }
         let maxHeight = 18_000.0
+        let labelSize = CGFloat(min(14, max(10, 10 * scale)))
+        let strokeScale = CGFloat(scale)
+        let targetAltitudeStep = maxHeight * 34 / Double(bottom - top)
+        let altitudeStep = [1000.0, 1500, 2000, 3000, 5000, 7500, 10_000]
+            .first(where: { $0 >= targetAltitudeStep }) ?? maxHeight
+        let altitudes = Array(stride(from: 0.0, through: maxHeight, by: altitudeStep))
+        func altitudeLabel(_ altitude: Double) -> Text {
+            let label = altitude.truncatingRemainder(dividingBy: 1000) == 0
+                ? "\(Int(altitude / 1000))km" : String(format: "%.1fkm", altitude / 1000)
+            return Text(label).font(.system(size: labelSize)).foregroundStyle(.secondary)
+        }
+        // Fractional altitude ticks widen at higher zoom levels.
+        let labelWidth = altitudes.map {
+            context.resolve(altitudeLabel($0)).measure(in: size).width
+        }.max() ?? 0
+        let left = max(40, ceil(labelWidth) + 8), right = size.width - 12
+        guard right > left + 20 else { return }
+        let maxDistance = max(1, data.distances.last ?? 1)
         let x = { (distance: Double) in left + distance / maxDistance * (right - left) }
         let y = { (height: Double) in top + (1 - min(max(height, 0), maxHeight) / maxHeight) * (bottom - top) }
 
-        // height grid + labels (0 / 3 / 6 / ... / 18 km ASL)
-        for altitude in stride(from: 0.0, through: maxHeight, by: 3000.0) {
+        // Atmospheric sky gradient backdrop inside the plot frame
+        let plotRect = CGRect(x: left, y: top, width: right - left, height: bottom - top)
+        let plotPath = Path(roundedRect: plotRect, cornerRadius: 8 * strokeScale)
+        let skyGradient = Gradient(colors: scheme == .dark
+            ? [Color(red: 0.09, green: 0.13, blue: 0.22).opacity(0.75),
+               Color(red: 0.14, green: 0.19, blue: 0.28).opacity(0.45),
+               Color(red: 0.28, green: 0.20, blue: 0.19).opacity(0.32)]
+            : [Color(red: 0.85, green: 0.91, blue: 0.97).opacity(0.72),
+               Color(red: 0.94, green: 0.95, blue: 0.98).opacity(0.52),
+               Color(red: 0.99, green: 0.93, blue: 0.87).opacity(0.55)])
+        context.fill(
+            plotPath,
+            with: .linearGradient(skyGradient,
+                                  startPoint: CGPoint(x: left, y: top),
+                                  endPoint: CGPoint(x: left, y: bottom))
+        )
+        context.stroke(plotPath, with: .color(Color.secondary.opacity(scheme == .dark ? 0.28 : 0.22)),
+                       lineWidth: 0.9 * strokeScale)
+
+        // Subtle golden-amber solar illumination corridor above requiredASL
+        if data.requiredASL.count == data.distances.count {
+            var sunlit = Path()
+            sunlit.move(to: CGPoint(x: left, y: top))
+            sunlit.addLine(to: CGPoint(x: right, y: top))
+            for index in data.distances.indices.reversed() {
+                sunlit.addLine(to: CGPoint(x: x(data.distances[index]), y: y(data.requiredASL[index])))
+            }
+            sunlit.closeSubpath()
+            let sunGrad = Gradient(colors: [
+                Color(red: 0.98, green: 0.69, blue: 0.30).opacity(scheme == .dark ? 0.03 : 0.04),
+                Color(red: 0.96, green: 0.57, blue: 0.22).opacity(scheme == .dark ? 0.14 : 0.13),
+            ])
+            context.fill(
+                sunlit,
+                with: .linearGradient(sunGrad,
+                                      startPoint: CGPoint(x: left, y: top),
+                                      endPoint: CGPoint(x: left, y: bottom))
+            )
+        }
+
+        for altitude in altitudes {
             let lineY = y(altitude)
             var grid = Path()
             grid.move(to: CGPoint(x: left, y: lineY))
             grid.addLine(to: CGPoint(x: right, y: lineY))
-            context.stroke(grid, with: .color(Color.secondary.opacity(0.22)), lineWidth: 0.6)
-            context.draw(Text("\(Int(altitude / 1000))km").font(.system(size: 8)).foregroundStyle(.secondary),
-                         at: CGPoint(x: left - 4, y: lineY), anchor: .trailing)
+            context.stroke(grid, with: .color(Color.secondary.opacity(0.18)), lineWidth: 0.6 * strokeScale)
+            context.draw(altitudeLabel(altitude),
+                         at: CGPoint(x: left - 5, y: lineY), anchor: .trailing)
         }
         // distance grid every 4th sample
         for (index, distance) in data.distances.enumerated() where index % 4 == 0 {
@@ -1739,13 +2920,14 @@ struct CrossSectionFigureView: View {
             var grid = Path()
             grid.move(to: CGPoint(x: lineX, y: top))
             grid.addLine(to: CGPoint(x: lineX, y: bottom))
-            context.stroke(grid, with: .color(Color.secondary.opacity(0.15)),
-                           style: StrokeStyle(lineWidth: 0.6, dash: [3, 4]))
-            context.draw(Text("\(Int(distance))km").font(.system(size: 8)).foregroundStyle(.secondary),
-                         at: CGPoint(x: lineX, y: bottom + 10), anchor: .center)
+            context.stroke(grid, with: .color(Color.secondary.opacity(0.14)),
+                           style: StrokeStyle(lineWidth: 0.6 * strokeScale, dash: [3 * strokeScale, 4 * strokeScale]))
+            context.draw(Text("\(Int(distance))km").font(.system(size: labelSize)).foregroundStyle(.secondary),
+                         at: CGPoint(x: lineX, y: bottom + 10),
+                         anchor: distance == maxDistance ? .trailing : .center)
         }
 
-        // terrain fill + line + observer dot
+        // terrain fill (vertical earth-slate gradient) + crisp ridge line + observer badge
         if data.terrain.count == data.distances.count {
             var fill = Path()
             fill.move(to: CGPoint(x: x(data.distances[0]), y: y(data.terrain[0])))
@@ -1755,45 +2937,110 @@ struct CrossSectionFigureView: View {
             fill.addLine(to: CGPoint(x: right, y: bottom))
             fill.addLine(to: CGPoint(x: left, y: bottom))
             fill.closeSubpath()
-            context.fill(fill, with: .color(Color(red: 0.41, green: 0.45, blue: 0.44).opacity(0.18)))
+            let terrainMinY = data.terrain.map { y($0) }.min() ?? bottom
+            let terrainGrad = Gradient(colors: scheme == .dark
+                ? [Color(red: 0.36, green: 0.42, blue: 0.44).opacity(0.62),
+                   Color(red: 0.20, green: 0.24, blue: 0.28).opacity(0.85)]
+                : [Color(red: 0.46, green: 0.51, blue: 0.49).opacity(0.38),
+                   Color(red: 0.32, green: 0.37, blue: 0.36).opacity(0.58)])
+            context.fill(
+                fill,
+                with: .linearGradient(terrainGrad,
+                                      startPoint: CGPoint(x: left, y: terrainMinY),
+                                      endPoint: CGPoint(x: left, y: bottom))
+            )
             var line = Path()
             line.move(to: CGPoint(x: x(data.distances[0]), y: y(data.terrain[0])))
             for index in data.distances.indices.dropFirst() {
                 line.addLine(to: CGPoint(x: x(data.distances[index]), y: y(data.terrain[index])))
             }
-            context.stroke(line, with: .color(Color(red: 0.41, green: 0.45, blue: 0.44)), lineWidth: 1.6)
+            context.stroke(line, with: .color(Color(red: 0.41, green: 0.46, blue: 0.45)),
+                           lineWidth: 1.8 * strokeScale)
             let observer = CGPoint(x: x(data.distances[0]), y: y(data.terrain[0]))
-            let dot = CGRect(x: observer.x - 5, y: observer.y - 5, width: 10, height: 10)
+            let haloSize = 15 * strokeScale
+            let halo = CGRect(x: observer.x - haloSize / 2, y: observer.y - haloSize / 2,
+                              width: haloSize, height: haloSize)
+            context.fill(Path(ellipseIn: halo), with: .color(Color(red: 0.95, green: 0.49, blue: 0.26).opacity(0.24)))
+            let dotSize = 9 * strokeScale
+            let dot = CGRect(x: observer.x - dotSize / 2, y: observer.y - dotSize / 2,
+                             width: dotSize, height: dotSize)
             context.fill(Path(ellipseIn: dot), with: .color(Color(red: 0.95, green: 0.49, blue: 0.26)))
-            context.draw(Text("观测点").font(.system(size: 8)).foregroundStyle(.secondary),
-                         at: CGPoint(x: observer.x + 10, y: observer.y - 8), anchor: .leading)
+            context.stroke(Path(ellipseIn: dot), with: .color(.white.opacity(0.9)), lineWidth: 1.4 * strokeScale)
+            context.draw(Text("观测点").font(.system(size: labelSize, weight: .semibold)).foregroundStyle(.primary),
+                         at: CGPoint(x: observer.x + dotSize * 1.1, y: observer.y - 9 * strokeScale), anchor: .leading)
         }
 
-        // RH / cloud amount cells with cloud-layer status strokes
+        // Use the model's cloud base/top envelope for each pressure family with rounded strata shading.
         let sampleCount = Swift.max(1, data.distances.count - 1)
         let columnSpan = (right - left) / Double(sampleCount)
-        let cellWidth = Swift.max(6.0, columnSpan * 0.72)
+        let cellWidth = Swift.max(6.0, columnSpan * 0.92)
+        func scalar(_ grid: [[Double?]], _ sample: Int, _ level: Int) -> Double? {
+            guard grid.indices.contains(sample), grid[sample].indices.contains(level) else { return nil }
+            return grid[sample][level]
+        }
+        func integer(_ grid: [[Int]], _ sample: Int, _ level: Int) -> Int? {
+            guard grid.indices.contains(sample), grid[sample].indices.contains(level) else { return nil }
+            return grid[sample][level]
+        }
         for i in data.distances.indices {
-            for l in data.levels.indices {
-                guard let height = data.heights[i][l] else { continue } // 缺测层不绘制，不解释成晴空
-                let center = CGPoint(x: x(data.distances[i]), y: y(height))
-                let topY = y(height + 700)
-                let cellHeight = max(5, y(height - 700) - topY)
-                let rect = CGRect(x: center.x - cellWidth / 2, y: topY,
-                                  width: cellWidth, height: cellHeight)
-                if let fill = cloudCellFill(amount: data.amounts[i][l], presence: data.presence[i][l],
-                                            rh: data.rh[i][l], fraction: data.fractions[i][l],
-                                            family: data.familyCodes[i][l]) {
-                    context.fill(Path(rect), with: .color(fill))
+            for family in 1...3 {
+                let cloudyLevels = data.levels.indices.filter { level in
+                    guard integer(data.familyCodes, i, level) == family else { return false }
+                    let amount = scalar(data.amounts, i, level)
+                        ?? max(scalar(data.presence, i, level) ?? 0,
+                               (scalar(data.fractions, i, level) ?? 0) / 100)
+                    return amount >= 0.06
                 }
-                switch data.statuses[i][l] {
-                case 3:
-                    context.stroke(Path(rect), with: .color(Color(red: 0.94, green: 0.42, blue: 0.21)), lineWidth: 1.8)
-                case 2:
-                    context.stroke(Path(rect), with: .color(Color(red: 0.83, green: 0.55, blue: 0.22)),
-                                   style: StrokeStyle(lineWidth: 1.4, dash: [4, 3]))
-                default:
-                    break
+                guard !cloudyLevels.isEmpty else { continue }
+
+                let bases = cloudyLevels.compactMap { scalar(data.layerBases, i, $0) }
+                let tops = cloudyLevels.compactMap { scalar(data.layerTops, i, $0) }
+                let heights = cloudyLevels.compactMap { scalar(data.heights, i, $0) }
+                let layerBase = bases.min() ?? heights.min().map { $0 - 700 }
+                let layerTop = tops.max() ?? heights.max().map { $0 + 700 }
+                guard let layerBase, let layerTop, layerTop > layerBase else { continue }
+
+                let amounts = cloudyLevels.compactMap {
+                    scalar(data.amounts, i, $0)
+                        ?? max(scalar(data.presence, i, $0) ?? 0,
+                               (scalar(data.fractions, i, $0) ?? 0) / 100)
+                }
+                let presence = cloudyLevels.compactMap { scalar(data.presence, i, $0) }.max()
+                let humidity = cloudyLevels.compactMap { scalar(data.rh, i, $0) }.max()
+                let fraction = cloudyLevels.compactMap { scalar(data.fractions, i, $0) }.max()
+                let status = cloudyLevels.compactMap { integer(data.statuses, i, $0) }.max() ?? 0
+
+                let centerX = x(data.distances[i])
+                let rectLeft = max(left, centerX - cellWidth / 2)
+                let rectRight = min(right, centerX + cellWidth / 2)
+                let terrainY = data.terrain.indices.contains(i) ? y(data.terrain[i]) : bottom
+                let rectTop = max(top, y(layerTop))
+                let rectBottom = min(terrainY, y(layerBase))
+                guard rectRight > rectLeft, rectBottom > rectTop else { continue }
+                let rect = CGRect(x: rectLeft, y: rectTop,
+                                  width: rectRight - rectLeft, height: rectBottom - rectTop)
+                let radius = min(4.5 * strokeScale, min(rect.width, rect.height) * 0.35)
+                let shape = Path(roundedRect: rect, cornerRadius: radius)
+                if let fill = cloudCellFill(amount: amounts.max(), presence: presence,
+                                            rh: humidity, fraction: fraction, family: family) {
+                    let topColor = fill.opacity(0.82)
+                    let bottomColor = status == 3
+                        ? Color(red: 0.97, green: 0.52, blue: 0.28).opacity(0.62)
+                        : fill
+                    context.fill(
+                        shape,
+                        with: .linearGradient(Gradient(colors: [topColor, bottomColor]),
+                                              startPoint: CGPoint(x: rect.midX, y: rect.minY),
+                                              endPoint: CGPoint(x: rect.midX, y: rect.maxY))
+                    )
+                }
+                if status == 3 {
+                    context.stroke(shape, with: .color(Color(red: 0.96, green: 0.43, blue: 0.20)),
+                                   lineWidth: 1.9 * strokeScale)
+                } else if status == 2 {
+                    context.stroke(shape, with: .color(Color(red: 0.85, green: 0.56, blue: 0.22)),
+                                   style: StrokeStyle(lineWidth: 1.4 * strokeScale,
+                                                      dash: [4 * strokeScale, 3 * strokeScale]))
                 }
             }
         }
@@ -1815,10 +3062,11 @@ struct CrossSectionFigureView: View {
             let color = average < -30 ? Color(red: 0.55, green: 0.40, blue: 0.45)
                 : average < 0 ? Color(red: 0.69, green: 0.42, blue: 0.36)
                 : Color(red: 0.78, green: 0.31, blue: 0.22)
-            context.stroke(line, with: .color(color.opacity(0.62)), lineWidth: 1.1)
+            context.stroke(line, with: .color(color.opacity(0.62)), lineWidth: 1.1 * strokeScale)
             if l % 2 == 0, l < data.levels.count, let last = points.last {
-                context.draw(Text("\(data.levels[l])hPa").font(.system(size: 8)).foregroundStyle(.secondary),
-                             at: CGPoint(x: last.x - 5, y: last.y - 6), anchor: .trailing)
+                context.draw(Text("\(data.levels[l])hPa").font(.system(size: labelSize)).foregroundStyle(.secondary),
+                             at: CGPoint(x: last.x - 5 * strokeScale, y: last.y - 6 * strokeScale),
+                             anchor: .trailing)
             }
         }
 
@@ -1830,7 +3078,8 @@ struct CrossSectionFigureView: View {
                 line.addLine(to: CGPoint(x: x(data.distances[index]), y: y(data.requiredASL[index])))
             }
             context.stroke(line, with: .color(Color(red: 0.83, green: 0.55, blue: 0.22)),
-                           style: StrokeStyle(lineWidth: 2.2, dash: [7, 5]))
+                           style: StrokeStyle(lineWidth: 2.2 * strokeScale,
+                                              dash: [7 * strokeScale, 5 * strokeScale]))
         }
 
         // theoretical target cloud base / top markers
@@ -1838,12 +3087,17 @@ struct CrossSectionFigureView: View {
             guard let distance = number(target["distance_km"]),
                   let base = number(target["cloud_base_asl_m"]) else { continue }
             let basePoint = CGPoint(x: x(distance), y: y(base))
-            context.fill(Path(ellipseIn: CGRect(x: basePoint.x - 4, y: basePoint.y - 4, width: 8, height: 8)),
+            let markerSize = 8 * strokeScale
+            context.fill(Path(ellipseIn: CGRect(x: basePoint.x - markerSize / 2,
+                                                y: basePoint.y - markerSize / 2,
+                                                width: markerSize, height: markerSize)),
                          with: .color(warm))
             if let top = number(target["cloud_top_asl_m"]) {
                 let topPoint = CGPoint(x: x(distance), y: y(top))
-                context.fill(Path(ellipseIn: CGRect(x: topPoint.x - 4, y: topPoint.y - 4, width: 8, height: 8)),
-                             with: .color(teal))
+                context.fill(Path(ellipseIn: CGRect(x: topPoint.x - markerSize / 2,
+                                                    y: topPoint.y - markerSize / 2,
+                                                    width: markerSize, height: markerSize)),
+                             with: .color(coolAccent))
             }
         }
     }
@@ -1854,7 +3108,7 @@ struct CrossSectionFigureView: View {
                                fraction: Double?, family: Int) -> Color? {
         let cloudAmount = amount ?? Swift.max(presence ?? 0, (fraction ?? 0) / 100)
         let humidity = Swift.max(0, (rh ?? 0) - 55) / 45
-        if cloudAmount < 0.18 {
+        if cloudAmount < 0.06 {
             if let fraction, fraction <= 0 { return nil }
             if humidity < 0.06 { return nil }
             return Color(red: 112 / 255, green: 151 / 255, blue: 126 / 255)
@@ -1878,17 +3132,16 @@ struct CrossSectionFigureView: View {
 
     private var legend: some View {
         VStack(alignment: .leading, spacing: 5) {
-            HStack(spacing: 12) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), alignment: .leading)],
+                      alignment: .leading, spacing: 8) {
                 legendChip("高云压力族", Color(red: 116 / 255, green: 157 / 255, blue: 194 / 255))
                 legendChip("中云压力族", Color(red: 105 / 255, green: 154 / 255, blue: 142 / 255))
                 legendChip("低云压力族", Color(red: 126 / 255, green: 136 / 255, blue: 145 / 255))
                 legendChip("湿润未饱和", Color(red: 112 / 255, green: 151 / 255, blue: 126 / 255))
                 legendLine("温度层线", Color(red: 0.69, green: 0.42, blue: 0.36), dashed: false)
                 legendLine("地形", Color(red: 0.41, green: 0.45, blue: 0.44), dashed: false)
-            }
-            HStack(spacing: 12) {
                 legendDot("云底", warm)
-                legendDot("云顶", teal)
+                legendDot("云顶", coolAccent)
                 legendLine("理论照明基准（ASL）", Color(red: 0.83, green: 0.55, blue: 0.22), dashed: true)
                 legendFrame("受光且可见候选（未评估云遮挡）", Color(red: 0.94, green: 0.42, blue: 0.21), dashed: false)
                 legendFrame("达到受光阈值但不可见", Color(red: 0.83, green: 0.55, blue: 0.22), dashed: true)
@@ -2138,13 +3391,19 @@ struct WorkRegionPage: View {
             WorkStaleResultBanner()
             HStack(spacing: 16) {
                 summary(store.regionalModel)
-                Spacer(minLength: 0)
+                Divider().frame(height: 44).opacity(0.5)
                 regionalMetadata(store.regionalModel.uppercased(),
                                  store.regionalForecast.model(store.regionalModel))
-            }.padding(.vertical, 6)
+            }
+            .padding(.horizontal, 16).padding(.vertical, 11)
+            .fireSkySurface(role: .content, cornerRadius: 12)
             HStack(spacing: 10) {
                 Text(regionalGridLabel).font(.system(size: 10)).foregroundStyle(.secondary)
                 Spacer()
+                Toggle(isOn: $store.showRegionalSmooth) {
+                    Image(systemName: "aqi.medium").accessibilityLabel(L10n.text("平滑过渡渲染", "Smooth rendering"))
+                }.toggleStyle(.button).help(L10n.text("平滑过渡渲染（关闭则显示原始 0.25° 网格方块）",
+                                                      "Smooth interpolated rendering (turn off for raw 0.25° grid squares)"))
                 Toggle(isOn: $store.showRegionalGrid) {
                     Image(systemName: "square.grid.3x3").accessibilityLabel("显示网格")
                 }.toggleStyle(.button).help("显示网格")
@@ -2160,28 +3419,50 @@ struct WorkRegionPage: View {
                 VStack(spacing: 0) {
                     map(store.regionalModel)
                     legend
-                }.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
-                if store.showRegionalInspector { inspector.frame(width: 236) }
+                }.fireSkySurface(role: .content, cornerRadius: 12)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                if store.showRegionalInspector {
+                    inspector
+                        .padding(12)
+                        .frame(width: 248)
+                        .fireSkySurface(role: .content, cornerRadius: 12)
+                }
             }.frame(maxHeight: .infinity)
             if store.busy {
                 HStack {
                     ProgressView(value: store.percent, total: 100).frame(width: 130)
                     Text(store.status).font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
                     Spacer()
-                    Button { store.cancel() } label: { Image(systemName: "xmark") }.help("取消任务")
+                    Button { store.cancel() } label: { Image(systemName: "xmark") }.help("取消任务").accessibilityLabel("取消任务")
                 }
             }
-            if !store.error.isEmpty {
-                // UX #17：错误全文可见、可选中复制，不再截断成两行。
-                Text(store.error).font(.system(size: 10)).foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                    .help(store.error)
+            let regionalError = store.errorText(for: .regional)
+            if !regionalError.isEmpty {
+                // UX #17：错误全文可见、可选中复制，按页面隔离不串屏。
+                HStack(alignment: .top, spacing: 8) {
+                    Text(regionalError).font(.system(size: 10)).foregroundStyle(.red)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .help(regionalError)
+                    Button { store.clearError() } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.borderless).font(.system(size: 10)).foregroundStyle(.secondary)
+                        .help(L10n.t("关闭"))
+                }
             }
         }.padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 16)
             .onExitCommand { store.editingRegionOnMap = false }
+    }
+
+    private var selectedRegionMenuTitle: String {
+        let labels = store.regionDefinitions.compactMap { item -> String? in
+            guard let code = item["code"] as? String, store.selectedRegions.contains(code) else { return nil }
+            return item["label"] as? String ?? code
+        }
+        if labels.count == 1, !store.customRegion { return labels[0] }
+        if !labels.isEmpty { return "\(labels[0])+\(labels.count - 1 + (store.customRegion ? 1 : 0))" }
+        if store.customRegion { return L10n.text("自定义范围", "Custom") }
+        return L10n.t("预测区域")
     }
 
     private var controls: some View {
@@ -2192,32 +3473,44 @@ struct WorkRegionPage: View {
                         let code = item["code"] as? String ?? ""
                         Toggle(item["label"] as? String ?? code, isOn: Binding(
                             get: { store.selectedRegions.contains(code) },
-                            set: { if $0 { store.selectedRegions.insert(code) } else { store.selectedRegions.remove(code) } }
+                            set: {
+                                if $0 { store.selectedRegions.insert(code) } else { store.selectedRegions.remove(code) }
+                                store.regionalCamera = nil
+                                store.regionalFitVersion += 1
+                            }
                         ))
                     }
                     Toggle("自定义范围", isOn: $store.customRegion)
                 }
+                Divider()
+                Button(L10n.text("将当前区域设为默认", "Set Current Region as Default")) {
+                    store.saveCurrentRegionsAsDefault()
+                }
+                .disabled(store.selectedRegions.isEmpty)
+                Button(L10n.text("恢复默认区域", "Reset to Default Region")) {
+                    store.applyDefaultRegions()
+                }
             } label: {
-                Label("预测区域", systemImage: "map")
-            }.frame(width: 112)
+                Label(selectedRegionMenuTitle, systemImage: "map")
+            }.frame(minWidth: 112)
             Button {
                 store.editingRegionOnMap.toggle()
             } label: {
-                Label(store.editingRegionOnMap ? "取消绘制" : "绘制范围", systemImage: "rectangle.dashed")
-                    .foregroundStyle(store.editingRegionOnMap ? teal : Color.primary)
+                Label(L10n.t(store.editingRegionOnMap ? "取消绘制" : "绘制范围"), systemImage: "rectangle.dashed")
+                    .foregroundStyle(store.editingRegionOnMap ? coolAccent : Color.primary)
             }.help("在地图上拖拽绘制范围，Esc 取消")
             Button { store.showRegionBounds.toggle() } label: { Image(systemName: "slider.horizontal.3") }
                 .help("编辑区域坐标").accessibilityLabel("编辑区域坐标")
                 .popover(isPresented: $store.showRegionBounds) {
                     VStack(alignment: .leading, spacing: 14) {
-                        Text("自定义范围").font(.headline)
+                        Text(L10n.t("自定义范围")).font(.headline)
                         Toggle("启用自定义范围", isOn: $store.customRegion).toggleStyle(.checkbox)
                         HStack { number("西界", $store.west); number("东界", $store.east) }
                         HStack { number("南界", $store.south); number("北界", $store.north) }
                         Text("各网格时区按经纬度自动计算")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
-                        HStack { Spacer(); Button("完成") { store.showRegionBounds = false } }
+                        HStack { Spacer(); Button(L10n.t("确定")) { store.showRegionBounds = false } }
                     }.padding(18).frame(width: 310)
                 }
             Divider().frame(height: 22)
@@ -2228,7 +3521,7 @@ struct WorkRegionPage: View {
                          selection: $store.regionalModel).frame(width: 100)
             Spacer(minLength: 4)
             Button { store.beginCheck() } label: {
-                Label("开始预测", systemImage: "play.fill")
+                Label(L10n.start, systemImage: "play.fill")
                     .font(.system(size: 12, weight: .semibold)).padding(.horizontal, 7).frame(height: 25)
             }.buttonStyle(.borderedProminent).disabled(store.busy || !store.online)
                 .help(store.busy ? "当前有任务正在进行（\(store.status)），完成或取消后可开始新预测。"
@@ -2242,13 +3535,19 @@ struct WorkRegionPage: View {
         return HStack(alignment: .center, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
                 Text(model.uppercased()).font(.system(size: 13, weight: .bold))
-                    .foregroundStyle(model == "gfs" ? warm : teal)
+                    .foregroundStyle(model == "gfs" ? warm : coolAccent)
                 Text(report.status).font(.system(size: 10)).foregroundStyle(report.error == nil ? Color.secondary : Color.red)
             }.frame(width: 60, alignment: .leading)
             VStack(alignment: .leading, spacing: 4) {
                 Text(report.peak?.quality.map { String(format: "%.2f", $0) } ?? "—")
                     .font(.system(size: 25, weight: .semibold)).monospacedDigit()
-                Text("区域峰值").font(.system(size: 9)).foregroundStyle(.secondary)
+                Text(L10n.text("区域峰值", "Regional peak")).font(.system(size: 9)).foregroundStyle(.secondary)
+                if let peak = report.peak {
+                    Text("\(L10n.text("最佳地点", "Best location")) · \(peak.label)")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .help("\(peak.label) · \(peak.level)")
+                }
             }
             Spacer(minLength: 2)
             VStack(alignment: .trailing, spacing: 5) {
@@ -2298,7 +3597,7 @@ struct WorkRegionPage: View {
         VStack(spacing: 0) {
             HStack {
                 Text(model.uppercased()).font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(model == "gfs" ? warm : teal)
+                    .foregroundStyle(model == "gfs" ? warm : coolAccent)
                 Spacer()
                 if let cycle = store.regionalForecast.model(model).cycle {
                     Text(cycle.replacingOccurrences(of: "T", with: " ").replacingOccurrences(of: "+00:00", with: "Z"))
@@ -2310,7 +3609,7 @@ struct WorkRegionPage: View {
                     if let error = store.regionalForecast.model(model).error {
                         Label(error, systemImage: "exclamationmark.triangle")
                             .font(.system(size: 10)).padding(10)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 6)).padding(10)
+                            .fireSkySurface(role: .overlay, cornerRadius: 6).padding(10)
                     }
                 }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -2318,7 +3617,7 @@ struct WorkRegionPage: View {
 
     private var legend: some View {
         HStack(spacing: 7) {
-            Text("质量指数")
+            Text(L10n.t("质量指数"))
             VStack(spacing: 2) {
                 HStack(spacing: 0) {
                     ForEach(0..<RegionalPalette.steps, id: \.self) { index in
@@ -2344,7 +3643,7 @@ struct WorkRegionPage: View {
             Spacer(minLength: 4)
             Rectangle().stroke(.secondary.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [2, 2]))
                 .frame(width: 9, height: 9)
-            Text("缺测")
+            Text(L10n.t("缺测"))
         }.font(.system(size: 9)).foregroundStyle(.secondary).padding(.horizontal, 12).frame(height: 32)
     }
 
@@ -2352,10 +3651,10 @@ struct WorkRegionPage: View {
         VStack(alignment: .leading, spacing: 12) {
             if let coordinate = store.selectedRegionalCoordinate {
                 HStack {
-                    Text("网格详情").font(.system(size: 12, weight: .semibold))
+                    Text(L10n.t("网格详情")).font(.system(size: 12, weight: .semibold))
                     Spacer()
                     Button { store.selectedRegionalCoordinate = nil } label: { Image(systemName: "xmark") }
-                        .buttonStyle(.borderless).help("关闭网格详情")
+                        .buttonStyle(.borderless).help("关闭网格详情").accessibilityLabel("关闭网格详情")
                 }
                 Text(coordinate.label).font(.system(size: 11)).monospacedDigit().foregroundStyle(.secondary)
                 ForEach([store.regionalModel], id: \.self) { model in
@@ -2365,7 +3664,7 @@ struct WorkRegionPage: View {
                     let cityCell = store.regionalForecast.model(model).cityRanking.first { $0.coordinate == coordinate }
                     let display = cell ?? cityCell
                     HStack(spacing: 6) {
-                        Text(model.uppercased()).foregroundStyle(model == "gfs" ? warm : teal).frame(width: 34, alignment: .leading)
+                        Text(model.uppercased()).foregroundStyle(model == "gfs" ? warm : coolAccent).frame(width: 34, alignment: .leading)
                         Text(display?.quality.map { String(format: "%.2f", $0) } ?? "—").monospacedDigit().bold()
                         Spacer()
                         Text(display?.quality == nil ? "缺测" : timeLabel(display?.bestTime)).foregroundStyle(.secondary)
@@ -2377,6 +3676,7 @@ struct WorkRegionPage: View {
                             }
                             .buttonStyle(.borderless)
                             .help("读取 \(model.uppercased()) 剖面")
+                            .accessibilityLabel("读取 \(model.uppercased()) 剖面")
                             .disabled(store.busy)
                         }
                     }.font(.system(size: 11)).help(display?.error ?? display?.level ?? "无该模式结果")
@@ -2392,7 +3692,7 @@ struct WorkRegionPage: View {
                 Divider()
             }
             HStack {
-                Text(store.regionalInspectorMode == "cities" ? "城市排名" : "高值排行")
+                Text(L10n.t(store.regionalInspectorMode == "cities" ? "城市排名" : "高值排行"))
                     .font(.system(size: 12, weight: .semibold))
                 Spacer()
                 Text(store.regionalModel.uppercased()).font(.system(size: 10)).foregroundStyle(.secondary)
@@ -2400,7 +3700,7 @@ struct WorkRegionPage: View {
             WorkSegments(options: ["grid", "cities"], titles: ["网格", "城市"],
                          selection: $store.regionalInspectorMode).frame(width: 124)
             if store.regionalInspectorMode == "cities" {
-                TextField("搜索城市", text: $store.regionalQuery).textFieldStyle(.roundedBorder)
+                TextField(L10n.t("搜索城市"), text: $store.regionalQuery).textFieldStyle(.roundedBorder)
                 let rows = cityRanking
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -2418,7 +3718,7 @@ struct WorkRegionPage: View {
                                         .font(.system(size: 12, weight: .semibold)).monospacedDigit()
                                 }
                                 .padding(.horizontal, 7).padding(.vertical, 9).contentShape(Rectangle())
-                                .background(store.selectedRegionalCoordinate == cell.coordinate ? teal.opacity(0.12) : Color.clear,
+                                .background(store.selectedRegionalCoordinate == cell.coordinate ? coolAccent.opacity(0.12) : Color.clear,
                                             in: RoundedRectangle(cornerRadius: 5))
                             }.buttonStyle(.plain)
                             Divider().opacity(0.35)
@@ -2434,7 +3734,7 @@ struct WorkRegionPage: View {
                 }
                 Text("前 \(rows.count) 个城市").font(.system(size: 9)).foregroundStyle(.tertiary)
             } else {
-                TextField("搜索网格", text: $store.regionalQuery).textFieldStyle(.roundedBorder)
+                TextField(L10n.t("搜索网格"), text: $store.regionalQuery).textFieldStyle(.roundedBorder)
                 let rows = ranking
                 ScrollView {
                     LazyVStack(spacing: 0) {
@@ -2450,7 +3750,7 @@ struct WorkRegionPage: View {
                                         .monospacedDigit()
                                 }
                                 .padding(.horizontal, 7).padding(.vertical, 9).contentShape(Rectangle())
-                                .background(store.selectedRegionalCoordinate == cell.coordinate ? teal.opacity(0.12) : Color.clear,
+                                .background(store.selectedRegionalCoordinate == cell.coordinate ? coolAccent.opacity(0.12) : Color.clear,
                                             in: RoundedRectangle(cornerRadius: 5))
                             }.buttonStyle(.plain)
                             Divider().opacity(0.35)
@@ -2480,7 +3780,7 @@ struct WorkRegionPage: View {
 
     private func number(_ title: String, _ value: Binding<Double>) -> some View {
         HStack(spacing: 6) {
-            Text(title).foregroundStyle(.secondary)
+            Text(title).fireSkyFont(size: 12).foregroundStyle(.secondary)
             TextField(title, value: value, format: .number).labelsHidden().textFieldStyle(.roundedBorder).frame(width: 75)
         }
     }
@@ -2567,18 +3867,46 @@ private struct WorkNowcastHeroView: View {
     @EnvironmentObject private var store: Store
     private var report: JSONObject? { store.resultKind == .nowcast ? store.result : nil }
     private var nowcast: JSONObject { report?["nowcast"] as? JSONObject ?? [:] }
+    private var presentation: NowcastPresentation { NowcastPresentation(report: report) }
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text("\(store.resultTitle) \(store.resultPhenomenonLabel)")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             WorkStaleResultBanner()
+            if report == nil || store.dateTab != "今天" {
+                HStack(spacing: 8) {
+                    Image(systemName: "clock.badge.exclamationmark")
+                        .foregroundStyle(coolAccent)
+                    Text(L10n.text(
+                        "卫星实况仅适用距朝霞/晚霞 4 小时以内的当前观测窗口；远期日期请改用「单点预测」或「区域预测」。",
+                        "Satellite nowcast applies within 4 hours of the target dawn/dusk window; use Point or Regional Forecast for later dates."
+                    ))
+                    .fireSkyFont(size: 11, relativeTo: .caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                }
+                .padding(.horizontal, 10).padding(.vertical, 7)
+                .background(coolAccent.opacity(0.10), in: RoundedRectangle(cornerRadius: 8))
+            }
+            if let mapCapability = report?["map_capability"] as? JSONObject,
+               mapCapability["available"] as? Bool == false {
+                let rawReason = mapCapability["reason"] as? String ?? ""
+                if rawReason != "native-nowcast-map-publication-not-requested" {
+                    Label(friendlyEngineMessage(rawReason.isEmpty ? "实况地图未发布" : rawReason),
+                          systemImage: "exclamationmark.triangle")
+                        .font(.system(size: 10)).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel(L10n.text("实况地图不可用", "Nowcast map unavailable"))
+                }
+            }
             HStack(alignment: .top, spacing: 18) {
                 VStack(alignment: .leading, spacing: 9) {
                     HStack(spacing: 6) {
-                        Circle().fill(teal).frame(width: 6, height: 6)
-                        Text("卫星实况").font(.system(size: 12, weight: .semibold))
+                        Circle().fill(coolAccent).frame(width: 6, height: 6)
+                        Text(L10n.t("卫星实况")).font(.system(size: 12, weight: .semibold))
                         Spacer(minLength: 4)
-                        Text(report == nil ? "等待分析" : "分析完成")
+                        Text(L10n.t(report == nil ? "等待分析" : "分析完成"))
                             .font(.system(size: 9)).foregroundStyle(.secondary)
                     }
                     HStack(alignment: .firstTextBaseline, spacing: 5) {
@@ -2590,6 +3918,9 @@ private struct WorkNowcastHeroView: View {
                     Text(report?["peak_quality_level"] as? String ?? report?["quality_level"] as? String ?? "峰值质量指数")
                         .font(.system(size: 9)).foregroundStyle(.secondary)
                     Text("推荐窗口 \(windowLabel(report))").font(.system(size: 10)).foregroundStyle(.secondary)
+                    Text("\(L10n.text("卫星覆盖", "Satellite coverage"))：\(coverageSummary)")
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                        .lineLimit(1)
                 }.frame(maxWidth: .infinity, minHeight: 124, alignment: .topLeading)
                 Divider().frame(height: 124).opacity(0.5)
                 VStack(alignment: .leading, spacing: 9) {
@@ -2607,6 +3938,12 @@ private struct WorkNowcastHeroView: View {
         guard let value = nowcast["image_valid_time_utc"] as? String,
               let date = ISO8601DateFormatter().date(from: value) else { return "—" }
         return ObservationDate.timeLabel(date, timezone: store.timezone)
+    }
+
+    private var coverageSummary: String {
+        guard report != nil else { return L10n.text("等待分析", "Waiting for analysis") }
+        let stats = presentation.profileStats
+        return "\(stats.statusLabel) · \(stats.coverageText)"
     }
 
     // nowcast-8: real source & channel from the backend (desktop_nowcast_adjustment.rs:991,994),
@@ -2630,42 +3967,54 @@ private struct WorkNowcastResultsView: View {
     // Plan row 29 grouping: 卫星云况 / 运动采样 / 光学与雷达 (nowcast-4/7/11).
     private let groups = [("卫星云况", 0..<7), ("运动采样", 7..<11), ("光学与雷达", 11..<15)]
     var body: some View {
-        VStack(spacing: 12) {
-            WorkAnalysisTabs()
-            ScrollView {
-                VStack(spacing: 12) {
-                    if store.resultTab == "概览" {
-                        ForEach(groups, id: \.0) { title, range in
-                            VStack(alignment: .leading, spacing: 7) {
-                                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                                    Text(title).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
-                                    if title == "光学与雷达" {
-                                        Text(radarTimeliness)
-                                            .font(.system(size: 9)).foregroundStyle(.secondary)
-                                            .lineLimit(1).help(radarTimeliness)
+        VStack(alignment: .leading, spacing: 12) {
+            if report == nil {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.text("准备进行卫星临近实况分析", "Ready for satellite nowcast analysis"))
+                        .fireSkyFont(size: 14, weight: .semibold)
+                    Text(L10n.text("点击左侧「开始实况分析」检查并获取最近两帧卫星扫描后，这里会显示云况、运动采样、光学/雷达指标与概率剖面。",
+                                   "Click Start Nowcast to fetch the latest paired satellite scans and view cloud coverage, motion sampling, optics, and probability profiles."))
+                        .fireSkyFont(size: 12).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .workSurface()
+            } else {
+                WorkAnalysisTabs()
+                ScrollView {
+                    VStack(spacing: 12) {
+                        if store.resultTab == "概览" {
+                            ForEach(groups, id: \.0) { title, range in
+                                VStack(alignment: .leading, spacing: 7) {
+                                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                        Text(L10n.t(title)).font(.system(size: 10, weight: .medium)).foregroundStyle(.secondary)
+                                        if title == "光学与雷达" {
+                                            Text(radarTimeliness)
+                                                .font(.system(size: 9)).foregroundStyle(.secondary)
+                                                .lineLimit(1).help(radarTimeliness)
+                                        }
+                                        Spacer(minLength: 0)
                                     }
-                                    Spacer(minLength: 0)
-                                }
-                                LazyVGrid(columns: [GridItem(.flexible(), spacing: 10),
-                                                    GridItem(.flexible(), spacing: 10),
-                                                    GridItem(.flexible())], spacing: 10) {
-                                    ForEach(Array(NowcastPresentation.metrics[range]), id: \.0) { spec in
-                                        metric(spec)
+                                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 185), spacing: 10)], spacing: 10) {
+                                        ForEach(Array(NowcastPresentation.metrics[range]), id: \.0) { spec in
+                                            metric(spec)
+                                        }
                                     }
                                 }
                             }
+                            WorkCurveView(report: report, timezone: store.timezone)
+                        } else if store.resultTab == "逐时台账" {
+                            WorkNowcastLedgerView(report: report, timezone: store.timezone)
+                        } else if store.resultTab == "大气剖面" {
+                            WorkSatelliteProfileView(presentation: presentation)
+                        } else {
+                            WorkDiagnosticView(report: report, profile: false, waiting: "等待实况分析")
+                            diagnostics
                         }
-                        WorkCurveView(report: report, timezone: store.timezone)
-                    } else if store.resultTab == "逐时台账" {
-                        WorkNowcastLedgerView(report: report, timezone: store.timezone)
-                    } else if store.resultTab == "大气剖面" {
-                        WorkSatelliteProfileView(presentation: presentation)
-                    } else {
-                        WorkDiagnosticView(report: report, profile: false, waiting: "等待实况分析")
-                        diagnostics
-                    }
-                }.padding(.trailing, 2)
-            }.defaultScrollAnchor(.top).scrollIndicators(.hidden)
+                    }.padding(.trailing, 2)
+                }.defaultScrollAnchor(.top).scrollIndicators(.hidden)
+            }
         }
     }
 
@@ -2739,12 +4088,6 @@ private struct WorkNowcastResultsView: View {
                     Text(nowcast[key] as? String ?? presentation.value(key)).textSelection(.enabled).lineLimit(2)
                 }.font(.system(size: 11))
             }
-            if let map = report?["map_capability"] as? JSONObject,
-               map["available"] as? Bool == false {
-                Label(friendlyEngineMessage(map["reason"] as? String ?? "实况地图未发布"), systemImage: "map")
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-                    .lineLimit(2).help(friendlyEngineMessage(map["reason"] as? String ?? ""))
-            }
         }.padding(18).frame(maxWidth: .infinity, alignment: .leading).workSurface()
     }
 
@@ -2773,7 +4116,7 @@ private struct WorkNowcastResultsView: View {
 }
 
 /// Satellite posterior probability profile (plan rows nowcast-1/2/3, Web parity with
-/// SatelliteVerticalProfile.svelte): header coverage stats, teal retrieved-alpha scale,
+/// SatelliteVerticalProfile.svelte): header coverage stats, coolAccent retrieved-alpha scale,
 /// amber dashed unknown cells, pressure-level row lines with hPa labels on a trailing
 /// axis anchored to the same height scale, and the HSD posterior / GFS prior source legend.
 private struct WorkSatelliteProfileView: View {
@@ -2990,7 +4333,7 @@ private struct WorkNowcastLedgerView: View {
                             .frame(width: 92, alignment: .leading)
                         Image(systemName: !valid || burnable == nil ? "minus"
                               : burnable == true ? "checkmark" : "xmark")
-                            .foregroundStyle(!valid || burnable == nil ? Color.secondary : burnable == true ? teal : Color.orange)
+                            .foregroundStyle(!valid || burnable == nil ? Color.secondary : burnable == true ? coolAccent : Color.orange)
                             .frame(width: 52, alignment: .leading)
                             .accessibilityLabel(!valid ? "缺测" : burnable == true ? "可烧" : burnable == false ? "不可烧" : "未提供")
                         Text(valid ? percent(step["burnable_cloud_coverage"]) : "—")
@@ -3039,18 +4382,8 @@ private extension Dictionary where Key == String, Value == Any {
 private struct WorkSurface: ViewModifier {
     var emphasized = false
     func body(content: Content) -> some View {
-        // v1.10 设计 P3：毛玻璃材质 + 16px 圆角（GlassCard 同源）。
-        content.glassCard(emphasized: emphasized)
-    }
-}
-
-private struct SidebarGlass: ViewModifier {
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(macOS 26.0, *) {
-            content.background { Color.clear.glassEffect(.regular, in: .rect(cornerRadius: 0)) }
-        } else {
-            content.background(.regularMaterial)
-        }
+        // 内容表面退出通用玻璃：正文、指标和图表保持稳定底色与清晰边界。
+        content.fireSkySurface(role: .content, emphasized: emphasized)
     }
 }
 
@@ -3060,25 +4393,48 @@ private struct WorkSegments: View {
     @Binding var selection: String
     var accented = false
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
     var body: some View {
         HStack(spacing: 3) {
             ForEach(Array(options.enumerated()), id: \.element) { index, value in
                 let selected = selection == value
+                let label = titles?[index] ?? value
                 Button { selection = value } label: {
-                    Text(titles?[index] ?? value)
-                        .font(.system(size: 11, weight: selected ? .semibold : .regular))
-                        .foregroundStyle(selected && accented ? warm : selected ? Color.primary : Color.secondary)
-                        .frame(maxWidth: .infinity).frame(height: 26)
+                    Text(L10n.t(label))
+                        .fireSkyFont(size: 11, weight: selected ? .semibold : .regular,
+                                     relativeTo: .caption)
+                        .foregroundStyle(selected && accented
+                                          ? (scheme == .dark ? warm : Color(0xB3, 0x3F, 0x23))
+                                          : selected ? Color.primary : Color.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity).padding(.vertical, 5)
+                        .frame(minHeight: 28)
                         .background {
                             RoundedRectangle(cornerRadius: 6)
-                                .fill(selected ? (accented ? warm.opacity(0.16) : scheme == .dark ? Color.white.opacity(0.10) : .white.opacity(0.85)) : .clear)
+                                .fill(selected
+                                      ? (accented ? warm.opacity(0.14)
+                                         : scheme == .dark ? Color.white.opacity(0.12) : Color.white.opacity(0.88))
+                                      : Color.clear)
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 6)
+                                .strokeBorder(
+                                    selected ? warm.opacity(0.35)
+                                             : Color.secondary.opacity(contrast == .increased ? 0.45 : 0.16),
+                                    lineWidth: selected || contrast == .increased ? 1 : 0.5
+                                )
                         }
                         .contentShape(Rectangle())
                 }.buttonStyle(.plain)
+                    .accessibilityLabel(L10n.text(
+                        "\(label)\(selected ? "，已选中" : "")",
+                        "\(L10n.t(label))\(selected ? ", selected" : "")"
+                    ))
                     .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }.padding(3)
-            .background(.black.opacity(scheme == .dark ? 0.12 : 0.035), in: RoundedRectangle(cornerRadius: 8))
+            .background(Color.black.opacity(scheme == .dark ? 0.12 : 0.035), in: RoundedRectangle(cornerRadius: 8))
             .overlay { RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.15), lineWidth: 1) }
     }
 }
@@ -3087,8 +4443,8 @@ extension View {
     fileprivate func workSurface(emphasized: Bool = false) -> some View { modifier(WorkSurface(emphasized: emphasized)) }
     fileprivate func workChip() -> some View {
         padding(.horizontal, 8).padding(.vertical, 5)
-            .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 6))
-            .overlay { RoundedRectangle(cornerRadius: 6).stroke(.secondary.opacity(0.16), lineWidth: 1) }
+            .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 6))
+            .overlay { RoundedRectangle(cornerRadius: 6).stroke(.secondary.opacity(0.22), lineWidth: 1) }
     }
 }
 
@@ -3151,7 +4507,7 @@ private func sceneLabel(_ value: Any?) -> String {
     }
 }
 
-private func modelColor(_ model: String) -> Color { model == "ec" ? teal : warm }
+private func modelColor(_ model: String) -> Color { model == "ec" ? coolAccent : warm }
 
 private func timeLabel(_ value: String?) -> String {
     guard let value, value.count >= 16 else { return "—" }
@@ -3244,7 +4600,8 @@ struct SkyTimeline: View {
                 .accessibilityLabel("观测窗口 \(startRaw) 至 \(endRaw)\(bestRaw.map { "，最佳时刻 \($0)" } ?? "")")
             }
         } else {
-            Text("推荐窗口 \(windowLabel(report))").font(.system(size: 10)).foregroundStyle(.secondary)
+            Text(L10n.tf("推荐窗口 %@", windowLabel(report)))
+                .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
         }
     }
 }
@@ -3351,6 +4708,8 @@ private func cycleLabel(_ model: String, _ report: JSONObject?) -> String? {
 /// One-line model source note, mirroring the Web source description.
 private func modelSourceNote(_ model: String) -> String {
     model == "ec"
-        ? "EC 公共 Open Data · TCC + 压力层 RH 云柱代理 · 不含 GFS 云场 · CAMS 气溶胶"
-        : "GFS 0.25° 全量云场评分 · CAMS 气溶胶"
+        ? L10n.text("EC 公共 Open Data · TCC + 压力层 RH 云柱代理 · 不含 GFS 云场 · CAMS 气溶胶",
+                    "EC public Open Data · TCC + pressure-level RH cloud-column proxy · no GFS cloud field · CAMS aerosol")
+        : L10n.text("GFS 0.25° 全量云场评分 · CAMS 气溶胶",
+                    "GFS 0.25° full cloud-field scoring · CAMS aerosol")
 }

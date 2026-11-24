@@ -4,7 +4,6 @@ import SwiftUI
 /// 实况链延后 MN4 裁决，requestKind 在 v1 中恒为单点）。
 struct PreflightView: View {
     @EnvironmentObject private var store: Store
-    @Environment(\.colorScheme) private var scheme
     private var actions: PreparationActions {
         PreparationActions(ready: store.ready, busy: store.busy, hasSession: store.session != nil)
     }
@@ -27,6 +26,8 @@ struct PreflightView: View {
                 Button { store.refreshCheck() } label: { Image(systemName: "arrow.clockwise") }
                     .disabled(store.busy)
             }.padding(.bottom, 16)
+            ScrollView {
+            VStack(alignment: .leading, spacing: 0) {
             if store.rows.isEmpty {
                 HStack { ProgressView(); Text(L10n.text("正在检查本地数据", "Checking local data")) }
                     .frame(maxWidth: .infinity, minHeight: 140)
@@ -42,7 +43,7 @@ struct PreflightView: View {
                         Spacer()
                         Label(L10n.status(row.status), systemImage: !row.ready ? "arrow.down.circle" : row.old ? "arrow.clockwise" : "checkmark.circle.fill")
                             .font(.callout).foregroundStyle(!row.ready || row.old ? Color.primary : Color.green)
-                    }.frame(height: 64)
+                    }.frame(minHeight: 64).padding(.vertical, 8)
                     if row.id != store.rows.last?.id { Divider() }
                 }
             }
@@ -60,25 +61,42 @@ struct PreflightView: View {
                     }.font(.callout).foregroundStyle(.primary)
                 }
             }.frame(minHeight: 38, alignment: .leading).padding(.top, 12)
-            HStack {
-                Button(L10n.cancel) { store.closePreflight() }
-                Spacer()
+            }
+            }
+            .frame(maxWidth: .infinity)
+            VStack(spacing: 12) {
                 if actions.primary == .download {
-                    Button(L10n.text("下载缺失数据", "Download missing data"), systemImage: "arrow.down.to.line") { store.prepare() }
-                        .buttonStyle(.borderedProminent).disabled(!actions.canDownload)
-                        .foregroundStyle(scheme == .dark ? Color.black : Color.white)
-                    Button(L10n.text("确定预测", "Confirm forecast")) {}.disabled(true)
+                    AccentButton(title: L10n.text("下载缺失数据", "Download missing data"),
+                                 systemImage: "arrow.down.to.line", disabled: !actions.canDownload) { store.prepare() }
                 } else {
-                    Button(L10n.text("更新数据", "Update data"), systemImage: "arrow.down.to.line") { store.prepare() }
-                        .disabled(!actions.canDownload)
-                    Button(L10n.text("确定预测", "Confirm forecast")) { store.confirm() }
-                        .buttonStyle(.borderedProminent).disabled(!actions.canForecast)
-                        .foregroundStyle(scheme == .dark ? Color.black : Color.white)
+                    AccentButton(title: L10n.text("确定预测", "Confirm forecast"),
+                                 systemImage: "sparkles", disabled: !actions.canForecast) { store.confirm() }
+                }
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        cancelButton
+                        Spacer()
+                        if actions.primary != .download { updateButton }
+                    }
+                    VStack(spacing: 8) {
+                        if actions.primary != .download { updateButton }
+                        cancelButton
+                    }
                 }
             }.padding(.top, 14)
-                .animation(.easeInOut(duration: 0.18), value: store.ready)
-        }.padding(26).frame(maxWidth: 520)
-            .background(Color(uiColor: .systemBackground))
+        }.padding(20).frame(maxWidth: 520, maxHeight: .infinity, alignment: .top)
+            .background(WorkBackground())
+            .presentationDragIndicator(.visible)
+    }
+
+    private var cancelButton: some View {
+        Button(L10n.cancel) { store.closePreflight() }
+            .frame(minHeight: 44)
+    }
+
+    private var updateButton: some View {
+        Button(L10n.text("更新数据", "Update data"), systemImage: "arrow.down.to.line") { store.prepare() }
+            .frame(minHeight: 44).disabled(!actions.canDownload)
     }
 }
 

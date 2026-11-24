@@ -194,6 +194,7 @@ fn srtm_client() -> Result<&'static Client, String> {
         .get_or_init(|| {
             Client::builder()
                 .user_agent(USER_AGENT)
+                .connect_timeout(Duration::from_secs(15))
                 .build()
                 .map_err(|_| "cannot initialize SRTM HTTP client".into())
         })
@@ -681,6 +682,40 @@ impl Config {
         timeout: f64,
         progress: Option<&(dyn Fn(Value) -> Result<(), String> + Sync)>,
     ) -> Result<Vec<u8>, (bool, String)> {
+        let attempts = self.request_attempts.max(1);
+        let mut last_error = "SRTM download failed".to_string();
+        for attempt in 0..attempts {
+            self.check_cancelled().map_err(|e| (false, e))?;
+            match self.fetch_tile_bytes_once(name, timeout, progress) {
+                Ok(bytes) => return Ok(bytes),
+                Err((true, message)) => return Err((true, message)),
+                Err((false, message)) => {
+                    if self.check_cancelled().is_err()
+                        || message.contains("exceeds bound")
+                        || attempt + 1 >= attempts
+                    {
+                        return Err((false, message));
+                    }
+                    last_error = message;
+                    let delay = (self.retry_seconds.max(0.1) * (1u32 << attempt.min(3)) as f64)
+                        .min(8.0);
+                    let deadline = Instant::now() + Duration::from_secs_f64(delay);
+                    while Instant::now() < deadline {
+                        self.check_cancelled().map_err(|e| (false, e))?;
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                }
+            }
+        }
+        Err((false, last_error))
+    }
+
+    fn fetch_tile_bytes_once(
+        &self,
+        name: &str,
+        timeout: f64,
+        progress: Option<&(dyn Fn(Value) -> Result<(), String> + Sync)>,
+    ) -> Result<Vec<u8>, (bool, String)> {
         let endpoint = url(&format!(
             "{}/{}/{}.hgt.gz",
             self.srtm_base_url.trim_end_matches('/'),
@@ -978,7 +1013,27 @@ impl Config {
         let north = params["bounds"]["north"].as_i64().unwrap_or(59);
         let west = params["bounds"]["west"].as_i64().unwrap_or(-180);
         let east = params["bounds"]["east"].as_i64().unwrap_or(179);
-        let candidates = bulk_candidates(south, north, west, east)?;
+        let candidates = if let Some(explicit) = params.get("tiles").and_then(Value::as_array) {
+            let mut list = Vec::with_capacity(explicit.len());
+            for item in explicit {
+                let Some(name) = item.as_str() else {
+                    return Err("terrain tiles entry must be a string".into());
+                };
+                require(
+                    name.len() == 7
+                        && matches!(name.as_bytes()[0], b'N' | b'S')
+                        && matches!(name.as_bytes()[3], b'E' | b'W')
+                        && name.as_bytes()[1..3].iter().all(u8::is_ascii_digit)
+                        && name.as_bytes()[4..7].iter().all(u8::is_ascii_digit),
+                    "invalid SRTM tile name",
+                )?;
+                list.push(name.to_string());
+            }
+            require(!list.is_empty(), "terrain tiles list must not be empty")?;
+            list
+        } else {
+            bulk_candidates(south, north, west, east)?
+        };
         let timeout = params
             .get("timeout_seconds")
             .and_then(Value::as_f64)
@@ -1008,6 +1063,7 @@ impl Config {
         let downloaded = AtomicUsize::new(0);
         let absent = AtomicUsize::new(0);
         let failed = AtomicUsize::new(0);
+        let failed_tiles: Mutex<Vec<String>> = Mutex::new(Vec::new());
         let received = AtomicU64::new(0);
         let cancelled = AtomicBool::new(false);
         let disk_stopped = AtomicBool::new(false);
@@ -1057,6 +1113,11 @@ impl Config {
                             }
                             Err(_) => {
                                 failed.fetch_add(1, Ordering::Relaxed);
+                                if let Ok(mut list) = failed_tiles.lock() {
+                                    if list.len() < 500 {
+                                        list.push(name.clone());
+                                    }
+                                }
                             }
                         }
                     }
@@ -1090,6 +1151,7 @@ impl Config {
             "downloaded": downloaded.load(Ordering::Relaxed),
             "absent": absent.load(Ordering::Relaxed),
             "failed": failed.load(Ordering::Relaxed),
+            "failed_tiles": failed_tiles.into_inner().unwrap_or_default(),
             "received_bytes": received.load(Ordering::Relaxed),
             "received_gb": received.load(Ordering::Relaxed) as f64 / 1e9,
             "stopped_reason": if disk_stopped.load(Ordering::Acquire) { json!("disk_space") } else { json!(null) },

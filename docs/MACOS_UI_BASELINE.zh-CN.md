@@ -1,7 +1,7 @@
 # macOS 产品与 UI 基准
 
-更新日期：2026-11-13。依据用户本次明确决定：**以 macOS 为基准，其他 UI 最终向 macOS 对齐**。
-本文定义产品与界面的对齐方向；执行顺序见[最新接续计划](archive/NEXT_AGENT_PLAN_2026-11-13.zh-CN.md)。
+更新日期：2026-11-24。依据用户明确决定：**以 macOS 为基准，其他 UI 最终向 macOS 对齐**。
+本文定义产品与界面的对齐方向；最新 UX 改造与验收记录见[macOS Liquid Glass 交接规范](MACOS_LIQUID_GLASS_UX_HANDOFF.zh-CN.md)与[macOS 界面图册](ui/macos/README.md)。
 
 ## 1. 基准与对齐方向
 
@@ -80,10 +80,5 @@ Linux 统一预检/任务历史/恢复、Docker/Web 本地构建与运行冒烟�
 
 ## 7. 与旧文档的关系
 
-- [Web 与 macOS 历史展示对齐方案](archive/WEB_MACOS_DISPLAY_PARITY_PLAN.zh-CN.md)及
-  [71 项字段矩阵](archive/WEB_MACOS_FIELD_MATRIX.zh-CN.md)保留前一批从 Web 盘点桌面字段的证据，
-  不再决定产品方向或要求 macOS 复制旧 Web。
-- [macOS 后端展示审计](archive/MACOS_BACKEND_DISPLAY_AUDIT.zh-CN.md)与
-  [字段映射](archive/MACOS_BACKEND_DATA_DISPLAY.zh-CN.md)继续提供实际字段、来源和实现证据。
-- [运行时切换](archive/RUST_RUNTIME_CUTOVER.zh-CN.md)与[剩余工作清单](archive/RUST_REMAINING_WORK.zh-CN.md)
-  保留 Rust/平台验收合同，执行优先级服从 macOS 主线。
+- 早期 Web/桌面盘点文档（`WEB_MACOS_DISPLAY_PARITY_PLAN.zh-CN.md`、`WEB_MACOS_FIELD_MATRIX.zh-CN.md`、`MACOS_BACKEND_DISPLAY_AUDIT.zh-CN.md`、`MACOS_BACKEND_DATA_DISPLAY.zh-CN.md`、`NEXT_AGENT_PLAN_2026-11-13.zh-CN.md`、`RUST_REMAINING_WORK.zh-CN.md`）已完成历史阶段使命并从归档目录清理，不再决定产品方向或要求 macOS 复制旧 Web。
+- [运行时切换](archive/RUST_RUNTIME_CUTOVER.zh-CN.md)保留 Rust/平台运行时切换合同，执行优先级服从 macOS 主线。

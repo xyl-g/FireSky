@@ -1,36 +1,47 @@
 # FireSky Design System
 
-Overview paragraphs first: FireSky 是一款围绕「朝霞 / 晚霞观测窗口」的天气
-工作台，四端（macOS AppKit+SwiftUI / Windows WinUI / Android Compose /
+FireSky 是一款围绕「朝霞 / 晚霞观测窗口」的天气
+工作台，多端（macOS AppKit+SwiftUI / Windows WinUI / Android Compose /
 iOS SwiftUI / 共享 Web Svelte）共用同一套视觉识别。设计基调是**黄昏观测**
-——暖橙作为唯一强调色（brand accent），青绿作次级（辅助信息），天空渐变
+——铜橙作为强调色（brand accent），冷静蓝（macOS 主基准）/青绿（历史移动与 Web 兼容色）作次级与第二模型色，天空渐变
 做页面底色；数据可视化只使用三个语义图表色（覆盖/照度/透过率），绝不引入
 新的数据色相。深浅双主题一等公民：所有 token 都成对给出 light/dark 值，
-界面文字一律中文（简体），数值用等宽字体。
+界面默认中文（简体），可切换 English，数值用等宽字体。
+
+2026-11-23 优先级调整：**先优化并验收 macOS，形成唯一的产品 UI 基准**。
+当前投入集中于 macOS 的专业工作流、剖面可读性、设置和响应式细节。
+界面图统一存放在 [macOS 图册](docs/ui/macos/README.md)，可直接打开
+[可视图册](docs/ui/macos/index.html) 按页面、主题、状态对照。
+Windows 后续以 macOS 图册和本文 token 为参考，保留平台原生控件与键盘习惯。
+iOS / Android 降为后续阶段；当前改动保留为未完成、未验收工作，暂不继续扩展。
+统一的是视觉语义、信息层级与操作顺序，具体尺寸和导航按平台适配。
+Web / Windows 的旧主题及移动端在制 UI 均不代表已完成本轮验收。
 
 ```yaml
 colors:
-  brand.warm.light: "#BD523D"
-  brand.warm.dark: "#FF8C61"
-  brand.teal: "#428F8A"
-  background.gradient.light.start: "#E3EDEF"
-  background.gradient.light.mid: "#F5EBE7"
-  background.gradient.light.end: "#E3F0EB"
-  background.gradient.dark.start: "#121A1C"
-  background.gradient.dark.mid: "#211E24"
-  background.gradient.dark.end: "#141F1D"
-  surface.light: "#E3EDEF"
-  surface.dark: "#121A1C"
-  surfaceVariant.light: "#EDF3F2"
-  surfaceVariant.dark: "#1A2526"
+  brand.warm.light: "#D25A36"
+  brand.warm.dark: "#FF9B6A"
+  brand.coolAccent.light: "#4F76B8"
+  brand.coolAccent.dark: "#8EB7FF"
+  brand.teal: "#428F8A" # 兼容旧 Web/移动辅助色；macOS 基准统一使用 coolAccent
+  background.gradient.light.start: "#EEF3F8"
+  background.gradient.light.mid: "#F8F5F0"
+  background.gradient.light.end: "#EBF1F6"
+  background.gradient.dark.start: "#0B1222"
+  background.gradient.dark.mid: "#121B2E"
+  background.gradient.dark.end: "#080E18"
+  surface.light: "#FBFCFE"
+  surface.dark: "#1B2435"
+  surfaceVariant.light: "#F2F6FA"
+  surfaceVariant.dark: "#232E40"
   onBackground.light: "#1B2224"
   onBackground.dark: "#E6EDF0"
-  success.light: "#3B9C57"
-  success.dark: "#33CC70"
-  warning.light: "#C9A23C"
-  warning.dark: "#FFB340"
-  danger.light: "#C4574A"
-  danger.dark: "#FF6B52"
+  success.light: "#1F6E5A"
+  success.dark: "#63D6AB"
+  warning.light: "#8A6321"
+  warning.dark: "#FFC273"
+  danger.light: "#B83E38"
+  danger.dark: "#FF8A7A"
   chart.coverage.dark: "#33D499"
   chart.coverage.light: "#05664A"
   chart.illumination.dark: "#FABF24"
@@ -39,39 +50,36 @@ colors:
   chart.transmission.light: "#0A5B8F"
   selection.light: "#BD523D1F"
   selection.dark: "#FF8C611F"
-  accent.gradient.dark.start: "#FF8C61"
-  accent.gradient.dark.end: "#FABF24"
-  accent.gradient.light.start: "#E06A3C"
-  accent.gradient.light.end: "#D98A2E"
-  chip.success.light.bg: "#3B9C571F"
-  chip.success.dark.bg: "#33CC7024"
-  chip.warning.light.bg: "#C9A23C1F"
-  chip.warning.dark.bg: "#FFB34024"
-  chip.danger.light.bg: "#C4574A1F"
-  chip.danger.dark.bg: "#FF6B5224"
-  card.border.dark: "#FFFFFF14"
-  card.border.light: "#1B22240F"
+  accent.gradient.dark.start: "#FF9B6A"
+  accent.gradient.dark.end: "#FFC273"
+  accent.gradient.light.start: "#B84B2E"
+  accent.gradient.light.end: "#9B401F"
+  action.foreground.light: "#FFFFFF"
+  action.foreground.dark: "#241810"
+  card.border.dark: "#4B5D78"
+  card.border.light: "#C9D5E1"
 
 typography:
   display.numeric: "32px mono medium（百分比/时刻/倒计时等关键数字）"
-  body.mobile: "12-14px sans-serif（Roboto / SF / system）"
-  body.desktop: "12px system (SF Pro / Segoe UI)"
-  heading.page: "22px bold"
-  heading.card: "13-14px semibold"
-  caption: "10-11px regular @ 60% onBackground"
+  body.mobile: "15-17sp/pt system（新控件支持系统文字缩放，旧结果表逐批迁移）"
+  body.desktop: "12-13pt system (SF Pro / Segoe UI，macOS 逐步以 13pt 与动态字号为基准)"
+  heading.page: "20-22pt semibold/bold"
+  heading.card: "13-14pt semibold"
+  caption: "desktop 10-11pt / mobile 12-13sp/pt secondary"
   numeric: "monospaced digit（等宽数字，时间/百分比/字节）"
 
 rounded:
-  card: 10
+  card.desktop: 16 # 主内容卡 16pt，分组/浮层 12pt（同心圆角）
+  card.mobile: 8
   control: 8
   chip: 6
 
 spacing:
-  page.padding: 16
-  card.padding: 15-20
+  page.padding: 16-20
+  card.padding: 14-18
   element.gap: 6-14
-  row.height.list: 46
-  button.height: 40-44
+  row.height.list: 44-46
+  button.height: "desktop 36-42 / iOS >=44 / Android >=48"
 
 motion:
   interactive: 180ms ease-in-out（preflight 展开等 UI 状态切换）
@@ -80,8 +88,8 @@ motion:
 
 ## Colors
 
-- 唯一强调色是暖橙 `brand.warm`：浅色主题用更深的 `#BD523D`（在浅背景上
-  保持对比度），深色主题用更亮的 `#FF8C61`。主按钮、选中态、进度强调、
+- 强调色是铜橙 `brand.warm`：浅色 `#D25A36`，深色 `#FF9B6A`。
+  小号文字优先使用系统正文色或语义前景色。主按钮、选中态、进度强调、
   观测时间轴高亮全部只用它。
 - 青绿 `brand.teal` 仅作次级语义（辅助参数、次要 chip），不与暖橙争夺强调。
 - 语义色三对：success（就绪/已下载）、warning（未核验/注意）、danger
@@ -89,7 +97,7 @@ motion:
 - 图表色三组固定语义对：`chart.coverage`（覆盖率）、`chart.illumination`
   （照度）、`chart.transmission`（透过率），dark/light 各自独立取值——
   任何新图表必须复用这三组，禁止新色相。
-- 页面底色是三段天空渐变（light：冷青→暖米→浅绿；dark：深青→暗紫→墨绿），
+- 页面底色是三段轻微色温变化，light 为冷瓷白、暖白，dark 为夜空色，
   用作整体氛围而非表面色；卡片表面用 `surface`/`surfaceVariant`。
 - 文字对比：正文对背景 ≥ WCAG AA；caption 一律带 60% 不透明度且只放次要
   信息，不得承载可执行操作。
@@ -100,26 +108,28 @@ motion:
   与中文正文混排。
 - 页面大标题 22px bold；卡片标题 13-14px semibold；正文 12px（桌面）/
   12-14px（移动）；说明文字 10-11px caption。禁止小于 9px 的文字。
-- 全部界面文案为简体中文；英文仅出现在专有名词（GFS / ECMWF / CAMS /
-  SRTM / Mock / FFI）。
+- 默认界面文案为简体中文，英文模式使用对应翻译；GFS / ECMWF / CAMS /
+  SRTM 等专有名词保持原文。
 
 ## Layout
 
 - 桌面侧栏宽 196px、行高 46px；移动端底部导航 + 每页 16px 水平 padding。
 - 卡片间距 12-14px；卡片内垂直 10-15px、水平 15-20px。
-- 控件高度：主按钮 40-44px、列表行 46px、文本输入 ≥ 36px。
+- 桌面主按钮 40-44pt、列表行 46pt；手机交互区域 iOS ≥44pt、Android ≥48dp，
+  文字放大时允许多行并增长高度，不以固定高度截断。
 - 长路径/长错误必须可截断（middle truncation）且提供复制；错误文字保持
   可选择（text selection）。
 
 ## Elevation
 
-- 移动端卡片用 Material Surface（surfaceVariant 10% 差异），桌面/Web 用
-  半透明 surface（0.72 opacity）+ 8-10px 圆角；不使用多重阴影。
+- 移动端数据表面使用稳定不透明 surface 和细描边；玻璃材质集中于系统导航、
+  工具栏和浮层。桌面遵循 `MACOS_LIQUID_GLASS_UX_HANDOFF.zh-CN.md` 的材质分层。
+  不使用多重阴影。
 - 弹窗（确认/引导）统一平台默认模态，不自制弹窗样式。
 
 ## Shapes
 
-- 卡片 10px 圆角、按钮/输入 8px、小 chip 6px；图标按钮最小可点面积 28-30px。
+- 卡片、按钮/输入 8pt/dp，小 chip 6pt/dp；手机图标按钮仍保留 44/48 的触控区域。
 
 ## Motion
 
@@ -141,25 +151,13 @@ motion:
 
 ## Components
 
-- 主按钮：实底 `brand.warm` + 白字（light）或深字（dark）；破坏性按钮
-  danger 实底；次级动作 Outlined/borderless。
-- 分段选择器（Segmented）：浅色背景 5% 黑、选中项白底（accent 时主题
-  色 16%）；用于枚举 ≤4 项。
-- 列表行：状态图标（checkmark/exclamation/stop/pause/clock 五态）+ 标题 +
-  状态字 + 时间行；行内动作图标按钮 28-30px。
-- 卡片标题行右侧放该卡片的唯一主动作；次级动作 borderless。
-- 空态：图标 + 一句话说明 + 条件提示（在线/离线口径）。
-
-## Components
-
-- 状态徽标 StatusChip：语义色 14% 底 + 图标(10 semibold) + 文字(11 medium)，
-  圆角 6、内边距 3×8；五态 done/running/failed/interrupted/pending。
-  替换一切裸彩色状态文字（v1.9.0 起历史/预检行已接入）。
-- 主行动按钮 AccentButton：`accent.gradient` 实底（dark #FF8C61→#FABF24，
-  light #E06A3C→#D98A2E）+ 圆角 8 + 高 41；dark 深字 / light 白字；
-  禁用改 30% 灰。次级动作 Outlined/borderless。
-- 卡片 hairline 边框：dark 白 8%、light 黑 6%（v1.9.0 移动端已接入）。
-- 「加载更早任务」：历史页底部居中次级按钮，分页游标 has_more 时显示。
+- 主行动按钮 AccentButton：`accent.gradient`（dark `#FF9B6A` → `#FFC273`，light `#B84B2E` → `#9B401F`）+ 圆角 8；dark 深字 / light 白字；禁用态改 30% 灰。破坏性按钮仅用于真实删除/卸载操作，用 danger 实底；次级动作 Outlined / borderless。
+- 状态徽标 StatusChip：语义色 14% 底 + 图标（11 semibold）+ 文字（11 medium）+ 语义边框，圆角 6、内边距 4×8；五态 `done` / `running` / `failed` / `interrupted` / `pending`。替换一切裸彩色状态文字（v1.9.0 起历史/预检行已接入）。
+- 分段选择器（Segmented）：浅色背景 5% 黑、选中项高对比白/浮层底（accent 时主题色 14%）；用于枚举 ≤4 项。
+- 列表行：状态图标（checkmark/exclamation/stop/pause/clock 五态）+ 标题 + 状态字 + 时间行；行内动作图标按钮 28–30px。
+- 卡片与边框：内容卡采用稳定表面 + `card.border`（强调态才使用品牌色，高对比模式增强边界）；标题行右侧放该卡片唯一主动作，次级动作 borderless。
+- 空态：图标 + 一句话说明 + 条件提示（在线/离线口径），首次空态不堆叠空数据占位卡片。
+- 「加载更早任务」：历史页底部居中次级按钮，分页游标 `has_more` 时显示。
 
 ## Do's and Don'ts
 

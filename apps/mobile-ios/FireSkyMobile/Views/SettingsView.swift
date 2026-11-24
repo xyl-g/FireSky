@@ -8,6 +8,7 @@ private let SettingsCategories = ["通用", "数据", "高级"]
 struct SettingsView: View {
     @EnvironmentObject private var store: Store
     var body: some View {
+        NavigationStack {
         Form {
             Picker("分类", selection: $store.settingsCategory) {
                 ForEach(SettingsCategories, id: \.self) { category in
@@ -18,12 +19,14 @@ struct SettingsView: View {
                 .listRowInsets(EdgeInsets())
 
             if store.settingsCategory == "通用" {
-                Section("外观") {
-                    Picker("主题", selection: $store.appearance) {
-                        Text("跟随系统").tag("system")
-                        Text("浅色").tag("light")
-                        Text("深色").tag("dark")
-                    }.onChange(of: store.appearance) { _ in store.saveAppearance() }
+                Section(L10n.text("外观", "Appearance")) {
+                    Picker(L10n.text("主题", "Theme"), selection: $store.appearance) {
+                        Label(L10n.text("跟随系统", "System"), systemImage: "circle.lefthalf.filled").tag("system")
+                        Label(L10n.text("浅色", "Light"), systemImage: "sun.max").tag("light")
+                        Label(L10n.text("深色", "Dark"), systemImage: "moon").tag("dark")
+                    }.pickerStyle(.segmented)
+                        .onChange(of: store.appearance) { _ in store.saveAppearance() }
+                        .accessibilityIdentifier("appearance-picker")
                 }
                 // v1.9.5 i18n：语言偏好（跟随系统/中文/English）。
                 // 写 UserDefaults 后由 RootView 的 @AppStorage 触发整树刷新。
@@ -134,7 +137,9 @@ struct SettingsView: View {
         }
         .scrollContentBackground(.hidden)
         .workPageBackground()
+        .navigationTitle(L10n.navSettings)
         .disabled(store.busy)
+        }
     }
 
     /// 分类显示名（状态键保持中文，标题随语言切换）。
