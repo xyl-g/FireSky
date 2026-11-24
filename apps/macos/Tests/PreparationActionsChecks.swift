@@ -5,6 +5,8 @@ import CoreGraphics
 @main
 enum PreparationActionsChecks {
     static func main() {
+        // Fixtures assert Chinese UI strings deterministically regardless of CI runner OS locale.
+        L10n.language = .chinese
         switch CommandLine.arguments.last {
         case "diagnostic-values":
             let parsed = try! JSONSerialization.jsonObject(with: Data(
