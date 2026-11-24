@@ -41,4 +41,48 @@ final class ObservationDateTests: XCTestCase {
         XCTAssertTrue(forecast.canForecast)
         XCTAssertFalse(PreparationActions(ready: true, busy: true, hasSession: true).canForecast)
     }
+
+    func testCloudGenusBriefFormatting() {
+        let saved = L10n.language
+        defer { L10n.language = saved }
+        L10n.language = .chinese
+
+        XCTAssertEqual(
+            cloudGenusBrief(["label": "cirrus", "confidence": 0.72]),
+            "卷云（代理 72%）"
+        )
+        XCTAssertEqual(
+            cloudGenusBrief(["label": "unknown", "compatible_genera": ["altocumulus", "altostratus"]]),
+            "高积云等（代理）"
+        )
+        XCTAssertNil(cloudGenusBrief(["label": "unknown", "compatible_genera": []]))
+
+        L10n.language = .english
+        XCTAssertEqual(
+            cloudGenusBrief(["label": "cirrus", "confidence": 0.72]),
+            "Cirrus (proxy 72%)"
+        )
+    }
+
+    func testHourlyLedgerFilteringAndToggleTitles() {
+        let saved = L10n.language
+        defer { L10n.language = saved }
+        L10n.language = .chinese
+
+        let steps: [JSONObject] = [
+            ["valid_time_local": "2026-11-24T17:30:00", "valid": false],
+            ["valid_time_local": "2026-11-24T17:40:00", "valid": true, "instant_quality_index": 1.2],
+            ["valid_time_local": "2026-11-24T17:50:00", "instant_quality_index": 1.5],
+            ["valid_time_local": "2026-11-24T18:00:00", "valid": false],
+        ]
+        XCTAssertEqual(WorkLedgerView.hiddenCount(in: steps), 2)
+        XCTAssertEqual(WorkLedgerView.filteredSteps(from: steps, showInvalid: false).count, 2)
+        XCTAssertEqual(WorkLedgerView.filteredSteps(from: steps, showInvalid: true).count, 4)
+        XCTAssertEqual(WorkLedgerView.toggleButtonTitle(hiddenCount: 2, showInvalid: false), "显示 2 个未判断时次")
+        XCTAssertEqual(WorkLedgerView.toggleButtonTitle(hiddenCount: 2, showInvalid: true), "隐藏未判断时次")
+    }
+
+    func testFriendlyEngineMessageSuppressesInternalNowcastReason() {
+        XCTAssertEqual(friendlyEngineMessage("native-nowcast-map-publication-not-requested"), "")
+    }
 }

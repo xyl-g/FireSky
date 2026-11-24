@@ -247,24 +247,203 @@ public sealed partial class MainWindow
                     Content = details,
                     HorizontalAlignment = HorizontalAlignment.Stretch,
                 });
-                InventoryRows.Children.Add(stack);
                 InventoryRows.Children.Add(new Border
                 {
-                    Height = 1,
-                    Background = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
+                    Padding = new Thickness(18),
+                    CornerRadius = new CornerRadius(14),
+                    Background = ThemeBrush("FireSkyCardBrush"),
+                    BorderBrush = ThemeBrush("FireSkyCardBorderBrush"),
+                    BorderThickness = new Thickness(1),
+                    Child = stack,
                 });
             }
             DataWorkspaceText.Text = WorkspacePath.Text.Length > 0
                 ? WorkspacePath.Text : L10n.T("数据目录未设置");
             DataWorkspaceText.Opacity = WorkspacePath.Text.Length > 0 ? .65 : .9;
+            var hasDatasets = (response["datasets"] as JsonArray)?.OfType<JsonObject>().Any() == true;
+            InventoryEmptyCard.Visibility = !hasDatasets ? Visibility.Visible : Visibility.Collapsed;
+            RenderInventoryCategories(response["categories"]);
             InventoryError.Visibility = Visibility.Collapsed;
         }
         catch (Exception error)
         {
+            InventoryEmptyCard.Visibility = Visibility.Collapsed;
+            InventoryCategoriesHost.Children.Clear();
             InventoryError.Text = FriendlyMessages.Map(error.Message);
             InventoryError.Visibility = Visibility.Visible;
+            Fail(error, "data");
         }
     }
+
+    private void RenderInventoryCategories(JsonNode? categoriesNode)
+    {
+        if (InventoryCategoriesHost == null) return;
+        InventoryCategoriesHost.Children.Clear();
+        JsonArray? rows = null;
+        if (categoriesNode is JsonObject wrapped && wrapped["categories"] is JsonArray nested)
+            rows = nested;
+        else if (categoriesNode is JsonArray direct)
+            rows = direct;
+        var items = rows?.OfType<JsonObject>().ToList() ?? [];
+        if (items.Count == 0) return;
+
+        var cardStack = new StackPanel { Spacing = 10 };
+        var header = new StackPanel { Spacing = 3 };
+        header.Children.Add(new TextBlock
+        {
+            Text = L10n.T("预测结果与附加缓存"),
+            FontSize = 15,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        });
+        header.Children.Add(new TextBlock
+        {
+            Text = L10n.T("计算过程中的中间产物（衍生张量、卫星解包帧、临时排行缓存）会在计算结束后立即自动删除，磁盘仅保留最终结果与原始气象/地形数据。"),
+            FontSize = 11,
+            Opacity = .7,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        cardStack.Children.Add(header);
+        cardStack.Children.Add(new Border
+        {
+            Height = 1,
+            Background = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
+        });
+
+        for (var i = 0; i < items.Count; i++)
+        {
+            var item = items[i];
+            var key = Text(item, "category");
+            var files = (long?)DoubleValue(item["file_count"]) ?? 0;
+            var bytes = (long?)DoubleValue(item["bytes"]) ?? 0;
+            var path = Text(item, "path");
+
+            var row = new Grid { ColumnSpacing = 12, Padding = new Thickness(0, 4, 0, 4) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(24) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            row.Children.Add(new FontIcon
+            {
+                Glyph = CategoryGlyph(key),
+                FontSize = 15,
+                Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            var textCol = new StackPanel { Spacing = 2 };
+            textCol.Children.Add(new TextBlock
+            {
+                Text = CategoryTitle(key),
+                FontSize = 13,
+                FontWeight = Microsoft.UI.Text.FontWeights.Medium,
+            });
+            var subtitle = CategorySubtitle(key);
+            if (subtitle.Length > 0)
+            {
+                textCol.Children.Add(new TextBlock
+                {
+                    Text = subtitle,
+                    FontSize = 11,
+                    Opacity = .65,
+                    TextWrapping = TextWrapping.Wrap,
+                });
+            }
+            Grid.SetColumn(textCol, 1);
+            row.Children.Add(textCol);
+
+            var filesText = new TextBlock
+            {
+                Text = L10n.IsEnglish ? $"{files} files" : $"{files} 个文件",
+                FontSize = 12,
+                Opacity = .75,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            Grid.SetColumn(filesText, 2);
+            row.Children.Add(filesText);
+
+            var sizeText = new TextBlock
+            {
+                Text = FormatBytes(bytes),
+                FontSize = 12,
+                FontWeight = Microsoft.UI.Text.FontWeights.Medium,
+                MinWidth = 72,
+                HorizontalTextAlignment = TextAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            Grid.SetColumn(sizeText, 3);
+            row.Children.Add(sizeText);
+
+            if (path.Length > 0)
+            {
+                var open = new IconButton("\uE838", L10n.T("在资源管理器中打开"));
+                open.Click += (_, _) =>
+                {
+                    if (Directory.Exists(path))
+                    {
+                        System.Diagnostics.Process.Start(
+                            new System.Diagnostics.ProcessStartInfo(path) { UseShellExecute = true });
+                    }
+                };
+                Grid.SetColumn(open, 4);
+                row.Children.Add(open);
+            }
+
+            cardStack.Children.Add(row);
+            if (i < items.Count - 1)
+            {
+                cardStack.Children.Add(new Border
+                {
+                    Height = 1,
+                    Opacity = .45,
+                    Background = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
+                });
+            }
+        }
+
+        InventoryCategoriesHost.Children.Add(new Border
+        {
+            Padding = new Thickness(18),
+            CornerRadius = new CornerRadius(14),
+            Background = ThemeBrush("FireSkyCardBrush"),
+            BorderBrush = ThemeBrush("FireSkyCardBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Child = cardStack,
+        });
+    }
+
+    private static string CategoryTitle(string key) => key switch
+    {
+        "point-forecasts" => L10n.T("单点预测结果缓存"),
+        "regional-forecasts" => L10n.T("区域预测结果缓存"),
+        "map-frames" => L10n.T("地图渲染帧缓存"),
+        "reports" => L10n.T("历史报告产物"),
+        "satellite" => L10n.T("卫星实况帧（Himawari HSD）"),
+        "srtm" => L10n.T("SRTM 地形瓦片"),
+        _ => key,
+    };
+
+    private static string CategorySubtitle(string key) => key switch
+    {
+        "point-forecasts" => L10n.T("按地点与起报周期复用单点计算结果"),
+        "regional-forecasts" => L10n.T("按区域范围、模式与周期复用计算结果"),
+        "map-frames" => L10n.T("地图与剖面可视化中间帧"),
+        "reports" => L10n.T("已归档预测报告与快照"),
+        "satellite" => L10n.T("葵花卫星多波段观测帧"),
+        "srtm" => L10n.T("离线高程与地形遮挡计算瓦片"),
+        _ => "",
+    };
+
+    private static string CategoryGlyph(string key) => key switch
+    {
+        "point-forecasts" => "\uE707",
+        "regional-forecasts" => "\uE826",
+        "map-frames" => "\uEB9F",
+        "reports" => "\uE8A5",
+        "satellite" => "\uE701",
+        "srtm" => "\uE7F4",
+        _ => "\uE8B7",
+    };
 
     /// <summary>轻量图标按钮（访达/删除等行内动作）。</summary>
     private sealed class IconButton : Button
@@ -286,7 +465,7 @@ public sealed partial class MainWindow
         var path = WorkspacePath.Text;
         if (path.Length == 0 || !Directory.Exists(path))
         {
-            Fail(new InvalidOperationException(L10n.T("数据目录尚未设置或不存在。")));
+            Fail(new InvalidOperationException(L10n.T("数据目录尚未设置或不存在。")), "data");
             return;
         }
         System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(path)
@@ -321,6 +500,9 @@ public sealed partial class MainWindow
     private JsonObject terrainProgress = [];
     private int terrainRegionIndex;
     private bool showTerrainConfirm;
+    private int terrainLastFailedCount;
+    private (string Label, int South, int North, int West, int East)? terrainLastFailedRegion;
+    private List<string> terrainLastFailedTiles = [];
     private CancellationTokenSource? terrainOperation;
 
     private void BuildTerrainRegionPicker()
@@ -429,8 +611,16 @@ public sealed partial class MainWindow
         }
     }
 
+    private void OnTerrainRetryFailed(object sender, RoutedEventArgs args)
+    {
+        var region = terrainLastFailedRegion ?? TerrainRegions[terrainRegionIndex];
+        var tiles = terrainLastFailedTiles.Count > 0 ? terrainLastFailedTiles : null;
+        DownloadTerrainRegion(region, tiles);
+    }
+
     /// <summary>区域/全球批量下载：跳过已有、可取消续传；不占计算锁。</summary>
-    private async void DownloadTerrainRegion((string Label, int South, int North, int West, int East) region)
+    private async void DownloadTerrainRegion((string Label, int South, int North, int West, int East) region,
+        List<string>? tiles = null)
     {
         if (!online || busy || terrainDownloading) return;
         terrainDownloading = true;
@@ -443,7 +633,11 @@ public sealed partial class MainWindow
         var token = terrainOperation.Token;
         RenderTerrainControls();
         var parameters = new JsonObject { ["mode"] = "global", ["timeout_seconds"] = 300.0 };
-        if (region.Label != "全球")
+        if (tiles is { Count: > 0 })
+        {
+            parameters["tiles"] = new JsonArray(tiles.Select(t => (JsonNode)JsonValue.Create(t)!).ToArray());
+        }
+        else if (region.Label != "全球")
         {
             parameters["bounds"] = new JsonObject
             {
@@ -463,6 +657,15 @@ public sealed partial class MainWindow
                     }
                 }), cancellation: token);
             token.ThrowIfCancellationRequested();
+            var failed = (int)(DoubleValue(result["failed"]) ?? 0);
+            var failedTiles = (result["failed_tiles"] as JsonArray ?? [])
+                .Select(node => StringOrNull(node))
+                .Where(name => !string.IsNullOrEmpty(name))
+                .Cast<string>()
+                .ToList();
+            terrainLastFailedCount = failed;
+            terrainLastFailedRegion = failed > 0 ? region : null;
+            terrainLastFailedTiles = failed > 0 ? failedTiles : [];
             terrainMessage = TerrainResultMessage(result, region.Label);
             terrainMessageFailed = TerrainMessageFailedFlag(result);
         }
@@ -481,6 +684,7 @@ public sealed partial class MainWindow
             terrainDownloading = false;
             terrainCancelling = false;
             RenderTerrain();
+            _ = LoadTerrain();
         }
     }
 
@@ -693,6 +897,17 @@ public sealed partial class MainWindow
         TerrainCancelButton.Visibility = terrainDownloading ? Visibility.Visible : Visibility.Collapsed;
         TerrainCancelButton.IsEnabled = terrainDownloading && !terrainCancelling;
         TerrainRegionButton.Visibility = terrainDownloading ? Visibility.Collapsed : Visibility.Visible;
+        ToolTipService.SetToolTip(TerrainRegionButton, L10n.T("确认估算后下载所选区域的 SRTM 瓦片（跳过已有；可随时取消续传）"));
+        if (TerrainRetryFailedButton != null)
+        {
+            TerrainRetryFailedButton.Visibility = !terrainDownloading && terrainLastFailedCount > 0
+                ? Visibility.Visible : Visibility.Collapsed;
+            TerrainRetryFailedButton.IsEnabled = online && !busy && !terrainDownloading;
+            TerrainRetryFailedButton.Content = L10n.IsEnglish
+                ? $"Retry failed ({terrainLastFailedCount})"
+                : $"重试失败项（{terrainLastFailedCount}）";
+            ToolTipService.SetToolTip(TerrainRetryFailedButton, L10n.T("定向重试上次失败的 SRTM 瓦片，自动跳过已完成瓦片"));
+        }
         TerrainRegionPicker.Visibility = terrainDownloading ? Visibility.Collapsed : Visibility.Visible;
         TerrainPointButton.Visibility = terrainDownloading ? Visibility.Collapsed : Visibility.Visible;
         TerrainRefreshButton.Visibility = terrainDownloading ? Visibility.Collapsed : Visibility.Visible;

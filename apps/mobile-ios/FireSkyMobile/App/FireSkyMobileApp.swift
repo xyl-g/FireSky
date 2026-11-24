@@ -1,9 +1,6 @@
 import SwiftUI
 
 /// FireSkyMobile App 壳（FireSkyApp.swift 迁移）。
-/// AppKit WindowGroup + CommandMenu/快捷键 + 多窗口 → 单窗口 TabView 导航；
-/// 快捷键（⌘1 单点 / ⌘4 数据 / ⌘, 设置）语义降级为底部标签页切换；
-/// applicationWillTerminate → scenePhase 语义（见 onChange）。
 @main
 struct FireSkyMobileApp: App {
     @Environment(\.scenePhase) private var scenePhase
@@ -13,13 +10,11 @@ struct FireSkyMobileApp: App {
         WindowGroup {
             RootView()
                 .environmentObject(store)
-                .environment(\.locale, Locale(identifier: L10n.effective == .english ? "en_US" : "zh_CN"))
+                .environment(\.locale, store.appLocale)
                 .tint(warm)
                 .preferredColorScheme(store.appearance == "dark" ? .dark : store.appearance == "light" ? .light : nil)
         }
         .onChange(of: scenePhase) { phase in
-            // iOS 进程随时可能被系统回收，引擎通道随进程消亡；
-            // 回前台若已断线则自动重连（对应桌面「重新连接」入口）。
             if phase == .active, !store.online, !store.busy, !store.probingDownloads {
                 Task { await store.connect() }
             }
@@ -30,10 +25,10 @@ struct FireSkyMobileApp: App {
 struct RootView: View {
     @EnvironmentObject private var store: Store
     @State private var tab: Page = .point
-    /// v1.9.5 i18n：观察语言偏好变化——改动触发整棵树重建，L10n 文案随之刷新。
     @AppStorage("appLanguage") private var appLanguage = "system"
 
     var body: some View {
+        let _ = appLanguage
         TabView(selection: $tab) {
             PointWorkbenchView()
                 .tabItem { Label(L10n.navPoint, systemImage: "location.circle") }
@@ -51,8 +46,6 @@ struct RootView: View {
         .environment(\.timeZone, TimeZone(identifier: store.timezone) ?? .current)
         .onAppear { tab = store.page }
         .onChange(of: tab) { newTab in
-            // 对应桌面侧栏「if !store.busy { store.page = page }」：
-            // 任务进行中保持当前页。
             if store.busy {
                 tab = store.page
             } else {
@@ -64,7 +57,13 @@ struct RootView: View {
                     }
                 }
                 if newTab == .history { store.loadTaskHistory() }
-                if newTab == .settings { Task { await store.refreshCAMSConfiguration() } }
+                if newTab == .settings {
+                    Task {
+                        await store.refreshCAMSConfiguration()
+                        await store.loadRetentionSettings()
+                        await store.loadDataSyncSettings()
+                    }
+                }
             }
         }
         .onChange(of: store.page) { newPage in

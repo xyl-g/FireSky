@@ -7,17 +7,17 @@ native desktop clients**. The physics follows the methodology of the
 
 > 中文文档：[README.md](README.md)
 
-> Current release **v1.9.10** (see [Download & install](#download--install-releases)):
+> Current release **v1.10.0** (see [Download & install](#download--install-releases)):
 > macOS DMGs (dual arch) and Windows zip + installer (x64/ARM64) are built and
 > attached to GitHub Releases automatically on `v*` tags; Android APK
 > auto-publishing is wired in (mobile-release job builds on tags); iOS builds
-> from source with Xcode. Highlights of v1.9.10: macOS Liquid Glass chrome and
-> new sunset-cloud vector logo, built-in LAN & Cloudflare Tunnel HTTP server,
-> 30-second preflight watchdog stall fix (local checks down to 25–200 ms),
-> 5-minute lightweight background update monitoring (downloads only when a new
-> cycle is published), 6-frame multispectral nowcast & profile upgrade, China
-> regional parallel decoding & immediate intermediate-artifact cleanup, EC/CAMS
-> retention fix, and GitHub 403/429 updater fallback. Design tokens in [DESIGN.md](DESIGN.md).
+> from source with Xcode. Highlights of v1.10.0: **Windows, iOS, and Android UI
+> & feature parity with the macOS Liquid Glass baseline**, plus **Mobile Remote
+> Server Mode** (connect iOS/Android directly to a Mac over Cloudflare Tunnel
+> HTTPS or LAN HTTP to share Mac caches, forecasts, and task history), building
+> on v1.9.10's 30 s watchdog fix, 5-minute lightweight background sync monitor,
+> 6-frame multispectral nowcast, and China regional parallel speedup. Design
+> tokens in [DESIGN.md](DESIGN.md).
 > The UI reference is the [macOS product & UI baseline](docs/MACOS_UI_BASELINE.zh-CN.md);
 > mobile blueprint and acceptance status:
 > [mobile native plan](docs/MOBILE_NATIVE_PLAN.md).
@@ -81,7 +81,7 @@ native desktop clients**. The physics follows the methodology of the
 
 Official builds are published on
 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) (current:
-**v1.9.10**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
+**v1.10.0**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
 file names; run it in the directory holding the assets):
 
 ```bash

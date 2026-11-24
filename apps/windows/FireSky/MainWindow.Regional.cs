@@ -391,4 +391,208 @@ public sealed partial class MainWindow
         if (RegionalCrossSectionExpand != null)
             RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
     }
+
+    private void OnSetDefaultRegion(object sender, RoutedEventArgs args)
+    {
+        var codes = selectedRegions.OrderBy(v => v).ToList();
+        if (codes.Count == 0)
+        {
+            Fail(new InvalidOperationException(L10n.T("请至少选择一个预设区域后再设为默认。")), "regional");
+            return;
+        }
+        defaultRegionalPreset = codes;
+        SaveSettings();
+        Status.Text = L10n.T("已将当前区域设为默认");
+    }
+
+    private void OnResetDefaultRegion(object sender, RoutedEventArgs args)
+    {
+        selectedRegions.Clear();
+        foreach (var code in defaultRegionalPreset) selectedRegions.Add(code);
+        customRegion = false;
+        suppressDraftEvents = true;
+        try
+        {
+            CustomRegionToggle.IsChecked = false;
+            CustomBoundsFields.Visibility = Visibility.Collapsed;
+            RenderRegionPresetsChecks();
+        }
+        finally { suppressDraftEvents = false; }
+        PageSubtitle.Text = page == "regional" ? RegionalTitle() : PageSubtitle.Text;
+        ClearError("regional");
+        RenderResult();
+        ScheduleSessionSave();
+        _ = UpdateMap(forceFit: true);
+    }
+
+    private (double West, double South, double East, double North)? RegionalActiveBounds()
+    {
+        var areas = new List<(double W, double S, double E, double N)>();
+        foreach (var region in regionDefinitions)
+        {
+            var code = Text(region, "code");
+            if (!selectedRegions.Contains(code)) continue;
+            if (region["bounds"] is JsonArray bounds && bounds.Count >= 4)
+            {
+                var w = DoubleValue(bounds[0]);
+                var s = DoubleValue(bounds[1]);
+                var e = DoubleValue(bounds[2]);
+                var n = DoubleValue(bounds[3]);
+                if (w is { } west && s is { } south && e is { } east && n is { } north && north > south)
+                    areas.Add((west, south, east, north));
+            }
+        }
+        if (areas.Count == 0 && selectedRegions.Contains("china"))
+        {
+            // 引擎连接前立即按完整中国边界自动缩放（西 73°E，南 18°N，东 136°E，北 54°N）。
+            areas.Add((73.0, 18.0, 136.0, 54.0));
+        }
+        if (customRegion && double.IsFinite(West.Value) && double.IsFinite(East.Value)
+            && double.IsFinite(South.Value) && double.IsFinite(North.Value)
+            && North.Value > South.Value && West.Value != East.Value)
+        {
+            areas.Add((West.Value, South.Value, East.Value, North.Value));
+        }
+        if (areas.Count == 0) return null;
+        if (areas.Count == 1) return areas[0];
+        // 若包含跨 180° 区域则取首个边界，否则取联合外包框。
+        if (areas.Any(a => a.W > a.E)) return areas[0];
+        return (
+            areas.Min(a => a.W),
+            areas.Min(a => a.S),
+            areas.Max(a => a.E),
+            areas.Max(a => a.N)
+        );
+    }
+
+    /// <summary>
+    /// WebView2 Leaflet 增强：切换至区域大图前刷新容器尺寸确保完整中国视野居正，
+    /// 并支持双线性平滑插值热图图层（严格保持缺测透明且不遮挡网格点击）。
+    /// </summary>
+    private static string MapEnhancerScript() => """
+        (() => {
+          if (window.__fireSkyEnhanced) return;
+          window.__fireSkyEnhanced = true;
+          const origUpdate = window.fireSky && window.fireSky.update;
+          if (!origUpdate) return;
+          let prevRegional = null;
+          function buildSmoothOverlay(points) {
+            const valid = [];
+            let minLat = Infinity, maxLat = -Infinity, minLon = Infinity, maxLon = -Infinity;
+            for (const p of points) {
+              if (!Number.isFinite(p.lat) || !Number.isFinite(p.lon)) continue;
+              const v = p.peak_quality_index ?? p.quality_index;
+              if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) continue;
+              valid.push({ lat: p.lat, lon: p.lon, q: v });
+              if (p.lat < minLat) minLat = p.lat;
+              if (p.lat > maxLat) maxLat = p.lat;
+              if (p.lon < minLon) minLon = p.lon;
+              if (p.lon > maxLon) maxLon = p.lon;
+            }
+            if (valid.length === 0 || maxLon - minLon > 350) return null;
+            const step = 0.25;
+            const cols = Math.round((maxLon - minLon) / step) + 1;
+            const rows = Math.round((maxLat - minLat) / step) + 1;
+            if (cols < 1 || rows < 1 || cols * rows > 400000) return null;
+            const g = new Float64Array(rows * cols);
+            g.fill(NaN);
+            for (const item of valid) {
+              const c = Math.round((item.lon - minLon) / step);
+              const r = Math.round((item.lat - minLat) / step);
+              if (c >= 0 && c < cols && r >= 0 && r < rows) g[r * cols + c] = item.q;
+            }
+            const west = Math.max(-180, minLon - step / 2);
+            const east = Math.min(180, maxLon + step / 2);
+            const south = Math.max(-85, minLat - step / 2);
+            const north = Math.min(85, maxLat + step / 2);
+            const mercY = lat => Math.log(Math.tan(Math.PI / 4 + Math.max(-85, Math.min(85, lat)) * Math.PI / 360));
+            const invMercY = y => (2 * Math.atan(Math.exp(y)) - Math.PI / 2) * 180 / Math.PI;
+            const yMin = mercY(south), yMax = mercY(north);
+            const rawW = Math.max(cols * 3, 32), rawH = Math.max(rows * 3, 32), maxDim = 900;
+            const scale = Math.max(1, rawW / maxDim, rawH / maxDim);
+            const w = Math.max(16, Math.round(rawW / scale));
+            const h = Math.max(16, Math.round(rawH / scale));
+            const canvas = document.createElement('canvas');
+            canvas.width = w; canvas.height = h;
+            const ctx = canvas.getContext('2d');
+            const img = ctx.createImageData(w, h);
+            const data = img.data;
+            for (let py = 0; py < h; py++) {
+              const fracY = (py + 0.5) / h;
+              const lat = invMercY(yMax - fracY * (yMax - yMin));
+              const rFloat = (lat - minLat) / step;
+              const rNear = Math.round(rFloat);
+              if (rNear < 0 || rNear >= rows) continue;
+              const r0 = Math.max(0, Math.min(rows - 1, Math.floor(rFloat)));
+              const r1 = Math.max(0, Math.min(rows - 1, r0 + 1));
+              const ty = Math.max(0, Math.min(1, rFloat - r0));
+              for (let px = 0; px < w; px++) {
+                const lon = west + ((px + 0.5) / w) * (east - west);
+                const cFloat = (lon - minLon) / step;
+                const cNear = Math.round(cFloat);
+                if (cNear < 0 || cNear >= cols || Number.isNaN(g[rNear * cols + cNear])) continue;
+                const c0 = Math.max(0, Math.min(cols - 1, Math.floor(cFloat)));
+                const c1 = Math.max(0, Math.min(cols - 1, c0 + 1));
+                const tx = Math.max(0, Math.min(1, cFloat - c0));
+                const s00 = g[r0 * cols + c0], s01 = g[r0 * cols + c1];
+                const s10 = g[r1 * cols + c0], s11 = g[r1 * cols + c1];
+                let sum = 0, wt = 0;
+                const w00 = (1 - tx) * (1 - ty), w01 = tx * (1 - ty), w10 = (1 - tx) * ty, w11 = tx * ty;
+                if (!Number.isNaN(s00) && w00 > 0) { sum += s00 * w00; wt += w00; }
+                if (!Number.isNaN(s01) && w01 > 0) { sum += s01 * w01; wt += w01; }
+                if (!Number.isNaN(s10) && w10 > 0) { sum += s10 * w10; wt += w10; }
+                if (!Number.isNaN(s11) && w11 > 0) { sum += s11 * w11; wt += w11; }
+                if (wt <= 0) continue;
+                const q = sum / wt;
+                const t = Math.min(1, Math.max(0, q / 2.5));
+                let rgb = [201, 60, 145];
+                for (let i = 1; i < STOPS.length; i++) {
+                  if (t <= STOPS[i][0]) {
+                    const [l0, a] = STOPS[i - 1], [r0s, b] = STOPS[i];
+                    const f = (t - l0) / (r0s - l0);
+                    rgb = [Math.round(a[0] + (b[0] - a[0]) * f), Math.round(a[1] + (b[1] - a[1]) * f), Math.round(a[2] + (b[2] - a[2]) * f)];
+                    break;
+                  }
+                }
+                const alpha = Math.round((t <= 0.001 ? 12 : (42 + 190 * Math.sqrt(t))) * 0.9);
+                const idx = (py * w + px) * 4;
+                data[idx] = rgb[0]; data[idx + 1] = rgb[1]; data[idx + 2] = rgb[2]; data[idx + 3] = alpha;
+              }
+            }
+            ctx.putImageData(img, 0, 0);
+            return L.imageOverlay(canvas.toDataURL('image/png'), [[south, west], [north, east]], { interactive: false });
+          }
+          window.fireSky.update = function(state) {
+            if (typeof map !== 'undefined' && prevRegional !== !!state.regional) {
+              prevRegional = !!state.regional;
+              map.invalidateSize(false);
+              lastKey = '';
+            }
+            if (state.force_fit) lastKey = '';
+            if (state.regional && state.show_smooth && Array.isArray(state.points) && state.points.length > 0) {
+              const pts = state.points;
+              const overlay = buildSmoothOverlay(pts);
+              if (overlay) {
+                const missingOnly = pts.filter(p => {
+                  const v = p.peak_quality_index ?? p.quality_index;
+                  return !(typeof v === 'number' && Number.isFinite(v) && v >= 0);
+                });
+                const patched = Object.assign({}, state, { points: missingOnly });
+                origUpdate(patched);
+                overlay.addTo(grid);
+                if (state.show_grid !== false && Number.isFinite(state.west) && Number.isFinite(state.east)
+                    && Number.isFinite(state.south) && Number.isFinite(state.north) && state.north > state.south) {
+                  gridLines(state.west, state.south, state.east, state.north).addTo(grid);
+                }
+                return;
+              }
+            }
+            origUpdate(state);
+            if (state.regional && state.show_grid !== false && Number.isFinite(state.west) && Number.isFinite(state.east)
+                && Number.isFinite(state.south) && Number.isFinite(state.north) && state.north > state.south) {
+              gridLines(state.west, state.south, state.east, state.north).addTo(grid);
+            }
+          };
+        })();
+        """;
 }

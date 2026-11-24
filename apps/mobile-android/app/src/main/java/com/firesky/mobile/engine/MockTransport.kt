@@ -36,6 +36,12 @@ class MockTransport : EngineTransport {
     private var lastPayload: JSONObject? = null
     private var datasets: List<Triple<String, String, Boolean>> = emptyList()
     private var camsConfigured = false
+    private var retentionSettings: JSONObject = JSONObject()
+    private var dataSyncSettings: JSONObject = JSONObject()
+        .put("enabled", false)
+        .put("sources", JSONObject().put("cams", false).put("gfs", true).put("ec", true))
+        .put("interval_minutes", 15)
+        .put("lead_horizon_hours", 72)
 
     override fun start(config: JSONObject) {
         stop()
@@ -43,6 +49,12 @@ class MockTransport : EngineTransport {
         sessionToken = null
         lastPayload = null
         camsConfigured = false
+        retentionSettings = JSONObject()
+        dataSyncSettings = JSONObject()
+            .put("enabled", false)
+            .put("sources", JSONObject().put("cams", false).put("gfs", true).put("ec", true))
+            .put("interval_minutes", 15)
+            .put("lead_horizon_hours", 72)
         datasets = listOf(
             Triple("gfs", "GFS", true),
             Triple("ecmwf", "EC", true),
@@ -130,6 +142,12 @@ class MockTransport : EngineTransport {
         "forecast" -> forecast(requestId)
         "dismiss" -> dismiss()
         "inventory" -> inventory()
+        "retention_settings" -> retentionStatus()
+        "save_retention_settings" -> saveRetentionSettings(params)
+        "apply_retention_settings" -> applyRetentionSettings()
+        "data_sync_settings" -> dataSyncStatus()
+        "save_data_sync_settings" -> saveDataSyncSettings(params)
+        "data_sync_run" -> dataSyncRun(params)
         "task_history" -> taskHistory()
         "task_events" -> taskEvents()
         "task_forget" -> JSONObject().put("forgotten", true)
@@ -154,7 +172,7 @@ class MockTransport : EngineTransport {
                 listOf(
                     "score_window", "check_desktop_data", "desktop_inventory",
                     "desktop_publications", "desktop_prepare", "desktop_session", "location",
-                    "task_history", "task_events", "task_forget", "result_restore",
+                    "data_sync", "task_history", "task_events", "task_forget", "result_restore",
                     "data_delete", "terrain_inventory", "terrain_download",
                 ),
             ),
@@ -361,7 +379,75 @@ class MockTransport : EngineTransport {
                     .put("path", "/data/data/com.firesky.mobile/files/cache/$source"),
             )
         }
-        return JSONObject().put("datasets", rows)
+        val categories = JSONArray()
+            .put(JSONObject().put("category", "point-forecasts").put("path", "/data/data/com.firesky.mobile/files/cache/point-forecasts").put("file_count", 4).put("bytes", 2_400_000L))
+            .put(JSONObject().put("category", "regional-forecasts").put("path", "/data/data/com.firesky.mobile/files/cache/regional-forecasts").put("file_count", 0).put("bytes", 0L))
+            .put(JSONObject().put("category", "map-frames").put("path", "/data/data/com.firesky.mobile/files/cache/map-frames").put("file_count", 0).put("bytes", 0L))
+            .put(JSONObject().put("category", "reports").put("path", "/data/data/com.firesky.mobile/files/reports").put("file_count", 2).put("bytes", 480_000L))
+            .put(JSONObject().put("category", "satellite").put("path", "/data/data/com.firesky.mobile/files/cache/himawari-hsd").put("file_count", 0).put("bytes", 0L))
+            .put(JSONObject().put("category", "srtm").put("path", "/data/data/com.firesky.mobile/files/cache/srtm").put("file_count", 3).put("bytes", 77_803_206L))
+        return JSONObject()
+            .put("datasets", rows)
+            .put("categories", JSONObject().put("contract", "firesky-data-categories-v1").put("categories", categories))
+    }
+
+    private fun retentionConfigured(): Boolean = listOf(
+        "gfs_cycles", "ecmwf_cycles", "cams_cycles", "satellite_days", "report_days", "map_days",
+    ).any { key ->
+        val value = retentionSettings.opt(key)
+        value != null && value != JSONObject.NULL
+    }
+
+    private fun retentionStatus(): JSONObject = JSONObject()
+        .put("configured", retentionConfigured())
+        .put("settings", JSONObject(retentionSettings.toString()))
+
+    private fun saveRetentionSettings(params: JSONObject): JSONObject {
+        retentionSettings = JSONObject(params.optJSONObject("settings")?.toString() ?: "{}")
+        return retentionStatus()
+    }
+
+    private fun applyRetentionSettings(): JSONObject {
+        if (!retentionConfigured()) {
+            return JSONObject().put("configured", false).put("result", JSONObject.NULL)
+        }
+        return JSONObject()
+            .put("configured", true)
+            .put(
+                "result",
+                JSONObject()
+                    .put("removed_count", 6)
+                    .put("freed_mb", 128.4)
+                    .put("deferred_count", 0)
+                    .put("failed_count", 0),
+            )
+    }
+
+    private fun dataSyncStatus(): JSONObject = JSONObject()
+        .put("configured", true)
+        .put("retention_configured", retentionConfigured())
+        .put("settings", JSONObject(dataSyncSettings.toString()))
+        .put("state", JSONObject().put("sources", JSONObject()))
+
+    private fun saveDataSyncSettings(params: JSONObject): JSONObject {
+        val incoming = params.optJSONObject("settings") ?: JSONObject()
+        val interval = incoming.optInt("interval_minutes", 15)
+        if (interval !in 5..1440) {
+            throw EngineError("同步间隔必须在 5–1440 分钟之间。")
+        }
+        dataSyncSettings = JSONObject(incoming.toString())
+        return dataSyncStatus()
+    }
+
+    private fun dataSyncRun(params: JSONObject): JSONObject {
+        val sources = params.optJSONArray("sources") ?: JSONArray()
+        val forced = params.optBoolean("force", false)
+        val resultSources = JSONObject()
+        for (i in 0 until sources.length()) {
+            val name = sources.optString(i)
+            resultSources.put(name, JSONObject().put("status", if (forced) "synced" else "up_to_date"))
+        }
+        return JSONObject().put("sources", resultSources).put("forced", forced)
     }
 
     private fun camsCredentials(): JSONObject = JSONObject()
@@ -457,14 +543,93 @@ class MockTransport : EngineTransport {
             )
             .put("duration_minutes", 42.0)
             .put("confidence_score", 0.74)
+            .put("convective_risk", 0.12)
             .put("model_disagreement_score", 0.18)
+            .put("dominant_burnable_pressure_family", "high")
+            .put("dominant_burnable_cloud_base_agl_mean_m", 7200.0)
+            .put("dominant_burnable_cloud_top_agl_mean_m", 9800.0)
+            .put(
+                "cloud_genus_proxy",
+                JSONObject()
+                    .put("label", "cirrus")
+                    .put("confidence", 0.72)
+                    .put("source", "pressure-phase-geometry-proxy")
+                    .put("scoring_effect", false)
+                    .put("compatible_genera", JSONArray(listOf("cirrus", "cirrostratus")))
+                    .put(
+                        "candidate_scores",
+                        JSONObject().put("cirrus", 0.72).put("cirrostratus", 0.21).put("altocumulus", 0.07),
+                    ),
+            )
+            .put("cross_section", mockCrossSection(bestTime))
             .put(
                 "aerosol",
                 JSONObject().put("aod550", 0.28).put("source", "CAMS").put("quality", "cams"),
             )
-            .put("summary", "模拟结果：傍晚云量适中，霞光窗口集中，建议提前 15 分钟到场。")
+            .put("summary", "模拟结果：傍晚高云量适中，霞光窗口集中，建议提前 15 分钟到场。")
             .put("cycle_time_utc", "2026-11-12T12:00:00Z")
             .put("steps", steps)
+    }
+
+    private fun mockCrossSection(validTimeLocal: String): JSONObject {
+        val distances = listOf(0.0, 40.0, 80.0, 120.0, 160.0, 200.0)
+        val levels = listOf(250, 300, 500, 700, 850)
+        val levelHeights = listOf(10300.0, 9100.0, 5600.0, 3000.0, 1500.0)
+        val levelTemps = listOf(-46.0, -37.0, -14.0, 2.0, 11.0)
+        val terrain = listOf(12.0, 85.0, 240.0, 620.0, 310.0, 90.0)
+        val requiredAsl = listOf(1800.0, 2600.0, 3500.0, 4600.0, 5800.0, 7100.0)
+
+        fun <T> grid(fn: (Int, Int) -> T): JSONArray = JSONArray().apply {
+            for (i in distances.indices) {
+                put(JSONArray().apply {
+                    for (l in levels.indices) put(fn(i, l))
+                })
+            }
+        }
+
+        val cloudMask = Array(distances.size) { i ->
+            Array(levels.size) { l ->
+                (l == 0 || l == 1) && i in 1..4
+            }
+        }
+
+        return JSONObject()
+            .put("distances_km", JSONArray(distances))
+            .put("pressure_levels_hpa", JSONArray(levels))
+            .put("terrain_elevation_asl_m", JSONArray(terrain))
+            .put("required_illumination_base_asl_m", JSONArray(requiredAsl))
+            .put("solar_elevation_deg", -1.4)
+            .put("solar_azimuth_deg", 251.2)
+            .put("analysis_radius_km", 200.0)
+            .put("offset_minutes", 0.0)
+            .put("valid_time_local", validTimeLocal)
+            .put("spatial_sampling", "mock-6x5")
+            .put(
+                "fields",
+                JSONObject()
+                    .put("geopotential_height_asl_m", grid { _, l -> levelHeights[l] })
+                    .put("temperature_c", grid { _, l -> levelTemps[l] })
+                    .put("rh_percent", grid { i, l -> if (cloudMask[i][l]) 88.0 else 42.0 })
+                    .put("cloud_amount", grid { i, l -> if (cloudMask[i][l]) 0.68 else 0.02 })
+                    .put("cloud_presence", grid { i, l -> if (cloudMask[i][l]) 0.72 else 0.0 })
+                    .put("cloud_fraction_percent", grid { i, l -> if (cloudMask[i][l]) 68.0 else 2.0 })
+                    .put("pressure_family_code", grid { _, l -> if (l <= 1) 1 else if (l == 2) 2 else 3 })
+                    .put("cloud_layer_status", grid { i, l -> if (cloudMask[i][l]) 3 else 0 })
+                    .put("cloud_layer_base_asl_m", grid { _, l -> levelHeights[l] - 650.0 })
+                    .put("cloud_layer_top_asl_m", grid { _, l -> levelHeights[l] + 650.0 }),
+            )
+            .put(
+                "theoretical_targets",
+                JSONArray().put(
+                    JSONObject()
+                        .put("status", "burnable")
+                        .put("pressure_family", "high")
+                        .put("distance_km", 120.0)
+                        .put("cloud_base_asl_m", 7800.0)
+                        .put("cloud_top_asl_m", 10400.0)
+                        .put("cloud_phase", JSONObject().put("label", "ice")),
+                ),
+            )
     }
 
     private fun qualityLevel(value: Double): String = when {

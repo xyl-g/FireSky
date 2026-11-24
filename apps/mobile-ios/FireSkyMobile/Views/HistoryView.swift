@@ -1,32 +1,55 @@
 import SwiftUI
 
-/// 任务历史页（macOS NativeTaskHistoryView 同构）：列表 + 点击展开详情
-/// （事件时间线），行内恢复结果 / 恢复参数重查 / 删除记录；删除只删状态与事件。
+/// 任务历史页（对齐 macOS NativeTaskHistoryView 空态、筛选与任务详情）。
 struct HistoryView: View {
     @EnvironmentObject private var store: Store
+    @State private var kindFilter = "all"
+
+    private var visibleHistory: [MobileTaskHistoryItem] {
+        switch kindFilter {
+        case "active": return store.taskHistory.filter { !$0.isBackgroundSync }
+        case "sync": return store.taskHistory.filter(\.isBackgroundSync)
+        default: return store.taskHistory
+        }
+    }
 
     var body: some View {
         NavigationStack {
-            Group {
-                if store.taskHistoryLoading && store.taskHistory.isEmpty {
-                    ProgressView(L10n.text("正在读取任务记录…", "Loading task records…"))
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else if store.taskHistory.isEmpty {
-                    VStack(spacing: 10) {
-                        FireSkyMark()
-                            .frame(width: 32, height: 32)
-                            .opacity(0.24)
-                        Text(L10n.text("暂无任务记录", "No task records")).font(.system(size: 13, weight: .medium))
-                        Text(store.online
-                             ? L10n.text("完成一次检查或预测后会显示在这里。", "Shown after a check or forecast completes.")
-                             : L10n.text("引擎未连接。", "Engine is offline."))
-                            .font(.caption).foregroundStyle(.secondary)
+            VStack(spacing: 0) {
+                if !store.taskHistory.isEmpty {
+                    Picker(L10n.text("筛选", "Filter"), selection: $kindFilter) {
+                        Text(L10n.text("全部", "All")).tag("all")
+                        Text(L10n.text("主动任务", "Active")).tag("active")
+                        Text(L10n.text("后台同步", "Sync")).tag("sync")
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    historyList
+                    .pickerStyle(.segmented)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                }
+
+                Group {
+                    if store.taskHistoryLoading && store.taskHistory.isEmpty {
+                        ProgressView(L10n.text("正在读取任务记录…", "Loading task records…"))
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if visibleHistory.isEmpty {
+                        emptyState(
+                            title: store.taskHistory.isEmpty
+                                ? L10n.text("暂无任务记录", "No task records")
+                                : L10n.text("没有符合筛选的任务", "No tasks match the filter"),
+                            message: store.online
+                                ? (store.taskHistory.isEmpty
+                                   ? L10n.text("完成一次数据检查或预测后，任务记录与可恢复快照会显示在这里。",
+                                               "Task records and restorable snapshots will appear here after a check or forecast.")
+                                   : L10n.text("当前筛选条件下没有记录，可切换到「全部」查看。",
+                                               "No records match this filter. Switch back to All to view everything."))
+                                : L10n.text("引擎未连接。", "Engine is offline.")
+                        )
+                    } else {
+                        historyList
+                    }
                 }
             }
+            .workPageBackground()
             .navigationTitle(L10n.navHistory)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -47,38 +70,80 @@ struct HistoryView: View {
             Button(L10n.text("删除记录", "Delete record"), role: .destructive) { store.forgetPendingTask() }
             Button(L10n.text("保留记录", "Keep record"), role: .cancel) { store.setPendingForgetTask(nil) }
         } message: {
-            Text(L10n.text("只删除状态和事件，不删除已发布报告或天气数据。", "Only status and events are removed; published reports and weather data are kept."))
+            Text(L10n.text("只删除状态和事件，不删除已发布报告或天气数据。",
+                           "Only status and events are removed; published reports and weather data are kept."))
         }
     }
 
+    /// 统一空态（对齐 macOS NativeTaskHistoryView.emptyState）：FireSkyMarkScene + 标题 + 说明。
+    private func emptyState(title: String, message: String) -> some View {
+        VStack(spacing: 12) {
+            FireSkyMarkScene(size: 64)
+            Text(title).font(.subheadline.weight(.medium))
+            Text(message)
+                .font(.caption).foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 32)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+
     private var historyList: some View {
-        List {
-            if !store.taskHistoryError.isEmpty {
-                Text(store.taskHistoryError).foregroundStyle(.red)
-                    .font(.callout)
-            }
-            ForEach(store.taskHistory) { item in
-                HistoryRow(item: item)
-            }
-            if store.taskHistoryHasMore {
-                Button {
-                    store.loadTaskHistory(older: true)
-                } label: {
-                    HStack(spacing: 8) {
-                        if store.taskHistoryLoading { ProgressView() }
-                        Text(L10n.loadOlder).font(.callout)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                if !store.taskHistoryError.isEmpty {
+                    Text(store.taskHistoryError)
+                        .foregroundStyle(.red)
+                        .font(.callout)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                }
+
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(visibleHistory.enumerated()), id: \.element.id) { index, item in
+                        HistoryRow(item: item)
+                        if index < visibleHistory.count - 1 {
+                            Divider()
+                                .opacity(0.45)
+                                .padding(.leading, 46)
+                        }
                     }
                 }
-                .disabled(store.taskHistoryLoading)
-                .frame(maxWidth: .infinity, alignment: .center)
+                .fireSkySurface(role: .content, cornerRadius: 14)
+
+                if store.taskHistoryHasMore {
+                    Button {
+                        store.loadTaskHistory(older: true)
+                    } label: {
+                        HStack(spacing: 8) {
+                            if store.taskHistoryLoading { ProgressView().controlSize(.small) }
+                            Text(L10n.loadOlder).font(.callout.weight(.medium))
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 42)
+                    }
+                    .buttonStyle(.plain)
+                    .fireSkySurface(role: .grouped, cornerRadius: 10)
+                    .disabled(store.taskHistoryLoading)
+                }
+
+                if !store.online && store.taskHistoryError.isEmpty {
+                    Label(L10n.text("引擎未连接，显示的是上次读取的记录。", "Engine offline; showing previously loaded records."),
+                          systemImage: "wifi.slash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 4)
+                }
             }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
         }
-        .listStyle(.plain)
     }
 }
 
 private struct HistoryRow: View {
     @EnvironmentObject private var store: Store
+    @Environment(\.colorScheme) private var scheme
     let item: MobileTaskHistoryItem
 
     private var isSelected: Bool {
@@ -90,7 +155,7 @@ private struct HistoryRow: View {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: statusSymbol)
                     .foregroundStyle(statusColor)
-                    .frame(width: 22)
+                    .frame(width: 22, height: 22)
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 7) {
                         Text(item.rowTitle).font(.callout.weight(.medium))
@@ -103,7 +168,6 @@ private struct HistoryRow: View {
                         .monospacedDigit()
                 }
                 Spacer(minLength: 4)
-                // 方案 D9：动作收进「…」菜单，危险项红字隔离。
                 Menu {
                     if item.canRestoreResult {
                         Button(L10n.text("恢复已发布结果", "Restore published result")) { store.restoreTaskResult(item) }
@@ -122,13 +186,17 @@ private struct HistoryRow: View {
                     .disabled(store.busy || item.status == "running")
                 } label: {
                     Image(systemName: "ellipsis.circle")
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 32, minHeight: 32)
                 }
-                
             }
             if isSelected {
                 TaskDetail(item: item)
             }
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background(isSelected ? warm.opacity(scheme == .dark ? 0.10 : 0.06) : Color.clear)
         .contentShape(Rectangle())
         .onTapGesture { store.selectTask(item.taskID) }
     }
@@ -153,7 +221,6 @@ private struct HistoryRow: View {
     }
 }
 
-/// 详情：预测详情（结果快照）+ 事件时间线 + 删除口径说明（同 macOS 详情区）。
 private struct TaskDetail: View {
     @EnvironmentObject private var store: Store
     let item: MobileTaskHistoryItem
@@ -164,7 +231,7 @@ private struct TaskDetail: View {
             if item.method == "forecast" && item.status == "done" {
                 ForecastResultCard(taskID: item.taskID)
             }
-            Text("事件").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Text(L10n.text("事件", "Events")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             if store.taskEventsLoading {
                 ProgressView().controlSize(.small)
             } else if !store.taskEventsError.isEmpty {
@@ -182,30 +249,29 @@ private struct TaskDetail: View {
                     }
                 }
             }
-            Text(L10n.text("删除记录只删除状态和事件，不影响报告与天气数据。", "Deleting removes only status and events; reports and weather data are unaffected."))
+            Text(L10n.text("删除记录只删除状态和事件，不影响报告与天气数据。",
+                           "Deleting removes only status and events; reports and weather data are unaffected."))
                 .font(.caption2).foregroundStyle(.secondary)
         }
     }
 }
 
-/// v1.9.5 预测详情卡（macOS forecastResultCard 同构）：读取不可变结果
-/// 快照，呈现该次预测双模型的关键信息；快照过期时给出可读说明。
 private struct ForecastResultCard: View {
     @EnvironmentObject private var store: Store
     let taskID: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            Text("预测详情").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+            Text(L10n.text("预测详情", "Forecast details")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
             if store.taskResultTaskID != taskID {
                 Text("—").font(.caption).foregroundStyle(.secondary)
             } else if store.taskResultLoading {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("正在读取预测详情…").font(.caption).foregroundStyle(.secondary)
+                    Text(L10n.text("正在读取预测详情…", "Loading forecast details…")).font(.caption).foregroundStyle(.secondary)
                 }
             } else if !store.taskResultError.isEmpty {
-                Text("预测详情不可用：\(store.taskResultError)")
+                Text("\(L10n.text("预测详情不可用", "Forecast details unavailable"))：\(store.taskResultError)")
                     .font(.caption).foregroundStyle(.secondary)
                     .textSelection(.enabled)
             } else if let result = store.taskResult {
@@ -226,21 +292,21 @@ private struct ForecastResultCard: View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(alignment: .firstTextBaseline, spacing: 7) {
                 Text(model.uppercased()).font(.caption.weight(.semibold))
-                    .foregroundStyle(model == "ec" ? .teal : .orange)
+                    .foregroundStyle(modelColor(model))
                 if let error, !error.isEmpty {
-                    Text("未完成：\(error)").font(.caption2).foregroundStyle(.red)
+                    Text("\(L10n.t("未完成"))：\(error)").font(.caption2).foregroundStyle(.red)
                         .textSelection(.enabled).lineLimit(2)
                 } else if report == nil {
-                    Text("暂无结果").font(.caption2).foregroundStyle(.secondary)
+                    Text(L10n.t("暂无结果")).font(.caption2).foregroundStyle(.secondary)
                 } else {
                     Text("\(format(report?["peak_quality_index"] ?? report?["quality_index"])) / 2.5")
                         .font(.caption.weight(.medium)).monospacedDigit()
                     Text(report?["quality_level"] as? String ?? "")
                         .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     Spacer(minLength: 0)
-                    Text("最佳 \(timeLabel(report?["best_time_local"] as? String))")
+                    Text("\(L10n.text("最佳", "Best")) \(timeLabel(report?["best_time_local"] as? String))")
                         .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
-                    Text("窗口 \(windowLabel(report))")
+                    Text("\(L10n.text("窗口", "Window")) \(windowLabel(report))")
                         .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
                 }
             }

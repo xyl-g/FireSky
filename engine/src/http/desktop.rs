@@ -244,6 +244,14 @@ fn allowed_method(method: &str) -> bool {
             | "cams_credentials"
             | "retention_settings"
             | "save_retention_settings"
+            | "apply_retention_settings"
+            | "data_sync_settings"
+            | "save_data_sync_settings"
+            | "data_sync_run"
+            | "data_delete_preview"
+            | "data_delete_execute"
+            | "terrain_inventory"
+            | "terrain_download"
             | "profile_query"
             | "task_history"
             | "task_events"
@@ -565,7 +573,15 @@ mod tests {
     async fn empty_cache_status_hello_inventory_and_instance_changes() {
         let (_dir, app) = app();
         let instance = instance(&app).await;
-        for (offset, method) in ["hello", "inventory"].iter().enumerate() {
+        for (offset, method) in [
+            "hello",
+            "inventory",
+            "data_sync_settings",
+            "terrain_inventory",
+        ]
+        .iter()
+        .enumerate()
+        {
             let id = format!("00000000-0000-4000-8000-{:012x}", offset + 1);
             let (status, ticket) = request(
                 &app,

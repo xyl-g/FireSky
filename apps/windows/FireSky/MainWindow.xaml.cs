@@ -49,8 +49,11 @@ public sealed partial class MainWindow : Window
     private string regionalProfileState = "idle";
     private double regionalProfileLat, regionalProfileLon;
     internal List<JsonObject> regionDefinitions = [];
-    private readonly HashSet<string> selectedRegions = new() { "east-asia" };
-    private bool customRegion = true;
+    private List<string> defaultRegionalPreset = ["china"];
+    private readonly HashSet<string> selectedRegions = new() { "china" };
+    private bool customRegion;
+    private string errorMessage = "";
+    private string errorPage = "";
     private List<JsonObject> favorites = [];
     private readonly List<ProbeRow> probeRows = [.. ProbeRow.Initial()];
     private DateTimeOffset? probeDate;
@@ -112,18 +115,27 @@ public sealed partial class MainWindow : Window
             presenter.PreferredMinimumWidth = 1120;
             presenter.PreferredMinimumHeight = 720;
         }
-        BuildMetrics();
         BuildHeroCards();
         AttachUpdater();
         BuildTerrainRegionPicker();
         TargetDate.Date = DateTimeOffset.Now;
         LoadSettings();
+        BuildMetrics();
         RestoreSession();
         Navigation.SelectedItem = Navigation.MenuItems[0];
         initialized = true;
         LanguageChoice.SelectedIndex = L10n.Preference switch { "zh" => 1, "en" => 2, _ => 0 };
         ApplyLocalization();
+        UpdateRuntimeSummary();
         AddKeyboardAccelerators();
+        Root.ActualThemeChanged += (_, _) =>
+        {
+            if (!initialized) return;
+            BuildMetrics();
+            RenderResult();
+            if (page == "data") _ = LoadInventory();
+            UpdateRuntimeSummary();
+        };
         Root.Loaded += async (_, _) =>
         {
             await InitializeMap();
@@ -254,6 +266,7 @@ public sealed partial class MainWindow : Window
         // 写操作按钮按资源实际禁用。
         PredictButton.IsEnabled = !value && online;
         SaveRetentionButton.IsEnabled = !value && online;
+        UpdateRetentionControls();
         SyncRunNowButton.IsEnabled = !value && online && dataSyncRunning == false;
         BusyRing.IsActive = value;
         CancelButton.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
@@ -273,20 +286,56 @@ public sealed partial class MainWindow : Window
         StarButton.IsEnabled = online && !busy;
     }
 
-    private void Fail(Exception error)
+    private void Fail(Exception error, string? targetPage = null)
     {
         var message = error is OperationCanceledException ? L10n.T("操作已取消。") : FriendlyMessages.Map(error.Message);
-        ErrorBar.Message = error is OperationCanceledException ? L10n.T("操作已取消。") : message;
-        ErrorBar.IsOpen = true;
-        // 错误全文可选中复制（基准：错误文本可复制）。
-        var detail = new TextBlock
+        errorMessage = message;
+        errorPage = targetPage ?? page;
+        RenderPageErrors();
+        Status.Text = error is OperationCanceledException ? L10n.T("已取消") : L10n.T("操作未完成");
+        if (errorPage == "settings") SettingsStatusMessage(message, false);
+    }
+
+    private void ClearError(string? targetPage = null)
+    {
+        if (targetPage != null && errorPage != targetPage) return;
+        errorMessage = "";
+        errorPage = "";
+        RenderPageErrors();
+    }
+
+    private void OnPageErrorBarClosed(InfoBar sender, InfoBarClosedEventArgs args)
+    {
+        ClearError();
+    }
+
+    private void RenderPageErrors()
+    {
+        var hasError = errorMessage.Length > 0;
+        var forecastActive = hasError && errorPage == page && page is "point" or "regional" or "nowcast";
+        ApplyErrorBar(ErrorBar, forecastActive ? errorMessage : "");
+        ApplyErrorBar(DataErrorBar, hasError && errorPage == "data" && page == "data" ? errorMessage : "");
+        ApplyErrorBar(HistoryErrorBar, hasError && errorPage == "history" && page == "history" ? errorMessage : "");
+        ApplyErrorBar(SettingsErrorBar, hasError && errorPage == "settings" && page == "settings" ? errorMessage : "");
+    }
+
+    private static void ApplyErrorBar(InfoBar? bar, string message)
+    {
+        if (bar == null) return;
+        if (string.IsNullOrEmpty(message))
+        {
+            bar.IsOpen = false;
+            bar.Message = "";
+            bar.Content = null;
+            return;
+        }
+        bar.Message = message;
+        bar.Content = new TextBlock
         {
             Text = message, TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true,
             FontSize = 11,
         };
-        ErrorBar.Content = detail;
-        Status.Text = error is OperationCanceledException ? L10n.T("已取消") : L10n.T("操作未完成");
-        if (page == "settings") SettingsStatusMessage(message, false);
+        bar.IsOpen = true;
     }
 
     private void SettingsStatusMessage(string message, bool transient)
@@ -316,11 +365,24 @@ public sealed partial class MainWindow : Window
     [System.Runtime.InteropServices.DllImport("user32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
     private static extern int MessageBoxW(nint hWnd, string text, string caption, uint type);
 
+    internal Brush ThemeBrush(string key)
+    {
+        var themeKey = Root?.ActualTheme == ElementTheme.Dark ? "Dark" : "Light";
+        if (Application.Current.Resources.ThemeDictionaries.TryGetValue(themeKey, out var dictObj)
+            && dictObj is ResourceDictionary dict
+            && dict.TryGetValue(key, out var themed) && themed is Brush themedBrush)
+            return themedBrush;
+        if (Application.Current.Resources.TryGetValue(key, out var value) && value is Brush brush)
+            return brush;
+        return (Brush)Application.Current.Resources["LayerFillColorDefaultBrush"];
+    }
+
     // ---------- 连接与启动 ----------
 
     private async Task Connect()
     {
         online = false;
+        UpdateRuntimeSummary();
         Status.Text = L10n.T("正在连接引擎");
         try
         {
@@ -339,7 +401,7 @@ public sealed partial class MainWindow : Window
             BuildRegionPresets();
             RebuildSyncAnchorPicker();
             online = true;
-            ErrorBar.IsOpen = false;
+            ClearError();
             Status.Text = L10n.T("本地引擎已连接");
             await Task.WhenAll(
                 LoadRetentionSettings(),
@@ -349,7 +411,11 @@ public sealed partial class MainWindow : Window
             await MaybeCamsReminder();
         }
         catch (Exception error) { Fail(error); }
-        finally { UpdateActionButtons(); }
+        finally
+        {
+            UpdateActionButtons();
+            UpdateRuntimeSummary();
+        }
     }
 
     /// <summary>启动时 CAMS 未配置 → 提醒直达设置→数据（macOS openCAMSSetup 基准）。</summary>
@@ -416,6 +482,20 @@ public sealed partial class MainWindow : Window
             "general" => 0, "data" => 1, "location" => 2, _ => 3,
         };
         updater.SetAutoCheck(Flag(saved, "autoUpdateCheck") || saved["autoUpdateCheck"] == null);
+        var savedDefaults = (saved["defaultRegionalPreset"] as JsonArray ?? [])
+            .Select(node => StringOrNull(node))
+            .Where(code => !string.IsNullOrWhiteSpace(code))
+            .Cast<string>()
+            .Distinct()
+            .ToList();
+        defaultRegionalPreset = savedDefaults.Count > 0 ? savedDefaults : ["china"];
+        showRegionalSmooth = saved["showRegionalSmooth"] == null || Flag(saved, "showRegionalSmooth");
+        if (ShowSmoothToggle != null) ShowSmoothToggle.IsChecked = showRegionalSmooth;
+        if (saved["lastSession"] == null)
+        {
+            selectedRegions.Clear();
+            foreach (var code in defaultRegionalPreset) selectedRegions.Add(code);
+        }
         ApplySettingsCategory();
     }
 
@@ -429,6 +509,8 @@ public sealed partial class MainWindow : Window
         saved["elevationSource"] = elevationSource;
         saved["settingsCategory"] = settingsCategory;
         saved["autoUpdateCheck"] = updater.AutoCheck;
+        saved["showRegionalSmooth"] = showRegionalSmooth;
+        saved["defaultRegionalPreset"] = new JsonArray(defaultRegionalPreset.Select(code => (JsonNode)JsonValue.Create(code)!).ToArray());
         saved["favorites"] = new JsonArray(favorites.Select(node => (JsonNode)node.DeepClone()).ToArray());
         Directory.CreateDirectory(Path.GetDirectoryName(settingsFile)!);
         File.WriteAllText(settingsFile, saved.ToJsonString());
@@ -496,8 +578,13 @@ public sealed partial class MainWindow : Window
             selectedRegions.Clear();
             foreach (var region in saved["selected_regions"] as JsonArray ?? [])
                 if (region?.GetValue<string>() is { Length: > 0 } code) selectedRegions.Add(code);
-            if (selectedRegions.Count == 0) selectedRegions.Add("east-asia");
             customRegion = Flag(saved, "custom_region");
+            if (selectedRegions.Count == 0 && !customRegion)
+            {
+                foreach (var code in defaultRegionalPreset) selectedRegions.Add(code);
+            }
+            CustomRegionToggle.IsChecked = customRegion;
+            CustomBoundsFields.Visibility = customRegion ? Visibility.Visible : Visibility.Collapsed;
             if (Number(saved, "west") is { } west && double.IsFinite(west)) West.Value = west;
             if (Number(saved, "east") is { } east && double.IsFinite(east)) East.Value = east;
             if (Number(saved, "south") is { } south && double.IsFinite(south)) South.Value = south;
@@ -558,6 +645,7 @@ public sealed partial class MainWindow : Window
             MiniMapHost.Visibility = Visibility.Visible;
             ResultTabs.Visibility = Visibility.Visible;
         }
+        RenderPageErrors();
         RenderResult();
         _ = UpdateMap();
         if (page == "data")
@@ -566,7 +654,11 @@ public sealed partial class MainWindow : Window
             _ = LoadTerrain();
         }
         if (page == "history") _ = LoadTaskHistory();
-        if (page == "settings") _ = LoadRetentionSettings();
+        if (page == "settings")
+        {
+            _ = LoadRetentionSettings();
+            UpdateRuntimeSummary();
+        }
     }
 
     private string RegionalTitle()
@@ -652,6 +744,7 @@ public sealed partial class MainWindow : Window
                     {
                         case "ready":
                             mapReady = true;
+                            await Map.ExecuteScriptAsync(MapEnhancerScript());
                             await UpdateMap();
                             break;
                         case "point" when !busy:
@@ -714,27 +807,35 @@ public sealed partial class MainWindow : Window
         ScheduleSessionSave();
     }
 
-    private async Task UpdateMap()
+    private async Task UpdateMap(bool forceFit = false)
     {
         if (!initialized || !mapReady || !double.IsFinite(Latitude.Value) || !double.IsFinite(Longitude.Value)) return;
         var report = SelectedReport();
+        var regionalBounds = page == "regional" ? RegionalActiveBounds() : null;
+        var west = regionalBounds?.West ?? West.Value;
+        var south = regionalBounds?.South ?? South.Value;
+        var east = regionalBounds?.East ?? East.Value;
+        var north = regionalBounds?.North ?? North.Value;
         var state = new JsonObject
         {
             ["lat"] = Latitude.Value, ["lon"] = Longitude.Value, ["regional"] = page == "regional",
-            ["west"] = West.Value, ["east"] = East.Value, ["south"] = South.Value, ["north"] = North.Value,
+            ["west"] = west, ["east"] = east, ["south"] = south, ["north"] = north,
             ["points"] = resultKind == page ? report?["points"]?.DeepClone() : null,
             ["show_grid"] = showRegionalGrid,
             ["show_samples"] = showRegionalSamples,
+            ["show_smooth"] = showRegionalSmooth,
+            ["force_fit"] = forceFit,
             ["samples"] = page == "regional" && resultKind == page && showRegionalSamples
                 ? report?["points"]?.DeepClone() : null,
             ["selected_time"] = page == "point" && pointSelectedTime.Length > 0 ? pointSelectedTime : null,
         };
         try { await Map.ExecuteScriptAsync("window.fireSky.update(" + state.ToJsonString() + ")"); }
-        catch (Exception error) { Fail(error); }
+        catch (Exception error) { Fail(error, page); }
     }
 
     internal bool showRegionalGrid = true;
     internal bool showRegionalSamples = true;
+    internal bool showRegionalSmooth = true;
 
     // ---------- 位置搜索 / 定位（UX #5：轻量任务不占全局 busy） ----------
 
@@ -952,6 +1053,7 @@ public sealed partial class MainWindow : Window
         TargetDate.Visibility = dateTab == "自定义" ? Visibility.Visible : Visibility.Collapsed;
         if (dateTab == "今天") TargetDate.Date = DateTimeOffset.Now;
         if (dateTab == "明天") TargetDate.Date = DateTimeOffset.Now.AddDays(1);
+        if (page == "nowcast") UpdateNowcastBanners(resultKind == "nowcast" ? SelectedReport() : null);
         ScheduleSessionSave();
     }
 
@@ -959,6 +1061,7 @@ public sealed partial class MainWindow : Window
     {
         if (!initialized || restoringSession) return;
         if (dateTab != "自定义") { dateTab = "自定义"; DateTabs.SelectedIndex = 2; TargetDate.Visibility = Visibility.Visible; }
+        if (page == "nowcast") UpdateNowcastBanners(resultKind == "nowcast" ? SelectedReport() : null);
         ScheduleSessionSave();
     }
 
@@ -1002,12 +1105,14 @@ public sealed partial class MainWindow : Window
         result = null; RenderResult(); ScheduleSessionSave(); _ = UpdateMap();
     }
 
-    /// <summary>区域地图叠加开关：网格线与采样点标注（对齐 macOS regional-6）。</summary>
+    /// <summary>区域地图叠加开关：平滑渲染、网格线与采样点标注（对齐 macOS regional-6）。</summary>
     private void OnMapOverlayToggled(object sender, RoutedEventArgs args)
     {
         if (!initialized || ShowGridToggle == null) return;
+        showRegionalSmooth = ShowSmoothToggle?.IsChecked == true;
         showRegionalGrid = ShowGridToggle.IsChecked == true;
         showRegionalSamples = ShowSamplesToggle.IsChecked == true;
+        SaveSettings();
         _ = UpdateMap();
     }
 
@@ -1096,7 +1201,7 @@ public sealed partial class MainWindow : Window
     {
         if (!online || busy || searching || locating) return;
         JsonObject payload;
-        try { payload = Payload(); } catch (Exception error) { Fail(error); return; }
+        try { payload = Payload(); } catch (Exception error) { Fail(error, page); return; }
         var kind = page;
         var dialog = new PreflightDialog(engine, kind, payload) { XamlRoot = Root.XamlRoot };
         await dialog.ShowAsync();
@@ -1108,7 +1213,7 @@ public sealed partial class MainWindow : Window
     {
         SetBusy(true);
         operation = new();
-        ErrorBar.IsOpen = false;
+        ClearError(kind);
         Status.Text = L10n.T("正在预测");
         try
         {
@@ -1129,7 +1234,7 @@ public sealed partial class MainWindow : Window
             await UpdateMap();
             SaveSession();
         }
-        catch (Exception error) { Fail(error); }
+        catch (Exception error) { Fail(error, kind); }
         finally { SetBusy(false); }
     }
 
@@ -1148,12 +1253,12 @@ public sealed partial class MainWindow : Window
         OnPredict(sender, args);
     }
 
-    /// <summary>当前表单是否与结果原始参数不一致（只比较影响结果的键；缺失键视为相同）。</summary>
+    /// <summary>当前表单是否与结果原始参数不一致（仅在结果归属当前页面时生效，不跨页误报）。</summary>
     private bool ResultParametersStale
     {
         get
         {
-            if (result == null || resultParams == null) return false;
+            if (result == null || resultParams == null || resultKind != page) return false;
             bool SameString(string key, string current) =>
                 resultParams![key] is not System.Text.Json.Nodes.JsonValue value
                 || value.GetValueKind() != System.Text.Json.JsonValueKind.String
@@ -1198,10 +1303,10 @@ public sealed partial class MainWindow : Window
         || !value.TryGetValue<double>(out var saved)
         || Math.Abs(saved - current) < 1e-9;
 
-    /// <summary>结果区标题：有结果时以结果原始参数为准。</summary>
+    /// <summary>结果区标题：仅在结果归属当前页面时以结果原始参数为准，不跨页串标题。</summary>
     private string ResultTitle()
     {
-        if (resultParams != null && result != null)
+        if (resultParams != null && result != null && resultKind == page)
         {
             var name = Text(resultParams, "name") is { Length: > 0 } saved ? saved : LocationName.Text;
             var date = Text(resultParams, "target_date") is { Length: > 0 } savedDate
@@ -1213,7 +1318,7 @@ public sealed partial class MainWindow : Window
 
     private string ResultPhenomenonLabel()
     {
-        var value = result != null && resultParams != null
+        var value = result != null && resultParams != null && resultKind == page
             ? Text(resultParams, "phenomenon") : TagOf(Phenomenon.SelectedItem);
         return value == "dawn" ? L10n.T("朝霞") : L10n.T("晚霞");
     }
@@ -1259,6 +1364,7 @@ public sealed partial class MainWindow : Window
         DataSettings.Visibility = settingsCategory == "data" ? Visibility.Visible : Visibility.Collapsed;
         LocationSettings.Visibility = settingsCategory == "location" ? Visibility.Visible : Visibility.Collapsed;
         AdvancedSettings.Visibility = settingsCategory == "advanced" ? Visibility.Visible : Visibility.Collapsed;
+        if (settingsCategory == "general") UpdateRuntimeSummary();
     }
 
     private void OnOpenSyncSettings(object sender, RoutedEventArgs args)
@@ -1287,7 +1393,7 @@ public sealed partial class MainWindow : Window
             var result = await folder.PickSingleFolderAsync();
             if (result != null) WorkspacePath.Text = result.Path;
         }
-        catch (Exception error) { Fail(error); }
+        catch (Exception error) { Fail(error, "settings"); }
     }
 
     private void OnAppearanceChanged(object sender, SelectionChangedEventArgs args)
@@ -1337,7 +1443,7 @@ public sealed partial class MainWindow : Window
 
     private async Task ReconnectAsync()
     {
-        if (HasActiveWork) { Fail(new InvalidOperationException(L10n.T("请等待当前任务完成后再重新连接。"))); return; }
+        if (HasActiveWork) { Fail(new InvalidOperationException(L10n.T("请等待当前任务完成后再重新连接。")), "settings"); return; }
         await Connect();
     }
 

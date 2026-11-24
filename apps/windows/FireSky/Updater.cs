@@ -161,8 +161,9 @@ public sealed class Updater
             AutomaticDecompression = DecompressionMethods.None,
         };
         var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
+        var version = CurrentVersion();
         client.DefaultRequestHeaders.UserAgent.ParseAdd(
-            $"FireSky-Updater/{CurrentVersion()}");
+            $"FireSky/{(string.IsNullOrEmpty(version) ? "dev" : version)} (Windows)");
         return client;
     }
 
@@ -230,6 +231,10 @@ public sealed class Updater
             $"https://api.github.com/repos/{Repository}/releases/latest");
         request.Headers.Accept.ParseAdd("application/vnd.github+json");
         using var response = await client.SendAsync(request, token);
+        if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests)
+        {
+            return await FetchLatestReleaseFallback(token);
+        }
         if (response.StatusCode != HttpStatusCode.OK)
             throw new UpdateException($"GitHub 返回状态 {(int)response.StatusCode}");
         var text = await response.Content.ReadAsStringAsync(token);
@@ -240,6 +245,33 @@ public sealed class Updater
             ?? throw new UpdateException($"最新 Release 没有适用于 {architecture} 的安装包");
         if (CompareVersions(parsed.Version, CurrentVersion()) <= 0) return null;
         return parsed;
+    }
+
+    private async Task<Info?> FetchLatestReleaseFallback(CancellationToken token)
+    {
+        using var client = MakeClient(20);
+        using var request = new HttpRequestMessage(HttpMethod.Get,
+            $"https://github.com/{Repository}/releases/latest");
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, token);
+        if (response.StatusCode != HttpStatusCode.OK)
+            throw new UpdateException($"GitHub Releases 页面返回状态 {(int)response.StatusCode}");
+        var finalUri = response.RequestMessage?.RequestUri;
+        if (finalUri == null || !finalUri.AbsolutePath.Contains("/releases/tag/", StringComparison.Ordinal))
+            throw new UpdateException(L10n.T("未在 GitHub Releases 页面找到有效版本标签"));
+        var tag = finalUri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries).LastOrDefault() ?? "";
+        var version = NormalizeTag(tag);
+        if (version.Length == 0 || version.Length > 32
+            || version.Any(character => !char.IsLetterOrDigit(character) && character != '.'))
+            throw new UpdateException($"GitHub Releases 标签格式无效：{tag}");
+        if (CompareVersions(version, CurrentVersion()) <= 0) return null;
+        var architecture = MachineArchitecture();
+        var assetName = AssetName(version, architecture);
+        var assetUrl = $"https://github.com/{Repository}/releases/download/{tag}/{assetName}";
+        var checksumUrl = $"https://github.com/{Repository}/releases/download/{tag}/SHA256SUMS.txt";
+        var notes = L10n.IsEnglish
+            ? $"Detected v{version} via Releases redirect fallback because GitHub API was rate-limited (403/429). Detailed release notes are unavailable here; check the GitHub Releases page."
+            : $"由于 GitHub API 请求受限（403/429），本次通过 Releases 页面重定向回退检测到 v{version}，未获取详细更新日志；请前往 GitHub Releases 页面查看完整说明。";
+        return new Info(version, notes, assetUrl, 0, checksumUrl);
     }
 
     // ---------- 下载 + 校验 + 安装 ----------

@@ -59,11 +59,34 @@ public sealed partial class MainWindow
         };
     }
 
+    private void UpdateNowcastBanners(JsonObject? report)
+    {
+        if (NowcastNoticeBar == null || NowcastMapWarningBar == null) return;
+        var isNowcastPage = page == "nowcast";
+        NowcastNoticeBar.IsOpen = isNowcastPage && (report == null || resultKind != "nowcast" || dateTab != "今天");
+        if (isNowcastPage && report?["map_capability"] is JsonObject mapCapability
+            && BoolValue(mapCapability, "available") == false)
+        {
+            var rawReason = Text(mapCapability, "reason");
+            if (rawReason != "native-nowcast-map-publication-not-requested")
+            {
+                NowcastMapWarningBar.Message = string.IsNullOrWhiteSpace(rawReason)
+                    ? L10n.T("实况地图未发布")
+                    : FriendlyMessages.Map(rawReason);
+                NowcastMapWarningBar.IsOpen = true;
+                return;
+            }
+        }
+        NowcastMapWarningBar.IsOpen = false;
+        NowcastMapWarningBar.Message = "";
+    }
+
     private void RenderNowcastResult()
     {
         // Hero 区：单卡显示卫星帧与质量摘要（隐藏 GFS/EC 双卡布局）。
         HeroHost.Visibility = Visibility.Visible;
         MetricHost.Visibility = Visibility.Visible;
+        UpdateNowcastBanners(SelectedReport());
         RenderNowcastHero();
         RenderNowcastMetrics();
         RenderChart();
@@ -100,6 +123,8 @@ public sealed partial class MainWindow
             }.Where(part => part.Length > 0));
         ToolTipService.SetToolTip(card.Chips, L10n.T("卫星帧时次与通道来自真实观测载荷；缺项如实显示。"));
         card.Source.Text = L10n.T("HSD B07/B13/B15 云概率代理（posterior）；HSD 分支不发布 COT、云相或官方云高真值。");
+        card.GenusText.Text = "";
+        card.GenusBadge.Visibility = Visibility.Collapsed;
         card.Error.Text = "";
         card.Error.Visibility = Visibility.Collapsed;
         // EC 卡隐藏（实况为单来源）。
@@ -146,9 +171,9 @@ public sealed partial class MainWindow
                 var border = new Border
                 {
                     Child = card, Padding = new Thickness(2),
-                    CornerRadius = new CornerRadius(8),
-                    Background = (Brush)Application.Current.Resources["LayerFillColorDefaultBrush"],
-                    BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                    CornerRadius = new CornerRadius(14),
+                    Background = ThemeBrush("FireSkyCardBrush"),
+                    BorderBrush = ThemeBrush("FireSkyCardBorderBrush"),
                     BorderThickness = new Thickness(1),
                 };
                 Grid.SetColumn(border, index - start);

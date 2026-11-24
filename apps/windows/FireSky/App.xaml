@@ -7,24 +7,103 @@
             <ResourceDictionary.MergedDictionaries>
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls"/>
             </ResourceDictionary.MergedDictionaries>
-            <!-- v1.9.3 DESIGN.md v2 token 对齐：FireSky 暖橙 accent（替换默认 #E63D5C）。 -->
-            <!-- DESIGN.md v2 token 对齐（暖橙 accent + 夜空蓝底 + hairline） -->
-            <Color x:Key="SystemAccentColor">#BD523D</Color>
-            <Color x:Key="FireSkyAccentLight">#BD523D</Color>
-            <Color x:Key="FireSkyAccentDark">#FF8C61</Color>
-            <Color x:Key="FireSkyGradientStartLight">#E06A3C</Color>
-            <Color x:Key="FireSkyGradientEndLight">#D98A2E</Color>
-            <Color x:Key="FireSkyGradientStartDark">#FF8C61</Color>
-            <Color x:Key="FireSkyGradientEndDark">#FABF24</Color>
-            <Color x:Key="FireSkyTeal">#428F8A</Color>
-            <Color x:Key="FireSkyBgDarkStart">#080D17</Color>
-            <Color x:Key="FireSkyBgDarkMid">#0D1423</Color>
-            <Color x:Key="FireSkyBgDarkEnd">#0A0F1C</Color>
-            <Color x:Key="FireSkyCardBorderDark">#FFFFFF14</Color>
-            <Color x:Key="FireSkyCardBorderLight">#1B22240F</Color>
-            <Color x:Key="FireSkyChipSuccessDark">#33CC7024</Color>
-            <Color x:Key="FireSkyChipDangerDark">#FF6B5224</Color>
-            <x:Double x:Key="FireSkyCardRadius">24</x:Double>
+            <!-- v1.9.10 DESIGN.md v2 token 对齐 macOS FSDesign（双主题铜橙 + 冷静蓝 + 暖瓷/靛蓝夜空）。 -->
+            <ResourceDictionary.ThemeDictionaries>
+                <ResourceDictionary x:Key="Light">
+                    <Color x:Key="FireSkyAccentColor">#D25A36</Color>
+                    <Color x:Key="FireSkyAccentHoverColor">#B84B2E</Color>
+                    <Color x:Key="FireSkyCoolAccentColor">#4F76B8</Color>
+                    <SolidColorBrush x:Key="FireSkyAccentBrush" Color="#D25A36"/>
+                    <SolidColorBrush x:Key="FireSkyAccentHoverBrush" Color="#B84B2E"/>
+                    <SolidColorBrush x:Key="FireSkyCoolAccentBrush" Color="#4F76B8"/>
+                    <SolidColorBrush x:Key="FireSkyAccentTintBrush" Color="#1AD25A36"/>
+                    <SolidColorBrush x:Key="FireSkyCoolTintBrush" Color="#1A4F76B8"/>
+                    <SolidColorBrush x:Key="FireSkySuccessBrush" Color="#1F6E5A"/>
+                    <SolidColorBrush x:Key="FireSkySuccessTintBrush" Color="#212E8C73"/>
+                    <SolidColorBrush x:Key="FireSkyWarningBrush" Color="#8A6321"/>
+                    <SolidColorBrush x:Key="FireSkyWarningTintBrush" Color="#21CC9942"/>
+                    <LinearGradientBrush x:Key="FireSkyPageBgBrush" StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#EEF3F8" Offset="0.0"/>
+                        <GradientStop Color="#F8F5F0" Offset="0.5"/>
+                        <GradientStop Color="#EBF1F6" Offset="1.0"/>
+                    </LinearGradientBrush>
+                    <LinearGradientBrush x:Key="FireSkyWarmGlowBrush" StartPoint="1,0" EndPoint="0.3,0.7">
+                        <GradientStop Color="#52F4D2AE" Offset="0.0"/>
+                        <GradientStop Color="#00F4D2AE" Offset="0.65"/>
+                    </LinearGradientBrush>
+                    <LinearGradientBrush x:Key="FireSkyCoolGlowBrush" StartPoint="0,1" EndPoint="0.7,0.3">
+                        <GradientStop Color="#4DCBDFF2" Offset="0.0"/>
+                        <GradientStop Color="#00CBDFF2" Offset="0.65"/>
+                    </LinearGradientBrush>
+                    <LinearGradientBrush x:Key="FireSkyAccentGradientBrush" StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#B84B2E" Offset="0.0"/>
+                        <GradientStop Color="#9B401F" Offset="1.0"/>
+                    </LinearGradientBrush>
+                    <SolidColorBrush x:Key="FireSkyCardBrush" Color="#FCFDFF"/>
+                    <SolidColorBrush x:Key="FireSkyGroupedCardBrush" Color="#F3F6FA"/>
+                    <SolidColorBrush x:Key="FireSkyNavSurfaceBrush" Color="#F5F7FA"/>
+                    <SolidColorBrush x:Key="FireSkyCardBorderBrush" Color="#D9C9D5E1"/>
+                    <SolidColorBrush x:Key="FireSkyGroupedBorderBrush" Color="#D9D8E1EA"/>
+                    <SolidColorBrush x:Key="FireSkyPillTrackBrush" Color="#EAF0F6"/>
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <Color x:Key="FireSkyAccentColor">#FF9B6A</Color>
+                    <Color x:Key="FireSkyAccentHoverColor">#FFC273</Color>
+                    <Color x:Key="FireSkyCoolAccentColor">#8EB7FF</Color>
+                    <SolidColorBrush x:Key="FireSkyAccentBrush" Color="#FF9B6A"/>
+                    <SolidColorBrush x:Key="FireSkyAccentHoverBrush" Color="#FFC273"/>
+                    <SolidColorBrush x:Key="FireSkyCoolAccentBrush" Color="#8EB7FF"/>
+                    <SolidColorBrush x:Key="FireSkyAccentTintBrush" Color="#26FF9B6A"/>
+                    <SolidColorBrush x:Key="FireSkyCoolTintBrush" Color="#268EB7FF"/>
+                    <SolidColorBrush x:Key="FireSkySuccessBrush" Color="#63D6AB"/>
+                    <SolidColorBrush x:Key="FireSkySuccessTintBrush" Color="#264DD1A6"/>
+                    <SolidColorBrush x:Key="FireSkyWarningBrush" Color="#FFC273"/>
+                    <SolidColorBrush x:Key="FireSkyWarningTintBrush" Color="#26FFC273"/>
+                    <LinearGradientBrush x:Key="FireSkyPageBgBrush" StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#0B1222" Offset="0.0"/>
+                        <GradientStop Color="#121B2E" Offset="0.5"/>
+                        <GradientStop Color="#080E18" Offset="1.0"/>
+                    </LinearGradientBrush>
+                    <LinearGradientBrush x:Key="FireSkyWarmGlowBrush" StartPoint="1,0" EndPoint="0.3,0.7">
+                        <GradientStop Color="#338A5546" Offset="0.0"/>
+                        <GradientStop Color="#008A5546" Offset="0.65"/>
+                    </LinearGradientBrush>
+                    <LinearGradientBrush x:Key="FireSkyCoolGlowBrush" StartPoint="0,1" EndPoint="0.7,0.3">
+                        <GradientStop Color="#382B558A" Offset="0.0"/>
+                        <GradientStop Color="#002B558A" Offset="0.65"/>
+                    </LinearGradientBrush>
+                    <LinearGradientBrush x:Key="FireSkyAccentGradientBrush" StartPoint="0,0" EndPoint="1,1">
+                        <GradientStop Color="#FF9B6A" Offset="0.0"/>
+                        <GradientStop Color="#FFC273" Offset="1.0"/>
+                    </LinearGradientBrush>
+                    <SolidColorBrush x:Key="FireSkyCardBrush" Color="#182132"/>
+                    <SolidColorBrush x:Key="FireSkyGroupedCardBrush" Color="#202A3D"/>
+                    <SolidColorBrush x:Key="FireSkyNavSurfaceBrush" Color="#111826"/>
+                    <SolidColorBrush x:Key="FireSkyCardBorderBrush" Color="#8C4B5D78"/>
+                    <SolidColorBrush x:Key="FireSkyGroupedBorderBrush" Color="#7350617B"/>
+                    <SolidColorBrush x:Key="FireSkyPillTrackBrush" Color="#161E2E"/>
+                </ResourceDictionary>
+            </ResourceDictionary.ThemeDictionaries>
+            <Color x:Key="SystemAccentColor">#D25A36</Color>
+            <Color x:Key="FireSkyAccentLight">#D25A36</Color>
+            <Color x:Key="FireSkyAccentDark">#FF9B6A</Color>
+            <Color x:Key="FireSkyGradientStartLight">#B84B2E</Color>
+            <Color x:Key="FireSkyGradientEndLight">#9B401F</Color>
+            <Color x:Key="FireSkyGradientStartDark">#FF9B6A</Color>
+            <Color x:Key="FireSkyGradientEndDark">#FFC273</Color>
+            <Color x:Key="FireSkyTeal">#4F76B8</Color>
+            <Color x:Key="FireSkyBgDarkStart">#0B1222</Color>
+            <Color x:Key="FireSkyBgDarkMid">#121B2E</Color>
+            <Color x:Key="FireSkyBgDarkEnd">#080E18</Color>
+            <Color x:Key="FireSkyLogoBgStart">#0F294D</Color>
+            <Color x:Key="FireSkyLogoBgMid">#242647</Color>
+            <Color x:Key="FireSkyLogoBgEnd">#5E1F36</Color>
+            <Color x:Key="FireSkyCardBorderDark">#8C4B5D78</Color>
+            <Color x:Key="FireSkyCardBorderLight">#D9C9D5E1</Color>
+            <Color x:Key="FireSkyChipSuccessDark">#264DD1A6</Color>
+            <Color x:Key="FireSkyChipDangerDark">#26FF8A7A</Color>
+            <x:Double x:Key="FireSkyCardRadius">14</x:Double>
+            <x:Double x:Key="FireSkyInnerRadius">10</x:Double>
             <x:Double x:Key="FireSkyChipRadius">6</x:Double>
         </ResourceDictionary>
     </Application.Resources>

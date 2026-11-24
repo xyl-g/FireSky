@@ -3,18 +3,16 @@ import Combine
 import SwiftUI
 import UIKit
 
-/// 页面枚举：v1 仅单点预测 / 数据与下载 / 设置。
-/// 区域预测（用户裁定排除）与实况观测（延后 MN4 裁决）未迁移；
-/// AppKit 菜单/快捷键（⌘1/⌘4/⌘,）降级为底部标签页导航。
+/// 页面枚举：单点预测 / 数据管理 / 任务历史 / 设置。
 enum Page: String, CaseIterable, Identifiable {
     case point, data, history, settings
     var id: String { rawValue }
     var title: String {
         switch self {
-        case .point: "单点预测"
-        case .data: "数据管理"
-        case .history: "任务历史"
-        case .settings: "设置"
+        case .point: L10n.navPoint
+        case .data: L10n.navData
+        case .history: L10n.navHistory
+        case .settings: L10n.navSettings
         }
     }
     var symbol: String {
@@ -42,21 +40,21 @@ struct MobileTaskHistoryItem: Identifiable {
     var isBackgroundSync: Bool { method == "data_sync" }
     var methodTitle: String {
         switch method {
-        case "check": "数据检查"
-        case "prepare": "数据准备"
-        case "forecast": "预测计算"
-        case "publications": "发布核验"
-        case "network_probe": "下载探测"
-        case "data_sync": "后台同步"
-        case "terrain_download": "地形下载"
-        default: "任务"
+        case "check": L10n.text("数据检查", "Data check")
+        case "prepare": L10n.text("数据准备", "Data preparation")
+        case "forecast": L10n.text("预测计算", "Forecast")
+        case "publications": L10n.text("发布核验", "Publication check")
+        case "network_probe": L10n.text("下载探测", "Download probe")
+        case "data_sync": L10n.text("后台同步", "Background sync")
+        case "terrain_download": L10n.text("地形下载", "Terrain download")
+        default: L10n.text("任务", "Task")
         }
     }
     var kindTitle: String {
         switch retryPayload?["kind"] as? String {
-        case "point": "单点"
-        case "regional": "区域"
-        case "nowcast": "实况"
+        case "point": L10n.text("单点", "Point")
+        case "regional": L10n.text("区域", "Regional")
+        case "nowcast": L10n.text("实况", "Nowcast")
         default: methodTitle
         }
     }
@@ -73,7 +71,7 @@ struct MobileTaskHistoryItem: Identifiable {
     }
     var contextTitle: String {
         guard let payload = retryPayload else {
-            return isBackgroundSync ? "后台数据同步轮次" : ""
+            return isBackgroundSync ? L10n.text("后台数据同步轮次", "Background sync round") : ""
         }
         let name = payload["name"] as? String
             ?? (payload["regions"] as? [String])?.joined(separator: "、")
@@ -81,12 +79,12 @@ struct MobileTaskHistoryItem: Identifiable {
         let date = payload["target_date"] as? String ?? ""
         let phenomenon: String
         switch payload["phenomenon"] as? String {
-        case "dawn": phenomenon = "朝霞"
-        case "dusk": phenomenon = "晚霞"
+        case "dawn": phenomenon = L10n.t("朝霞")
+        case "dusk": phenomenon = L10n.t("晚霞")
         default: phenomenon = ""
         }
         let text = [name, date, phenomenon].filter { !$0.isEmpty }.joined(separator: " · ")
-        if text.isEmpty && isBackgroundSync { return "后台数据同步轮次" }
+        if text.isEmpty && isBackgroundSync { return L10n.text("后台数据同步轮次", "Background sync round") }
         return text
     }
     /// 本地时区短时间（UTC ISO8601 → MM-dd HH:mm）。
@@ -101,7 +99,9 @@ struct MobileTaskHistoryItem: Identifiable {
         if status == "running", let percent {
             text += String(format: " · %.0f%%", percent)
         }
-        if status == "interrupted" { text += " · 不会自动重跑" }
+        if status == "interrupted" {
+            text += L10n.text(" · 不会自动重跑", " · Will not re-run")
+        }
         return text
     }
 
@@ -127,7 +127,7 @@ struct MobileTaskHistoryItem: Identifiable {
             cancelRequested: value["cancel_requested"] as? Bool ?? false,
             percent: (value["progress"] as? JSONObject)?["percent"] as? Double,
             retryPayload: payload,
-            canRestoreResult: canRestore,
+            canRestoreResult: canRestore
         )
     }
 }
@@ -144,14 +144,14 @@ struct MobileTaskEventRow: Identifiable {
     var id: Int { seq }
     var title: String {
         switch event {
-        case "running": "开始"
-        case "progress": "进度"
-        case "cancel_requested": "请求取消"
-        case "done": "完成"
-        case "failed": "失败"
-        case "cancelled": "已取消"
-        case "interrupted": "已中断"
-        default: "状态更新"
+        case "running": L10n.text("开始", "Started")
+        case "progress": L10n.text("进度", "Progress")
+        case "cancel_requested": L10n.text("请求取消", "Cancel requested")
+        case "done": L10n.text("完成", "Done")
+        case "failed": L10n.status("失败")
+        case "cancelled": L10n.status("已取消")
+        case "interrupted": L10n.status("已中断")
+        default: L10n.text("状态更新", "Status update")
         }
     }
     var detail: String {
@@ -199,13 +199,10 @@ enum TerrainRegion: String, CaseIterable, Identifiable {
     }
 }
 
-/// 状态语义以桌面版 Store.swift（701 行）为参照源；区域/实况字段随页面一并排除，
-/// AppKit 专属项（NSOpenPanel/NSPasteboard/进程内引擎二进制路径）按移动端语义替换。
 @MainActor
 final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
     let engine = EngineClient(transportFactory: Store.makeTransport)
     /// 截图夹具：`FIRESKY_PAGE=data|history|settings` 指定初始页
-    /// （simctl launch 的 SIMCTL_CHILD_FIRESKY_PAGE 环境变量注入）。
     @Published var page: Page = {
         guard let raw = ProcessInfo.processInfo.environment["FIRESKY_PAGE"],
               let forced = Page(rawValue: raw) else { return .point }
@@ -213,30 +210,42 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     }()
     @Published var name = "杭州"
     @Published var query = ""
-    @Published var lat = 30.2741 { didSet { metadataReady = false; result = nil } }
-    @Published var lon = 120.1551 { didSet { metadataReady = false; result = nil } }
-    @Published var elevation = 8.0 { didSet { result = nil } }
-    @Published var timezone = "Asia/Shanghai" { didSet { result = nil } }
+    @Published var lat = 30.2741 { didSet { metadataReady = false } }
+    @Published var lon = 120.1551 { didSet { metadataReady = false } }
+    @Published var elevation = 8.0
+    @Published var timezone = "Asia/Shanghai"
     @Published var metadataReady = true
-    @Published var date = Date() { didSet { result = nil } }
-    @Published var phenomenon = "dusk" { didSet { result = nil } }
+    @Published var date = Date()
+    @Published var phenomenon = "dusk"
     @Published var busy = false
+    @Published var searching = false
     @Published var locating = false
     @Published var status = "正在连接引擎"
     @Published var error = ""
+    /// 错误归属页面；nil 表示全局错误（如引擎未连接），非 nil 时仅在对应页面展示，不串屏。
+    @Published var errorPage: Page? = nil
     @Published var online = false
     @Published var percent = 0.0
     @Published var showPreflight = false
+    @Published var showCycleAgeConfirm = false
     @Published var checking = false
     @Published var publicationsPending = false
     @Published var rows: [DataRow] = []
     @Published var ready = false
     @Published var session: String?
     @Published var inventory: [JSONObject] = []
+    @Published var inventoryCategories: [JSONObject] = []
     @Published var result: JSONObject? {
-        didSet { resultVersion += 1 }
+        didSet {
+            if result == nil { resultParams = nil }
+            resultVersion += 1
+            pointSelectedTime = nil
+        }
     }
+    @Published var pointSelectedTime: String?
     private(set) var resultVersion = 0
+    @Published var resultKind: Page = .point
+    @Published private(set) var resultParams: JSONObject?
     @Published var selectedModel = "gfs"
     @Published var expandedInventory: Set<String> = []
     @Published var locationTab = "地图"
@@ -254,19 +263,16 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var taskHistoryLoaded = false
     @Published var taskHistoryLoading = false
     @Published var taskHistoryError = ""
-    /// 分页（v1.8.1 可用性）：has_more 时提供「加载更早任务」。
     @Published var taskHistoryHasMore = false
     @Published var taskHistoryCursor: String?
     @Published var selectedTaskID: String?
     @Published var taskEvents: [MobileTaskEventRow] = []
     @Published var taskEventsLoading = false
     @Published var taskEventsError = ""
-    /// v1.9.5 任务详情 → 预测详情：选中已完成的预测任务时读取结果快照。
     @Published var taskResultTaskID: String?
     @Published var taskResult: JSONObject?
     @Published var taskResultLoading = false
     @Published var taskResultError = ""
-    /// 快照不可变，会话内按 task_id 缓存（同 macOS Store）。
     private var taskResultCache: [String: JSONObject] = [:]
     @Published var pendingForgetTaskID: String?
     @Published var restoringTaskID: String?
@@ -288,7 +294,40 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var terrainEstimate: JSONObject?
     @Published var terrainEstimateLoading = false
     @Published var showTerrainConfirm = false
-    // 设置分类（通用/数据/位置与海拔/高级）
+    @Published var terrainLastFailedCount = 0
+    @Published var terrainLastFailedRegion: TerrainRegion? = nil
+    @Published var terrainLastFailedTiles: [String] = []
+    // 保留策略 & 后台同步（对齐 macOS v1.9.10）
+    @Published var retentionGFS = ""
+    @Published var retentionECMWF = ""
+    @Published var retentionCAMS = ""
+    @Published var retentionSatelliteDays = ""
+    @Published var retentionReportDays = ""
+    @Published var retentionMapDays = ""
+    @Published var retentionConfigured = false
+    @Published var savingRetention = false
+    @Published var applyingRetention = false
+    @Published var retentionMessage = ""
+    @Published var retentionSaveFailed = false
+    @Published var regionDefinitions: [JSONObject] = []
+    @Published var dataSyncEnabled = false
+    @Published var dataSyncCAMS = false
+    @Published var dataSyncGFS = false
+    @Published var dataSyncEC = false
+    @Published var dataSyncInterval = ""
+    @Published var dataSyncAnchor = ""
+    @Published var dataSyncLeadHorizon = ""
+    @Published var dataSyncConfigured = false
+    @Published var dataSyncRetentionConfigured = false
+    @Published var dataSyncLoaded = false
+    @Published var savingDataSync = false
+    @Published var dataSyncMessage = ""
+    @Published var dataSyncSaveFailed = false
+    @Published var dataSyncRunning = false
+    @Published var dataSyncState: JSONObject = [:]
+    @Published var dataSyncProgress: JSONObject = [:]
+    @Published var dataSyncActiveSource = ""
+    // 设置分类（通用 / 数据 / 高级）
     @Published var settingsCategory = "通用"
     @Published var camsConfiguration: JSONObject?
     @Published var camsKeyDraft = ""
@@ -303,7 +342,6 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var ecmwfSource = "ecmwf" {
         didSet {
             UserDefaults.standard.set(ecmwfSource, forKey: "ecmwfSource")
-            result = nil
             downloadProbeDate = nil
             downloadProbeRows = DownloadProbeRow.initial
             downloadProbeError = ""
@@ -316,32 +354,63 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         default: return "ECMWF 官方"
         }
     }
-    /// 海拔来源三档（v1.1.1 §1）：auto / http / srtm，持久化在 UserDefaults，
-    /// 所有 search/metadata 调用点透传 elevation_source。
     @Published var elevationSource: String
+    @Published var elevationSourceActual = ""
+    var elevationSourceLabel: String {
+        switch elevationSource {
+        case "http": return L10n.text("仅 HTTP（open-meteo）", "HTTP only (open-meteo)")
+        case "srtm": return L10n.text("SRTM 下载（本地时区 + 瓦片）", "SRTM tiles (local TZ)")
+        default: return L10n.text("自动（HTTP 优先，SRTM 兜底）", "Auto (HTTP first, SRTM fallback)")
+        }
+    }
+    var elevationSourceActualLabel: String {
+        switch elevationSourceActual {
+        case "open-meteo-point-metadata": return "open-meteo (HTTP)"
+        case "local-timezone+srtm": return L10n.text("本地时区 + SRTM", "Local TZ + SRTM")
+        case "": return L10n.text("未获取", "Not fetched")
+        default: return elevationSourceActual
+        }
+    }
     @Published var favorites: [JSONObject] = []
     @Published var workspace: String
     @Published var appearance: String
-    /// 引擎通道：ffi（engine-mobile C 契约，v1.1.0 起默认）或 mock（内置模拟，
-    /// 设置页可切回，供无引擎库环境调试 UI）。
+    @Published var appLanguage: L10n.Language = L10n.language {
+        didSet {
+            L10n.language = appLanguage
+        }
+    }
+    var appLocale: Locale {
+        Locale(identifier: L10n.effective == .english ? "en_US" : "zh_CN")
+    }
     @Published var engineTransport: String
+    // 远程服务器模式（Mac / LAN / Cloudflare Tunnel）
+    @Published var connectionMode: String
+    @Published var remoteServerURL: String
+    @Published var remoteTokenDraft = ""
+    @Published var remoteTokenSaved: Bool
+    @Published var remoteTesting = false
+    @Published var remoteTestMessage = ""
+    @Published var remoteTestOK = false
+    @Published var remoteWorkspace = ""
+    var isRemoteMode: Bool { connectionMode == "remote" }
+    var remoteSession: URLSession = .shared
     private var engineConnection: AnyCancellable?
     private let location = CLLocationManager()
     private var operation: Task<Void, Never>?
+    private var searchTask: Task<Void, Never>?
     private var publicationTask: Task<Void, Never>?
     private var downloadProbeTask: Task<Void, Never>?
+    private var terrainTask: Task<Void, Never>?
+    private var terrainDownloadTask: Task<Void, Never>?
     private var locationTimeout: Task<Void, Never>?
     private var generation = UUID()
     private var metadataGeneration = UUID()
     private(set) var requestKind: Page = .point
     private var requestPayload: JSONObject = [:]
     private var didCheckStartupCredentials = false
-    /// 连接重入保护：scenePhase 与 .task 可能在启动时并发触发 connect，
-    /// 二次 engine.start 会 stop 掉前一次仍在握手的通道。
     private var connecting = false
 
     private static func makeTransport() -> EngineTransport {
-        // 截图夹具：FIRESKY_TRANSPORT=mock 强制走模拟通道（SIMCTL_CHILD_ 注入）。
         let environment = ProcessInfo.processInfo.environment
         let choice = environment["FIRESKY_TRANSPORT"]
             ?? UserDefaults.standard.string(forKey: "engineTransport")
@@ -353,12 +422,20 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         let defaults = UserDefaults.standard
         let dataDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("FireSky/Data", isDirectory: true)
-        // iOS 厚客户端：缓存根/数据目录固定在应用沙箱（桌面版可选任意目录的
-        // NSOpenPanel 语义降级为固定沙箱路径 + 文本框微调）。
         try? FileManager.default.createDirectory(at: dataDirectory, withIntermediateDirectories: true)
         workspace = dataDirectory.path
         appearance = defaults.string(forKey: "appearance") ?? "system"
         engineTransport = defaults.string(forKey: "engineTransport") ?? "ffi"
+        let argumentDomain = defaults.volatileDomain(forName: UserDefaults.argumentDomain)
+        if ProcessInfo.processInfo.environment["FIRESKY_TRANSPORT"] != nil
+            || argumentDomain["engineTransport"] != nil,
+           argumentDomain["connectionMode"] == nil {
+            connectionMode = RemoteServerConfig.defaultMode
+        } else {
+            connectionMode = defaults.string(forKey: "connectionMode") ?? RemoteServerConfig.defaultMode
+        }
+        remoteServerURL = defaults.string(forKey: "remoteServerURL") ?? ""
+        remoteTokenSaved = ServerCredentialStore.hasToken()
         ecmwfSource = defaults.string(forKey: "ecmwfSource") ?? "ecmwf"
         elevationSource = ElevationSourceSetting.load(defaults)
         super.init()
@@ -390,24 +467,39 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         downloadProbeDate = nil
         downloadProbeError = ""
         do {
-            try engine.start(workspace: workspace)
+            if isRemoteMode {
+                let token = ServerCredentialStore.loadToken() ?? ""
+                let transport = try RemoteHttpTransport(
+                    urlString: remoteServerURL,
+                    token: token,
+                    session: remoteSession
+                )
+                try engine.start(workspace: workspace, transport: transport)
+            } else {
+                try engine.start(workspace: workspace)
+            }
             let hello = try await engine.call("hello")
             guard hello["protocol"] as? Int == 1 else {
                 throw EngineError(message: "引擎协议版本不匹配。")
             }
             online = true
             engine.connected = true
+            regionDefinitions = hello["regions"] as? [JSONObject] ?? []
             camsConfiguration = hello["cams_credentials"] as? JSONObject
             if !didCheckStartupCredentials, let camsConfiguration {
                 didCheckStartupCredentials = true
                 showCAMSReminder = camsConfiguration["configured"] as? Bool != true
             }
-            status = "引擎已连接"
-            error = ""
+            if isRemoteMode {
+                remoteWorkspace = hello["workspace"] as? String ?? remoteWorkspace
+                status = L10n.text("已连接到远程 Mac", "Connected to remote Mac")
+            } else {
+                status = "引擎已连接"
+            }
+            clearError()
             UserDefaults.standard.set(workspace, forKey: "workspace")
-            // result_restore 链（参照 macOS Store.loadTaskHistory/restoreTaskResult）：
-            // hello 能力含 task_history/result_restore 时自动恢复最近一次可恢复的
-            // 单点 forecast。Mock 通道 hello 无 capabilities → 跳过，不影响 mock 链路。
+            await loadRetentionSettings()
+            await loadDataSyncSettings()
             let capabilities = Set(hello["capabilities"] as? [String] ?? [])
             if capabilities.isSuperset(of: ["task_history", "result_restore"]) {
                 await restoreLatestForecastResult()
@@ -417,14 +509,128 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 loadTerrain()
             }
             if page == .history { loadTaskHistory() }
-        } catch { self.error = error.localizedDescription; status = "引擎未连接" }
+        } catch {
+            if isRemoteMode {
+                remoteWorkspace = ""
+            }
+            self.error = friendlyEngineMessage(error.localizedDescription)
+            self.errorPage = nil
+            status = "引擎未连接"
+        }
     }
 
-    /// 冷启动/kill-restart 后恢复最近一次已完成的单点预测结果。
-    /// 协议与桌面逐帧一致：task_history(limit 20，created_at_utc 降序) →
-    /// 首个 done 且带 firesky-result-snapshot-v1 引用的 point forecast →
-    /// result_restore(task_id) → 应用 result 与 location/date/phenomenon 参数。
-    /// 守 busy/generation/session：不得覆盖进行中的会话或用户已产生的新结果。
+    func testRemoteServer() async {
+        guard !remoteTesting else { return }
+        remoteTesting = true
+        remoteTestMessage = ""
+        remoteTestOK = false
+        defer { remoteTesting = false }
+
+        let draft = remoteTokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveToken = draft.isEmpty ? (ServerCredentialStore.loadToken() ?? "") : draft
+        do {
+            let remoteStatus = try await RemoteHttpTransport.testConnection(
+                urlString: remoteServerURL,
+                token: effectiveToken,
+                session: remoteSession
+            )
+            remoteWorkspace = remoteStatus.workspace
+            remoteTestOK = true
+            remoteTestMessage = remoteStatus.workspace.isEmpty
+                ? L10n.text("连接成功（FireSky Mac 服务在线）。", "Connected (FireSky Mac server online).")
+                : L10n.text("连接成功：\(remoteStatus.workspace)", "Connected: \(remoteStatus.workspace)")
+        } catch {
+            remoteTestOK = false
+            remoteTestMessage = friendlyEngineMessage(error.localizedDescription)
+        }
+    }
+
+    func saveAndConnectRemoteServer() async {
+        guard !busy, !probingDownloads, !remoteTesting else { return }
+        remoteTesting = true
+        remoteTestMessage = ""
+        remoteTestOK = false
+        defer { remoteTesting = false }
+
+        do {
+            let normalized = try RemoteHttpTransport.normalizeBaseURL(remoteServerURL)
+            remoteServerURL = normalized.absoluteString
+            UserDefaults.standard.set(remoteServerURL, forKey: "remoteServerURL")
+
+            let draft = remoteTokenDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !draft.isEmpty {
+                try ServerCredentialStore.saveToken(draft)
+                remoteTokenDraft = ""
+                remoteTokenSaved = true
+            }
+
+            connectionMode = "remote"
+            UserDefaults.standard.set("remote", forKey: "connectionMode")
+            resetModeSessionState()
+            status = L10n.text("正在连接远程服务器", "Connecting to remote server")
+            await connect()
+
+            if online {
+                remoteTestOK = true
+                remoteTestMessage = remoteWorkspace.isEmpty
+                    ? L10n.text("已连接到远程服务器。", "Connected to remote server.")
+                    : L10n.text("已连接：\(remoteWorkspace)", "Connected: \(remoteWorkspace)")
+                await loadInventory()
+                loadTaskHistory()
+                await refreshCAMSConfiguration()
+                await loadRetentionSettings()
+                await loadDataSyncSettings()
+            } else {
+                remoteTestOK = false
+                remoteTestMessage = error.isEmpty
+                    ? L10n.text("连接远程服务器失败。", "Failed to connect to remote server.")
+                    : error
+            }
+        } catch {
+            remoteTestOK = false
+            remoteTestMessage = friendlyEngineMessage(error.localizedDescription)
+        }
+    }
+
+    func switchToLocalEngine() async {
+        guard !busy, !probingDownloads else { return }
+        connectionMode = "local"
+        UserDefaults.standard.set("local", forKey: "connectionMode")
+        remoteTestMessage = ""
+        remoteTestOK = false
+        remoteWorkspace = ""
+        resetModeSessionState()
+        status = "正在连接引擎"
+        await connect()
+        if online {
+            if page == .data {
+                await loadInventory()
+                loadTerrain()
+            }
+            if page == .history { loadTaskHistory() }
+        }
+    }
+
+    func clearRemoteToken() {
+        ServerCredentialStore.deleteToken()
+        remoteTokenDraft = ""
+        remoteTokenSaved = false
+        remoteTestOK = false
+        remoteTestMessage = L10n.text("已清除保存的访问令牌。", "Saved access token cleared.")
+    }
+
+    private func resetModeSessionState() {
+        generation = UUID()
+        session = nil
+        result = nil
+        inventory = []
+        inventoryCategories = []
+        taskHistory = []
+        taskHistoryLoaded = false
+        taskHistoryError = ""
+        clearTaskSelection()
+    }
+
     private func restoreLatestForecastResult() async {
         guard online, !busy, !showPreflight, session == nil, result == nil else { return }
         let revision = generation
@@ -449,23 +655,21 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             let response = try await engine.call("result_restore", ["task_id": taskID])
             guard generation == revision, !busy, !showPreflight, session == nil, result == nil,
                   response["model_results"] is JSONObject else { return }
-            // 先落参数再落 result：lat/lon/date/phenomenon 的 didSet 会清 result。
-            if let payload = (item["retry_request"] as? JSONObject)?["payload"] as? JSONObject {
-                applyRestoredPayload(payload)
+            let restoredPayload = (item["retry_request"] as? JSONObject)?["payload"] as? JSONObject
+            if let restoredPayload {
+                applyRestoredPayload(restoredPayload)
             }
-            result = response
-            // 与 confirm() 一致：gfs 缺失回退 ec。
+            adoptResult(response, kind: .point, params: restoredPayload)
             selectedModel = (response["model_results"] as? JSONObject)?["gfs"] == nil ? "ec" : "gfs"
             status = "已恢复历史结果"
-            error = ""
+            clearError()
         } catch {
-            // 恢复失败不打断连接（引擎仍在线，可正常发起新预测）。
             guard generation == revision, !Task.isCancelled else { return }
-            self.error = "历史结果恢复失败：\(error.localizedDescription)"
+            self.error = "历史结果恢复失败：\(friendlyEngineMessage(error.localizedDescription))"
+            self.errorPage = .point
         }
     }
 
-    /// 恢复 retry_request.payload 中的观测参数（macOS applyRetryPayload 的单点子集）。
     private func applyRestoredPayload(_ payload: JSONObject) {
         if let value = payload["name"] as? String { name = value }
         if let value = (payload["lat"] as? NSNumber)?.doubleValue { lat = value }
@@ -479,33 +683,33 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         if let value = payload["phenomenon"] as? String { phenomenon = value }
         if let value = payload["ecmwf_source"] as? String { ecmwfSource = value }
         metadataReady = true
+        syncDateTab()
     }
 
     func search() {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, !busy else { return }
-        busy = true
-        status = "正在查找位置"
+        guard !text.isEmpty, !searching else { return }
+        searching = true
+        if !busy { status = "正在查找位置" }
         let source = elevationSource
-        operation = Task {
-            defer { busy = false }
+        searchTask = Task {
+            defer { searching = false }
             do {
                 let point = try await engine.call(
                     "search", ElevationSourceSetting.searchParams(query: text, source: source))
                 try Task.checkCancellation()
                 applyLocation(point)
                 query = ""
-            } catch { fail(error) }
+                clearError()
+            } catch { fail(error, page: .point) }
         }
     }
 
     func selectPoint(lat: Double, lon: Double) {
-        guard !busy else { return }
         self.lat = lat
         self.lon = lon
-        self.name = "地图选点"
+        self.name = String(format: "地图选点 %.2f, %.2f", lat, lon)
         metadataReady = false
-        result = nil
         lookupMetadata()
     }
 
@@ -515,20 +719,23 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         let a = lat, b = lon
         let source = elevationSource
         metadataReady = false
-        status = "正在获取海拔与时区"
+        if !busy { status = "正在获取海拔与时区" }
         Task {
             do {
                 let point = try await engine.call(
                     "metadata", ElevationSourceSetting.metadataParams(lat: a, lon: b, source: source))
-                guard metadataGeneration == revision, a == lat, b == lon else { return }
+                guard metadataGeneration == revision, a == lat, b == lon,
+                      source == elevationSource else { return }
                 elevation = (point["elevation_m"] as? NSNumber)?.doubleValue ?? 0
                 timezone = point["timezone_name"] as? String ?? timezone
+                elevationSourceActual = point["source"] as? String ?? ""
                 metadataReady = true
-                status = "位置已就绪"
+                if !busy { status = "位置已就绪" }
             } catch {
                 guard metadataGeneration == revision else { return }
-                self.error = error.localizedDescription
-                status = "海拔未获取，可手动填写"
+                self.error = friendlyEngineMessage(error.localizedDescription)
+                self.errorPage = .point
+                if !busy { status = "海拔未获取，可手动填写" }
             }
         }
     }
@@ -539,15 +746,15 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         name = point["name"] as? String ?? "当前位置"
         timezone = point["timezone_name"] as? String ?? timezone
         elevation = (point["elevation_m"] as? NSNumber)?.doubleValue ?? elevation
+        elevationSourceActual = point["source"] as? String ?? elevationSourceActual
         metadataReady = true
-        result = nil
-        status = "位置已就绪"
+        if !busy { status = "位置已就绪" }
     }
 
     func locate() {
-        guard !locating, !busy else { return }
+        guard !locating else { return }
         locating = true
-        status = "正在获取当前位置"
+        if !busy { status = "正在获取当前位置" }
         locationTimeout?.cancel()
         locationTimeout = Task {
             try? await Task.sleep(for: .seconds(20))
@@ -555,11 +762,13 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             locating = false
             location.stopUpdatingLocation()
             error = "定位超时，请检查系统定位权限，或在地图上选点。"
+            errorPage = .point
         }
         switch location.authorizationStatus {
         case .denied, .restricted:
             locating = false
             error = "定位权限未开启，请在系统设置中允许 FireSky 使用位置。"
+            errorPage = .point
         case .notDetermined: location.requestWhenInUseAuthorization()
         default: location.requestLocation()
         }
@@ -567,11 +776,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         guard locating else { return }
-        if manager.authorizationStatus == .authorizedAlways {
+        if manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse {
             manager.requestLocation()
         } else if manager.authorizationStatus == .denied || manager.authorizationStatus == .restricted {
             locating = false
             error = "定位未获授权，可继续在地图上选点。"
+            errorPage = .point
         }
     }
 
@@ -580,6 +790,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         guard point.horizontalAccuracy >= 0, point.horizontalAccuracy <= 5000,
               abs(point.timestamp.timeIntervalSinceNow) <= 120 else {
             error = "定位精度不足或位置已过期，请重试。"
+            errorPage = .point
             locating = false
             return
         }
@@ -592,7 +803,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
         locating = false
         locationTimeout?.cancel()
-        self.error = error.localizedDescription
+        self.error = friendlyEngineMessage(error.localizedDescription)
+        self.errorPage = .point
     }
 
     var targetDateLabel: String { ObservationDate.label(date, timezone: timezone) }
@@ -604,6 +816,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             "phenomenon": phenomenon, "model_source": "both", "workers": 1,
             "forecast_mode": "model", "satellite_source": "off",
             "ecmwf_source": ecmwfSource,
+            "elevation_source": elevationSource,
         ]
     }
 
@@ -611,6 +824,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         guard !busy, online else { return }
         guard metadataReady else {
             error = "请先获取海拔与时区，或手动确认位置数据。"
+            errorPage = .point
             return
         }
         generation = UUID()
@@ -620,7 +834,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         session = nil
         rows = []
         ready = false
-        error = ""
+        clearError()
         showPreflight = true
         check(revision: revision)
     }
@@ -652,7 +866,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 session = response["session"] as? String
                 applyReport(response)
                 verifyPublications(revision: revision)
-            } catch { if generation == revision { fail(error) } }
+            } catch { if generation == revision { fail(error, page: requestKind) } }
         }
     }
 
@@ -660,11 +874,17 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         let report = response["report"] as? JSONObject ?? [:]
         ready = report["ready"] as? Bool ?? false
         rows = (report["datasets"] as? [JSONObject] ?? []).map {
-            DataRow(source: $0["source"] as? String ?? "",
-                    ready: $0["ready"] as? Bool ?? false,
-                    old: ($0["verified"] as? Bool == true) && !($0["is_latest"] as? Bool ?? false),
-                    verified: $0["verified"] as? Bool ?? false,
-                    missing: $0["missing_count"] as? Int ?? 0)
+            let verified = $0["verified"] as? Bool ?? false
+            let latest = $0["is_latest"] as? Bool ?? false
+            return DataRow(
+                source: $0["source"] as? String ?? "",
+                ready: $0["ready"] as? Bool ?? false,
+                old: !latest,
+                verified: verified,
+                latest: latest,
+                missing: $0["missing_count"] as? Int ?? 0,
+                policy: $0["policy"] as? String ?? ""
+            )
         }
         status = ready ? "本次数据已下载" : "缺少 " + rows.filter { !$0.ready }.map(\.title).joined(separator: "、")
     }
@@ -676,7 +896,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             defer { if generation == revision { publicationsPending = false } }
             do {
                 let response = try await engine.call("publications", ["session": session])
-                guard generation == revision, showPreflight, !busy else { return }
+                guard generation == revision, showPreflight else { return }
                 applyReport(response)
             } catch { /* A publication outage must not invalidate local availability. */ }
         }
@@ -689,7 +909,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         checking = true
         ready = false
         percent = 0
-        error = ""
+        clearError()
         status = "正在准备数据"
         let revision = generation
         operation = Task {
@@ -699,34 +919,57 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 try Task.checkCancellation()
                 guard generation == revision, showPreflight else { return }
                 applyReport(response)
-                // Deliberately stay in the sheet until the user confirms.
-            } catch { if generation == revision { fail(error) } }
+            } catch { if generation == revision { fail(error, page: requestKind) } }
         }
     }
 
+    /// Mirrors the engine's `needs_cycle_age_confirmation`: a ready dataset
+    /// that is unverified or not the latest release needs an explicit user
+    /// acknowledgment before forecasting.
+    var needsCycleAgeConfirmation: Bool {
+        ready && rows.contains { $0.ready && (!$0.verified || !$0.latest) }
+    }
+
     func confirm() {
+        guard session != nil, ready, !busy else { return }
+        if needsCycleAgeConfirmation {
+            showCycleAgeConfirm = true
+            return
+        }
+        runForecast(cycleAgeConfirmed: false)
+    }
+
+    func confirmCycleAgeAndForecast() {
+        showCycleAgeConfirm = false
+        runForecast(cycleAgeConfirmed: true)
+    }
+
+    private func runForecast(cycleAgeConfirmed: Bool) {
         guard let session, ready, !busy else { return }
         publicationTask?.cancel()
         showPreflight = false
         busy = true
         checking = false
-        error = ""
+        clearError()
         percent = 0
         status = "正在预测"
         let revision = generation
+        let kind = requestKind
         operation = Task {
             defer { if generation == revision { busy = false } }
             do {
-                let response = try await engine.call("forecast", [
+                var params: JSONObject = [
                     "session": session, "confirmed": true,
-                ], progress: updateProgress)
+                ]
+                if cycleAgeConfirmed { params["cycle_age_confirmed"] = true }
+                let response = try await engine.call("forecast", params, progress: updateProgress)
                 try Task.checkCancellation()
                 guard generation == revision else { return }
-                result = response
+                adoptResult(response, kind: kind, params: requestPayload)
                 selectedModel = (response["model_results"] as? JSONObject)?["gfs"] == nil ? "ec" : "gfs"
                 self.session = nil
                 status = "预测完成"
-            } catch { if generation == revision { self.session = nil; ready = false; fail(error) } }
+            } catch { if generation == revision { self.session = nil; ready = false; fail(error, page: kind) } }
         }
     }
 
@@ -734,6 +977,10 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         percent = min(100, max(0, (event["percent"] as? NSNumber)?.doubleValue ?? 0))
         let source = event["source"] as? String ?? ""
         let message = event["message"] as? String ?? ""
+        if dataSyncRunning, !source.isEmpty {
+            dataSyncActiveSource = source
+            dataSyncProgress[source] = ["percent": percent, "message": message]
+        }
         status = message.isEmpty
             ? (checking ? "正在准备 \(source) 数据" : "正在计算 \(source)")
             : message
@@ -752,11 +999,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         operation?.cancel()
         dismissToken()
         showPreflight = false
+        showCycleAgeConfirm = false
         checking = false
         publicationsPending = false
         busy = false
         ready = false
-        error = ""
+        clearError()
         status = "已取消"
     }
 
@@ -770,7 +1018,13 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         do {
             let response = try await engine.call("inventory")
             inventory = response["datasets"] as? [JSONObject] ?? []
-        } catch { fail(error) }
+            if let wrapped = response["categories"] as? JSONObject,
+               let rows = wrapped["categories"] as? [JSONObject] {
+                inventoryCategories = rows
+            } else {
+                inventoryCategories = response["categories"] as? [JSONObject] ?? []
+            }
+        } catch { fail(error, page: .data) }
     }
 
     // MARK: - 任务历史（v1.6.0 与 macOS 历史页对齐）
@@ -797,7 +1051,6 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 if Set(parsed.map(\.taskID)).count != parsed.count {
                     throw EngineError(message: "任务历史包含重复记录。")
                 }
-                // 加载更早 = 追加；首页 = 替换。
                 taskHistory = older ? taskHistory + parsed : parsed
                 taskHistoryTotal = (response["total"] as? NSNumber)?.intValue ?? parsed.count
                 taskHistoryHasMore = response["has_more"] as? Bool ?? false
@@ -808,7 +1061,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 }
             } catch is CancellationError {
             } catch {
-                taskHistoryError = error.localizedDescription
+                taskHistoryError = friendlyEngineMessage(error.localizedDescription)
             }
         }
     }
@@ -823,7 +1076,6 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         taskEvents = []
         taskEventsError = ""
         taskEventsLoading = true
-        // v1.9.5：已完成的预测任务随选中项加载预测详情（结果快照）。
         if let item = taskHistory.first(where: { $0.taskID == taskID }) {
             loadTaskResult(for: item)
         } else {
@@ -851,12 +1103,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                         seq: seq, at: at, event: event,
                         stage: data["stage"] as? String ?? "",
                         message: data["message"] as? String ?? "",
-                        percent: data["percent"] as? Double,
+                        percent: data["percent"] as? Double
                     )
                 }
                 taskEvents = rows
             } catch {
-                taskEventsError = error.localizedDescription
+                taskEventsError = friendlyEngineMessage(error.localizedDescription)
             }
         }
     }
@@ -869,8 +1121,6 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         resetTaskResult()
     }
 
-    /// v1.9.5 任务详情 → 预测详情：经 result_restore 读取不可变结果快照
-    /// （引擎 SHA256 校验，fail-closed）；读取失败转为可读说明。
     private func loadTaskResult(for item: MobileTaskHistoryItem) {
         guard item.method == "forecast", item.status == "done" else {
             resetTaskResult()
@@ -899,7 +1149,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 taskResultCache[item.taskID] = response
                 taskResult = response
             } catch {
-                taskResultError = error.localizedDescription
+                taskResultError = friendlyEngineMessage(error.localizedDescription)
             }
         }
     }
@@ -915,7 +1165,6 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         pendingForgetTaskID = taskID
     }
 
-    /// 「删除记录」语义同 macOS：只删除状态与事件，不删报告与数据。
     func forgetPendingTask() {
         let taskID = pendingForgetTaskID
         pendingForgetTaskID = nil
@@ -931,12 +1180,11 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 if selectedTaskID == taskID { clearTaskSelection() }
                 loadTaskHistory()
             } catch {
-                taskHistoryError = error.localizedDescription
+                taskHistoryError = friendlyEngineMessage(error.localizedDescription)
             }
         }
     }
 
-    /// 恢复已发布结果（回填原始参数 + adoptResult，同 macOS restoreTaskResult）。
     func restoreTaskResult(_ item: MobileTaskHistoryItem) {
         guard !busy, restoringTaskID == nil, item.canRestoreResult else { return }
         restoringTaskID = item.taskID
@@ -951,26 +1199,26 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 if let payload = item.retryPayload {
                     applyRestoredPayload(payload)
                 }
-                result = response
+                adoptResult(response, kind: .point, params: item.retryPayload)
+                page = .point
                 selectedModel = (response["model_results"] as? JSONObject)?["gfs"] == nil ? "ec" : "gfs"
                 status = "已恢复历史结果"
-                error = ""
+                clearError()
             } catch {
-                taskHistoryError = error.localizedDescription
+                taskHistoryError = friendlyEngineMessage(error.localizedDescription)
             }
         }
     }
 
-    /// 恢复参数并重新检查（同 macOS restoreTaskParameters）。
     func restoreTaskParameters(_ item: MobileTaskHistoryItem) {
         guard !busy, restoringTaskID == nil, let payload = item.retryPayload, online else { return }
         applyRestoredPayload(payload)
+        page = .point
         beginCheck()
     }
 
     // MARK: - 数据管理（手动删除，v1.3.0 macOS 契约）
 
-    /// 选择范围并请求引擎预览；范围始终是库存周期键，不传磁盘路径。
     func beginDataDelete(source: String, cycle: String?) {
         guard online, !busy, !dataDeleteRunning, !dataDeletePreviewing else { return }
         var scope: JSONObject = ["source": source]
@@ -987,7 +1235,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 dataDeletePreview = try await engine.call("data_delete_preview", ["scope": scope])
             } catch {
                 pendingDataDelete = nil
-                dataDeleteMessage = error.localizedDescription
+                dataDeleteMessage = friendlyEngineMessage(error.localizedDescription)
                 dataDeleteFailed = true
             }
         }
@@ -998,7 +1246,6 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         dataDeletePreview = nil
     }
 
-    /// 确认后执行；预览过期保留范围并提示重新确认，不静默扩大。
     func executeDataDelete() {
         guard let scope = pendingDataDelete,
               let preview = dataDeletePreview,
@@ -1025,7 +1272,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 await loadInventory()
             } catch {
                 dataDeletePreview = nil
-                dataDeleteMessage = error.localizedDescription
+                dataDeleteMessage = friendlyEngineMessage(error.localizedDescription)
                 dataDeleteFailed = true
             }
         }
@@ -1035,24 +1282,25 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
 
     func loadTerrain() {
         guard online, !terrainLoading, !terrainDownloading else { return }
-        terrainLoading = true
-        Task { [weak self] in
+        terrainTask?.cancel()
+        terrainTask = Task { [weak self] in
             guard let self else { return }
-            defer { terrainLoading = false }
+            terrainLoading = true
+            defer {
+                terrainLoading = false
+                terrainTask = nil
+            }
             do {
-                let response = try await engine.call("terrain_inventory", ["lat": lat, "lon": lon])
-                // 成功刷新不清空刚设置的下载完成消息；仅失败时覆盖。
-                terrain = response
+                terrain = try await engine.call("terrain_inventory", ["lat": lat, "lon": lon])
             } catch is CancellationError {
             } catch {
                 terrain = nil
-                terrainMessage = error.localizedDescription
+                terrainMessage = friendlyEngineMessage(error.localizedDescription)
                 terrainMessageFailed = true
             }
         }
     }
 
-    /// 请求所选区域估算（HEAD 抽样）；完成后弹确认。
     func loadTerrainEstimate() {
         guard online, !terrainDownloading, !terrainEstimateLoading else { return }
         terrainEstimateLoading = true
@@ -1065,10 +1313,10 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             defer { terrainEstimateLoading = false }
             do {
                 terrainEstimate = try await engine.call("terrain_inventory", params)
-                showTerrainConfirm = true
+                showTerrainConfirm = terrainEstimate != nil
             } catch {
                 terrainEstimate = nil
-                terrainMessage = error.localizedDescription
+                terrainMessage = friendlyEngineMessage(error.localizedDescription)
                 terrainMessageFailed = true
             }
         }
@@ -1078,8 +1326,17 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         showTerrainConfirm = false
     }
 
-    /// 批量（区域/全球）下载：跳过已有、可取消续传；进度经 terrain 事件回填。
     func downloadTerrainRegion() {
+        downloadTerrain(region: terrainRegion, tiles: nil)
+    }
+
+    func retryFailedTerrainTiles() {
+        let region = terrainLastFailedRegion ?? terrainRegion
+        let tiles = terrainLastFailedTiles.isEmpty ? nil : terrainLastFailedTiles
+        downloadTerrain(region: region, tiles: tiles)
+    }
+
+    func downloadTerrain(region: TerrainRegion, tiles: [String]? = nil) {
         guard online, !busy, !terrainDownloading else { return }
         terrainDownloading = true
         terrainCancelling = false
@@ -1087,14 +1344,17 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         terrainProgress = [:]
         showTerrainConfirm = false
         var params: JSONObject = ["mode": "global", "timeout_seconds": 300.0]
-        if let bounds = terrainRegion.bounds {
+        if let tiles, !tiles.isEmpty {
+            params["tiles"] = tiles
+        } else if let bounds = region.bounds {
             params["bounds"] = bounds
         }
-        Task { [weak self] in
+        terrainDownloadTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 terrainDownloading = false
                 terrainCancelling = false
+                terrainDownloadTask = nil
             }
             do {
                 let result = try await engine.call("terrain_download", params, progress: { [weak self] event in
@@ -1105,40 +1365,44 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 let downloaded = (result["downloaded"] as? NSNumber)?.intValue ?? 0
                 let absent = (result["absent"] as? NSNumber)?.intValue ?? 0
                 let failed = (result["failed"] as? NSNumber)?.intValue ?? 0
+                let failedTiles = result["failed_tiles"] as? [String] ?? []
+                terrainLastFailedCount = failed
+                terrainLastFailedRegion = failed > 0 ? region : nil
+                terrainLastFailedTiles = failed > 0 ? failedTiles : []
                 let gb = (result["received_gb"] as? NSNumber)?.doubleValue ?? 0
                 let summary = "新增 \(downloaded) 块、缺失 \(absent) 块、失败 \(failed) 块，占用 \(String(format: "%.1f", gb)) GB。"
                 switch result["status"] as? String ?? "" {
                 case "cancelled":
                     terrainMessage = (result["stopped_reason"] as? String == "disk_space"
-                        ? "\(terrainRegion.rawValue)下载因磁盘空间不足停止：" : "\(terrainRegion.rawValue)下载已停止：") + summary
+                        ? "\(region.rawValue)下载因磁盘空间不足停止：" : "\(region.rawValue)下载已停止：") + summary
                     terrainMessageFailed = result["stopped_reason"] as? String == "disk_space"
                 default:
-                    terrainMessage = (failed > 0 ? "\(terrainRegion.rawValue)下载完成（部分失败）：" : "\(terrainRegion.rawValue)下载完成：") + summary
+                    terrainMessage = (failed > 0 ? "\(region.rawValue)下载完成（部分失败）：" : "\(region.rawValue)下载完成：") + summary
                     terrainMessageFailed = failed > 0
                 }
             } catch is CancellationError {
                 terrainMessage = "已停止下载；已完成的瓦片保留，重新开始会跳过它们。"
                 terrainMessageFailed = false
             } catch {
-                terrainMessage = error.localizedDescription
+                terrainMessage = friendlyEngineMessage(error.localizedDescription)
                 terrainMessageFailed = true
             }
             loadTerrain()
         }
     }
 
-    /// 点级下载（次级入口）：仅当前地点对应瓦片。
     func downloadTerrainPoint() {
         guard online, !busy, !terrainDownloading else { return }
         terrainDownloading = true
         terrainCancelling = false
         terrainMessage = ""
         terrainProgress = [:]
-        Task { [weak self] in
+        terrainDownloadTask = Task { [weak self] in
             guard let self else { return }
             defer {
                 terrainDownloading = false
                 terrainCancelling = false
+                terrainDownloadTask = nil
             }
             do {
                 let result = try await engine.call("terrain_download",
@@ -1162,7 +1426,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 terrainMessage = "已停止下载。"
                 terrainMessageFailed = false
             } catch {
-                terrainMessage = error.localizedDescription
+                terrainMessage = friendlyEngineMessage(error.localizedDescription)
                 terrainMessageFailed = true
             }
             loadTerrain()
@@ -1172,11 +1436,298 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     func cancelTerrainDownload() {
         guard terrainDownloading else { return }
         terrainCancelling = true
+        terrainDownloadTask?.cancel()
     }
 
-    func fail(_ error: Error) {
-        self.error = error.localizedDescription
+    // MARK: - 保留策略与后台同步（v1.9.10 macOS 对齐）
+
+    func loadRetentionSettings() async {
+        guard online else { return }
+        do {
+            let response = try await engine.call("retention_settings")
+            let settings = response["settings"] as? JSONObject ?? [:]
+            retentionGFS = retentionText(settings["gfs_cycles"])
+            retentionECMWF = retentionText(settings["ecmwf_cycles"])
+            retentionCAMS = retentionText(settings["cams_cycles"])
+            retentionSatelliteDays = retentionText(settings["satellite_days"])
+            retentionReportDays = retentionText(settings["report_days"])
+            retentionMapDays = retentionText(settings["map_days"])
+            retentionConfigured = response["configured"] as? Bool ?? false
+            retentionMessage = ""
+            retentionSaveFailed = false
+        } catch {
+            retentionMessage = friendlyEngineMessage(error.localizedDescription)
+            retentionSaveFailed = true
+        }
+    }
+
+    func saveRetentionSettings() {
+        guard online, !busy, !savingRetention else { return }
+        savingRetention = true
+        retentionMessage = ""
+        let payload: JSONObject = [
+            "settings": [
+                "gfs_cycles": retentionInteger(retentionGFS),
+                "ecmwf_cycles": retentionInteger(retentionECMWF),
+                "cams_cycles": retentionInteger(retentionCAMS),
+                "satellite_days": retentionNumber(retentionSatelliteDays),
+                "report_days": retentionNumber(retentionReportDays),
+                "map_days": retentionNumber(retentionMapDays),
+            ],
+        ]
+        Task {
+            defer { savingRetention = false }
+            do {
+                let response = try await engine.call("save_retention_settings", payload)
+                let settings = response["settings"] as? JSONObject ?? [:]
+                retentionGFS = retentionText(settings["gfs_cycles"])
+                retentionECMWF = retentionText(settings["ecmwf_cycles"])
+                retentionCAMS = retentionText(settings["cams_cycles"])
+                retentionSatelliteDays = retentionText(settings["satellite_days"])
+                retentionReportDays = retentionText(settings["report_days"])
+                retentionMapDays = retentionText(settings["map_days"])
+                retentionConfigured = response["configured"] as? Bool ?? false
+                retentionMessage = retentionConfigured
+                    ? L10n.text("保留设置已保存；可点击「立即按策略清理」，或等待下一次成功准备后自动清理。",
+                                "Retention policy saved; tap Clean up now or wait for the next prepare.")
+                    : L10n.text("已清空保留设置。", "Retention policy cleared.")
+                retentionSaveFailed = false
+                await refreshDataSyncState()
+            } catch {
+                retentionMessage = friendlyEngineMessage(error.localizedDescription)
+                retentionSaveFailed = true
+            }
+        }
+    }
+
+    func applyRetentionNow() {
+        guard online, !busy, !savingRetention, !applyingRetention else { return }
+        applyingRetention = true
+        retentionMessage = ""
+        retentionSaveFailed = false
+        Task {
+            defer { applyingRetention = false }
+            do {
+                let response = try await engine.call("apply_retention_settings")
+                let configured = response["configured"] as? Bool ?? false
+                guard configured, let result = response["result"] as? JSONObject else {
+                    retentionMessage = L10n.text("尚未保存任何保留规则，未执行清理。",
+                                                 "No retention rules saved; nothing to clean.")
+                    retentionSaveFailed = false
+                    return
+                }
+                let removed = (result["removed_count"] as? NSNumber)?.intValue ?? 0
+                let freedMB = (result["freed_mb"] as? NSNumber)?.doubleValue ?? 0
+                let deferred = (result["deferred_count"] as? NSNumber)?.intValue ?? 0
+                let failed = (result["failed_count"] as? NSNumber)?.intValue ?? 0
+                var parts: [String] = []
+                if removed > 0 {
+                    parts.append(L10n.text(
+                        String(format: "已清理 %d 项旧数据，释放 %.1f MB", removed, freedMB),
+                        String(format: "Cleaned %d old items, freed %.1f MB", removed, freedMB)
+                    ))
+                } else {
+                    parts.append(L10n.text("当前没有超出保留策略的旧数据", "No old data exceeded the retention policy"))
+                }
+                if deferred > 0 {
+                    parts.append(L10n.text("跳过 \(deferred) 项占用中文件", "skipped \(deferred) busy items"))
+                }
+                if failed > 0 {
+                    parts.append(L10n.text("\(failed) 项清理失败", "\(failed) failed"))
+                }
+                retentionMessage = parts.joined(separator: " · ") + "。"
+                retentionSaveFailed = failed > 0
+                await loadInventory()
+            } catch {
+                retentionMessage = friendlyEngineMessage(error.localizedDescription)
+                retentionSaveFailed = true
+            }
+        }
+    }
+
+    private func retentionText(_ value: Any?) -> String {
+        guard let number = value as? NSNumber else { return "" }
+        if number.doubleValue.rounded() == number.doubleValue {
+            return String(number.intValue)
+        }
+        return String(format: "%.2f", number.doubleValue)
+    }
+
+    private func retentionInteger(_ value: String) -> Any {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? NSNull() : (Int(trimmed) ?? -1)
+    }
+
+    private func retentionNumber(_ value: String) -> Any {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? NSNull() : (Double(trimmed) ?? -1)
+    }
+
+    func loadDataSyncSettings() async {
+        guard online else { return }
+        do {
+            let response = try await engine.call("data_sync_settings")
+            applyDataSyncStatus(response)
+        } catch {
+            dataSyncMessage = friendlyEngineMessage(error.localizedDescription)
+            dataSyncSaveFailed = true
+        }
+    }
+
+    private func applyDataSyncStatus(_ response: JSONObject) {
+        let settings = response["settings"] as? JSONObject ?? [:]
+        let sources = settings["sources"] as? JSONObject ?? [:]
+        dataSyncEnabled = settings["enabled"] as? Bool ?? false
+        dataSyncCAMS = sources["cams"] as? Bool ?? false
+        dataSyncGFS = sources["gfs"] as? Bool ?? false
+        dataSyncEC = sources["ec"] as? Bool ?? false
+        dataSyncInterval = dataSyncNumberText(settings["interval_minutes"])
+        dataSyncLeadHorizon = dataSyncNumberText(settings["lead_horizon_hours"])
+        dataSyncAnchor = settings["anchor_region"] as? String ?? ""
+        dataSyncConfigured = response["configured"] as? Bool ?? false
+        dataSyncRetentionConfigured = response["retention_configured"] as? Bool ?? false
+        dataSyncState = (response["state"] as? JSONObject)?["sources"] as? JSONObject ?? [:]
+        dataSyncLoaded = true
+    }
+
+    private func dataSyncNumberText(_ value: Any?) -> String {
+        guard let number = value as? NSNumber else { return "" }
+        return String(number.intValue)
+    }
+
+    private func dataSyncInteger(_ value: String) -> Any {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? NSNull() : (Int(trimmed) ?? -1)
+    }
+
+    func saveDataSyncSettings() {
+        guard online, !busy, !savingDataSync else { return }
+        savingDataSync = true
+        dataSyncMessage = ""
+        let payload: JSONObject = [
+            "settings": [
+                "enabled": dataSyncEnabled,
+                "sources": ["cams": dataSyncCAMS, "gfs": dataSyncGFS, "ec": dataSyncEC],
+                "interval_minutes": dataSyncInteger(dataSyncInterval),
+                "anchor_region": (dataSyncAnchor.isEmpty ? NSNull() : dataSyncAnchor) as Any,
+                "lead_horizon_hours": dataSyncInteger(dataSyncLeadHorizon),
+                "ecmwf_source": ecmwfSource,
+            ],
+        ]
+        Task {
+            defer { savingDataSync = false }
+            do {
+                let response = try await engine.call("save_data_sync_settings", payload)
+                applyDataSyncStatus(response)
+                dataSyncMessage = dataSyncEnabled
+                    ? L10n.text("后台同步已保存。", "Background sync saved.")
+                    : L10n.text("后台同步已关闭。", "Background sync disabled.")
+                dataSyncSaveFailed = false
+            } catch {
+                dataSyncMessage = friendlyEngineMessage(error.localizedDescription)
+                dataSyncSaveFailed = true
+            }
+        }
+    }
+
+    private var dataSyncEnabledSources: [String] {
+        [("cams", dataSyncCAMS), ("gfs", dataSyncGFS), ("ec", dataSyncEC)]
+            .filter { $0.1 }.map { $0.0 }
+    }
+
+    func refreshDataSyncState() async {
+        guard online, let response = try? await engine.call("data_sync_settings") else { return }
+        dataSyncRetentionConfigured = response["retention_configured"] as? Bool ?? dataSyncRetentionConfigured
+        dataSyncState = (response["state"] as? JSONObject)?["sources"] as? JSONObject ?? dataSyncState
+    }
+
+    private func runDataSyncRound(sources: [String], force: Bool = false) async -> (response: JSONObject?, error: Error?) {
+        dataSyncRunning = true
+        dataSyncProgress = [:]
+        dataSyncActiveSource = ""
+        defer {
+            dataSyncRunning = false
+            dataSyncActiveSource = ""
+        }
+        var response: JSONObject?
+        var roundError: Error?
+        var params: JSONObject = ["sources": sources]
+        if force { params["force"] = true }
+        do {
+            response = try await engine.call("data_sync_run", params, progress: { [weak self] event in
+                guard let self, !self.busy else { return }
+                self.updateProgress(event)
+            })
+        } catch {
+            roundError = error
+        }
+        await refreshDataSyncState()
+        return (response, roundError)
+    }
+
+    func runDataSyncNow() {
+        guard online, !busy, !probingDownloads, !dataSyncRunning, !savingDataSync else { return }
+        let sources = dataSyncEnabledSources
+        guard dataSyncEnabled, !sources.isEmpty else {
+            dataSyncMessage = L10n.text("请先在设置中启用后台数据同步并至少选择一个数据源。",
+                                        "Enable background sync and select at least one source first.")
+            dataSyncSaveFailed = true
+            return
+        }
+        status = "正在立即同步后台数据"
+        Task {
+            let round = await runDataSyncRound(sources: sources, force: true)
+            guard !busy else { return }
+            if let error = round.error {
+                dataSyncMessage = friendlyEngineMessage(error.localizedDescription)
+                dataSyncSaveFailed = true
+                status = "立即同步未完成"
+            } else {
+                let summary = round.response.map(dataSyncRoundSummary) ?? "立即同步未完成，详见任务历史。"
+                status = summary
+                dataSyncMessage = summary
+                dataSyncSaveFailed = summary.contains("失败") || summary.contains("未完成")
+            }
+        }
+    }
+
+    private func dataSyncRoundSummary(_ response: JSONObject) -> String {
+        let labels = ["cams": "CAMS", "gfs": "GFS", "ec": "EC"]
+        let names = ["cams", "gfs", "ec"]
+        let parts = names.compactMap { name -> String? in
+            guard let source = response["sources"] as? JSONObject, let row = source[name] as? JSONObject
+            else { return nil }
+            let status = row["status"] as? String ?? ""
+            let text: String
+            switch status {
+            case "synced": text = "已同步"
+            case "current": text = "已是最新"
+            case "failed": text = "失败"
+            case "cancelled": text = "已取消"
+            default: text = status.isEmpty ? "无结果" : status
+            }
+            return "\(labels[name] ?? name) \(text)"
+        }
+        return parts.isEmpty ? "立即同步结束，没有可同步的数据源。" : "立即同步结束：" + parts.joined(separator: "、")
+    }
+
+    // MARK: - 错误隔离与结果参数追踪
+
+    func fail(_ error: Error, page targetPage: Page? = nil) {
+        self.error = friendlyEngineMessage(error.localizedDescription)
+        self.errorPage = targetPage ?? self.page
         status = Task.isCancelled ? "已取消" : "操作未完成"
+    }
+
+    func clearError() {
+        error = ""
+        errorPage = nil
+    }
+
+    func errorText(for targetPage: Page) -> String {
+        guard !error.isEmpty else { return "" }
+        guard let errorPage else { return error }
+        return errorPage == targetPage ? error : ""
     }
 
     var modelResult: JSONObject? {
@@ -1188,7 +1739,73 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     }
 
     var pointComparison: ForecastComparison {
-        ForecastComparison(result: requestKind == .point ? result : nil)
+        ForecastComparison(result: resultKind == .point ? result : nil)
+    }
+
+    func adoptResult(_ response: JSONObject, kind: Page, params: JSONObject?) {
+        resultParams = params
+        result = response
+        resultKind = kind
+    }
+
+    var resultParametersStale: Bool {
+        guard result != nil, resultKind == page, let params = resultParams else { return false }
+        func sameString(_ key: String, _ current: String) -> Bool {
+            guard let saved = params[key] as? String else { return true }
+            return saved == current
+        }
+        func sameNumber(_ key: String, _ current: Double) -> Bool {
+            guard let saved = (params[key] as? NSNumber)?.doubleValue else { return true }
+            return abs(saved - current) < 1e-9
+        }
+        if !sameString("target_date", targetDateLabel) { return true }
+        if !sameString("phenomenon", phenomenon) { return true }
+        if !sameString("ecmwf_source", ecmwfSource) { return true }
+        if !sameNumber("lat", lat) || !sameNumber("lon", lon) { return true }
+        if !sameNumber("elevation_m", elevation) { return true }
+        if !sameString("timezone_name", timezone) { return true }
+        return false
+    }
+
+    var resultTitle: String {
+        if let params = resultParams, result != nil, resultKind == page {
+            let name = params["name"] as? String ?? name
+            let date = params["target_date"] as? String ?? targetDateLabel
+            return "\(name) · \(date)"
+        }
+        return "\(name) · \(targetDateLabel)"
+    }
+
+    var resultPhenomenonLabel: String {
+        let value = (result != nil && resultKind == page ? resultParams?["phenomenon"] as? String : nil) ?? phenomenon
+        return value == "dawn" ? "朝霞" : "晚霞"
+    }
+
+    var resultParamsSummary: String {
+        guard let params = resultParams else { return "" }
+        var parts: [String] = []
+        if let value = params["name"] as? String { parts.append("地点：\(value)") }
+        if let lat = (params["lat"] as? NSNumber)?.doubleValue,
+           let lon = (params["lon"] as? NSNumber)?.doubleValue {
+            parts.append(String(format: "坐标：%.4f, %.4f", lat, lon))
+        }
+        if let value = params["target_date"] as? String { parts.append("日期：\(value)") }
+        if let value = params["phenomenon"] as? String {
+            parts.append("现象：\(value == "dawn" ? "朝霞" : "晚霞")")
+        }
+        return "结果原始参数 — " + parts.joined(separator: "；")
+    }
+
+    private func syncDateTab() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: timezone) ?? .current
+        if calendar.isDateInToday(date) {
+            dateTab = "今天"
+        } else if calendar.isDateInTomorrow(date) {
+            dateTab = "明天"
+        } else {
+            dateTab = "自定义"
+        }
     }
 
     func saveAppearance() { UserDefaults.standard.set(appearance, forKey: "appearance") }
@@ -1196,18 +1813,19 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     var camsConfigured: Bool { camsConfiguration?["configured"] as? Bool == true }
     var canSaveCAMS: Bool { camsConfiguration?["can_save"] as? Bool == true }
     var camsConfigurationDescription: String {
-        guard let camsConfiguration else { return "正在检查本地配置" }
+        guard let camsConfiguration else { return L10n.text("正在检查本地配置", "Checking local configuration") }
         switch camsConfiguration["state"] as? String {
-        case "configured": return "已检测到 Key，下载时验证授权。"
-        case "wrong_endpoint": return "接口地址不是 Copernicus ADS，请重新配置。"
-        case "tls_disabled": return "配置关闭了 TLS 验证，请重新保存以启用安全连接。"
-        case "unreadable": return "配置文件无法读取或格式有误，请修正后重新检查。"
-        default: return "尚未配置 CAMS Key，本地数据缺失时无法下载。"
+        case "configured": return L10n.text("已检测到 Key，下载时验证授权。", "Key detected; authorization verified on download.")
+        case "wrong_endpoint": return L10n.text("接口地址不是 Copernicus ADS，请重新配置。", "Endpoint is not Copernicus ADS; please reconfigure.")
+        case "tls_disabled": return L10n.text("配置关闭了 TLS 验证，请重新保存以启用安全连接。", "TLS verification disabled; save key again to enable.")
+        case "unreadable": return L10n.text("配置文件无法读取或格式有误，请修正后重新检查。", "Configuration unreadable; please fix and re-check.")
+        default: return L10n.text("尚未配置 CAMS Key，本地数据缺失时无法下载。", "CAMS key not configured; cannot download missing data.")
         }
     }
 
     func openCAMSSetup() {
         page = .settings
+        settingsCategory = "数据"
         showCAMSTutorial = true
     }
 
@@ -1222,15 +1840,23 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     }
 
     func saveCAMSKey() {
+        if isRemoteMode {
+            camsMessage = L10n.text(
+                "远程模式下不支持通过网络修改 Mac 的 CAMS Key，请在 Mac 端本地配置。",
+                "Saving CAMS Key remotely is disabled for security; configure it locally on your Mac."
+            )
+            camsSaveFailed = true
+            return
+        }
         guard online, !busy, !savingCAMS, !probingDownloads, canSaveCAMS else { return }
         savingCAMS = true
         camsMessage = ""
         let key = camsKeyDraft
-        camsKeyDraft = ""
         Task {
             defer { savingCAMS = false }
             do {
                 camsConfiguration = try await engine.call("save_cams_key", ["key": key])
+                if camsKeyDraft == key { camsKeyDraft = "" }
                 if let index = downloadProbeRows.firstIndex(where: { $0.source == "cams" }) {
                     downloadProbeRows[index] = DownloadProbeRow.initial[index]
                 }
@@ -1238,7 +1864,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 camsMessage = "已保存到本机配置文件。"
                 camsSaveFailed = false
             } catch {
-                camsMessage = error.localizedDescription
+                camsMessage = friendlyEngineMessage(error.localizedDescription)
                 camsSaveFailed = true
             }
         }
@@ -1281,7 +1907,9 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                     downloadProbeRows[index].detail = cancelled ? "已停止，尚未验证下载。" : "探测中断，尚未验证下载。"
                 }
                 downloadProbeDate = Date()
-                downloadProbeError = cancelled ? "探测已取消；已完成的结果保留。" : error.localizedDescription
+                downloadProbeError = cancelled
+                    ? "探测已取消；已完成的结果保留。"
+                    : friendlyEngineMessage(error.localizedDescription)
             }
         }
     }
@@ -1292,7 +1920,6 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         downloadProbeTask?.cancel()
     }
 
-    /// NSPasteboard 语义 → UIPasteboard。
     func copyDownloadProbeReport() {
         let timestamp = downloadProbeDate?.formatted(date: .numeric, time: .standard) ?? "未完成"
         let report = ["FireSky 数据源下载探测 · \(timestamp)"] + downloadProbeRows.map {
@@ -1310,20 +1937,72 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     }
 
     func starLocation() {
-        guard metadataReady else { error = "请先确认海拔与时区。"; return }
+        guard metadataReady else {
+            error = "请先确认海拔与时区。"
+            errorPage = .point
+            return
+        }
         favorites.removeAll { ($0["lat"] as? Double) == lat && ($0["lon"] as? Double) == lon }
         favorites.append(["name": name, "lat": lat, "lon": lon,
                           "elevation_m": elevation, "timezone_name": timezone])
         UserDefaults.standard.set(favorites, forKey: "favorites")
     }
 
-    /// AppKit applicationWillTerminate → 移动端在退到后台时挂起即可，
-    /// 进程回收由系统负责；前台返回时若已断线由 App 壳自动重连。
+    func removeFavorite(_ favorite: JSONObject) {
+        let favLat = (favorite["lat"] as? NSNumber)?.doubleValue
+        let favLon = (favorite["lon"] as? NSNumber)?.doubleValue
+        favorites.removeAll {
+            ($0["lat"] as? NSNumber)?.doubleValue == favLat
+                && ($0["lon"] as? NSNumber)?.doubleValue == favLon
+        }
+        UserDefaults.standard.set(favorites, forKey: "favorites")
+    }
+
     func shutdown() {
         downloadProbeTask?.cancel()
         locationTimeout?.cancel()
         operation?.cancel()
+        searchTask?.cancel()
         publicationTask?.cancel()
+        terrainTask?.cancel()
+        terrainDownloadTask?.cancel()
         engine.stop()
+    }
+}
+
+/// 引擎机器可读错误映射与内部码抑制（对齐 macOS friendlyEngineMessage）。
+func friendlyEngineMessage(_ message: String) -> String {
+    let text = message.trimmingCharacters(in: .whitespacesAndNewlines)
+    if text == "native-nowcast-map-publication-not-requested" {
+        return ""
+    }
+    if text.hasPrefix("another data sync round is active in another process") {
+        return "另一轮数据同步正在进行，本轮已让路；稍后会自动重试。"
+    }
+    switch text {
+    case "another prepare/forecast is active":
+        return "已有预测准备或计算正在进行，请等待完成或先取消，再发起本次操作。"
+    case "data sync skipped because another prepare/forecast is active":
+        return "预测准备或计算正在进行，本轮同步已让路；待当前操作完成后再同步。"
+    case "another data sync is active":
+        return "已有一轮数据同步正在进行，请稍候再试。"
+    case "network probe is already active":
+        return "网络探测正在进行，请稍候再试。"
+    case "desktop operation cancelled", "nowcast preparation cancelled", "nowcast operation cancelled":
+        return "操作已取消。"
+    case "data cycle is unverified or older than the latest release; explicit cycle-age confirmation is required":
+        return "数据周期未核验或不是最新发布，请在确认提示中选择「使用当前缓存继续」，或先更新到最新数据。"
+    case "explicit confirmation is required before forecast":
+        return "请先在预检窗口确认后再开始预测。"
+    case "inputs are missing; prepare data before forecasting":
+        return "本次预测数据不完整，请先点击「下载缺失数据」补齐。"
+    case "strict input integrity check failed":
+        return "数据完整性校验未通过，请重新下载本次数据后再试。"
+    case "data sync is not enabled":
+        return "后台数据同步未启用，请先在设置中开启。"
+    case "native-report-has-no-map-cells":
+        return "本次结果未生成地图格网（单点报告不含区域地图）。"
+    default:
+        return message
     }
 }
