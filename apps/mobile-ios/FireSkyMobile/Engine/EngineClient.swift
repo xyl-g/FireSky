@@ -24,13 +24,15 @@ final class EngineClient: ObservableObject {
         self.transportFactory = transportFactory
     }
 
-    func start(workspace: String) throws {
+    func start(workspace: String, transport customTransport: EngineTransport? = nil) throws {
         stop()
-        let root = URL(fileURLWithPath: workspace)
-        guard FileManager.default.fileExists(atPath: root.path) else {
-            throw EngineError(message: "请选择有效的 FireSky 数据目录。")
+        let transport = customTransport ?? transportFactory()
+        if !(transport is RemoteHttpTransport) {
+            let root = URL(fileURLWithPath: workspace)
+            guard FileManager.default.fileExists(atPath: root.path) else {
+                throw EngineError(message: "请选择有效的 FireSky 数据目录。")
+            }
         }
-        let transport = transportFactory()
         transport.onFrame = { [weak self] data in
             Task { @MainActor in self?.receive(data) }
         }

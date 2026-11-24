@@ -8,6 +8,27 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v1.10.0 (2026-11-24)
+
+全端视觉设计统一对齐 macOS Liquid Glass 基准（Windows / iOS / Android）与手机端远程服务器模式（直连 Mac 局域网 / Cloudflare Tunnel）。
+Cross-platform UI parity with the macOS Liquid Glass baseline (Windows, iOS, and Android) plus Mobile Remote Server Mode (direct connection to Mac over LAN or Cloudflare Tunnel).
+
+**手机端远程服务器模式 / Mobile Remote Server Mode (iOS & Android + Rust HTTP)**
+
+- **直连 Mac 缓存与算力（CF Tunnel / 局域网）**：iOS 与 Android 新增 `RemoteHttpTransport`（实现 `EngineTransport` 协议，支持 `Authorization: Bearer <token>`、`GET /desktop/status` → `POST /desktop/jobs` → 自适应轮询进度 → `release`/`cancel`，以及 Mac 重启后 `409 engine_exited` 自动重连），可在 `设置 → 高级 → 远程服务器（Mac / CF Tunnel）` 配置服务端地址与令牌、一键测试连接并切换；连接后手机工作台显示「远程 Mac」徽标，直接复用 Mac 的 GFS/EC/CAMS/地形缓存、预测计算与任务历史。
+  Added `RemoteHttpTransport` for iOS (Keychain-backed token + `NSAllowsLocalNetworking`) and Android (`HttpURLConnection` + private preferences + `INTERNET`), enabling direct access to a Mac running FireSky's built-in HTTP server over Cloudflare Tunnel HTTPS or LAN HTTP with connection testing, progress streaming, automatic `409 engine_exited` recovery, and a live "Remote Mac" status pill.
+- **Rust 服务端安全扩展**：`engine/src/http/desktop.rs` 放行移动端工作台所需的同步/库存/保留清理/地形接口（`apply_retention_settings`、`data_sync_settings`、`save_data_sync_settings`、`data_sync_run`、`data_delete_preview`、`data_delete_execute`、`terrain_inventory`、`terrain_download`），同时继续禁止远程修改 `save_cams_key` 保护本地凭证安全。
+  Expanded the HTTP desktop RPC allowlist in `engine/src/http/desktop.rs` for remote sync, retention cleanup, cache deletion, and terrain operations while keeping `save_cams_key` local-only.
+
+**Windows / iOS / Android 视觉与功能全面对齐 macOS**
+
+- **Android**：全面重构为 macOS `FSDesign` 暮色美学——新增对角底色 + 右上暖霞与左下冷光径向氛围背景、`16dp` 浮动软卡片与柔和投影、铜橙-琥珀渐变主按钮、顶部胶囊分类设置栏（含珊瑚底线指示条）、2×2 运行状态摘要卡、图标徽标分组卡、`34sp Bold` 等宽数字（`tnum`）评分排版、全新立体火烧云自适应图标；补齐同步间隔 `5–1440` 分钟、保留清理、云属代理卡片、逐时台账折叠、周期龄确认门控与页面级错误/旧参数隔离。
+  Redesigned Android Compose UI to match macOS `FSDesign` (atmospheric radial-glow backdrop, `16dp` soft-shadowed cards, copper-amber CTA, top capsule Settings bar with coral indicator, 2×2 runtime summary card, icon-badge grouped cards, tabular hero typography, new adaptive sunset-cloud icon) and reached full feature parity (5–1440 min sync, retention cleanup, cloud genus proxy, ledger filtering, cycle-age confirmation, per-page error/stale isolation).
+- **Windows**：同步 macOS 浅/深色 22 项 `FSDesign` 色板与背景光晕、全站统一 `CornerRadius="14"` 卡片并修复 2 处边框色误作填充的 Bug；左侧观测点/观测参数收入独立浮动卡片；设置页升级为顶部居中胶囊分类栏 + 居中 `820px` 图标徽标卡片组 + 4 格运行状态摘要卡；补齐新火烧云向量 Logo、中国默认区域与平滑渲染、周期龄确认、云属代理、页面级错误隔离、隐藏内部 `native-nowcast-map-publication-not-requested` 提示及 GitHub 403/429 更新回退。
+  Aligned WinUI 3 with macOS `FSDesign` light/dark tokens, unified `14px` cards, fixed stroke-as-fill brush bugs, grouped the left rail into floating cards, upgraded Settings to a centered top capsule bar + `820px` icon-badge cards + 4-tile runtime summary, and added the new vector brand mark, China default regional view, cycle-age confirmation, cloud genus proxy, per-page error isolation, and updater 403/429 fallback.
+- **iOS**：统一 `14pt` 卡片圆角与柔光圆角搜索栏、历史列表升级为分组卡片、小屏 iPhone 自适应布局优化，并在模拟器完成浅/深色视觉与全量单测/UI 测试验收。
+  Unified `14pt` surfaces, soft-filled rounded search input, grouped History list cards, and compact-width hero/grid layouts, verified on iOS Simulator with light/dark captures and full unit + UI tests.
+
 ## v1.9.10 (2026-11-24)
 
 macOS Liquid Glass UI 全面升级、新品牌 Logo、局域网与 Cloudflare Tunnel 外网映射、数据检查 30 秒空等根治、卫星实况多帧/多波段算法升级、中国区域预测加速与中间产物自动清理。

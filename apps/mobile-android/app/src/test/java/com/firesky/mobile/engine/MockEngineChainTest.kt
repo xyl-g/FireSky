@@ -56,11 +56,43 @@ class MockEngineChainTest {
                 assertTrue("prepare 应发进度帧", progressEvents.isNotEmpty())
 
                 val forecast = withTimeout(30_000) {
-                    client.call("forecast", JSONObject().put("session", session).put("confirmed", true))
+                    client.call(
+                        "forecast",
+                        JSONObject().put("session", session).put("confirmed", true).put("cycle_age_confirmed", true),
+                    )
                 }
                 val models = forecast.optJSONObject("model_results")
-                assertNotNull(models?.optJSONObject("gfs"))
-                assertNotNull(models?.optJSONObject("ec"))
+                val gfs = models?.optJSONObject("gfs")
+                val ec = models?.optJSONObject("ec")
+                assertNotNull(gfs)
+                assertNotNull(ec)
+                assertEquals("cirrus", gfs?.optJSONObject("cloud_genus_proxy")?.optString("label"))
+                assertNotNull(gfs?.optJSONObject("cross_section")?.optJSONArray("distances_km"))
+
+                val inventory = withTimeout(10_000) { client.call("inventory") }
+                val categories = inventory.optJSONObject("categories")?.optJSONArray("categories")
+                assertNotNull(categories)
+                assertEquals(6, categories?.length())
+
+                val savedRetention = withTimeout(10_000) {
+                    client.call(
+                        "save_retention_settings",
+                        JSONObject().put("settings", JSONObject().put("gfs_cycles", 4)),
+                    )
+                }
+                assertTrue(savedRetention.optBoolean("configured"))
+                val applied = withTimeout(10_000) { client.call("apply_retention_settings") }
+                assertTrue(applied.optBoolean("configured"))
+                assertTrue(applied.optJSONObject("result")!!.optInt("removed_count") > 0)
+
+                val syncRun = withTimeout(10_000) {
+                    client.call(
+                        "data_sync_run",
+                        JSONObject().put("sources", org.json.JSONArray(listOf("gfs", "ec"))).put("force", true),
+                    )
+                }
+                assertTrue(syncRun.optBoolean("forced"))
+                assertEquals("synced", syncRun.optJSONObject("sources")?.optJSONObject("gfs")?.optString("status"))
             }
         } finally {
             client.stop()

@@ -19,6 +19,24 @@ public sealed partial class MainWindow
 
     // OnAppearanceChanged / OnSettingsCategoryChanged / OnChooseDirectory 在核心文件。
 
+    private void UpdateRuntimeSummary()
+    {
+        if (SummaryEngineText == null) return;
+        SummaryEngineText.Text = online ? L10n.T("已连接") : L10n.T("未连接");
+        SummaryEngineDot.Fill = ThemeBrush(online ? "FireSkySuccessBrush" : "FireSkyWarningBrush");
+
+        var syncHealthy = dataSyncEnabled || dataSyncConfigured;
+        SummarySyncText.Text = dataSyncEnabled ? L10n.T("已启用")
+            : dataSyncConfigured ? L10n.T("已配置") : L10n.T("按需准备");
+        SummarySyncDot.Fill = ThemeBrush(syncHealthy ? "FireSkySuccessBrush" : "FireSkyWarningBrush");
+
+        SummaryCamsText.Text = camsConfigured ? L10n.T("已配置") : L10n.T("未配置");
+        SummaryCamsDot.Fill = ThemeBrush(camsConfigured ? "FireSkySuccessBrush" : "FireSkyWarningBrush");
+
+        SummaryRetentionText.Text = dataSyncRetentionConfigured ? L10n.T("已配置") : L10n.T("不限制");
+        SummaryRetentionDot.Fill = ThemeBrush(dataSyncRetentionConfigured ? "FireSkySuccessBrush" : "FireSkyWarningBrush");
+    }
+
     // ---------- 数据：下载源 ----------
 
     // OnEcmwfSourceChanged 在核心文件。
@@ -73,6 +91,7 @@ public sealed partial class MainWindow
         SaveCamKeyButton.IsEnabled = online && !busy && !savingCams && canSaveCams
             && CamKeyBox.Password.Trim().Length > 0;
         CamRefreshButton.IsEnabled = online && !savingCams;
+        UpdateRuntimeSummary();
     }
 
     private async void OnSaveCamsKey(object sender, RoutedEventArgs args)
@@ -375,6 +394,7 @@ public sealed partial class MainWindow
         RenderSyncMessage();
         RenderSyncStatusRows();
         UpdateSyncControls();
+        UpdateRuntimeSummary();
     }
 
     private void OnSyncToggled(object sender, RoutedEventArgs args)
@@ -388,6 +408,7 @@ public sealed partial class MainWindow
         SyncLeadBox.IsEnabled = dataSyncEnabled;
         SyncAnchorPicker.IsEnabled = dataSyncEnabled;
         SyncRetentionWarning.IsOpen = dataSyncEnabled && !dataSyncRetentionConfigured;
+        UpdateRuntimeSummary();
     }
 
     private void OnSyncSourceToggled(object sender, RoutedEventArgs args)
@@ -475,7 +496,7 @@ public sealed partial class MainWindow
             return;
         }
         Status.Text = L10n.T("正在立即同步后台数据");
-        var round = await RunDataSyncRound(sources);
+        var round = await RunDataSyncRound(sources, force: true);
         if (round.Error != null)
         {
             // 轮级拒绝不进状态文件也不进任务历史，直接展示具体原因。
@@ -494,9 +515,12 @@ public sealed partial class MainWindow
         RenderSyncStatusRows();
     }
 
-    private async Task<(JsonObject? Response, Exception? Error)> RunDataSyncRound(List<string> sources)
+    private string dataSyncActiveSource = "";
+
+    private async Task<(JsonObject? Response, Exception? Error)> RunDataSyncRound(List<string> sources, bool force = false)
     {
         dataSyncRunning = true;
+        dataSyncActiveSource = "";
         dataSyncProgress.Clear();
         UpdateSyncControls();
         JsonObject? response = null;
@@ -504,17 +528,25 @@ public sealed partial class MainWindow
         syncOperation = new CancellationTokenSource();
         try
         {
-            response = await engine.Call("data_sync_run", new() { ["sources"] = new JsonArray(
-                sources.Select(source => JsonValue.Create(source)).ToArray<JsonNode>()) },
+            var parameters = new JsonObject
+            {
+                ["sources"] = new JsonArray(
+                    sources.Select(source => JsonValue.Create(source)).ToArray<JsonNode>()),
+            };
+            if (force) parameters["force"] = true;
+            response = await engine.Call("data_sync_run", parameters,
                 progress: e => DispatcherQueue.TryEnqueue(() =>
                 {
                     var source = Text(e, "source");
                     var percent = Math.Clamp(Number(e, "percent"), 0, 100);
                     if (source.Length > 0)
+                    {
+                        dataSyncActiveSource = source;
                         dataSyncProgress[source] = new JsonObject
                         {
                             ["percent"] = percent, ["message"] = Text(e, "message"),
                         };
+                    }
                     if (!busy) Status.Text = Text(e, "message") is { Length: > 0 } message
                         ? message : $"正在同步 {source} · {percent:0}%";
                     RenderSyncStatusRows();
@@ -524,6 +556,7 @@ public sealed partial class MainWindow
         finally
         {
             dataSyncRunning = false;
+            dataSyncActiveSource = "";
             dataSyncProgress.Clear();
         }
         // 仅刷新每源状态；不回填设置字段，避免覆盖正在编辑的内容。
@@ -611,7 +644,7 @@ public sealed partial class MainWindow
                 MinWidth = 44,
             });
             var body = new StackPanel { Spacing = 3 };
-            var live = running ? dataSyncProgress.GetValueOrDefault(source) : null;
+            var live = running && dataSyncActiveSource == source ? dataSyncProgress.GetValueOrDefault(source) : null;
             if (live != null)
             {
                 var progressLine = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
@@ -693,6 +726,21 @@ public sealed partial class MainWindow
 
     // ---------- 数据：存储与保留 ----------
 
+    private bool applyingRetention;
+
+    private void UpdateRetentionControls()
+    {
+        if (SaveRetentionButton == null || ApplyRetentionButton == null) return;
+        var active = savingRetention || applyingRetention;
+        RetentionRing.IsActive = active;
+        SaveRetentionButton.IsEnabled = online && !busy && !active;
+        ApplyRetentionButton.IsEnabled = online && dataSyncRetentionConfigured && !busy && !active;
+        ToolTipService.SetToolTip(ApplyRetentionButton, dataSyncRetentionConfigured
+            ? L10n.T("立即按已保存规则清理超出保留范围的旧文件（跳过占用中文件）")
+            : L10n.T("请先填写并保存至少一项保留规则"));
+        UpdateRuntimeSummary();
+    }
+
     private async Task LoadRetentionSettings()
     {
         if (!online) return;
@@ -710,6 +758,7 @@ public sealed partial class MainWindow
             RetentionStatus.Text = configured ? L10n.T("已启用自定义保留策略。") : L10n.T("未启用自定义保留策略。");
             dataSyncRetentionConfigured = configured;
             SyncRetentionWarning.IsOpen = dataSyncEnabled && !configured;
+            UpdateRetentionControls();
         }
         catch (Exception error)
         {
@@ -719,8 +768,9 @@ public sealed partial class MainWindow
 
     private async void OnSaveRetention(object sender, RoutedEventArgs args)
     {
-        if (!online || busy || savingRetention) return;
+        if (!online || busy || savingRetention || applyingRetention) return;
         savingRetention = true;
+        UpdateRetentionControls();
         try
         {
             var settings = new JsonObject
@@ -732,7 +782,6 @@ public sealed partial class MainWindow
                 ["report_days"] = RetentionNumber(RetentionReportDays.Text, L10n.T("历史报告")),
                 ["map_days"] = RetentionNumber(RetentionMapDays.Text, L10n.T("报告地图")),
             };
-            SaveRetentionButton.IsEnabled = false;
             var response = await engine.Call("save_retention_settings",
                 new JsonObject { ["settings"] = settings });
             var saved = response["settings"] as JsonObject ?? new JsonObject();
@@ -744,8 +793,9 @@ public sealed partial class MainWindow
             RetentionMapDays.Text = RetentionText(saved["map_days"]);
             var configured = BoolValue(response, "configured") == true;
             RetentionStatus.Text = configured
-                ? L10n.T("保留设置已保存；下一次成功准备后执行清理。") : L10n.T("已清空保留设置。");
-            ErrorBar.IsOpen = false;
+                ? L10n.T("保留设置已保存；可点击「立即按策略清理」，或等待下一次成功准备后自动清理。")
+                : L10n.T("已清空保留设置。");
+            ClearError("settings");
             // 同步页的「未配置保留」软警告依赖 retention_configured，一并刷新。
             dataSyncRetentionConfigured = configured;
             SyncRetentionWarning.IsOpen = dataSyncEnabled && !configured;
@@ -753,12 +803,59 @@ public sealed partial class MainWindow
         catch (Exception error)
         {
             RetentionStatus.Text = FriendlyMessages.Map(error.Message);
-            Fail(error);
+            Fail(error, "settings");
         }
         finally
         {
             savingRetention = false;
-            SaveRetentionButton.IsEnabled = !busy && online;
+            UpdateRetentionControls();
+        }
+    }
+
+    private async void OnApplyRetentionNow(object sender, RoutedEventArgs args)
+    {
+        if (!online || busy || savingRetention || applyingRetention) return;
+        applyingRetention = true;
+        RetentionStatus.Text = L10n.T("正在按保留策略清理旧数据…");
+        UpdateRetentionControls();
+        try
+        {
+            var response = await engine.Call("apply_retention_settings");
+            var configured = BoolValue(response, "configured") == true;
+            if (!configured || response["result"] is not JsonObject result)
+            {
+                RetentionStatus.Text = L10n.T("尚未保存任何保留规则，未执行清理。");
+                return;
+            }
+            var removed = (long?)DoubleValue(result["removed_count"]) ?? 0;
+            var freedMb = DoubleValue(result["freed_mb"]) ?? 0;
+            var deferred = (long?)DoubleValue(result["deferred_count"]) ?? 0;
+            var failed = (long?)DoubleValue(result["failed_count"]) ?? 0;
+            var parts = new List<string>
+            {
+                removed > 0
+                    ? (L10n.IsEnglish
+                        ? $"Cleaned {removed} old items, freed {freedMb:0.0} MB"
+                        : $"已清理 {removed} 项旧数据，释放 {freedMb:0.0} MB")
+                    : L10n.T("当前没有超出保留策略的旧数据")
+            };
+            if (deferred > 0)
+                parts.Add(L10n.IsEnglish ? $"skipped {deferred} busy items" : $"跳过 {deferred} 项占用中文件");
+            if (failed > 0)
+                parts.Add(L10n.IsEnglish ? $"{failed} failed" : $"{failed} 项清理失败");
+            RetentionStatus.Text = string.Join(" · ", parts) + (L10n.IsEnglish ? "." : "。");
+            ClearError("settings");
+            await LoadInventory();
+        }
+        catch (Exception error)
+        {
+            RetentionStatus.Text = FriendlyMessages.Map(error.Message);
+            Fail(error, "settings");
+        }
+        finally
+        {
+            applyingRetention = false;
+            UpdateRetentionControls();
         }
     }
 

@@ -3,6 +3,7 @@ package com.firesky.mobile.ui
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -18,22 +20,30 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.History
-import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Tune
+import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -46,11 +56,17 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -58,12 +74,16 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -81,47 +101,70 @@ import java.time.ZoneOffset
 fun WorkbenchApp(store: WorkbenchStore) {
     val state by store.state.collectAsStateWithLifecycle()
     FireSkyTheme(state.appearance) {
-        androidx.compose.material3.Scaffold(
-            containerColor = MaterialTheme.colorScheme.background,
-            bottomBar = {
-                Column(Modifier.background(MaterialTheme.colorScheme.surfaceVariant)) {
-                if (state.page == "workbench" && !state.showPreflight) {
-                    Box(Modifier.padding(horizontal = 16.dp, vertical = 10.dp)) {
-                        RunButton(store, state)
+        val dark = LocalFireSkyDark.current
+        val navBg = if (dark) Color(0xFF111826).copy(alpha = 0.96f) else Color(0xFFF5F7FA).copy(alpha = 0.96f)
+        val navDivider = if (dark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.06f)
+
+        FireSkyBackdrop(Modifier.fillMaxSize()) {
+            Scaffold(
+                containerColor = Color.Transparent,
+                topBar = {
+                    if (state.page == "workbench") {
+                        TopAppBar(
+                            title = { HeaderLine(state) },
+                            colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
+                            windowInsets = WindowInsets(0.dp),
+                        )
                     }
-                }
-                androidx.compose.material3.NavigationBar(containerColor = MaterialTheme.colorScheme.surfaceVariant) {
-                    NavigationItem("workbench", stringResource(R.string.nav_point), Icons.Filled.Place, state.page) {
-                        store.setPage("workbench")
+                },
+                bottomBar = {
+                    Column(Modifier.background(navBg)) {
+                        HorizontalDivider(thickness = 0.5.dp, color = navDivider)
+                        if (state.page == "workbench" && !state.showPreflight) {
+                            Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+                                RunButton(store, state)
+                            }
+                        }
+                        NavigationBar(
+                            containerColor = Color.Transparent,
+                            tonalElevation = 0.dp,
+                        ) {
+                            NavigationItem("workbench", stringResource(R.string.nav_point), Icons.Filled.Place, state.page) {
+                                store.setPage("workbench")
+                            }
+                            NavigationItem("data", stringResource(R.string.nav_data), Icons.Filled.Storage, state.page) {
+                                store.setPage("data")
+                            }
+                            NavigationItem("history", stringResource(R.string.nav_history), Icons.Filled.History, state.page) {
+                                store.setPage("history")
+                            }
+                            NavigationItem("settings", stringResource(R.string.nav_settings), Icons.Filled.Settings, state.page) {
+                                store.setPage("settings")
+                            }
+                        }
                     }
-                    NavigationItem("data", stringResource(R.string.nav_data), Icons.Filled.Storage, state.page) {
-                        store.setPage("data")
+                },
+            ) { padding ->
+                Box(Modifier.fillMaxSize().padding(padding)) {
+                    when (state.page) {
+                        "settings" -> SettingsScreen(store, state)
+                        "data" -> DataScreen(store, state)
+                        "history" -> HistoryScreen(store, state)
+                        else -> WorkbenchScreen(store, state)
                     }
-                    NavigationItem("history", stringResource(R.string.nav_history), Icons.Filled.History, state.page) {
-                        store.setPage("history")
+                    if (state.showPreflight) {
+                        ModalBottomSheet(
+                            onDismissRequest = {
+                                // 语义对齐 iOS interactiveDismissDisabled(busy)：忙时禁止下滑关闭。
+                                if (!state.checking && !state.busy) store.closePreflight()
+                            },
+                            containerColor = if (dark) Color(0xFF182132) else Color(0xFFFCFDFF),
+                        ) {
+                            PreflightSheet(store, state)
+                        }
                     }
-                    NavigationItem("settings", stringResource(R.string.nav_settings), Icons.Filled.Settings, state.page) {
-                        store.setPage("settings")
-                    }
-                }
-                }
-            },
-        ) { padding ->
-            Box(Modifier.fillMaxSize().background(pageBackground()).padding(padding)) {
-                when (state.page) {
-                    "settings" -> SettingsScreen(store, state)
-                    "data" -> DataScreen(store, state)
-                    "history" -> HistoryScreen(store, state)
-                    else -> WorkbenchScreen(store, state)
-                }
-                if (state.showPreflight) {
-                    ModalBottomSheet(
-                        onDismissRequest = {
-                            // 语义对齐 iOS interactiveDismissDisabled(busy)：忙时禁止下滑关闭。
-                            if (!state.checking && !state.busy) store.closePreflight()
-                        },
-                    ) {
-                        PreflightSheet(store, state)
+                    if (state.showCycleAgeConfirm) {
+                        CycleAgeConfirmDialog(store, state)
                     }
                 }
             }
@@ -137,11 +180,27 @@ private fun RowScope.NavigationItem(
     current: String,
     onClick: () -> Unit,
 ) {
+    val selected = current == key
     NavigationBarItem(
-        selected = current == key,
+        selected = selected,
         onClick = onClick,
         icon = { Icon(icon, contentDescription = title) },
-        label = { Text(title) },
+        label = {
+            Text(
+                title,
+                fontSize = 11.sp,
+                fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        },
+        colors = NavigationBarItemDefaults.colors(
+            indicatorColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+            selectedIconColor = MaterialTheme.colorScheme.primary,
+            selectedTextColor = MaterialTheme.colorScheme.primary,
+            unselectedIconColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+            unselectedTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+        ),
     )
 }
 
@@ -150,15 +209,19 @@ private fun RowScope.NavigationItem(
 /** 单点工作台（Workbench.swift workbench 区域同构）：参数表单 → 运行 → 进度 → 结果卡片。 */
 @Composable
 fun WorkbenchScreen(store: WorkbenchStore, state: WorkbenchState) {
+    val pageError = state.errorText("workbench")
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .padding(horizontal = 16.dp)
+            .padding(top = 4.dp, bottom = 14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        HeaderLine(state)
         if (!state.online) OfflineBanner(state) { store.connect() }
+        if (state.online && pageError.isNotEmpty()) {
+            DismissibleErrorBanner(pageError, onDismiss = { store.clearError() })
+        }
         LocationCard(store, state)
         ParametersCard(store, state)
         if (state.busy && !state.showPreflight) ProgressRow(store, state)
@@ -169,29 +232,71 @@ fun WorkbenchScreen(store: WorkbenchStore, state: WorkbenchState) {
 @Composable
 private fun HeaderLine(state: WorkbenchState) {
     val loc = state.location
-    Column {
-        Text(stringResource(R.string.point_title), fontSize = 22.sp, fontWeight = FontWeight.Bold)
-        Text(
-            "%s · %.4f° N, %.4f° E".format(loc.name, loc.lat, loc.lon),
-            fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-        )
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(end = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        FireSkyMark(Modifier.size(34.dp))
+        Column(Modifier.weight(1f)) {
+            Text(
+                stringResource(R.string.point_title),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
+            Text(
+                "%s · %.4f° N, %.4f° E".format(loc.name, loc.lat, loc.lon),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+        if (state.isRemoteMode) {
+            val statusColor = if (state.online) Color(0xFF3B9C57) else Color(0xFFC98B2C)
+            SoftPillChip(
+                text = stringResource(R.string.remote_mac_badge),
+                tint = statusColor,
+                leadingDotColor = statusColor,
+            )
+        }
     }
 }
 
 @Composable
 private fun OfflineBanner(state: WorkbenchState, onReconnect: () -> Unit) {
-    WorkSurface(Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("⚠", color = MaterialTheme.colorScheme.error)
-            Spacer(Modifier.width(8.dp))
-            Column(Modifier.weight(1f)) {
-                Text(stringResource(R.string.engine_offline), fontSize = 12.sp, color = MaterialTheme.colorScheme.error)
+    val errorColor = MaterialTheme.colorScheme.error
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(12.dp),
+        color = errorColor.copy(alpha = 0.10f),
+        border = BorderStroke(0.75.dp, errorColor.copy(alpha = 0.34f)),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            IconBadge(Icons.Filled.Warning, tint = errorColor)
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    stringResource(R.string.engine_offline),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = errorColor,
+                )
                 if (state.error.isNotEmpty()) {
-                    Text(state.error, fontSize = 10.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
+                    Text(
+                        state.error,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                    )
                 }
             }
-            TextButton(onClick = onReconnect) { Text(stringResource(R.string.reconnect)) }
+            TextButton(onClick = onReconnect) {
+                Text(stringResource(R.string.reconnect), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            }
         }
     }
 }
@@ -202,81 +307,122 @@ private fun OfflineBanner(state: WorkbenchState, onReconnect: () -> Unit) {
 @Composable
 private fun LocationCard(store: WorkbenchStore, state: WorkbenchState) {
     val loc = state.location
+    val dark = LocalFireSkyDark.current
+    val groupedFill = if (dark) Color(0xFF202A3D) else Color(0xFFF3F6FA)
+    val groupedBorder = if (dark) Color(0xFF50617B).copy(alpha = 0.45f) else Color(0xFFD8E1EA).copy(alpha = 0.85f)
+
     WorkSurface(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(stringResource(R.string.obs_point), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                IconBadge(Icons.Filled.Place)
+                Text(stringResource(R.string.obs_point), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = state.query,
                     onValueChange = store::setQuery,
                     modifier = Modifier.weight(1f),
                     singleLine = true,
+                    shape = SoftInputShape,
+                    colors = softInputColors(),
                     placeholder = { Text(stringResource(R.string.search_placeholder), fontSize = 12.sp) },
                     textStyle = MaterialTheme.typography.bodySmall,
-                    trailingIcon = {
-                        IconButton(onClick = { store.search() }) {
-                            Icon(Icons.Filled.Search, contentDescription = stringResource(R.string.cd_search))
-                        }
-                    },
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(onSearch = { store.search() }),
                 )
-                IconButton(onClick = { store.locate() }, enabled = !state.busy) {
-                    Icon(Icons.Filled.LocationOn, contentDescription = stringResource(R.string.cd_locate))
+                Surface(
+                    onClick = { store.search() },
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = if (dark) 0.18f else 0.12f),
+                    border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)),
+                    modifier = Modifier.size(42.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Filled.Search,
+                            contentDescription = stringResource(R.string.cd_search),
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+                Surface(
+                    onClick = { store.locate() },
+                    enabled = !state.busy,
+                    shape = CircleShape,
+                    color = groupedFill,
+                    border = BorderStroke(0.75.dp, groupedBorder),
+                    modifier = Modifier.size(42.dp),
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.Filled.LocationOn,
+                            contentDescription = stringResource(R.string.cd_locate),
+                            tint = coolAccentColor(),
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                 Box(Modifier.size(8.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
-                Column {
-                    Text(loc.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                    Text(loc.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     Text(
                         "%.4f° N, %.4f° E".format(loc.lat, loc.lon),
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f),
                     )
                 }
+                TextButton(onClick = { store.starLocation() }) {
+                    Icon(Icons.Filled.Star, contentDescription = null, Modifier.size(14.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(stringResource(R.string.star_location), fontSize = 11.sp)
+                }
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 ChipText(
                     if (loc.metadataReady) stringResource(R.string.elevation_m, loc.elevation)
                     else stringResource(R.string.elevation_unconfirmed),
                 )
                 ChipText(loc.timezone, modifier = Modifier.weight(1f, fill = false))
             }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                TextButton(onClick = { store.starLocation() }) {
-                    Icon(Icons.Filled.Star, contentDescription = null, Modifier.size(14.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.star_location), fontSize = 10.sp)
-                }
-            }
             if (state.favorites.isNotEmpty()) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
-                state.favorites.forEachIndexed { index, favorite ->
-                    Row(
-                        Modifier
-                            .fillMaxWidth()
-                            .clickable { store.applyFavorite(index) }
-                            .padding(vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            Icons.Filled.Place,
-                            contentDescription = null,
-                            Modifier.size(14.dp),
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            favorite.optString("name", stringResource(R.string.favorite_name)),
-                            fontSize = 12.sp,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Spacer(Modifier.weight(1f))
-                        Text(
-                            "%.4f, %.4f".format(favorite.optDouble("lat", 0.0), favorite.optDouble("lon", 0.0)),
-                            fontSize = 9.sp,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                        )
+                HorizontalDivider(
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
+                )
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    state.favorites.forEachIndexed { index, favorite ->
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(10.dp))
+                                .clickable { store.applyFavorite(index) }
+                                .padding(horizontal = 6.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(
+                                Icons.Filled.Place,
+                                contentDescription = null,
+                                Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.primary,
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                favorite.optString("name", stringResource(R.string.favorite_name)),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Spacer(Modifier.weight(1f))
+                            Text(
+                                "%.4f, %.4f".format(favorite.optDouble("lat", 0.0), favorite.optDouble("lon", 0.0)),
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+                            )
+                        }
                     }
                 }
             }
@@ -292,13 +438,22 @@ private fun ParametersCard(store: WorkbenchStore, state: WorkbenchState) {
     val pickerState = androidx.compose.material3.rememberDatePickerState(
         initialSelectedDateMillis = state.targetDate.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
     )
+    val dark = LocalFireSkyDark.current
+    val groupedFill = if (dark) Color(0xFF202A3D) else Color(0xFFF3F6FA)
+    val groupedBorder = if (dark) Color(0xFF50617B).copy(alpha = 0.45f) else Color(0xFFD8E1EA).copy(alpha = 0.85f)
+
     WorkSurface(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(15.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.obs_params), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
-                TextButton(onClick = { store.resetParameters() }) { Text(stringResource(R.string.reset), fontSize = 10.sp) }
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    IconBadge(Icons.Filled.Tune, tint = coolAccentColor())
+                    Text(stringResource(R.string.obs_params), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                }
+                TextButton(onClick = { store.resetParameters() }) {
+                    Text(stringResource(R.string.reset), fontSize = 11.sp)
+                }
             }
-            Text(stringResource(R.string.target_date), fontSize = 10.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
+            Text(stringResource(R.string.target_date), fontSize = 11.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f))
             Segmented(
                 options = listOf("今天", "明天", "自定义"),
                 titles = listOf(
@@ -310,14 +465,35 @@ private fun ParametersCard(store: WorkbenchStore, state: WorkbenchState) {
                 onSelect = { store.chooseDate(it) },
             )
             if (state.dateTab == "自定义") {
-                OutlinedButton(
+                Surface(
                     onClick = { showDatePicker = true },
-                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp),
+                    color = groupedFill,
+                    border = BorderStroke(0.75.dp, groupedBorder),
                 ) {
-                    Text("📅 ${state.targetDate}", fontSize = 12.sp)
+                    Row(
+                        Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center,
+                    ) {
+                        Icon(
+                            Icons.Filled.CalendarToday,
+                            contentDescription = null,
+                            modifier = Modifier.size(15.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            state.targetDate.toString(),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
                 }
             }
-            Text(stringResource(R.string.phenomenon_label), fontSize = 10.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
+            Text(stringResource(R.string.phenomenon_label), fontSize = 11.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f))
             Segmented(
                 options = listOf("dawn", "dusk"),
                 titles = listOf(
@@ -335,7 +511,7 @@ private fun ParametersCard(store: WorkbenchStore, state: WorkbenchState) {
                 Text(
                     if (state.editingCoordinates) stringResource(R.string.collapse_coordinates)
                     else stringResource(R.string.edit_coordinates),
-                    fontSize = 10.sp,
+                    fontSize = 11.sp,
                 )
             }
             AnimatedVisibility(visible = state.editingCoordinates) {
@@ -345,6 +521,8 @@ private fun ParametersCard(store: WorkbenchStore, state: WorkbenchState) {
                         onValueChange = { value -> store.editLocation { it.copy(name = value) } },
                         label = { Text(stringResource(R.string.name_label)) },
                         singleLine = true,
+                        shape = SoftInputShape,
+                        colors = softInputColors(),
                         textStyle = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.fillMaxWidth(),
                     )
@@ -362,25 +540,20 @@ private fun ParametersCard(store: WorkbenchStore, state: WorkbenchState) {
                         onValueChange = { value -> store.editLocation { it.copy(timezone = value) } },
                         label = { Text(stringResource(R.string.tz_label)) },
                         singleLine = true,
+                        shape = SoftInputShape,
+                        colors = softInputColors(),
                         textStyle = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.fillMaxWidth(),
                     )
-                    TextButton(onClick = { store.lookupMetadata() }) { Text(stringResource(R.string.fetch_metadata), fontSize = 11.sp) }
+                    TextButton(onClick = { store.lookupMetadata() }) { Text(stringResource(R.string.fetch_metadata), fontSize = 12.sp) }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         androidx.compose.material3.Checkbox(
                             checked = state.location.metadataReady,
                             onCheckedChange = { store.setMetadataReady(it) },
                         )
-                        Text(stringResource(R.string.location_confirmed), fontSize = 10.sp)
+                        Text(stringResource(R.string.location_confirmed), fontSize = 11.sp)
                     }
                 }
-            }
-            if (state.error.isNotEmpty()) {
-                Text(
-                    state.error,
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.error,
-                )
             }
         }
     }
@@ -410,6 +583,8 @@ private fun NumberField(label: String, value: Double, onChange: (Double) -> Unit
         onValueChange = { text -> text.toDoubleOrNull()?.let(onChange) },
         label = { Text(label) },
         singleLine = true,
+        shape = SoftInputShape,
+        colors = softInputColors(),
         textStyle = MaterialTheme.typography.bodySmall,
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         modifier = Modifier.fillMaxWidth(),
@@ -423,27 +598,30 @@ private fun RunButton(store: WorkbenchStore, state: WorkbenchState) {
     AccentButton(
         title = stringResource(R.string.start_forecast),
         enabled = !state.busy && state.online,
+        icon = Icons.Filled.AutoAwesome,
     ) { store.beginCheck() }
 }
 
 @Composable
 private fun ProgressRow(store: WorkbenchStore, state: WorkbenchState) {
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        LinearProgressIndicator(
-            progress = { (state.percent / 100).toFloat() },
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                state.status,
-                fontSize = 9.sp,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                modifier = Modifier.weight(1f),
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+    WorkSurface(Modifier.fillMaxWidth(), grouped = true, cornerRadius = 12.dp) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            LinearProgressIndicator(
+                progress = { (state.percent / 100).toFloat() },
+                modifier = Modifier.fillMaxWidth().clip(CircleShape),
             )
-            IconButton(onClick = { store.cancel() }, modifier = Modifier.size(28.dp)) {
-                Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.cd_cancel_task), Modifier.size(14.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    state.status,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                    modifier = Modifier.weight(1f),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                IconButton(onClick = { store.cancel() }, modifier = Modifier.size(28.dp)) {
+                    Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.cd_cancel_task), Modifier.size(14.dp))
+                }
             }
         }
     }
@@ -451,7 +629,7 @@ private fun ProgressRow(store: WorkbenchStore, state: WorkbenchState) {
 
 // ---------------------------------------------------------------- 通用小件
 
-/** WorkSegments 同构：分段选择器（accent 时选中项用主题色）。 */
+/** WorkSegments 同构：紧凑流线型分段选择器（40dp 高，圆角 11dp 滑轨 + 8dp 悬浮胶囊）。 */
 @Composable
 fun Segmented(
     options: List<String>,
@@ -462,44 +640,68 @@ fun Segmented(
     modifier: Modifier = Modifier,
 ) {
     val dark = LocalFireSkyDark.current
+    val trackFill = if (dark) Color(0xFF161E2E) else Color(0xFFEAF0F6)
+    val trackBorder = if (dark) Color(0xFF50617B).copy(alpha = 0.42f) else Color(0xFFD8E1EA).copy(alpha = 0.80f)
+    val pillShape = RoundedCornerShape(8.dp)
+
     Row(
         modifier
             .fillMaxWidth()
+            .heightIn(min = 40.dp)
             .selectableGroup()
-            .background(
-                if (dark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.05f),
-                RoundedCornerShape(8.dp),
-            )
+            .background(trackFill, RoundedCornerShape(11.dp))
+            .border(0.75.dp, trackBorder, RoundedCornerShape(11.dp))
             .padding(3.dp),
         horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         options.forEachIndexed { index, option ->
             val selected = selection == option
+            val pillFill = when {
+                selected && accent && dark -> MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)
+                selected && accent -> Color.White.copy(alpha = 0.96f)
+                selected && dark -> Color.White.copy(alpha = 0.12f)
+                selected -> Color.White.copy(alpha = 0.96f)
+                else -> Color.Transparent
+            }
+            val pillShadow = if (selected && !dark) {
+                Modifier.shadow(
+                    elevation = 1.dp,
+                    shape = pillShape,
+                    clip = false,
+                    ambientColor = Color(0xFF2A3C58).copy(alpha = 0.14f),
+                    spotColor = Color(0xFF2A3C58).copy(alpha = 0.10f),
+                )
+            } else {
+                Modifier
+            }
+            val pillBorder = if (selected && accent) {
+                Modifier.border(0.75.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.30f), pillShape)
+            } else {
+                Modifier
+            }
             Box(
                 Modifier
                     .weight(1f)
-                    .background(
-                        when {
-                            selected && accent -> MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
-                            selected -> if (dark) Color.White.copy(alpha = 0.10f) else Color.White.copy(alpha = 0.85f)
-                            else -> Color.Transparent
-                        },
-                        RoundedCornerShape(6.dp),
-                    )
+                    .heightIn(min = 34.dp)
+                    .then(pillShadow)
+                    .clip(pillShape)
+                    .background(pillFill, pillShape)
+                    .then(pillBorder)
                     .selectable(selected = selected, role = Role.Tab, onClick = { onSelect(option) })
-                    .heightIn(min = 48.dp)
-                    .padding(horizontal = 4.dp, vertical = 8.dp),
+                    .padding(horizontal = 6.dp, vertical = 7.dp),
                 contentAlignment = Alignment.Center,
             ) {
                 Text(
                     titles?.getOrNull(index) ?: option,
-                    fontSize = 14.sp,
-                    textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                     fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                     color = when {
                         selected && accent -> MaterialTheme.colorScheme.primary
-                        selected -> MaterialTheme.colorScheme.onBackground
-                        else -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+                        selected -> MaterialTheme.colorScheme.onSurface
+                        else -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
                     },
                 )
             }
@@ -509,16 +711,7 @@ fun Segmented(
 
 @Composable
 fun ChipText(text: String, modifier: Modifier = Modifier) {
-    Box(
-        modifier
-            .background(
-                MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f),
-                RoundedCornerShape(6.dp),
-            )
-            .padding(horizontal = 8.dp, vertical = 5.dp),
-    ) {
-        Text(text, fontSize = 9.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f))
-    }
+    SoftPillChip(text = text, modifier = modifier)
 }
 
 /** 模型结果状态行（comparison.status 同构）。 */
@@ -553,85 +746,108 @@ fun PreflightSheet(store: WorkbenchStore, state: WorkbenchState) {
         }
         Spacer(Modifier.height(16.dp))
         Column(Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState())) {
-        if (state.rows.isEmpty()) {
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 40.dp),
-                horizontalArrangement = Arrangement.Center,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(12.dp))
-                Text(stringResource(R.string.checking_data), fontSize = 13.sp)
-            }
-        } else {
-            state.rows.forEach { row ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Box(
-                        Modifier.size(32.dp).background(
-                            MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
-                            RoundedCornerShape(6.dp),
-                        ),
-                        contentAlignment = Alignment.Center,
-                    ) { Text(row.title.take(2), fontSize = 11.sp, fontWeight = FontWeight.SemiBold) }
+            if (state.rows.isEmpty()) {
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 40.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
                     Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f)) {
-                        Text(row.title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text(stringResource(R.string.checking_data), fontSize = 13.sp)
+                }
+            } else {
+                WorkSurface(Modifier.fillMaxWidth(), grouped = true, cornerRadius = 14.dp) {
+                    Column(Modifier.padding(horizontal = 12.dp)) {
+                        state.rows.forEachIndexed { index, row ->
+                            Row(
+                                Modifier.fillMaxWidth().padding(vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Box(
+                                    Modifier.size(32.dp).background(
+                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                                        RoundedCornerShape(8.dp),
+                                    ),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        row.title.take(2),
+                                        fontSize = 11.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary,
+                                    )
+                                }
+                                Spacer(Modifier.width(12.dp))
+                                Column(Modifier.weight(1f)) {
+                                    Text(row.title, fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                                    Text(
+                                        row.detail,
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                                    )
+                                }
+                                StatusChip(
+                                    state = if (!row.ready) "pending" else if (row.old) "interrupted" else "done",
+                                    title = statusText(row.status),
+                                )
+                            }
+                            if (index < state.rows.size - 1) {
+                                HorizontalDivider(
+                                    Modifier.padding(start = 44.dp),
+                                    thickness = 0.5.dp,
+                                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Column {
+                when {
+                    state.checking -> {
+                        LinearProgressIndicator(
+                            progress = { (state.percent / 100).toFloat() },
+                            modifier = Modifier.fillMaxWidth().clip(CircleShape),
+                        )
                         Text(
-                            row.detail,
+                            state.status,
                             fontSize = 11.sp,
                             color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                            modifier = Modifier.padding(top = 6.dp),
                         )
                     }
-                    StatusChip(
-                        state = if (!row.ready) "pending" else if (row.old) "interrupted" else "done",
-                        title = statusText(row.status),
+                    state.errorText("workbench").isNotEmpty() -> DismissibleErrorBanner(
+                        message = state.errorText("workbench"),
+                        onDismiss = { store.clearError() },
                     )
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f))
-            }
-        }
-        Spacer(Modifier.height(12.dp))
-        Column {
-            when {
-                state.checking -> {
-                    LinearProgressIndicator(
-                        progress = { (state.percent / 100).toFloat() },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Text(
-                        state.status,
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                        modifier = Modifier.padding(top = 6.dp),
-                    )
-                }
-                state.error.isNotEmpty() -> Text(
-                    state.error,
-                    fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.error,
-                )
-                else -> Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        preflightSummary(state, state.status),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (state.publicationsPending) {
-                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
+                    else -> Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            preflightSummary(state, state.status),
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.Medium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (state.publicationsPending) {
+                            CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
+                        }
                     }
                 }
             }
-        }
         }
         Spacer(Modifier.height(14.dp))
         AccentButton(
             title = stringResource(if (state.ready) R.string.confirm_forecast else R.string.download_missing),
             enabled = state.session != null && !state.busy,
+            icon = if (state.ready) Icons.Filled.AutoAwesome else Icons.Filled.CloudDownload,
         ) { if (state.ready) store.confirm() else store.prepare() }
         if (state.ready) {
-            TextButton(onClick = { store.prepare() }, enabled = state.session != null && !state.busy,
-                modifier = Modifier.fillMaxWidth()) {
+            TextButton(
+                onClick = { store.prepare() },
+                enabled = state.session != null && !state.busy,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
                 Text(stringResource(R.string.update_data))
             }
         }
@@ -650,4 +866,91 @@ private fun preflightSummary(state: WorkbenchState, status: String): String {
     } else {
         stringResource(R.string.preflight_ready)
     }
+}
+
+/** 结构化数据周期龄确认弹窗（对标 macOS CycleAgeConfirmView）。 */
+@Composable
+private fun CycleAgeConfirmDialog(store: WorkbenchStore, state: WorkbenchState) {
+    val flagged = state.flaggedCycleAgeRows
+    val warm = MaterialTheme.colorScheme.primary
+    AlertDialog(
+        onDismissRequest = { store.dismissCycleAgeConfirm() },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                IconBadge(Icons.Filled.Schedule, tint = warm, modifier = Modifier.size(38.dp))
+                Text(stringResource(R.string.cycle_age_title), fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    stringResource(R.string.cycle_age_body),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.78f),
+                )
+                WorkSurface(Modifier.fillMaxWidth(), grouped = true, cornerRadius = 12.dp) {
+                    Column {
+                        flagged.forEachIndexed { index, row ->
+                            Row(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Icon(
+                                    Icons.Filled.Storage,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                )
+                                Column(Modifier.weight(1f)) {
+                                    Text(row.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                    Text(
+                                        statusText(row.detail),
+                                        fontSize = 11.sp,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                                    )
+                                }
+                                StatusChip(
+                                    state = if (row.old) "interrupted" else "pending",
+                                    title = statusText(row.status),
+                                )
+                            }
+                            if (index < flagged.size - 1) {
+                                HorizontalDivider(
+                                    thickness = 0.5.dp,
+                                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                                )
+                            }
+                        }
+                    }
+                }
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { store.updateToLatestFromCycleAge() },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Icon(Icons.Filled.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Spacer(Modifier.width(6.dp))
+                        Text(stringResource(R.string.cycle_age_update_latest), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                    OutlinedButton(
+                        onClick = { store.confirmCycleAgeAndForecast() },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp),
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text(stringResource(R.string.cycle_age_continue_cache), fontSize = 13.sp)
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = { store.dismissCycleAgeConfirm() }) {
+                Text(stringResource(R.string.back))
+            }
+        },
+    )
 }

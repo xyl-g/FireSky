@@ -13,7 +13,11 @@ public sealed class PreflightDialog : ContentDialog
 {
     private sealed class CheckRow
     {
+        internal required string Source { get; init; }
         internal required string Title { get; init; }
+        internal required string Detail { get; init; }
+        internal required string StatusBadge { get; init; }
+        internal required bool Old { get; init; }
         internal required bool Ready { get; init; }
         internal required bool Verified { get; init; }
         internal required bool Latest { get; init; }
@@ -83,9 +87,12 @@ public sealed class PreflightDialog : ContentDialog
         {
             if (mode == "cycleage")
             {
-                // 周期龄确认「继续预测」：提交会话并带 cycle_age_confirmed。
-                ConfirmedSession = session;
-                CycleAgeConfirmed = true;
+                // 周期龄确认主按钮「更新到最新数据」：回到预检并立即执行 prepare 下载最新数据。
+                e.Cancel = true;
+                RestorePreflightMode();
+                var deferral = e.GetDeferral();
+                try { await Prepare(); }
+                finally { deferral.Complete(); }
                 return;
             }
             if (working || session == null) { e.Cancel = true; return; }
@@ -96,14 +103,21 @@ public sealed class PreflightDialog : ContentDialog
                 return;
             }
             e.Cancel = true;
-            var deferral = e.GetDeferral();
+            var prepareDeferral = e.GetDeferral();
             try { await Prepare(); }
-            finally { deferral.Complete(); }
+            finally { prepareDeferral.Complete(); }
         };
         SecondaryButtonClick += async (_, e) =>
         {
+            if (mode == "cycleage")
+            {
+                // 次按钮「使用当前缓存继续」：提交会话并带 cycle_age_confirmed。
+                ConfirmedSession = session;
+                CycleAgeConfirmed = true;
+                return;
+            }
             e.Cancel = true;
-            if (mode == "cycleage" || !ready || working || session == null) return;
+            if (!ready || working || session == null) return;
             // B6 基准：数据已就绪但有未核验/非最新发布的周期时，先弹确认。
             if (NeedsCycleAgeConfirmation) { ShowCycleAgeConfirm(); return; }
             var deferral = e.GetDeferral();
@@ -130,35 +144,123 @@ public sealed class PreflightDialog : ContentDialog
     private bool NeedsCycleAgeConfirmation =>
         ready && checkRows.Any(row => row.Ready && (!row.Verified || !row.Latest));
 
-    private string CycleAgeSummary
-    {
-        get
-        {
-            var titles = checkRows.Where(row => row.Ready && (!row.Verified || !row.Latest))
-                .Select(row => row.Title).ToList();
-            return titles.Count == 0 ? L10n.T("部分数据") : string.Join("、", titles);
-        }
-    }
-
-    /// <summary>周期龄确认弹层：主按钮「继续预测」经 PrimaryButtonClick 提交，
-    /// 「返回更新数据」经 CloseButtonClick 回到预检（macOS confirmationDialog 口径）。</summary>
+    /// <summary>周期龄确认弹层：列出过时/未核验数据源，主按钮「更新到最新数据」，
+    /// 次按钮「使用当前缓存继续」，返回回到预检（对齐 macOS CycleAgeConfirmSheet）。</summary>
     private void ShowCycleAgeConfirm()
     {
         mode = "cycleage";
         Title = L10n.T("数据周期确认");
-        IsPrimaryButtonEnabled = true;
-        IsSecondaryButtonEnabled = false;
-        PrimaryButtonText = L10n.T("继续预测");
-        SecondaryButtonText = "";
-        CloseButtonText = L10n.T("返回更新数据");
+        IsPrimaryButtonEnabled = !working && session != null;
+        IsSecondaryButtonEnabled = !working && session != null;
+        PrimaryButtonText = L10n.T("更新到最新数据");
+        SecondaryButtonText = L10n.T("使用当前缓存继续");
+        CloseButtonText = L10n.T("返回");
         DefaultButton = ContentDialogButton.Primary;
         refresh.IsEnabled = false;
-        dialogContent.Children.Clear();
-        dialogContent.Children.Add(new TextBlock
+
+        var flagged = checkRows.Where(row => row.Ready && (!row.Verified || !row.Latest)).ToList();
+        var body = new StackPanel { Spacing = 14, MinWidth = 460 };
+
+        var intro = new Grid { ColumnSpacing = 12 };
+        intro.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+        intro.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+        var iconBox = new Border
         {
-            Text = $"{CycleAgeSummary} 的发布周期未核验或不是最新发布。可以继续预测（结果可能略有偏差），也可以返回并点击「更新数据」获取最新周期。",
-            TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true,
+            Width = 38, Height = 38, CornerRadius = new CornerRadius(10),
+            Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0x22, 0xD2, 0x5A, 0x36)),
+            Child = new FontIcon
+            {
+                Glyph = "\uE823", FontSize = 18,
+                Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(Windows.UI.Color.FromArgb(0xFF, 0xD2, 0x5A, 0x36)),
+            },
+        };
+        var introText = new TextBlock
+        {
+            Text = L10n.T("以下本地数据源尚未核验为最新发布周期；使用旧周期可立即出图，但临近起报切换时结果可能略有偏差。"),
+            TextWrapping = TextWrapping.Wrap,
+            IsTextSelectionEnabled = true,
+            FontSize = 12,
+            Opacity = .85,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Grid.SetColumn(introText, 1);
+        intro.Children.Add(iconBox);
+        intro.Children.Add(introText);
+        body.Children.Add(intro);
+
+        var listPanel = new StackPanel { Spacing = 0 };
+        for (var i = 0; i < flagged.Count; i++)
+        {
+            var row = flagged[i];
+            var line = new Grid { Padding = new Thickness(12, 10, 12, 10), ColumnSpacing = 10 };
+            line.ColumnDefinitions.Add(new() { Width = new GridLength(24) });
+            line.ColumnDefinitions.Add(new() { Width = new GridLength(1, GridUnitType.Star) });
+            line.ColumnDefinitions.Add(new() { Width = GridLength.Auto });
+            line.Children.Add(new SymbolIcon(row.Source == "hsd" ? Symbol.Globe : Symbol.Save)
+            {
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            var textCol = new StackPanel { Spacing = 2 };
+            textCol.Children.Add(new TextBlock
+            {
+                Text = row.Title,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            });
+            textCol.Children.Add(new TextBlock
+            {
+                Text = row.Detail,
+                FontSize = 12,
+                Opacity = .75,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            Grid.SetColumn(textCol, 1);
+            line.Children.Add(textCol);
+
+            var badgeColor = row.Old
+                ? Windows.UI.Color.FromArgb(0x24, 0xD2, 0x5A, 0x36)
+                : Windows.UI.Color.FromArgb(0x20, 0x8A, 0x63, 0x21);
+            var badgeTextColor = row.Old
+                ? Windows.UI.Color.FromArgb(0xFF, 0xD2, 0x5A, 0x36)
+                : Windows.UI.Color.FromArgb(0xFF, 0xB8, 0x7A, 0x1A);
+            var chip = new Border
+            {
+                CornerRadius = new CornerRadius(6),
+                Padding = new Thickness(8, 3, 8, 3),
+                Background = new Microsoft.UI.Xaml.Media.SolidColorBrush(badgeColor),
+                VerticalAlignment = VerticalAlignment.Center,
+                Child = new TextBlock
+                {
+                    Text = row.StatusBadge,
+                    FontSize = 11,
+                    FontWeight = Microsoft.UI.Text.FontWeights.Medium,
+                    Foreground = new Microsoft.UI.Xaml.Media.SolidColorBrush(badgeTextColor),
+                },
+            };
+            Grid.SetColumn(chip, 2);
+            line.Children.Add(chip);
+            listPanel.Children.Add(line);
+
+            if (i < flagged.Count - 1)
+            {
+                listPanel.Children.Add(new Border
+                {
+                    BorderThickness = new Thickness(0, 0, 0, 1),
+                    BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                });
+            }
+        }
+
+        body.Children.Add(new Border
+        {
+            CornerRadius = new CornerRadius(8),
+            BorderThickness = new Thickness(1),
+            BorderBrush = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+            Background = (Microsoft.UI.Xaml.Media.Brush)Application.Current.Resources["LayerFillColorDefaultBrush"],
+            Child = listPanel,
         });
+
+        dialogContent.Children.Clear();
+        dialogContent.Children.Add(WrapScrollable(body));
     }
 
     private void RestorePreflightMode()
@@ -217,17 +319,19 @@ public sealed class PreflightDialog : ContentDialog
     {
         working = value;
         refresh.IsEnabled = !value && mode == "preflight";
-        PrimaryButtonText = mode == "cycleage" ? L10n.T("继续预测")
+        PrimaryButtonText = mode == "cycleage" ? L10n.T("更新到最新数据")
             : ready ? ConfirmTitle : L10n.T("下载缺失数据");
-        SecondaryButtonText = mode == "cycleage" ? ""
+        SecondaryButtonText = mode == "cycleage" ? L10n.T("使用当前缓存继续")
             : ready ? L10n.T("更新数据") : ConfirmTitle;
-        IsPrimaryButtonEnabled = !value && session != null && mode == "preflight";
-        IsSecondaryButtonEnabled = !value && ready && session != null && mode == "preflight";
+        IsPrimaryButtonEnabled = !value && session != null;
+        IsSecondaryButtonEnabled = !value && session != null && (mode == "cycleage" || ready);
         if (GetTemplateChild("SecondaryButton") is Button secondary)
         {
-            ToolTipService.SetToolTip(secondary, ready ? L10n.T("更新本次预测所需数据") : L10n.T("需先下载数据方可预测"));
-            Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(
-                secondary, ready ? L10n.T("更新本次预测所需数据") : L10n.T("需先下载数据方可预测"));
+            var tip = mode == "cycleage"
+                ? L10n.T("使用当前本地缓存直接继续预测")
+                : ready ? L10n.T("更新本次预测所需数据") : L10n.T("需先下载数据方可预测");
+            ToolTipService.SetToolTip(secondary, tip);
+            Microsoft.UI.Xaml.Automation.AutomationProperties.SetHelpText(secondary, tip);
         }
         bar.Visibility = value ? Visibility.Visible : Visibility.Collapsed;
         bar.IsIndeterminate = value;
@@ -319,9 +423,13 @@ public sealed class PreflightDialog : ContentDialog
             var latest = item["is_latest"]?.GetValue<bool>() ?? false;
             var old = verified && !latest;
             var count = item["missing_count"]?.GetValue<int>() ?? 0;
+            var detail = !available ? (count > 0 ? L10n.T("本次预测数据不完整") : L10n.T("尚未下载本次预测数据"))
+                : old ? L10n.T("有新发布的数据可更新") : verified ? L10n.T("发布周期已核验") : L10n.T("更新待核验");
+            var badgeText = !available ? L10n.T("需下载") : old ? L10n.T("可更新") : verified ? L10n.T("已下载") : L10n.T("待核验");
             checkRows.Add(new CheckRow
             {
-                Title = title, Ready = available, Verified = verified, Latest = latest,
+                Source = source, Title = title, Detail = detail, StatusBadge = badgeText,
+                Old = old, Ready = available, Verified = verified, Latest = latest,
             });
             if (!available) missing.Add(title);
             if (available && old) updates.Add(title);
@@ -337,8 +445,7 @@ public sealed class PreflightDialog : ContentDialog
             });
             labels.Children.Add(new TextBlock
             {
-                Text = !available ? (count > 0 ? L10n.T("本次预测数据不完整") : L10n.T("尚未下载本次预测数据"))
-                    : old ? L10n.T("有新发布的数据可更新") : verified ? L10n.T("发布周期已核验") : L10n.T("更新待核验"),
+                Text = detail,
                 FontSize = 12, Opacity = .8,
             });
             Grid.SetColumn(labels, 1);

@@ -78,4 +78,61 @@ final class MockTransportTests: XCTestCase {
         XCTAssertNotNil(metadata["elevation_m"] as? NSNumber)
         XCTAssertEqual(metadata["timezone_name"] as? String, "Asia/Shanghai")
     }
+
+    func testStoreErrorIsolationAndStaleBannerHygiene() {
+        let store = Store()
+        store.page = .point
+        store.fail(EngineError(message: "数据错误"), page: .data)
+        XCTAssertEqual(store.errorText(for: .data), "数据错误")
+        XCTAssertEqual(store.errorText(for: .point), "")
+        XCTAssertEqual(store.errorText(for: .settings), "")
+        store.clearError()
+        XCTAssertEqual(store.errorText(for: .data), "")
+
+        XCTAssertFalse(store.resultParametersStale)
+        store.adoptResult(["model_results": [:]], kind: .point, params: store.payload())
+        XCTAssertFalse(store.resultParametersStale)
+        store.phenomenon = "dawn"
+        XCTAssertTrue(store.resultParametersStale)
+        store.page = .settings
+        XCTAssertFalse(store.resultParametersStale)
+    }
+
+    func testCycleAgeConfirmationFlag() {
+        let store = Store()
+        store.ready = true
+        store.rows = [
+            DataRow(source: "gfs", ready: true, old: false, verified: true, latest: true, missing: 0),
+            DataRow(source: "ecmwf", ready: true, old: true, verified: true, latest: false, missing: 0),
+        ]
+        XCTAssertTrue(store.needsCycleAgeConfirmation)
+
+        store.rows = [
+            DataRow(source: "gfs", ready: true, old: false, verified: true, latest: true, missing: 0),
+            DataRow(source: "ecmwf", ready: true, old: false, verified: true, latest: true, missing: 0),
+        ]
+        XCTAssertFalse(store.needsCycleAgeConfirmation)
+    }
+
+    func testRetentionAndInventoryCategoriesOverMock() async throws {
+        let (client, dir) = try makeClient()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let inv = try await client.call("inventory")
+        let categories = try XCTUnwrap(inv["categories"] as? [JSONObject])
+        XCTAssertEqual(
+            Set(categories.compactMap { $0["category"] as? String }),
+            Set(["point-forecasts", "regional-forecasts", "map-frames", "reports", "satellite", "srtm"])
+        )
+
+        let saved = try await client.call("save_retention_settings", ["settings": ["gfs_cycles": 4]])
+        XCTAssertEqual(saved["configured"] as? Bool, true)
+        let applied = try await client.call("apply_retention_settings")
+        XCTAssertEqual(applied["configured"] as? Bool, true)
+        let result = try XCTUnwrap(applied["result"] as? JSONObject)
+        XCTAssertEqual((result["removed_count"] as? NSNumber)?.intValue, 3)
+
+        let sync = try await client.call("data_sync_run", ["sources": ["gfs"], "force": true])
+        XCTAssertNotNil((sync["sources"] as? JSONObject)?["gfs"])
+    }
 }

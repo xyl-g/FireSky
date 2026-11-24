@@ -25,11 +25,14 @@ public sealed partial class MainWindow
         internal required TextBlock Best { get; init; }
         internal required TextBlock Window { get; init; }
         internal required TextBlock Chips { get; init; }
+        internal required Border GenusBadge { get; init; }
+        internal required TextBlock GenusText { get; init; }
         internal required TextBlock Source { get; init; }
         internal required TextBlock Error { get; init; }
     }
 
     private readonly Dictionary<string, HeroCard> heroCards = new();
+    private bool showInvalidLedgerSteps;
 
     private static readonly (string Key, string Key1, string Title, string Caption)[] NowcastMetrics =
     [
@@ -159,6 +162,19 @@ public sealed partial class MainWindow
         panel.Children.Add(window);
         var chips = new TextBlock { Text = "", FontSize = 9, Opacity = .7, TextWrapping = TextWrapping.Wrap };
         panel.Children.Add(chips);
+        var genusText = new TextBlock { Text = "", FontSize = 10, Opacity = .85 };
+        var genusBadge = new Border
+        {
+            CornerRadius = new CornerRadius(6),
+            Padding = new Thickness(7, 2, 7, 2),
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x1C, 0x88, 0x99, 0xAA)),
+            BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+            BorderThickness = new Thickness(1),
+            Visibility = Visibility.Collapsed,
+            Child = genusText,
+        };
+        panel.Children.Add(genusBadge);
         var source = new TextBlock { Text = "", FontSize = 9, Opacity = .65, TextWrapping = TextWrapping.Wrap };
         panel.Children.Add(source);
         var error = new TextBlock
@@ -170,7 +186,9 @@ public sealed partial class MainWindow
         return new HeroCard
         {
             Panel = panel, Status = status, Score = score, Level = level,
-            Best = best, Window = window, Chips = chips, Source = source, Error = error,
+            Best = best, Window = window, Chips = chips,
+            GenusBadge = genusBadge, GenusText = genusText,
+            Source = source, Error = error,
         };
     }
 
@@ -189,6 +207,63 @@ public sealed partial class MainWindow
             "high" => L10n.T("高云族"), "middle" => L10n.T("中云族"), "low" => L10n.T("低云族"),
             null => "", _ => family,
         };
+    }
+
+    private static string GenusLabel(string value) => value switch
+    {
+        "cirrus" => L10n.T("卷云"),
+        "cirrocumulus" => L10n.T("卷积云"),
+        "cirrostratus" => L10n.T("卷层云"),
+        "altocumulus" => L10n.T("高积云"),
+        "altostratus" => L10n.T("高层云"),
+        "nimbostratus" => L10n.T("雨层云"),
+        "stratocumulus" => L10n.T("层积云"),
+        "stratus" => L10n.T("层云"),
+        "cumulus" => L10n.T("积云"),
+        "cumulonimbus" => L10n.T("积雨云"),
+        _ => value.Replace("_", " "),
+    };
+
+    private static string PhaseLabel(string value) => value switch
+    {
+        "ice" => L10n.T("冰相成分"),
+        "water" => L10n.T("液态水成分"),
+        "mixed" => L10n.T("冰水混合成分"),
+        _ => L10n.T("相态未知"),
+    };
+
+    private static string? CloudGenusBrief(JsonObject? proxy, JsonObject? report = null)
+    {
+        if (proxy == null) return null;
+        var label = Text(proxy, "label");
+        if (label.Length == 0) label = "unknown";
+        var conf = DoubleValue(proxy["confidence"]);
+        var pct = conf is { } c ? $" {(int)Math.Round(c * 100)}%" : "";
+        if (label != "unknown")
+        {
+            return L10n.IsEnglish
+                ? $"{GenusLabel(label)} (proxy{pct})"
+                : $"{GenusLabel(label)}（代理{pct}）";
+        }
+        var compatible = (proxy["compatible_genera"] as JsonArray ?? [])
+            .Select(node => StringOrNull(node))
+            .Where(name => !string.IsNullOrEmpty(name))
+            .Cast<string>()
+            .ToList();
+        if (compatible.Count == 0 && report?["dominant_burnable_cloud_genus_diagnosis"] is JsonObject diag)
+        {
+            compatible = (diag["compatible_genera"] as JsonArray ?? [])
+                .Select(node => StringOrNull(node))
+                .Where(name => !string.IsNullOrEmpty(name))
+                .Cast<string>()
+                .ToList();
+        }
+        if (compatible.Count > 0)
+        {
+            var first = GenusLabel(compatible[0]);
+            return L10n.IsEnglish ? $"{first} etc. (proxy)" : $"{first}等（代理）";
+        }
+        return null;
     }
 
     private string ModelSourceNote(string model)
@@ -248,13 +323,13 @@ public sealed partial class MainWindow
     {
         if (ResultPanel == null) return;
         var hasResult = result != null && resultKind == page;
-        ResultPanel.Visibility = Visibility.Visible;
+        UpdateNowcastBanners(hasResult && resultKind == "nowcast" ? SelectedReport() : null);
         ResultContext.Text = $"{ResultTitle()} {ResultPhenomenonLabel()}";
         // UX #1：标题跟随原始参数；表单改动不清空结果，只显示 stale 徽标。
         StaleBanner.IsOpen = hasResult && ResultParametersStale;
         ToolTipService.SetToolTip(StaleBanner, ResultParamsSummary());
         ResultModel.Visibility = page == "nowcast" ? Visibility.Collapsed : Visibility.Visible;
-        RegionalInspector.Visibility = resultKind == "regional" ? Visibility.Visible : Visibility.Collapsed;
+        RegionalInspector.Visibility = page == "regional" ? Visibility.Visible : Visibility.Collapsed;
         if (!hasResult)
         {
             RegionalGridRows.Items.Clear();
@@ -275,16 +350,44 @@ public sealed partial class MainWindow
             PointCrossSection.Visibility = Visibility.Collapsed;
             PointProfileNote.Text = "";
             frozenProfile = null; frozenProfileModel = ""; frozenProfileState = "idle";
+            if (page == "regional")
+            {
+                EmptyStatePanel.Visibility = Visibility.Collapsed;
+                ResultPanel.Visibility = Visibility.Collapsed;
+                RegionalGridSummary.Text = L10n.T("等待预测");
+            }
+            else
+            {
+                ResultPanel.Visibility = Visibility.Collapsed;
+                ResultTabs.Visibility = Visibility.Collapsed;
+                EmptyStatePanel.Visibility = Visibility.Visible;
+                if (page == "nowcast")
+                {
+                    EmptyStateTitle.Text = L10n.T("准备就绪，开始卫星实况观测");
+                    EmptyStateDescription.Text = L10n.T("分析完成后，这里会展示卫星帧评分、云幕/纹理光学指标、后验云概率垂直剖面与逐时实况台账。");
+                    EmptyStateCards.Visibility = Visibility.Collapsed;
+                }
+                else
+                {
+                    EmptyStateTitle.Text = L10n.T("准备就绪，开始首次朝晚霞预测");
+                    EmptyStateDescription.Text = L10n.T("预测完成后，这里会依次展示双模式行动结论、GFS 与 EC 独立指数、大气垂直剖面和逐时台账。");
+                    EmptyStateCards.Visibility = Visibility.Visible;
+                }
+            }
             return;
         }
+        EmptyStatePanel.Visibility = Visibility.Collapsed;
+        ResultPanel.Visibility = Visibility.Visible;
         if (resultKind == "regional")
         {
+            ResultTabs.Visibility = Visibility.Collapsed;
             HeroHost.Visibility = Visibility.Collapsed;
             MetricHost.Visibility = Visibility.Collapsed;
             BreakdownCard.Visibility = Visibility.Collapsed;
             RenderRegionalInspector(SelectedReport());
             return;
         }
+        ResultTabs.Visibility = Visibility.Visible;
         HeroHost.Visibility = Visibility.Visible;
         MetricHost.Visibility = Visibility.Visible;
         if (resultKind == "nowcast")
@@ -315,6 +418,8 @@ public sealed partial class MainWindow
             card.Best.Text = "--";
             card.Window.Text = L10n.T("推荐窗口 --");
             card.Chips.Text = "";
+            card.GenusText.Text = "";
+            card.GenusBadge.Visibility = Visibility.Collapsed;
             card.Source.Text = "";
             card.Error.Text = "";
             card.Error.Visibility = Visibility.Collapsed;
@@ -353,6 +458,19 @@ public sealed partial class MainWindow
             ToolTipService.SetToolTip(card.Chips, report == null
                 ? L10n.T("尚未运行预测；完成一次预测后显示主导可烧压力族。")
                 : L10n.T("主导可烧压力族（来自本次预测结果）"));
+            var genus = CloudGenusBrief(report?["cloud_genus_proxy"] as JsonObject, report);
+            if (genus != null)
+            {
+                card.GenusText.Text = genus;
+                card.GenusBadge.Visibility = Visibility.Visible;
+                ToolTipService.SetToolTip(card.GenusBadge,
+                    L10n.T("依据压力层、相态与云层几何的模型云属代理，不代表卫星或人工云属观测。"));
+            }
+            else
+            {
+                card.GenusText.Text = "";
+                card.GenusBadge.Visibility = Visibility.Collapsed;
+            }
             card.Source.Text = ModelSourceNote(model);
             card.Error.Text = error ?? "";
             card.Error.Visibility = error != null ? Visibility.Visible : Visibility.Collapsed;
@@ -365,6 +483,8 @@ public sealed partial class MainWindow
     {
         internal required TextBlock Gfs { get; init; }
         internal required TextBlock Ec { get; init; }
+        internal TextBlock? GfsSub { get; init; }
+        internal TextBlock? EcSub { get; init; }
         internal required TextBlock Caption { get; init; }
         internal required TextBlock Source { get; init; }
     }
@@ -433,6 +553,7 @@ public sealed partial class MainWindow
                 var aodShared = spec.Key == "aod";
                 var source = new TextBlock { Text = "", FontSize = 8, Opacity = .8 };
                 TextBlock gfs, ec;
+                TextBlock? gfsSub = null, ecSub = null;
                 if (aodShared)
                 {
                     var aodBlock = new StackPanel { Spacing = 3 };
@@ -467,6 +588,23 @@ public sealed partial class MainWindow
                     var ecStack = new StackPanel { Spacing = 2 };
                     ecStack.Children.Add(new TextBlock { Text = "EC", FontSize = 9, Opacity = .7, Foreground = ModelBrush("ec") });
                     ecStack.Children.Add(ec);
+                    if (spec.Key == "cloud_layer")
+                    {
+                        gfsSub = new TextBlock
+                        {
+                            Text = "", FontSize = 10, Opacity = .72,
+                            TextTrimming = TextTrimming.CharacterEllipsis,
+                            Visibility = Visibility.Collapsed,
+                        };
+                        ecSub = new TextBlock
+                        {
+                            Text = "", FontSize = 10, Opacity = .72,
+                            TextTrimming = TextTrimming.CharacterEllipsis,
+                            Visibility = Visibility.Collapsed,
+                        };
+                        gfsStack.Children.Add(gfsSub);
+                        ecStack.Children.Add(ecSub);
+                    }
                     Grid.SetColumn(gfsStack, 0);
                     Grid.SetColumn(ecStack, 1);
                     pair.Children.Add(gfsStack);
@@ -481,9 +619,9 @@ public sealed partial class MainWindow
                 var border = new Border
                 {
                     Child = card, Padding = new Thickness(2),
-                    CornerRadius = new CornerRadius(8),
-                    Background = (Brush)Application.Current.Resources["LayerFillColorDefaultBrush"],
-                    BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                    CornerRadius = new CornerRadius(14),
+                    Background = ThemeBrush("FireSkyCardBrush"),
+                    BorderBrush = ThemeBrush("FireSkyCardBorderBrush"),
                     BorderThickness = new Thickness(1),
                 };
                 Grid.SetColumn(border, index - start);
@@ -491,7 +629,7 @@ public sealed partial class MainWindow
                 row.Children.Add(border);
                 metricCards[spec.Key] = new MetricCard
                 {
-                    Gfs = gfs, Ec = ec, Caption = caption, Source = source,
+                    Gfs = gfs, Ec = ec, GfsSub = gfsSub, EcSub = ecSub, Caption = caption, Source = source,
                 };
             }
             section.Children.Add(row);
@@ -505,6 +643,8 @@ public sealed partial class MainWindow
         {
             card.Gfs.Text = "--";
             card.Ec.Text = card.Gfs == card.Ec ? "--" : "--";
+            if (card.GfsSub != null) { card.GfsSub.Text = ""; card.GfsSub.Visibility = Visibility.Collapsed; }
+            if (card.EcSub != null) { card.EcSub.Text = ""; card.EcSub.Visibility = Visibility.Collapsed; }
             card.Source.Text = "";
             card.Caption.Opacity = .6;
         }
@@ -525,10 +665,34 @@ public sealed partial class MainWindow
                 ToolTipService.SetToolTip(card.Gfs, aod.Detail);
                 continue;
             }
-            card.Gfs.Text = MetricValue(spec.Key, ModelReport("gfs"), aod);
-            card.Ec.Text = MetricValue(spec.Key, ModelReport("ec"), aod);
+            var gfsReport = ModelReport("gfs");
+            var ecReport = ModelReport("ec");
+            card.Gfs.Text = MetricValue(spec.Key, gfsReport, aod);
+            card.Ec.Text = MetricValue(spec.Key, ecReport, aod);
             if (spec.Key == "cloud_layer")
+            {
                 card.Caption.Text = L10n.T("云底–云顶为海拔 ASL 口径，「云层 AGL」为离地口径");
+                ApplyGenusSub(card.GfsSub, gfsReport);
+                ApplyGenusSub(card.EcSub, ecReport);
+            }
+        }
+    }
+
+    private static void ApplyGenusSub(TextBlock? target, JsonObject? report)
+    {
+        if (target == null) return;
+        var genus = CloudGenusBrief(report?["cloud_genus_proxy"] as JsonObject, report);
+        if (genus != null)
+        {
+            target.Text = genus;
+            target.Visibility = Visibility.Visible;
+            ToolTipService.SetToolTip(target,
+                L10n.T("依据压力层、相态与云层几何的模型云属代理，不代表卫星或人工云属观测。"));
+        }
+        else
+        {
+            target.Text = "";
+            target.Visibility = Visibility.Collapsed;
         }
     }
 
@@ -707,8 +871,9 @@ public sealed partial class MainWindow
         {
             Child = panel,
             Padding = new Thickness(12),
-            CornerRadius = new CornerRadius(8),
-            BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+            CornerRadius = new CornerRadius(12),
+            Background = ThemeBrush("FireSkyGroupedCardBrush"),
+            BorderBrush = ThemeBrush("FireSkyGroupedBorderBrush"),
             BorderThickness = new Thickness(1),
         };
     }
@@ -937,10 +1102,14 @@ public sealed partial class MainWindow
             Height = 1,
             Background = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
         });
-        var steps = (report?["steps"] as JsonArray ?? []).OfType<JsonObject>().ToList();
-        for (var index = 0; index < steps.Count; index++)
+        var allSteps = (report?["steps"] as JsonArray ?? []).OfType<JsonObject>().ToList();
+        var hiddenInvalidCount = allSteps.Count(step => BoolValue(step, "valid") == false);
+        var visibleSteps = showInvalidLedgerSteps
+            ? allSteps
+            : allSteps.Where(step => BoolValue(step, "valid") != false).ToList();
+        for (var index = 0; index < visibleSteps.Count; index++)
         {
-            var step = steps[index];
+            var step = visibleSteps[index];
             var local = Text(step, "valid_time_local");
             var valid = BoolValue(step, "valid") != false;
             var rowButton = BuildLedgerRow(step, columns, index, bestTime, valid && local.Length > 0);
@@ -953,7 +1122,7 @@ public sealed partial class MainWindow
                 Background = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
             });
         }
-        if (steps.Count == 0)
+        if (allSteps.Count == 0)
         {
             LedgerHost.Children.Add(new TextBlock
             {
@@ -961,12 +1130,48 @@ public sealed partial class MainWindow
                 Opacity = .65, Padding = new Thickness(0, 24, 0, 24),
             });
         }
-        LedgerHost.Children.Add(new TextBlock
+        else if (visibleSteps.Count == 0)
         {
-            Text = L10n.T("云底–云顶为海拔 ASL 口径，「云层 AGL」为离地口径；— 表示缺测，无效时次不展示数值；点击行仅切换本地选中时刻，不驱动地图。"),
+            LedgerHost.Children.Add(new TextBlock
+            {
+                Text = L10n.T("当前时段内没有有效判断时次。"),
+                Opacity = .65, Padding = new Thickness(0, 24, 0, 24),
+            });
+        }
+        var footer = new Grid { Padding = new Thickness(0, 8, 0, 8), ColumnSpacing = 10 };
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        footer.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        footer.Children.Add(new TextBlock
+        {
+            Text = L10n.T("云底–云顶为海拔 ASL 口径，「云层 AGL」为离地口径；— 表示缺测，默认仅展示有效判断时次；点击行仅切换本地选中时刻，不驱动地图。"),
             FontSize = 9, Opacity = .6, TextWrapping = TextWrapping.Wrap,
-            Padding = new Thickness(0, 8, 0, 8),
+            VerticalAlignment = VerticalAlignment.Center,
         });
+        if (hiddenInvalidCount > 0)
+        {
+            var toggleText = showInvalidLedgerSteps
+                ? L10n.T("隐藏未判断时次")
+                : (L10n.IsEnglish
+                    ? $"Show {hiddenInvalidCount} unevaluated"
+                    : $"显示 {hiddenInvalidCount} 个未判断时次");
+            var toggleButton = new Button
+            {
+                Content = toggleText,
+                FontSize = 10,
+                Padding = new Thickness(8, 3, 8, 3),
+                BorderThickness = new Thickness(0),
+                Background = new SolidColorBrush(Colors.Transparent),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            toggleButton.Click += (_, _) =>
+            {
+                showInvalidLedgerSteps = !showInvalidLedgerSteps;
+                RenderLedger();
+            };
+            Grid.SetColumn(toggleButton, 1);
+            footer.Children.Add(toggleButton);
+        }
+        LedgerHost.Children.Add(footer);
     }
 
     private Button BuildLedgerRow(JsonObject? item, LedgerColumn[] columns, int index,
@@ -1112,9 +1317,9 @@ public sealed partial class MainWindow
             }
             DiagnosticPanel.Children.Add(new Border
             {
-                Child = panel, Padding = new Thickness(12), CornerRadius = new CornerRadius(8),
-                Background = (Brush)Application.Current.Resources["LayerFillColorDefaultBrush"],
-                BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                Child = panel, Padding = new Thickness(14), CornerRadius = new CornerRadius(14),
+                Background = ThemeBrush("FireSkyCardBrush"),
+                BorderBrush = ThemeBrush("FireSkyCardBorderBrush"),
                 BorderThickness = new Thickness(1),
             });
         }
@@ -1144,6 +1349,44 @@ public sealed partial class MainWindow
         Group(L10n.T("云相与云族诊断"),
             (L10n.T("云相"), DiagnosticText(report["cloud_phase_diagnosis"])),
             (L10n.T("云族说明"), DiagnosticText(report["cloud_family_diagnosis"])));
+        if (report["cloud_genus_proxy"] is JsonObject || report["cloud_phase_proxy"] is JsonObject)
+        {
+            var proxyRows = new List<(string, string)>();
+            if (report["cloud_genus_proxy"] is JsonObject genusProxy)
+            {
+                var label = Text(genusProxy, "label");
+                if (label.Length > 0 && label != "unknown")
+                {
+                    var conf = DoubleValue(genusProxy["confidence"]) is { } c ? $" ({(int)Math.Round(c * 100)}%)" : "";
+                    proxyRows.Add((L10n.T("云属代理"), GenusLabel(label) + conf));
+                }
+                else if (CloudGenusBrief(genusProxy, report) is { } compat)
+                {
+                    proxyRows.Add((L10n.T("云属未定"), compat));
+                }
+                if (Text(genusProxy, "source") is { Length: > 0 } gSrc)
+                    proxyRows.Add((L10n.T("推断依据"), gSrc));
+                if (BoolValue(genusProxy, "scoring_effect") == false)
+                    proxyRows.Add((L10n.T("评分影响"), L10n.T("不参与评分")));
+            }
+            if (report["cloud_phase_proxy"] is JsonObject phaseProxy)
+            {
+                var pLabel = Text(phaseProxy, "label");
+                var pSource = Text(phaseProxy, "source");
+                if (pLabel == "unknown" && pSource == "not-resolved-for-native-burnable-target")
+                {
+                    proxyRows.Add((L10n.T("相态"), L10n.T("未解析（GFS 桌面点预测不解析目标云相态）")));
+                }
+                else if (pLabel.Length > 0)
+                {
+                    var ice = DoubleValue(phaseProxy["ice_fraction"]) is { } iceVal
+                        ? $" · {L10n.T("冰含量占比")} {(int)Math.Round(iceVal * 100)}%" : "";
+                    proxyRows.Add((L10n.T("相态"), PhaseLabel(pLabel) + ice));
+                }
+            }
+            if (proxyRows.Count > 0)
+                Group(L10n.T("云属与相态（模型代理 · 不参与评分）"), [.. proxyRows]);
+        }
         if (report["scene_scores"] is JsonObject scores && (scores as IDictionary<string, JsonNode?>).Count > 0)
         {
             Group(L10n.T("场景分数"), scores.OrderBy(pair => pair.Key)
@@ -1183,7 +1426,8 @@ public sealed partial class MainWindow
             actions.Children.Add(open);
         }
         if (report["map_capability"] is JsonObject mapCapability
-            && BoolValue(mapCapability, "available") == false)
+            && BoolValue(mapCapability, "available") == false
+            && Text(mapCapability, "reason") != "native-nowcast-map-publication-not-requested")
         {
             actions.Children.Add(new TextBlock
             {

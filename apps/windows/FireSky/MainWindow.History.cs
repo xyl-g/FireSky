@@ -49,10 +49,12 @@ public sealed partial class MainWindow
             if (selectedTaskHistoryId.Length > 0
                 && !parsed.Any(row => row.TaskId == selectedTaskHistoryId))
                 ClearTaskHistorySelection();
+            ClearError("history");
         }
         catch (Exception error)
         {
             taskHistoryError = FriendlyMessages.Map(error.Message);
+            Fail(error, "history");
         }
         finally
         {
@@ -104,7 +106,7 @@ public sealed partial class MainWindow
             HistoryListHost.Children.Add(new Border
             {
                 BorderThickness = new Thickness(0, 0, 0, 1),
-                BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
+                BorderBrush = ThemeBrush("FireSkyCardBorderBrush"),
                 Margin = new Thickness(52, 0, 0, 0),
             });
         }
@@ -475,6 +477,7 @@ public sealed partial class MainWindow
         catch (Exception error)
         {
             taskHistoryError = FriendlyMessages.Map(error.Message);
+            Fail(error, "history");
             RenderTaskHistory();
         }
         finally
@@ -509,11 +512,12 @@ public sealed partial class MainWindow
             RenderResult();
             await UpdateMap();
             Status.Text = L10n.T("已恢复历史结果");
-            ErrorBar.IsOpen = false;
+            ClearError();
         }
         catch (Exception error)
         {
             taskHistoryError = FriendlyMessages.Map(error.Message);
+            Fail(error, "history");
             RenderTaskHistory();
         }
         finally

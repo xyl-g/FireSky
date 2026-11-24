@@ -1,8 +1,8 @@
 import Foundation
 
-/// 界面多语言（v1.9.5）：轻量键值查找，支持中文（默认）/ English。
+/// 界面多语言（v1.9.10）：轻量键值查找，支持中文（默认）/ English。
 /// 语言偏好持久化到 UserDefaults（键 appLanguage，macOS/Android 同契约）；
-/// "system" 跟随系统首选语言。覆盖范围渐进扩展——未覆盖的 key 回落中文。
+/// "system" 跟随系统首选语言。覆盖范围与 macOS dictionary 对齐。
 enum L10n {
 
     // MARK: - 语言
@@ -68,6 +68,7 @@ enum L10n {
     static var refresh: String { text("刷新", "Refresh") }
     static var reconnect: String { text("重新连接", "Reconnect") }
     static var reset: String { text("重置", "Reset") }
+    static var close: String { text("关闭", "Close") }
     static var loadOlder: String { text("加载更早任务", "Load older tasks") }
 
     // 状态
@@ -83,10 +84,11 @@ enum L10n {
         case "已取消": return "Cancelled"
         case "失败": return "Failed"
         case "已中断": return "Interrupted"
-        case "等待预测": return "Awaiting forecast"
+        case "等待预测": return "Waiting for forecast"
         case "未完成": return "Incomplete"
         case "预测完成": return "Forecast complete"
         case "暂无结果": return "No result"
+        case "未预测": return "Not forecast"
         case "发布周期已核验": return "Publication verified"
         case "更新待核验": return "Update pending verification"
         case "有新发布的数据可更新": return "Newer data available"
@@ -95,6 +97,32 @@ enum L10n {
         case "尚未下载本次预测数据": return "Forecast data not downloaded"
         default: return chinese
         }
+    }
+
+    static func qualityLevel(_ value: String) -> String {
+        guard isEnglish else { return value }
+        switch value {
+        case "无明显火烧云": return "No prominent burnable clouds"
+        case "峰值质量指数": return "Peak quality index"
+        case "微微烧": return "Very faint glow"
+        case "小烧": return "Faint glow"
+        case "小烧到中等烧": return "Faint to moderate glow"
+        case "中等烧": return "Moderate glow"
+        case "中等烧到大烧": return "Moderate to strong glow"
+        case "不完美大烧": return "Strong glow, with limitations"
+        case "典型大烧": return "Typical strong glow"
+        case "优质大烧": return "Excellent glow"
+        case "世纪大烧": return "Exceptional glow"
+        case "测试峰值档位": return "Test peak category"
+        case "测试事件档位": return "Test event category"
+        case "测试档位": return "Test category"
+        default: return value
+        }
+    }
+
+    static func qualityLimit(_ value: String) -> String {
+        guard isEnglish else { return value }
+        return dictionary[value] ?? value
     }
 
     // 分类
@@ -113,11 +141,12 @@ enum L10n {
         "深色": "Dark",
         "取消": "Cancel",
         "确定": "OK",
+        "返回": "Back",
+        "关闭": "Close",
         "刷新": "Refresh",
         "删除": "Delete",
         "重试": "Retry",
         "保留": "Keep",
-        "迁移": "Migrate",
         "慢": "Slow",
         "天": "d",
         "小时": "h",
@@ -125,42 +154,9 @@ enum L10n {
         "个": "files",
         "同步": "Sync",
         "慢速": "Slow",
-        // 软件更新
-        "软件更新": "Software update",
-        "检查更新": "Check for updates",
-        "下载并安装": "Download & install",
-        "发布说明": "Release notes",
-        "下载中…": "Downloading…",
-        "下载 DMG、校验 SHA256 后自动安装到「应用程序」并重启":
-            "Downloads the DMG, verifies SHA256, installs into Applications and relaunches",
-        "启动时自动检查更新": "Check for updates at launch",
-        "正在安装，完成后应用将自动重启。":
-            "Installing; the app will relaunch automatically when done.",
-        "当前使用旧版隐藏目录布局（.cache / .firesky）。":
-            "Currently using the legacy hidden-directory layout (.cache / .firesky).",
-        "已使用可见目录布局（gfs/、reports/ 等直接位于工作区下）。":
-            "Using the visible-directory layout (gfs/, reports/ etc. directly under the workspace).",
-        "迁移到可见目录": "Migrate to visible directories",
-        "迁移到可见目录布局？": "Migrate to the visible-directory layout?",
-        "迁移会把数据移动到工作区下的可见目录（gfs/、ecmwf/、cams/、reports/ 等），旧目录残壳保留，可随时确认后手动删除。迁移期间会暂停任务与同步。":
-            "Data moves into visible directories under the workspace (gfs/, ecmwf/, cams/, reports/ etc.); old directory shells are kept for manual deletion. Tasks and sync pause during migration.",
-        "迁移数据到工作区可见目录并重连引擎":
-            "Migrate data into the visible workspace layout and reconnect the engine",
-        "迁移中…": "Migrating…",
-        "没有检测到旧布局数据（.cache / .firesky），迁移将只写入布局标记。":
-            "No legacy layout data detected (.cache / .firesky); migration will only write the layout marker.",
-        "有任务或同步正在进行，完成后再迁移":
-            "A task or sync is running; migrate after it finishes",
-        "数据固定保存在 macOS 系统数据目录（可在访达中前往）。开发/运维可用 FIRESKY_WORKSPACE 环境变量覆盖。":
-            "Data lives in the macOS system data directory (open it in Finder). Developers can override via FIRESKY_WORKSPACE.",
-        "在访达中打开数据目录": "Open data directory in Finder",
-        "在访达中打开": "Reveal in Finder",
         "数据目录": "Data directory",
         "数据目录未设置": "Data directory not set",
         "目录": "Directories",
-        "自定义引擎路径仅供开发调试；日常使用保持留空即可。":
-            "A custom engine path is for development only; leave it empty for daily use.",
-        "留空使用内置引擎": "Leave empty to use the bundled engine",
         "Rust 引擎": "Rust engine",
         "历史报告": "Past reports",
         "报告地图": "Report map",
@@ -169,17 +165,19 @@ enum L10n {
         "下载数据": "Download data",
         "需先补齐本次数据": "Download the missing data first",
         "数据已齐，可开始预测": "Data ready — start the forecast",
-        "数据已齐，可开始分析": "Data ready — start the analysis",
         "数据已齐，可更新 %@": "Data ready — can update %@",
         "更新数据": "Update data",
         "返回更新数据": "Back and update data",
         "返回并点击「更新数据」获取最新周期": "Go back and tap \u{201c}Update data\u{201d} for the latest cycle",
         "确定预测": "Confirm forecast",
-        "确定分析": "Confirm analysis",
         "下载缺失数据": "Download missing data",
+        "下载前先知道": "Before you download",
+        "首次下载耗时取决于本机缺失的数据集与网络。上方只列本次预测所需文件；已下载文件不会重复下载，过程中可取消，失败项会保留并提示重试。":
+            "First-download time depends on which datasets are missing and your network. The list above covers only this forecast; existing files are not downloaded twice. You can cancel, and failed items stay listed for retry.",
+        "CAMS Key 未配置时仍可使用本地缓存；如需气溶胶数据，可在设置中配置后重新预检。":
+            "Local caches remain usable without a CAMS key. Configure it in Settings and re-check if you need aerosol data.",
         "继续预测": "Forecast anyway",
         "预测准备": "Forecast preparation",
-        "实况准备": "Nowcast preparation",
         "数据周期确认": "Cycle confirmation",
         "正在检查本地数据": "Checking local data",
         "引擎未连接。": "Engine is offline.",
@@ -219,10 +217,12 @@ enum L10n {
             "Environment variables override the configuration. Restart the app after changing CDSAPI_KEY / CDSAPI_URL.",
         // 同步
         "同步设置": "Sync settings",
+        "后台同步": "Background sync",
         "启用后台同步": "Enable background sync",
         "后台同步已启用": "Background sync enabled",
         "同步间隔": "Sync interval",
         "锚定区域": "Anchor region",
+        "未设置": "Not set",
         "GFS/EC 时效上限": "GFS/EC lead horizon",
         "GFS 周期": "GFS cycles",
         "EC 周期": "EC cycles",
@@ -233,8 +233,8 @@ enum L10n {
         "已启用自定义保留策略": "Custom retention policy enabled",
         "未配置缓存保留策略，缓存将随同步增长；可在下方「存储与保留」中设置。":
             "No retention policy configured; the cache grows with sync. Set it under Storage & retention below.",
-        "自动清理按周期、扫描或生成时间滚动保留；新数据校验成功后才会清理旧文件。留空表示不自动清理。":
-            "Retention rolls by cycle, scan or generation time; old files are removed only after new data validates. Leave empty to disable.",
+        "自动清理按周期、扫描或生成时间滚动保留；保存策略后可点击「立即按策略清理」立刻释放空间，后续也会在新数据校验成功后自动清理旧文件。占用中的文件会自动跳过。":
+            "Retention rolls by cycle, scan, or generation time. Click Clean up now after saving to reclaim space immediately, or let it run after the next validated download. Busy files are skipped automatically.",
         "不限制": "Unlimited",
         "立即同步": "Sync now",
         "立即同步已启用的数据源（可解除失败熔断）":
@@ -248,25 +248,6 @@ enum L10n {
         "从未同步": "Never synced",
         "已暂停：立即同步或重新保存设置可解锁":
             "Suspended: Sync now or re-save settings to unlock",
-        "后台助手（关闭应用后仍同步）": "Background helper (syncs while the app is closed)",
-        "安装为系统 launchd 代理，按同步间隔在后台自动拉齐最新已发布周期。":
-            "Installs a launchd agent that pulls the latest published cycles in the background.",
-        "安装助手": "Install helper",
-        "卸载助手": "Uninstall helper",
-        "卸载后台同步助手？": "Uninstall the background sync helper?",
-        "卸载后，关闭应用时的后台同步将停止；已下载的数据会保留，可随时重新安装助手。":
-            "Background sync stops while the app is closed; downloaded data is kept and the helper can be reinstalled anytime.",
-        "卸载": "Uninstall",
-        "保留助手": "Keep helper",
-        "已安装并运行": "Installed and running",
-        "已安装（未加载）": "Installed (not loaded)",
-        "未安装": "Not installed",
-        "当前为源码运行环境，后台助手仅在正式 FireSky 安装包中可用。":
-            "Source-run environment: the background helper ships only with the official FireSky bundle.",
-        "上次后台运行": "Last background run",
-        "卸载前最后一次后台运行": "Last background run before uninstall",
-        "后台同步与下载探测已移到「设置 → 数据」":
-            "Background sync and download probes moved to Settings → Data",
         // 数据管理 / 库存
         "本地数据": "Local data",
         "刷新本地清单": "Refresh inventory",
@@ -302,7 +283,7 @@ enum L10n {
             "Estimated size about %.0f GB by sampling (samples mix small ocean tiles and large land tiles; actual usage applies).",
         "暂时无法估算体积（网络或服务不可用），开始后会显示实际用量。":
             "Size cannot be estimated right now (network or service unavailable); actual usage shows once started.",
-        // 格式化模板（tf）：与 Android values-en 同口径
+        // 格式化模板（tf）
         "需下载 %@": "Download needed: %@",
         "删除 %@ 的周期 %@：共 %d 个文件，预计释放 %.1f MB。占用中的文件会跳过；报告与任务记录不受影响。":
             "Deletes cycle %@ of %@: %d files, about %.1f MB. Files in use are skipped; reports and task records are unaffected.",
@@ -319,18 +300,120 @@ enum L10n {
         "目标 %@（%@）· 瓦片 %@ · %@": "Target %@ (%@) · tile %@ · %@",
         "将下载%@的 SRTM 瓦片：候选 %d 块，本地已有 %d 块会自动跳过（海洋上的瓦片是很小的空值瓦片，同样会下载）。下载耗时较长且占用磁盘，可随时取消，重新开始会跳过已下载瓦片。":
             "Downloads the SRTM tiles of %@: %d candidates; %d already local are skipped automatically (ocean tiles are tiny null tiles and are also downloaded). The download takes a while and uses disk; it can be cancelled anytime and resumes by skipping downloaded tiles.",
-        "当前版本 %@": "Current version %@",
-        "发现新版本 %@，可在下载后自动安装。":
-            "Version %@ is available; it can install automatically after download.",
-        "已下载 %@ / %@": "Downloaded %@ / %@",
-        " 等 %d 项": " and %d more",
-        "将迁移 %d 个文件（共 %.1f MB）：%@%@。迁移使用同卷移动，失败自动回滚；迁移完成后引擎将按新布局重连。":
-            "Migrates %d files (%.1f MB): %@%@. Same-volume moves with automatic rollback; the engine reconnects on the new layout afterwards.",
         "最近周期 %@": "Latest cycle %@",
         "上次同步 %@": "Last synced %@",
         "最近错误：%@": "Last error: %@",
         "缺 %d 个周期：%@": "Missing %d cycles: %@",
         "连续失败 %d 次": "%d consecutive failures",
+        // 点预测工作台 / 首次使用
+        "观测点": "Observation point",
+        "地图": "Map",
+        "收藏": "Favorites",
+        "观测参数": "Forecast settings",
+        "重置": "Reset",
+        "目标日期": "Target date",
+        "今天": "Today",
+        "明天": "Tomorrow",
+        "自定义": "Custom",
+        "推荐窗口 %@": "Recommended window %@",
+        "观测现象": "Observation",
+        "朝霞": "Dawn glow",
+        "晚霞": "Dusk glow",
+        "编辑坐标": "Edit coordinates",
+        "名称": "Name",
+        "纬度": "Latitude",
+        "经度": "Longitude",
+        "时区": "Time zone",
+        "获取海拔与时区": "Look up elevation and time zone",
+        "大地图": "Open map",
+        "收藏当前点": "Save this place",
+        "行动摘要": "Decision summary",
+        "模式结果": "Model results",
+        "概览": "Overview",
+        "大气剖面": "Atmospheric profile",
+        "诊断与时间窗": "Diagnostics & timing",
+        "逐时台账": "Hourly ledger",
+        "最佳时刻": "Best time",
+        "指数 %@ / 2.5": "Index %@ / 2.5",
+        "完成一次预测后，这里会给出是否值得外出、最佳时刻和主要限制。":
+            "Run a forecast to see whether conditions are worth a trip, the best time, and key limitations.",
+        "两个模式都未完成，暂不能给出观测建议。": "Neither model completed, so no recommendation is available yet.",
+        "未知原因": "Unknown reason",
+        "起报 %@": "Run %@",
+        "尚未运行预测；完成一次预测后显示主导可烧压力族。":
+            "No forecast has run yet. The dominant burnable-cloud pressure family appears after a forecast.",
+        "主导可烧压力族（来自本次预测结果）":
+            "Dominant burnable-cloud pressure family from this forecast",
+        "无可烧目标云": "No burnable target cloud",
+        "高云压力族": "High-cloud pressure family",
+        "中云压力族": "Mid-level cloud pressure family",
+        "低云压力族": "Low-cloud pressure family",
+        "不可烧云挡光": "Non-burnable cloud blocking sunlight",
+        "无可烧云": "No burnable cloud",
+        "太阳入射阻挡已进入可烧云面积": "Solar obstruction is included in burnable-cloud area",
+        "云质与垂直厚度": "Cloud structure and vertical depth",
+        "太阳入射 AOD 削光": "AOD reduces incoming sunlight",
+        "观测光路 AOD 降低对比度": "AOD reduces contrast along the viewing path",
+        "可烧云绝对量": "Burnable-cloud amount",
+        "当前结果对应旧参数，可点「按新参数重算」更新。":
+            "This result uses earlier settings. Recalculate to update it.",
+        "云况与色彩": "Clouds & color",
+        "大气光学": "Atmospheric optics",
+        "时效与可靠性": "Freshness & reliability",
+        "有效可烧云量": "Visible burnable cloud",
+        "前向可烧云占视野比例": "Visible burnable cloud coverage",
+        "云质厚度": "Cloud depth",
+        "云体材质负载": "Cloud material load",
+        "亮度色彩": "Brightness & color",
+        "霞光亮度与色彩评分": "Glow brightness and color score",
+        "主要云层": "Main cloud layer",
+        "云底–云顶 AGL": "Cloud base–top AGL",
+        "气溶胶光学厚度 · 通透度": "Aerosol optical depth · clarity",
+        "入射受光": "Incoming illumination",
+        "太阳入射照亮云体的因子": "Sunlight reaching the cloud",
+        "返程对比度": "Viewing-path contrast",
+        "观测者视线大气对比因子": "Atmospheric contrast along the viewing path",
+        "持续时长": "Duration",
+        "核心观赏窗口 · 分钟": "Core viewing window · minutes",
+        "输入支持度": "Input support",
+        "输入覆盖与几何支持 · 非命中概率": "Input and geometry support · not a hit probability",
+        "对流风险": "Convective risk",
+        "模式对流风险指标 · 非事件概率": "Model convective-risk indicator · not event probability",
+        "评分组成": "Score breakdown",
+        "只读展示后端计算值 · 不在客户端重算": "Backend values shown as reported; no client-side recalculation",
+        "预测完成": "Forecast complete",
+        "等待预测": "Waiting for forecast",
+        "暂无结果": "No result",
+        "未预测": "Not forecast",
+        "按新参数重算": "Recalculate with current settings",
+        "参数已变更 · 当前结果对应旧参数": "Parameters changed · showing previous result",
+        "时间": "Time",
+        "质量": "Quality",
+        "档位": "Level",
+        "可烧": "Burnable",
+        "可烧云量": "Burnable cloud",
+        "主导压力族": "Pressure family",
+        "云底–云顶 ASL": "Base–top ASL",
+        "云层 AGL": "Layer AGL",
+        "亮度颜色": "Brightness",
+        "可烧比例": "Burn ratio",
+        "回程透过率": "Return trans.",
+        "入射阻挡": "Solar block",
+        "太阳仰角": "Solar elev.",
+        "场景": "Regime",
+        "质量指数": "Quality index",
+        "缺测": "Missing",
+        "仅 %@ 可用：%@": "Only %@ available: %@",
+        "两个模式结论一致：%@": "Both models agree: %@",
+        "两个模式结论不同：GFS %@ · EC %@": "Models differ: GFS %@ · EC %@",
+        "最佳 %@ · 推荐窗口 %@": "Best time %@ · recommended window %@",
+        "%@ 最佳 %@ · 窗口 %@": "%@ best %@ · window %@",
+        "%@ 未完成：%@": "%@ incomplete: %@",
+        "%@ 暂无结果": "%@ has no result yet",
+        "%@ 主要限制：%@": "%@ main limitation: %@",
+        "事件时刻取值范围 · 未取平均": "Event-time range · not averaged",
+        "事件时刻 · 气溶胶光学厚度": "Event-time aerosol optical depth",
+        "暂无可用 AOD 观测": "No AOD observations available",
     ]
 
     /// 集中英译表查找（与 macOS 字典同源；未收录回落原文）。

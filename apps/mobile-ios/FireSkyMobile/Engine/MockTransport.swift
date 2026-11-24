@@ -1,17 +1,20 @@
 import Foundation
 
-/// MockTransport：进程内假引擎，让 UI 在 Rust 引擎库（engine-mobile）可用前
-/// 可编译、可运行。完全走 EngineTransport 的帧语义——JSON 行进、JSON 行出，
-/// 模拟 hello → check → prepare → forecast 全链路、progress 帧、取消与
-/// CAMS 配置 / 清单 / 下载探测，供模拟器冒烟与单元测试使用。
+/// MockTransport：进程内假引擎，完全走 EngineTransport 的帧语义——JSON 行进、JSON 行出，
+/// 模拟 hello → check → prepare → forecast 全链路、progress 帧、取消、保留策略、
+/// 后台同步、CAMS 配置 / 清单 / 下载探测，供模拟器冒烟与单元测试使用。
 @MainActor
 final class MockTransport: EngineTransport {
     var onFrame: ((Data) -> Void)?
     private var cancelled: Set<String> = []
     private var camsConfigured = false
     private var lastReport: JSONObject = [:]
+    private var retentionSettings: JSONObject = [:]
+    private var syncSettings: JSONObject = [
+        "enabled": false,
+        "sources": ["cams": false, "gfs": false, "ec": false],
+    ]
 
-    /// nonisolated：允许作为 EngineClient 的非隔离默认工厂值使用。
     nonisolated init() {}
 
     func start(workspace: String) throws {
@@ -44,7 +47,7 @@ final class MockTransport: EngineTransport {
 
     private func emit(_ frame: JSONObject) {
         guard var data = try? JSONSerialization.data(withJSONObject: frame) else { return }
-        data.append(10) // '\n'：与桌面 JSON-lines 协议一致的帧结尾
+        data.append(10)
         onFrame?(data)
     }
 
@@ -75,13 +78,17 @@ final class MockTransport: EngineTransport {
                 "protocol": 1,
                 "engine": "firesky-rust-mock",
                 "cams_credentials": camsCredentials(),
+                "regions": [
+                    ["code": "china", "label": "中国"],
+                    ["code": "east_asia", "label": "东亚"],
+                ],
             ])
         case "search":
             await pause(400)
             emitResult(id: id, Self.searchResult(query: params["query"] as? String ?? ""))
         case "metadata":
             await pause(300)
-            emitResult(id: id, ["elevation_m": 12.0, "timezone_name": "Asia/Shanghai"])
+            emitResult(id: id, ["elevation_m": 12.0, "timezone_name": "Asia/Shanghai", "source": "open-meteo-point-metadata"])
         case "check":
             await checkFlow(id: id, kind: params["kind"] as? String ?? "point")
         case "publications":
@@ -94,7 +101,47 @@ final class MockTransport: EngineTransport {
         case "dismiss":
             emitResult(id: id, ["ok": true])
         case "inventory":
-            emitResult(id: id, ["datasets": Self.mockInventory])
+            emitResult(id: id, ["datasets": Self.mockInventory, "categories": Self.mockCategories])
+        case "retention_settings":
+            let configured = !retentionSettings.values.allSatisfy { $0 is NSNull } && !retentionSettings.isEmpty
+            emitResult(id: id, ["settings": retentionSettings, "configured": configured])
+        case "save_retention_settings":
+            retentionSettings = params["settings"] as? JSONObject ?? [:]
+            let configured = !retentionSettings.values.allSatisfy { $0 is NSNull } && !retentionSettings.isEmpty
+            emitResult(id: id, ["settings": retentionSettings, "configured": configured])
+        case "apply_retention_settings":
+            let configured = !retentionSettings.values.allSatisfy { $0 is NSNull } && !retentionSettings.isEmpty
+            emitResult(id: id, [
+                "configured": configured,
+                "result": ["removed_count": configured ? 3 : 0, "freed_mb": configured ? 48.2 : 0.0,
+                           "deferred_count": 0, "failed_count": 0],
+            ])
+        case "data_sync_settings":
+            let configured = syncSettings["enabled"] as? Bool == true
+            let retentionConfigured = !retentionSettings.values.allSatisfy { $0 is NSNull } && !retentionSettings.isEmpty
+            emitResult(id: id, [
+                "settings": syncSettings,
+                "configured": configured,
+                "retention_configured": retentionConfigured,
+                "state": ["sources": [:] as JSONObject],
+            ])
+        case "save_data_sync_settings":
+            syncSettings = params["settings"] as? JSONObject ?? syncSettings
+            let configured = syncSettings["enabled"] as? Bool == true
+            let retentionConfigured = !retentionSettings.values.allSatisfy { $0 is NSNull } && !retentionSettings.isEmpty
+            emitResult(id: id, [
+                "settings": syncSettings,
+                "configured": configured,
+                "retention_configured": retentionConfigured,
+                "state": ["sources": [:] as JSONObject],
+            ])
+        case "data_sync_due":
+            emitResult(id: id, ["due_for_any": false, "due_sources": [] as [String]])
+        case "data_sync_run":
+            let sources = params["sources"] as? [String] ?? []
+            var sourceMap: JSONObject = [:]
+            for s in sources { sourceMap[s] = ["status": "current"] }
+            emitResult(id: id, ["sources": sourceMap])
         case "task_history":
             emitResult(id: id, Self.mockTaskHistory)
         case "task_events":
@@ -128,7 +175,6 @@ final class MockTransport: EngineTransport {
                          "lat_range": [30.0, 31.0], "lon_range": [120.0, 121.0]],
             ]
             if (params["estimate_global"] as? Bool) == true {
-                // 与真引擎同口径：bounds（缺省全球）→ 候选数 + 已有 + 估算体积。
                 let bounds = (params["bounds"] as? JSONObject) ??
                     ["south": -56, "north": 59, "west": -180, "east": 179]
                 let south = (bounds["south"] as? NSNumber)?.intValue ?? -56
@@ -285,7 +331,6 @@ final class MockTransport: EngineTransport {
         return formatter.string(from: date)
     }
 
-    /// 一份结构与桌面 forecast 结果一致的完整单点报告（GFS/EC 双模型）。
     static var mockForecast: JSONObject {
         let timezone = TimeZone(identifier: "Asia/Shanghai") ?? .current
         var calendar = Calendar(identifier: .gregorian)
@@ -296,21 +341,74 @@ final class MockTransport: EngineTransport {
         var best = 0.0, bestTime = localStamp(evening, timezone: timezone)
         for minute in stride(from: 0, through: 130, by: 10) {
             let time = calendar.date(byAdding: .minute, value: minute, to: evening) ?? now
-            // 平滑的霞光质量曲线（18:10 前后峰值 1.9 附近）。
             let quality = 1.9 * exp(-pow(Double(minute - 30) / 34.0, 2)) + 0.12
             let solar = 4.2 - Double(minute) * 0.06
-            if quality > best { best = quality; bestTime = localStamp(time, timezone: timezone) }
+            let valid = minute <= 110
+            if valid, quality > best { best = quality; bestTime = localStamp(time, timezone: timezone) }
             steps.append([
                 "valid_time_utc": isoUTC(time),
                 "valid_time_local": localStamp(time, timezone: timezone),
                 "instant_quality_index": (quality * 1000).rounded() / 1000,
                 "instant_quality_level": quality >= 1.5 ? "值得一看" : "一般",
                 "solar_elevation_deg": (solar * 100).rounded() / 100,
-                "valid": true,
-                "physically_burnable": quality >= 1.0,
+                "burnable_cloud_coverage": min(0.85, 0.35 + quality * 0.2),
+                "forward_burnable_cloud_ratio": min(0.9, 0.4 + quality * 0.2),
+                "observer_return_transmission": 0.72,
+                "brightness_color": 0.76,
+                "quality_aod550": 0.31,
+                "dominant_burnable_pressure_family": "high",
+                "dominant_burnable_cloud_base_agl_mean_m": 6400.0,
+                "dominant_burnable_cloud_top_agl_mean_m": 8900.0,
+                "dominant_burnable_cloud_base_asl_mean_m": 6412.0,
+                "dominant_burnable_cloud_top_asl_mean_m": 8912.0,
+                "valid": valid,
+                "physically_burnable": valid && quality >= 1.0,
             ])
         }
-        func model(aod: Double, material: Double, brightness: Double) -> JSONObject {
+        let distances: [Double] = [0, 50, 100, 150, 200, 250, 300]
+        let levels = [250, 300, 500, 700, 850]
+        let heights: [[Double?]] = distances.map { _ in [10400, 9200, 5600, 3000, 1500] }
+        let temps: [[Double?]] = distances.map { _ in [-48, -38, -12, 2, 12] }
+        let rh: [[Double?]] = distances.map { _ in [82, 78, 45, 38, 52] }
+        let amounts: [[Double?]] = distances.map { d in
+            d >= 100 && d <= 250 ? [0.68, 0.74, 0.12, 0.04, 0.02] : [0.22, 0.25, 0.05, 0.02, 0.02]
+        }
+        let familyCodes: [[Int]] = distances.map { _ in [1, 1, 2, 2, 3] }
+        let statuses: [[Int]] = distances.map { d in
+            d >= 100 && d <= 250 ? [3, 3, 0, 0, 0] : [2, 2, 0, 0, 0]
+        }
+        let layerBases: [[Double?]] = distances.map { _ in [8600, 8600, 5100, 2600, 1100] }
+        let layerTops: [[Double?]] = distances.map { _ in [10900, 10900, 6100, 3400, 1800] }
+        let terrain: [Double] = [12, 40, 180, 320, 120, 60, 20]
+        let requiredASL: [Double] = [12, 650, 1900, 3800, 6200, 8800, 11600]
+        let mockCrossSection: JSONObject = [
+            "distances_km": distances,
+            "pressure_levels_hpa": levels,
+            "solar_elevation_deg": 1.8,
+            "solar_azimuth_deg": 248.0,
+            "analysis_radius_km": 300.0,
+            "offset_minutes": 10,
+            "valid_time_local": bestTime,
+            "spatial_sampling": "sun-ray",
+            "terrain_elevation_asl_m": terrain,
+            "required_illumination_base_asl_m": requiredASL,
+            "fields": [
+                "geopotential_height_asl_m": heights,
+                "temperature_c": temps,
+                "rh_percent": rh,
+                "cloud_amount": amounts,
+                "pressure_family_code": familyCodes,
+                "cloud_layer_status": statuses,
+                "cloud_layer_base_asl_m": layerBases,
+                "cloud_layer_top_asl_m": layerTops,
+            ],
+            "theoretical_targets": [
+                ["pressure_family": "high", "status": "burnable", "distance_km": 150.0,
+                 "cloud_base_asl_m": 8600.0, "cloud_top_asl_m": 10900.0,
+                 "cloud_phase": ["label": "ice"]],
+            ],
+        ]
+        func model(aod: Double, material: Double, brightness: Double, genus: String, conf: Double) -> JSONObject {
             [
                 "peak_quality_index": (best * 100).rounded() / 100,
                 "quality_level": best >= 1.5 ? "值得一看" : "一般",
@@ -319,13 +417,25 @@ final class MockTransport: EngineTransport {
                     "start_time_local": localStamp(calendar.date(byAdding: .minute, value: -25,
                                                                  to: calendar.date(byAdding: .minute, value: 30, to: evening)!) ?? now, timezone: timezone),
                     "end_time_local": localStamp(calendar.date(byAdding: .minute, value: 65,
-                                                              to: calendar.date(byAdding: .minute, value: 30, to: evening)!) ?? now, timezone: timezone),
+                                                               to: calendar.date(byAdding: .minute, value: 30, to: evening)!) ?? now, timezone: timezone),
                 ],
-                "summary": "模拟报告：傍晚云层完整，霞光质量指数峰值为 \(String(format: "%.2f", best))，核心窗口约 60 分钟。",
+                "summary": "模拟报告：傍晚高云层完整，霞光质量指数峰值为 \(String(format: "%.2f", best))，核心窗口约 60 分钟。",
                 "cycle_time_utc": isoUTC(calendar.date(bySettingHour: 6, minute: 0, second: 0, of: now) ?? now),
                 "duration_minutes": 58,
                 "confidence_score": 0.82,
+                "convective_risk": 0.08,
                 "model_disagreement_score": 0.09,
+                "dominant_burnable_pressure_family": "high",
+                "dominant_burnable_cloud_base_agl_mean_m": 6400.0,
+                "dominant_burnable_cloud_top_agl_mean_m": 8900.0,
+                "cloud_genus_proxy": [
+                    "label": genus,
+                    "confidence": conf,
+                    "compatible_genera": ["cirrus", "cirrostratus"],
+                    "candidate_scores": ["cirrus": conf, "cirrostratus": 0.21, "altocumulus": 0.07],
+                    "source": "pressure-phase-geometry-proxy",
+                    "scoring_effect": false,
+                ],
                 "aerosol": ["aod550": aod, "source": "cams", "quality": "cams"],
                 "anchor_local": bestTime,
                 "quality_components": [
@@ -337,13 +447,14 @@ final class MockTransport: EngineTransport {
                     "quality_aod550": aod,
                     "duration_minutes": 58,
                 ],
+                "cross_section": mockCrossSection,
                 "steps": steps,
             ]
         }
         return [
             "kind": "point",
-            "model_results": ["gfs": model(aod: 0.31, material: 0.54, brightness: 0.78),
-                              "ec": model(aod: 0.34, material: 0.51, brightness: 0.74)],
+            "model_results": ["gfs": model(aod: 0.31, material: 0.54, brightness: 0.78, genus: "cirrus", conf: 0.72),
+                              "ec": model(aod: 0.34, material: 0.51, brightness: 0.74, genus: "cirrostratus", conf: 0.64)],
             "model_errors": [:] as JSONObject,
         ]
     }
@@ -359,6 +470,15 @@ final class MockTransport: EngineTransport {
         ["source": "cams", "total_file_count": 12, "total_storage_mb": 260.8,
          "path": "/mock/data/cams",
          "cycles": ["2026-11-12 00Z": ["files": 12]] as JSONObject],
+    ]
+
+    private static let mockCategories: [JSONObject] = [
+        ["category": "point-forecasts", "file_count": 4, "bytes": 184_320],
+        ["category": "regional-forecasts", "file_count": 0, "bytes": 0],
+        ["category": "map-frames", "file_count": 0, "bytes": 0],
+        ["category": "reports", "file_count": 2, "bytes": 92_160],
+        ["category": "satellite", "file_count": 0, "bytes": 0],
+        ["category": "srtm", "file_count": 3, "bytes": 77_803_206],
     ]
 
     private static let mockTaskHistory: JSONObject = {
@@ -402,7 +522,6 @@ final class MockTransport: EngineTransport {
         "next_seq": 6, "truncated": false,
     ]
 
-    /// mock 批量下载：模拟 4 块瓦片进度后完成（真下载走 FSMobileTransport 真引擎）。
     private func mockTerrainDownload(id: String) async {
         let total = 4
         for index in 1...total {
@@ -425,5 +544,4 @@ final class MockTransport: EngineTransport {
             "stopped_reason": NSNull(),
         ])
     }
-
 }

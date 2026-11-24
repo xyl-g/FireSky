@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:translateX="15.6"
+        android:translateY="15.6"
+        android:scaleX="1.2"
+        android:scaleY="1.2">
+        <!-- Sculpted outer sunset cloud silhouette -->
+        <path android:pathData="M17.5,45.2 C12.8,45.2 10.6,41.6 11.4,37.8 C11.9,34.4 14.0,32.3 16.5,31.8 C16.7,26.8 20.4,23.8 24.4,23.6 C27.2,15.6 39.2,15.6 42.4,24.8 C46.8,25.0 49.6,27.8 50.0,31.6 C52.4,32.4 53.6,35.4 52.8,38.4 C52.0,42.6 48.6,45.2 44.2,45.2 L34.2,45.2 C31.4,45.4 29.5,46.8 27.8,48.0 C28.5,46.8 29.2,45.9 29.8,45.2 L17.5,45.2 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="32"
+                    android:startY="17"
+                    android:endX="28"
+                    android:endY="47">
+                    <item android:color="#FFFFC729" android:offset="0.0" />
+                    <item android:color="#FFFC7D21" android:offset="0.48" />
+                    <item android:color="#FFD92936" android:offset="1.0" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- Inner bright golden-orange upper body -->
+        <path android:pathData="M19.4,42.6 C15.6,41.2 14.6,37.2 16.4,34.6 C18.2,29.4 21.8,26.4 25.4,26.2 C28.0,19.4 38.6,19.6 41.4,27.6 C45.4,28.4 47.0,32.6 45.6,36.2 C43.2,40.4 37.6,43.0 31.8,43.2 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="radial"
+                    android:centerX="34"
+                    android:centerY="26"
+                    android:gradientRadius="22">
+                    <item android:color="#FFFFD93D" android:offset="0.0" />
+                    <item android:color="#FFFF8F24" android:offset="0.55" />
+                    <item android:color="#FFE64029" android:offset="1.0" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- Lower-left sculpted deep-crimson cloud billow shadow -->
+        <path android:pathData="M11.6,38.6 C13.4,35.4 16.4,35.2 18.4,36.6 C21.8,38.6 25.0,43.8 29.8,45.2 L17.5,45.2 C13.2,45.2 11.0,42.0 11.6,38.6 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="18"
+                    android:startY="36"
+                    android:endX="16"
+                    android:endY="46">
+                    <item android:color="#FFEB3830" android:offset="0.0" />
+                    <item android:color="#FFA31738" android:offset="1.0" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- Right curling golden flame wisp sweeping to the bottom tail -->
+        <path android:pathData="M28.0,47.9 C31.2,42.4 34.4,39.4 39.2,36.8 C43.0,34.8 46.2,31.4 49.4,31.9 C52.2,32.6 53.6,35.6 52.7,38.4 C51.8,42.6 48.4,45.2 44.2,45.2 L34.2,45.2 C31.6,45.4 29.8,46.8 28.0,47.9 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="linear"
+                    android:startX="51"
+                    android:startY="33"
+                    android:endX="32"
+                    android:endY="47">
+                    <item android:color="#FFFFE357" android:offset="0.0" />
+                    <item android:color="#FFFC8A24" android:offset="0.45" />
+                    <item android:color="#FFD62E2B" android:offset="1.0" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <!-- Soft crest highlight on the right wisp tip -->
+        <path android:pathData="M42.0,38.2 C45.2,33.4 49.6,32.2 51.4,35.4 C52.6,38.8 48.8,42.0 44.6,42.6 C42.4,42.8 40.8,40.2 42.0,38.2 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient
+                    android:type="radial"
+                    android:centerX="49.2"
+                    android:centerY="35.6"
+                    android:gradientRadius="8.5">
+                    <item android:color="#E0FFF085" android:offset="0.0" />
+                    <item android:color="#00FFAD33" android:offset="1.0" />
+                </gradient>
+            </aapt:attr>
+        </path>
+    </group>
+</vector>
