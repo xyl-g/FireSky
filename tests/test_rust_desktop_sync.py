@@ -171,7 +171,7 @@ def test_enabled_settings_reject_missing_or_invalid_fields_over_the_bridge(
          "anchor_region": "china"},
         {"enabled": True, "sources": {"ec": True}, "interval_minutes": 60,
          "anchor_region": "china", "lead_horizon_hours": 120},
-        {"enabled": True, "sources": {"cams": True}, "interval_minutes": 29,
+        {"enabled": True, "sources": {"cams": True}, "interval_minutes": 4,
          "anchor_region": "china"},
         {"enabled": True, "sources": {"cams": True}, "interval_minutes": 1441,
          "anchor_region": "china"},
