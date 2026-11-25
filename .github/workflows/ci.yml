@@ -4,6 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 # 连续 push / PR 更新时取消同分支旧 run，释放 runner（审计 P0-1）。
 concurrency:
@@ -11,8 +12,106 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      contracts: ${{ steps.filter.outputs.contracts }}
+      engine: ${{ steps.filter.outputs.engine }}
+      tests_py: ${{ steps.filter.outputs.tests_py }}
+      shared_web: ${{ steps.filter.outputs.shared_web }}
+      macos: ${{ steps.filter.outputs.macos }}
+      docker: ${{ steps.filter.outputs.docker }}
+      android: ${{ steps.filter.outputs.android }}
+      ios: ${{ steps.filter.outputs.ios }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            contracts:
+              - 'resources/**'
+              - 'docker/**'
+              - 'docker-compose.yaml'
+              - 'apps/windows/**'
+              - 'apps/shared/**'
+              - 'apps/shared-web/**'
+              - 'scripts/**'
+              - '.github/workflows/**'
+            engine:
+              - 'engine/**'
+              - 'resources/**'
+              - 'deny.toml'
+              - 'scripts/build_rust_engine.sh'
+              - 'scripts/build_app_resources.py'
+              - 'scripts/prune_eccodes_definitions.sh'
+            tests_py:
+              - 'tests/**'
+              - 'engine/**'
+              - 'apps/macos/**'
+              - 'apps/shared/**'
+              - 'resources/**'
+              - 'scripts/test_macos_*.sh'
+            shared_web:
+              - 'apps/shared-web/**'
+              - 'apps/shared/**'
+            macos:
+              - 'apps/macos/**'
+              - 'apps/shared/**'
+              - 'engine/**'
+              - 'resources/**'
+              - 'scripts/build_macos_native.sh'
+              - 'scripts/bundle_macos_eccodes.sh'
+              - 'scripts/prune_eccodes_definitions.sh'
+              - 'scripts/test_macos_native.sh'
+              - 'scripts/test_macos_swift_fixtures.sh'
+              - 'scripts/smoke_macos_ffi.*'
+            docker:
+              - 'docker/**'
+              - 'docker-compose.yaml'
+              - 'engine/**'
+              - 'apps/shared-web/**'
+              - 'apps/shared/**'
+              - 'resources/**'
+              - 'scripts/test_docker_contract.sh'
+            android:
+              - 'apps/mobile-android/**'
+            ios:
+              - 'apps/mobile-ios/**'
+
+  contracts:
+    name: Native resource & FFI contracts
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.contracts == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      # 契约脚本（test_docker_contract.sh / test_windows_ffi_contract.sh）用 rg；
+      # ubuntu-24.04 镜像未预装 ripgrep。
+      - name: Install ripgrep for contract scripts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ripgrep
+      - name: Verify immutable application resources
+        run: python3 scripts/build_app_resources.py --root resources/app-data --check
+      - name: Verify Docker runtime contract
+        run: bash scripts/test_docker_contract.sh
+      - name: Verify Windows FFI adapter contract
+        run: bash scripts/test_windows_ffi_contract.sh
+      - run: node --test apps/shared-web/scripts/*.test.mjs
+
   native-contracts:
     name: pytest（现架构契约：Rust IPC + Swift UI）
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.tests_py == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -34,6 +133,8 @@ jobs:
   rust:
     timeout-minutes: 45
     name: cargo test（引擎 + 并入的评分核心，Python-free runtime）
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -60,6 +161,8 @@ jobs:
     # 依赖供应链审计：RustSec 公告 / 重复与封禁 crate / 许可 / 来源。
     # 策略与豁免理由见仓库根 deny.toml 与 docs/OPEN_SOURCE_ADOPTION_PLAN.zh-CN.md P0-1。
     name: cargo deny（Rust 依赖审计）
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.engine == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +177,8 @@ jobs:
     # 2026-11-13：产品共享 Web 统一为 apps/shared-web（Docker/Rust HTTP 同源）。
     # 旧 frontend/（SvelteKit）待合并，其契约测试保留为独立轻量 job。
     name: shared-web check + build
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.shared_web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -101,6 +206,8 @@ jobs:
   desktop:
     timeout-minutes: 45
     name: SwiftUI + Rust bundle
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.macos == 'true'
     runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
@@ -129,6 +236,8 @@ jobs:
   docker:
     timeout-minutes: 25
     name: docker build（三阶段镜像）
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.docker == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -137,6 +246,8 @@ jobs:
 
   android-native:
     name: Android Compose（thin-client 编译与单元测试）
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.android == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -154,6 +265,8 @@ jobs:
   ios-native:
     timeout-minutes: 30
     name: iOS SwiftUI（thin-client simulator tests）
+    needs: changes
+    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.ios == 'true'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
