@@ -354,5 +354,9 @@ internal static class L10n
         ["位置与海拔"] = "Location & Elevation",
         ["海拔来源"] = "Elevation source",
         ["下载连通性"] = "Download Connectivity",
+        ["后台同步中"] = "Syncing in background",
+        ["退避冷却中（立即同步或重新保存设置可马上重试）"] =
+            "Cooling down (run Sync Now or re-save settings to retry immediately)",
+        ["浏览器下载"] = "Download in Browser",
     };
 }

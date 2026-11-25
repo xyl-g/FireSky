@@ -8,6 +8,16 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v1.10.2 (2026-11-25)
+
+桌面端应用内更新下载提速与默认系统代理修复，以及后台数据同步按数据源独立加锁与指数退避自动恢复。
+Faster in-app desktop updater downloads with automatic default system-proxy routing, plus per-source background data sync locking and exponential-backoff auto-recovery.
+
+- **后台数据同步防永久停摆 + 按数据源独立锁**：连续失败 3 次后改用指数退避冷却（30m → 60m → 120m → 240m 封顶）并到期半开自动恢复；改为快源优先（`gfs -> ec -> cams`）与按源独立跨进程文件锁（`sync-gfs.lock` / `sync-ec.lock` / `sync-cams.lock`），CAMS ADS 排队 10–60 分钟不再阻塞 GFS/EC，且定时器检测到进行中时静默跳过并在全端设置页展示「后台同步中」状态。
+  Replaced permanent suspension after 3 consecutive failures with exponential-backoff cooldown (30m → 60m → 120m → 240m cap) and half-open automatic retry; switched to fast-first source ordering (`gfs -> ec -> cams`) with per-source cross-process file locks (`sync-gfs.lock`, `sync-ec.lock`, `sync-cams.lock`) so long CAMS ADS queues never block GFS/EC, while due-checks report `"sync_in_progress"` quietly and clients show a "Syncing in background" badge.
+- **桌面端应用内更新提速与默认系统代理修复**：macOS `Updater` 将 `@MainActor` 逐字节 `session.bytes(for:)` 替换为后台 `URLSessionDownloadTask` + `URLSessionDownloadDelegate` 大块直写，并将 SHA256 校验移出主线程，下载速度追平浏览器；补全环境变量 HTTPS 代理键并在无环境变量时默认走系统代理；Windows `Updater` 修复无环境变量时显式 `Proxy = null` 意外关闭系统代理的问题，并修复下载循环未触发进度刷新的问题；双端补充实时下载速度显示与「浏览器下载」快捷入口。
+  Replaced the macOS `@MainActor` byte-by-byte `session.bytes(for:)` loop with a background `URLSessionDownloadTask` + `URLSessionDownloadDelegate` and off-main-thread SHA256 verification to match browser download speeds; completed HTTPS proxy dictionary keys when env proxies are set while preserving default macOS system proxy when unset; fixed Windows `HttpClientHandler.Proxy = null` disabling system proxies and missing `Notify()` in the zip download loop; added live download speed readouts and a "Download in Browser" action on both desktop apps.
+
 ## v1.10.1 (2026-11-25)
 
 iOS / Android 全面转型纯原生瘦客户端（直连 Mac / Windows / Docker 服务端，移除笨重本地内嵌引擎与 131 MB ecCodes）、新增 iOS `.ipa` 随 Release 自动发布、移动端补齐区域预测（中国热力图 + 城市排行）与卫星实况、实时 SSE 进度流、卫星实况负仰角晴空隙物理判据升级，以及桌面包体瘦身与模块化重构。

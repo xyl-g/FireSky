@@ -22,8 +22,8 @@ android {
         applicationId = "com.firesky.mobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 25
-        versionName = "1.10.1"
+        versionCode = 26
+        versionName = "1.10.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

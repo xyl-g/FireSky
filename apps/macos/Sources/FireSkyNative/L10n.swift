@@ -503,6 +503,11 @@ enum L10n {
         "卫星云况": "Satellite clouds",
         "运动采样": "Motion sampling",
         "光学与雷达": "Optics & radar",
+        "后台同步中": "Syncing in background",
+        "退避冷却中 · 预计 %@ 自动重试（立即同步可马上重试）":
+            "Cooling down · auto retry at %@ (run Sync Now to retry immediately)",
+        "退避冷却中（立即同步或重新保存设置可马上重试）":
+            "Cooling down (run Sync Now or re-save settings to retry immediately)",
     ]
 
     // MARK: - 高频字符串

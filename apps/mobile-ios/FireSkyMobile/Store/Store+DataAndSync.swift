@@ -785,6 +785,7 @@ extension Store {
             case "current": text = "已是最新"
             case "failed": text = "失败"
             case "cancelled": text = "已取消"
+            case "in_progress": text = "后台同步中"
             default: text = status.isEmpty ? "无结果" : status
             }
             return "\(labels[name] ?? name) \(text)"

@@ -29,6 +29,7 @@ final class Updater: ObservableObject {
     @Published private(set) var message = ""
     @Published private(set) var receivedBytes: Int64 = 0
     @Published private(set) var totalBytes: Int64 = 0
+    @Published private(set) var bytesPerSecond: Double = 0
     @Published var autoCheck: Bool {
         didSet { UserDefaults.standard.set(autoCheck, forKey: "autoUpdateCheck") }
     }
@@ -109,28 +110,59 @@ final class Updater: ObservableObject {
 
     // MARK: - 会话（系统代理 + 环境代理）
 
-    private func makeSession() -> URLSession {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForRequest = 30
-        configuration.timeoutIntervalForResource = 3600
-        let environment = ProcessInfo.processInfo.environment
-        let proxy = environment["https_proxy"] ?? environment["HTTPS_PROXY"]
+    /// 解析环境变量代理；未配置时返回 `nil`，让 URLSession 默认遵循 macOS 系统代理（HTTP/HTTPS/SOCKS/PAC）。
+    nonisolated static func proxyDictionary(environment: [String: String]) -> [AnyHashable: Any]? {
+        let raw = environment["https_proxy"] ?? environment["HTTPS_PROXY"]
             ?? environment["all_proxy"] ?? environment["ALL_PROXY"]
-        if let proxy, let url = URL(string: proxy) {
-            // 源码/终端启动时环境代理生效；打包 GUI 应用遵循系统代理设置。
-            let host = url.host ?? ""
-            let isSocks = proxy.lowercased().hasPrefix("socks")
-            let port = url.port ?? (isSocks ? 1080 : 8080)
-            configuration.connectionProxyDictionary = [
-                kCFNetworkProxiesHTTPEnable as String: true,
-                kCFNetworkProxiesHTTPProxy as String: host,
-                kCFNetworkProxiesHTTPPort as String: port,
-                "SOCKSEnable": isSocks,
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty else {
+            return nil
+        }
+        let normalized = trimmed.contains("://") ? trimmed : "http://\(trimmed)"
+        guard let url = URL(string: normalized),
+              let host = url.host,
+              !host.isEmpty else {
+            return nil
+        }
+        let scheme = (url.scheme ?? "http").lowercased()
+        if scheme.hasPrefix("socks") {
+            return [
+                "SOCKSEnable": true,
                 "SOCKSProxy": host,
-                "SOCKSPort": port,
+                "SOCKSPort": url.port ?? 1080,
             ]
         }
-        return URLSession(configuration: configuration)
+        let port = url.port ?? 8080
+        return [
+            kCFNetworkProxiesHTTPEnable as String: true,
+            kCFNetworkProxiesHTTPProxy as String: host,
+            kCFNetworkProxiesHTTPPort as String: port,
+            "HTTPSEnable": true,
+            "HTTPSProxy": host,
+            "HTTPSPort": port,
+        ]
+    }
+
+    private func makeSessionConfiguration() -> URLSessionConfiguration {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.timeoutIntervalForRequest = 60
+        configuration.timeoutIntervalForResource = 3600
+        configuration.urlCache = nil
+        configuration.httpMaximumConnectionsPerHost = 6
+        // 仅当终端显式注入代理变量时覆盖；默认保持 nil 以走系统代理。
+        if let proxy = Self.proxyDictionary(environment: ProcessInfo.processInfo.environment) {
+            configuration.connectionProxyDictionary = proxy
+        }
+        return configuration
+    }
+
+    private func makeSession() -> URLSession {
+        URLSession(configuration: makeSessionConfiguration())
+    }
+
+    func openDownloadInBrowser() {
+        let fallback = URL(string: "https://github.com/\(Self.repository)/releases/latest")!
+        NSWorkspace.shared.open(info?.assetURL ?? fallback)
     }
 
     // MARK: - 检查
@@ -251,20 +283,24 @@ final class Updater: ObservableObject {
         phase = .downloading
         receivedBytes = 0
         totalBytes = info.assetBytes
+        bytesPerSecond = 0
         message = ""
         downloadTask = Task { [weak self] in
             guard let self else { return }
             do {
                 let archive = try await downloadDMG(info)
                 try await verifyChecksum(info, archive)
+                bytesPerSecond = 0
                 phase = .installing
                 let installed = try await installArchive(archive, version: info.version)
                 try await NSWorkspace.shared.openApplication(at: installed, configuration: .init())
                 NSApp.terminate(nil)
             } catch is CancellationError {
+                bytesPerSecond = 0
                 phase = .available
                 message = "已取消下载；未安装任何内容。"
             } catch {
+                bytesPerSecond = 0
                 phase = .failed
                 message = friendlyUpdateError(error)
             }
@@ -289,46 +325,47 @@ final class Updater: ObservableObject {
         message = ""
     }
 
-    /// 流式下载 DMG 到临时目录，按 1 MB 落盘并刷新进度。
+    /// 通过底层 URLSessionDownloadTask 后台大块流式落盘（脱离 @MainActor），按 ~200ms 节流回报进度与速度。
     private func downloadDMG(_ info: Info) async throws -> URL {
-        var request = URLRequest(url: info.assetURL, timeoutInterval: 600)
+        let current = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        let userAgent = "FireSky/\(current.isEmpty ? "dev" : current) (macOS)"
+        var request = URLRequest(url: info.assetURL, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 600)
+        request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 600
-        let session = makeSession()
-        let (bytes, response) = try await session.bytes(for: request)
-        if let http = response as? HTTPURLResponse, http.expectedContentLength > 0 {
-            totalBytes = http.expectedContentLength
-        }
+
         let archive = FileManager.default.temporaryDirectory
             .appendingPathComponent("firesky-update-\(info.version).dmg")
         try? FileManager.default.removeItem(at: archive)
-        FileManager.default.createFile(atPath: archive.path, contents: nil)
-        let handle = try FileHandle(forWritingTo: archive)
-        defer { try? handle.close() }
-        var buffer = Data()
-        buffer.reserveCapacity(1 << 20)
-        do {
-            for try await byte in bytes {
-                try Task.checkCancellation()
-                buffer.append(byte)
-                if buffer.count >= 1 << 20 {
-                    try handle.write(contentsOf: buffer)
-                    receivedBytes += Int64(buffer.count)
-                    buffer.removeAll(keepingCapacity: true)
+
+        let delegate = DMGDownloadDelegate(
+            destination: archive,
+            expectedSizeHint: info.assetBytes,
+            onProgress: { [weak self] written, expected, speed in
+                Task { @MainActor [weak self] in
+                    guard let self, self.phase == .downloading else { return }
+                    self.receivedBytes = written
+                    if expected > 0 { self.totalBytes = expected }
+                    self.bytesPerSecond = speed
+                }
+            },
+            onFinalBytes: { [weak self] written, total in
+                Task { @MainActor [weak self] in
+                    guard let self, self.phase == .downloading else { return }
+                    self.receivedBytes = written
+                    if total > 0 { self.totalBytes = total }
                 }
             }
-            if !buffer.isEmpty {
-                try handle.write(contentsOf: buffer)
-                receivedBytes += Int64(buffer.count)
+        )
+        let session = URLSession(configuration: makeSessionConfiguration(), delegate: delegate, delegateQueue: nil)
+        let task = session.downloadTask(with: request)
+
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                delegate.start(task: task, continuation: continuation)
             }
-        } catch {
-            try? FileManager.default.removeItem(at: archive)
-            throw error
+        } onCancel: {
+            delegate.cancel()
         }
-        guard totalBytes <= 0 || receivedBytes == totalBytes else {
-            try? FileManager.default.removeItem(at: archive)
-            throw UpdateError.network("下载不完整（\(receivedBytes)/\(totalBytes) 字节）")
-        }
-        return archive
     }
 
     /// SHA256SUMS.txt 校验（存在才校验；缺失视为通过并在安装摘要中说明）。
@@ -354,7 +391,9 @@ final class Updater: ObservableObject {
         guard let expected, !expected.isEmpty else {
             throw UpdateError.network("SHA256SUMS.txt 中没有本架构安装包的校验和")
         }
-        let actual = try Self.sha256(of: archive)
+        let actual = try await Task.detached(priority: .userInitiated) {
+            try Self.sha256(of: archive)
+        }.value
         guard actual == expected.lowercased() else {
             try? FileManager.default.removeItem(at: archive)
             throw UpdateError.checksum
@@ -447,5 +486,162 @@ enum UpdateError: LocalizedError {
         case .checksum: "SHA256 校验不匹配"
         case .install(let detail): detail
         }
+    }
+}
+
+private final class DMGDownloadDelegate: NSObject, URLSessionDownloadDelegate, @unchecked Sendable {
+    private let destination: URL
+    private let expectedSizeHint: Int64
+    private let onProgress: @Sendable (Int64, Int64, Double) -> Void
+    private let onFinalBytes: @Sendable (Int64, Int64) -> Void
+
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<URL, Error>?
+    private var task: URLSessionDownloadTask?
+    private var movedURL: URL?
+    private var recordedError: Error?
+    private var cancelled = false
+    private var lastReportTime = CFAbsoluteTimeGetCurrent()
+    private var lastReportBytes: Int64 = 0
+    private var smoothedSpeed: Double = 0
+
+    init(
+        destination: URL,
+        expectedSizeHint: Int64,
+        onProgress: @escaping @Sendable (Int64, Int64, Double) -> Void,
+        onFinalBytes: @escaping @Sendable (Int64, Int64) -> Void
+    ) {
+        self.destination = destination
+        self.expectedSizeHint = expectedSizeHint
+        self.onProgress = onProgress
+        self.onFinalBytes = onFinalBytes
+    }
+
+    func start(task: URLSessionDownloadTask, continuation: CheckedContinuation<URL, Error>) {
+        lock.lock()
+        if cancelled {
+            lock.unlock()
+            task.cancel()
+            continuation.resume(throwing: CancellationError())
+            return
+        }
+        self.task = task
+        self.continuation = continuation
+        self.lastReportTime = CFAbsoluteTimeGetCurrent()
+        self.lastReportBytes = 0
+        lock.unlock()
+        task.resume()
+    }
+
+    func cancel() {
+        lock.lock()
+        cancelled = true
+        let currentTask = task
+        let cont = continuation
+        continuation = nil
+        lock.unlock()
+        currentTask?.cancel()
+        cont?.resume(throwing: CancellationError())
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didWriteData bytesWritten: Int64,
+        totalBytesWritten: Int64,
+        totalBytesExpectedToWrite: Int64
+    ) {
+        let now = CFAbsoluteTimeGetCurrent()
+        var shouldReport = false
+        var speed: Double = 0
+
+        lock.lock()
+        let elapsed = now - lastReportTime
+        if elapsed >= 0.20 || (totalBytesExpectedToWrite > 0 && totalBytesWritten >= totalBytesExpectedToWrite) {
+            let dt = max(elapsed, 0.001)
+            let delta = max(totalBytesWritten - lastReportBytes, 0)
+            let instant = Double(delta) / dt
+            smoothedSpeed = smoothedSpeed > 0 ? (0.3 * instant + 0.7 * smoothedSpeed) : instant
+            lastReportTime = now
+            lastReportBytes = totalBytesWritten
+            speed = smoothedSpeed
+            shouldReport = true
+        }
+        lock.unlock()
+
+        if shouldReport {
+            onProgress(totalBytesWritten, totalBytesExpectedToWrite, speed)
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        downloadTask: URLSessionDownloadTask,
+        didFinishDownloadingTo location: URL
+    ) {
+        if let http = downloadTask.response as? HTTPURLResponse, http.statusCode != 200 {
+            lock.lock()
+            recordedError = UpdateError.network("下载失败：GitHub 返回状态 \(http.statusCode)")
+            lock.unlock()
+            return
+        }
+        do {
+            try? FileManager.default.removeItem(at: destination)
+            // Foundation 会在代理方法返回后立即删除临时文件，必须在回调内同步搬运。
+            try FileManager.default.moveItem(at: location, to: destination)
+            lock.lock()
+            movedURL = destination
+            lock.unlock()
+        } catch {
+            lock.lock()
+            recordedError = error
+            lock.unlock()
+        }
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        session.finishTasksAndInvalidate()
+
+        lock.lock()
+        let wasCancelled = cancelled
+        let moved = movedURL
+        let recErr = recordedError
+        let cont = continuation
+        continuation = nil
+        lock.unlock()
+
+        guard let cont else { return }
+
+        if wasCancelled || (error as? URLError)?.code == .cancelled {
+            try? FileManager.default.removeItem(at: destination)
+            cont.resume(throwing: CancellationError())
+            return
+        }
+        if let error {
+            try? FileManager.default.removeItem(at: destination)
+            cont.resume(throwing: error)
+            return
+        }
+        if let recErr {
+            try? FileManager.default.removeItem(at: destination)
+            cont.resume(throwing: recErr)
+            return
+        }
+        guard let moved else {
+            cont.resume(throwing: UpdateError.network("下载未生成临时文件"))
+            return
+        }
+
+        let actualBytes = (try? FileManager.default.attributesOfItem(atPath: moved.path)[.size] as? NSNumber)?.int64Value ?? 0
+        let responseExpected = (task.response as? HTTPURLResponse)?.expectedContentLength ?? -1
+        let expectedTotal = responseExpected > 0 ? responseExpected : expectedSizeHint
+        if expectedTotal > 0 && actualBytes != expectedTotal {
+            try? FileManager.default.removeItem(at: moved)
+            cont.resume(throwing: UpdateError.network("下载不完整（\(actualBytes)/\(expectedTotal) 字节）"))
+            return
+        }
+
+        onFinalBytes(actualBytes, expectedTotal > 0 ? expectedTotal : actualBytes)
+        cont.resume(returning: moved)
     }
 }

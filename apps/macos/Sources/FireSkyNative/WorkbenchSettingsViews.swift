@@ -447,11 +447,16 @@ struct SettingsView: View {
                     ProgressView(value: max(Double(updater.receivedBytes), 1),
                                  total: max(Double(updater.totalBytes), 1))
                     HStack {
-                        Text(L10n.tf("已下载 %@ / %@",
-                                     ByteCountFormatter.string(fromByteCount: updater.receivedBytes, countStyle: .file),
-                                     ByteCountFormatter.string(fromByteCount: updater.totalBytes, countStyle: .file)))
+                        let receivedText = ByteCountFormatter.string(fromByteCount: updater.receivedBytes, countStyle: .file)
+                        let totalText = ByteCountFormatter.string(fromByteCount: updater.totalBytes, countStyle: .file)
+                        let speedSuffix = updater.bytesPerSecond > 0
+                            ? " · \(ByteCountFormatter.string(fromByteCount: Int64(updater.bytesPerSecond), countStyle: .file))/s"
+                            : ""
+                        Text(L10n.tf("已下载 %@ / %@", receivedText, totalText) + speedSuffix)
                             .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                         Spacer()
+                        Button(L10n.text("浏览器下载", "Browser")) { updater.openDownloadInBrowser() }
+                            .controlSize(.small)
                         Button(L10n.t("取消")) { updater.cancelDownload() }
                             .controlSize(.small)
                     }
@@ -1057,14 +1062,21 @@ struct SettingsView: View {
         let cycle = state["last_cycle"] as? String ?? ""
         let failures = (state["consecutive_failures"] as? NSNumber)?.intValue ?? 0
         let suspended = state["suspended"] as? Bool ?? false
+        let inProgress = state["in_progress"] as? Bool ?? false
+        let nextRetry = state["next_retry_at_utc"] as? String ?? ""
         let badge: String
         let color: Color
-        switch status {
-        case "synced": badge = "已同步"; color = .green
-        case "current": badge = "已是最新"; color = .green
-        case "failed": badge = "失败"; color = .red
-        case "cancelled": badge = "已取消"; color = .secondary
-        default: badge = "从未同步"; color = .secondary
+        if inProgress {
+            badge = L10n.t("后台同步中")
+            color = coolAccent
+        } else {
+            switch status {
+            case "synced": badge = "已同步"; color = .green
+            case "current": badge = "已是最新"; color = .green
+            case "failed": badge = "失败"; color = .red
+            case "cancelled": badge = "已取消"; color = .secondary
+            default: badge = "从未同步"; color = .secondary
+            }
         }
         var details: [String] = []
         if !cycle.isEmpty { details.append(L10n.tf("最近周期 %@", cycle)) }
@@ -1089,7 +1101,13 @@ struct SettingsView: View {
             details.append(L10n.tf("缺 %d 个周期：%@", missing.count, missing.joined(separator: "、")))
         }
         if failures > 0 { details.append(L10n.tf("连续失败 %d 次", failures)) }
-        if suspended { details.append("已暂停：立即同步或重新保存设置可解锁") }
+        if suspended {
+            if !nextRetry.isEmpty {
+                details.append(L10n.tf("退避冷却中 · 预计 %@ 自动重试（立即同步可马上重试）", dataSyncTimeText(nextRetry)))
+            } else {
+                details.append(L10n.t("退避冷却中（立即同步或重新保存设置可马上重试）"))
+            }
+        }
         let live = (store.dataSyncRunning && store.dataSyncActiveSource == name)
             ? (store.dataSyncProgress[name] as? JSONObject)
             : nil

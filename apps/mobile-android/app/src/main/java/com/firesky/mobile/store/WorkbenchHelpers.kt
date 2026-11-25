@@ -173,8 +173,10 @@ internal fun dataSyncRoundSummary(response: JSONObject): String {
         val row = sources.optJSONObject(key) ?: return@mapNotNull null
         val statusText = when (row.optString("status")) {
             "synced" -> "已同步"
-            "up_to_date" -> "已是最新"
+            "current", "up_to_date" -> "已是最新"
             "failed" -> "失败"
+            "cancelled" -> "已取消"
+            "in_progress" -> "后台同步中"
             "skipped_busy" -> "让路跳过"
             else -> row.optString("status").ifEmpty { "完成" }
         }

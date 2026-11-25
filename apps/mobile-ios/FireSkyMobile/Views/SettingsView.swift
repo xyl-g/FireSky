@@ -458,22 +458,51 @@ struct SettingsView: View {
         let result = state["last_result"] as? JSONObject ?? [:]
         let status = result["status"] as? String ?? ""
         let cycle = state["last_cycle"] as? String ?? ""
+        let failures = (state["consecutive_failures"] as? NSNumber)?.intValue ?? 0
+        let suspended = state["suspended"] as? Bool ?? false
+        let inProgress = state["in_progress"] as? Bool ?? false
+        let nextRetry = state["next_retry_at_utc"] as? String ?? ""
         let badge: String
         let color: Color
-        switch status {
-        case "synced": badge = L10n.t("已同步"); color = .green
-        case "current": badge = L10n.t("已是最新"); color = .green
-        case "failed": badge = L10n.t("失败"); color = .red
-        case "cancelled": badge = L10n.t("已取消"); color = .secondary
-        default: badge = L10n.t("从未同步"); color = .secondary
-        }
-        return HStack(spacing: 10) {
-            Text(label).font(.caption.weight(.semibold)).frame(width: 44, alignment: .leading)
-            Text(badge).font(.caption).foregroundStyle(color)
-            if !cycle.isEmpty {
-                Text(L10n.tf("最近周期 %@", cycle)).font(.caption2).foregroundStyle(.secondary)
+        if inProgress {
+            badge = L10n.text("后台同步中", "Syncing in background")
+            color = FSDesign.coolAccent(dark: scheme == .dark)
+        } else {
+            switch status {
+            case "synced": badge = L10n.t("已同步"); color = .green
+            case "current": badge = L10n.t("已是最新"); color = .green
+            case "failed": badge = L10n.t("失败"); color = .red
+            case "cancelled": badge = L10n.t("已取消"); color = .secondary
+            default: badge = L10n.t("从未同步"); color = .secondary
             }
-            Spacer()
+        }
+        var notes: [String] = []
+        if !cycle.isEmpty { notes.append(L10n.tf("最近周期 %@", cycle)) }
+        if failures > 0 { notes.append(L10n.tf("连续失败 %d 次", failures)) }
+        if suspended {
+            if !nextRetry.isEmpty {
+                let shortTime = ObservationDate.timestamp(nextRetry).map {
+                    let f = DateFormatter()
+                    f.dateFormat = "MM-dd HH:mm"
+                    return f.string(from: $0)
+                } ?? nextRetry
+                notes.append(L10n.text("退避冷却中 · 预计 \(shortTime) 自动重试", "Cooling down · auto retry at \(shortTime)"))
+            } else {
+                notes.append(L10n.text("退避冷却中 · 立即同步可马上重试", "Cooling down · tap Sync Now to retry"))
+            }
+        }
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 10) {
+                Text(label).font(.caption.weight(.semibold)).frame(width: 44, alignment: .leading)
+                Text(badge).font(.caption).foregroundStyle(color)
+                Spacer()
+            }
+            if !notes.isEmpty {
+                Text(notes.joined(separator: " · "))
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 54)
+            }
         }
     }
 

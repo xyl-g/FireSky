@@ -7,13 +7,12 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 
 > English documentation: [README.en.md](README.en.md)
 
-> 当前版本 **v1.10.1**（见[下载安装](#下载安装releases)）：macOS DMG（双架构）、
+> 当前版本 **v1.10.2**（见[下载安装](#下载安装releases)）：macOS DMG（双架构）、
 > Windows zip + 安装器（x64/ARM64）、Android 通用 APK 与 iOS 未签名 IPA
-> 全部随 CI `v*` tag 自动直发 Release。v1.10.1 主线：**iOS / Android 全面转型
-> 纯原生瘦客户端**（直连 Mac / Windows / Docker 服务端，彻底移除手机端内嵌引擎
-> 与 131 MB ecCodes）、**移动端补齐区域预测（中国热力图/城市排行）与卫星实况**、
-> **实时 SSE 进度推送**、卫星实况负仰角晴空隙物理判据升级、桌面端 `ecCodes`
-> 包体裁剪（130 MB → 42 MB）以及全端模块化与零警告收口。UI 设计系统 v2
+> 全部随 CI `v*` tag 自动直发 Release。v1.10.2 优化了**桌面端应用内更新下载速度与默认系统代理兼容**，
+> 以及**后台数据同步按数据源独立锁与指数退避自动恢复**（CAMS ADS 长时间排队不再阻塞 GFS/EC）；
+> v1.10.1 起 iOS / Android 全面转型纯原生瘦客户端（直连 Mac / Windows / Docker 服务端，
+> 支持区域预测热力图/城市排行与卫星实况、实时 SSE 进度推送）。UI 设计系统 v2
 > （毛玻璃卡片 / 状态徽标 / 强调渐变 / 夜空蓝暗色）token 见 [DESIGN.md](DESIGN.md)。
 > UI 以 [macOS 产品与 UI 基准](docs/MACOS_UI_BASELINE.zh-CN.md)为参照，移动端蓝图与验收状态见
 > [移动端双原生计划](docs/MOBILE_NATIVE_PLAN.md)。
@@ -69,7 +68,7 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 ## 下载安装（Releases）
 
 正式版统一从 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) 下载
-（当前 **v1.10.1**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
+（当前 **v1.10.2**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
 与各资产放在同一目录执行）：
 
 ```bash

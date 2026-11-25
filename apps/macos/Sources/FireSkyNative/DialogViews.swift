@@ -768,7 +768,13 @@ struct UpdateSheetView: View {
                                  total: max(Double(updater.totalBytes), 1))
                         .tint(warm)
                     HStack {
-                        Text(ByteCountFormatter.string(fromByteCount: updater.receivedBytes, countStyle: .file))
+                        let receivedText = ByteCountFormatter.string(fromByteCount: updater.receivedBytes, countStyle: .file)
+                        if updater.bytesPerSecond > 0 {
+                            let speedText = ByteCountFormatter.string(fromByteCount: Int64(updater.bytesPerSecond), countStyle: .file)
+                            Text("\(receivedText) · \(speedText)/s")
+                        } else {
+                            Text(receivedText)
+                        }
                         Spacer()
                         Text(ByteCountFormatter.string(fromByteCount: updater.totalBytes, countStyle: .file))
                     }
@@ -828,6 +834,18 @@ struct UpdateSheetView: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(updater.phase == .checking || updater.phase == .downloading || updater.phase == .installing)
+
+                if updater.info != nil && (updater.phase == .available || updater.phase == .downloading || updater.phase == .failed) {
+                    Button {
+                        updater.openDownloadInBrowser()
+                    } label: {
+                        Label(L10n.text("浏览器下载", "Browser"), systemImage: "safari")
+                            .fireSkyFont(size: 12, weight: .medium)
+                            .padding(.horizontal, 14).padding(.vertical, 9)
+                            .background(Color.primary.opacity(scheme == .dark ? 0.08 : 0.06), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                }
 
                 if updater.phase == .available {
                     Button {

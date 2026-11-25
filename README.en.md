@@ -7,15 +7,15 @@ native desktop clients**. The physics follows the methodology of the
 
 > 中文文档：[README.md](README.md)
 
-> Current release **v1.10.1** (see [Download & install](#download--install-releases)):
+> Current release **v1.10.2** (see [Download & install](#download--install-releases)):
 > macOS DMGs (dual arch), Windows zip + installer (x64/ARM64), universal Android
 > APK, and unsigned sideloadable iOS `.ipa` are all built and attached to GitHub
-> Releases automatically on `v*` tags. Highlights of v1.10.1: **iOS & Android
-> rebuilt as pure native thin clients** (connecting to Mac/Windows/Docker
-> servers over real-time SSE, stripping embedded local engine & 131 MB ecCodes),
-> **mobile Regional Forecast (China heatmap + city ranking) and Satellite
-> Nowcast**, negative-elevation nowcast horizon-gap physics upgrade, desktop
-> `ecCodes` bundle slimming (130 MB → 42 MB), and zero-warning / modular cleanup.
+> Releases automatically on `v*` tags. v1.10.2 dramatically speeds up **in-app
+> updater downloads with proper default system-proxy routing**, and adds
+> **per-source locks & exponential-backoff auto-recovery** for background data sync
+> (so long CAMS ADS queues never block GFS/EC). Since v1.10.1, iOS & Android run as
+> pure native thin clients (connecting to Mac/Windows/Docker servers over real-time
+> SSE with Regional Forecast & Satellite Nowcast).
 > Design tokens in [DESIGN.md](DESIGN.md).
 > The UI reference is the [macOS product & UI baseline](docs/MACOS_UI_BASELINE.zh-CN.md);
 > mobile blueprint and acceptance status:
@@ -81,7 +81,7 @@ native desktop clients**. The physics follows the methodology of the
 
 Official builds are published on
 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) (current:
-**v1.10.1**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
+**v1.10.2**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
 file names; run it in the directory holding the assets):
 
 ```bash

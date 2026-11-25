@@ -517,7 +517,10 @@ public sealed partial class MainWindow
 
     private string dataSyncActiveSource = "";
 
-    private async Task<(JsonObject? Response, Exception? Error)> RunDataSyncRound(List<string> sources, bool force = false)
+    private async Task<(JsonObject? Response, Exception? Error)> RunDataSyncRound(
+        List<string> sources,
+        bool force = false,
+        bool autoTick = false)
     {
         dataSyncRunning = true;
         dataSyncActiveSource = "";
@@ -534,6 +537,7 @@ public sealed partial class MainWindow
                     sources.Select(source => JsonValue.Create(source)).ToArray<JsonNode>()),
             };
             if (force) parameters["force"] = true;
+            if (autoTick) parameters["auto_tick"] = true;
             response = await engine.Call("data_sync_run", parameters,
                 progress: e => DispatcherQueue.TryEnqueue(() =>
                 {
@@ -587,6 +591,7 @@ public sealed partial class MainWindow
                 "current" => L10n.T("已是最新"),
                 "failed" => L10n.T("失败"),
                 "cancelled" => L10n.T("已取消"),
+                "in_progress" => L10n.T("后台同步中"),
                 _ => status.Length == 0 ? L10n.T("无结果") : status,
             };
             parts.Add($"{labels.GetValueOrDefault(name, name)} {text}");
@@ -620,11 +625,15 @@ public sealed partial class MainWindow
             var cycle = Text(state, "last_cycle");
             var failures = (long?)DoubleValue(state["consecutive_failures"]) ?? 0;
             var suspended = BoolValue(state, "suspended") == true;
-            var badge = status switch
-            {
-                "synced" => L10n.T("已同步"), "current" => L10n.T("已是最新"), "failed" => L10n.T("失败"),
-                "cancelled" => L10n.T("已取消"), _ => L10n.T("从未同步"),
-            };
+            var inProgress = BoolValue(state, "in_progress") == true;
+            var nextRetry = Text(state, "next_retry_at_utc");
+            var badge = inProgress
+                ? L10n.T("后台同步中")
+                : status switch
+                {
+                    "synced" => L10n.T("已同步"), "current" => L10n.T("已是最新"), "failed" => L10n.T("失败"),
+                    "cancelled" => L10n.T("已取消"), "in_progress" => L10n.T("后台同步中"), _ => L10n.T("从未同步"),
+                };
             var details = new List<string>();
             if (cycle.Length > 0) details.Add($"最近周期 {cycle}");
             if (files > 0) details.Add($"{files} 个文件");
@@ -636,7 +645,12 @@ public sealed partial class MainWindow
                 if (message.Length > 0) details.Add($"最近错误：{message}");
             }
             if (failures > 0) details.Add($"连续失败 {failures} 次");
-            if (suspended) details.Add(L10n.T("已暂停：立即同步或重新保存设置可解锁"));
+            if (suspended)
+            {
+                details.Add(nextRetry.Length > 0
+                    ? $"退避冷却中 · 预计 {HistoryTime.Text(nextRetry)} 自动重试（立即同步可马上重试）"
+                    : L10n.T("退避冷却中（立即同步或重新保存设置可马上重试）"));
+            }
             var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
             row.Children.Add(new TextBlock
             {
@@ -666,7 +680,8 @@ public sealed partial class MainWindow
                 body.Children.Add(new TextBlock
                 {
                     Text = badge, FontSize = 12,
-                    Foreground = status is "synced" or "current" ? new SolidColorBrush(Colors.Green)
+                    Foreground = inProgress ? ThemeBrush("FireSkyCoolAccentBrush")
+                        : status is "synced" or "current" ? new SolidColorBrush(Colors.Green)
                         : status == "failed" ? new SolidColorBrush(Colors.Red)
                         : (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
                 });
@@ -715,7 +730,7 @@ public sealed partial class MainWindow
             var names = sources.Select(node => node?.GetValue<string>() ?? "")
                 .Where(name => name.Length > 0).ToList();
             if (names.Count == 0) return;
-            await RunDataSyncRound(names);
+            await RunDataSyncRound(names, autoTick: true);
             Status.Text = online ? L10n.T("本地引擎已连接") : Status.Text;
         }
         catch (Exception)

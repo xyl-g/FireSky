@@ -56,6 +56,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import org.json.JSONObject
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -656,6 +657,71 @@ private fun DataSyncSection(store: WorkbenchStore, state: WorkbenchState) {
                     Text(stringResource(R.string.sync_save), fontSize = 12.sp)
                 }
             }
+            if (state.dataSyncLoaded) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
+                Text(
+                    stringResource(R.string.sync_status_title),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+                )
+                listOf("cams" to "CAMS", "gfs" to "GFS", "ec" to "EC").forEach { (key, label) ->
+                    SyncSourceStatusRow(
+                        label = label,
+                        sourceState = state.dataSyncState.optJSONObject(key) ?: JSONObject(),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SyncSourceStatusRow(label: String, sourceState: JSONObject) {
+    val result = sourceState.optJSONObject("last_result") ?: JSONObject()
+    val status = result.optString("status")
+    val cycle = sourceState.optString("last_cycle")
+    val failures = sourceState.optInt("consecutive_failures", 0)
+    val suspended = sourceState.optBoolean("suspended", false)
+    val inProgress = sourceState.optBoolean("in_progress", false)
+    val nextRetry = sourceState.optString("next_retry_at_utc")
+    val (badge, badgeColor) = when {
+        inProgress -> stringResource(R.string.sync_status_in_progress) to coolAccentColor()
+        status == "synced" -> stringResource(R.string.sync_status_synced) to Color(0xFF2E8B72)
+        status == "current" -> stringResource(R.string.sync_status_current) to Color(0xFF2E8B72)
+        status == "failed" -> stringResource(R.string.sync_status_failed) to MaterialTheme.colorScheme.error
+        status == "cancelled" -> stringResource(R.string.sync_status_cancelled) to MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+        else -> stringResource(R.string.sync_status_never) to MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+    }
+    val notes = buildList {
+        if (cycle.isNotEmpty()) add(stringResource(R.string.sync_last_cycle_fmt, cycle))
+        if (failures > 0) add(stringResource(R.string.sync_failures_fmt, failures))
+        if (suspended) {
+            if (nextRetry.isNotEmpty()) {
+                val formatted = runCatching {
+                    val instant = java.time.Instant.parse(nextRetry)
+                    java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm")
+                        .withZone(java.time.ZoneId.systemDefault())
+                        .format(instant)
+                }.getOrDefault(nextRetry)
+                add(stringResource(R.string.sync_cooldown_retry_fmt, formatted))
+            } else {
+                add(stringResource(R.string.sync_cooldown_manual_hint))
+            }
+        }
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(44.dp))
+            Text(badge, fontSize = 12.sp, color = badgeColor, fontWeight = FontWeight.Medium)
+        }
+        if (notes.isNotEmpty()) {
+            Text(
+                notes.joinToString(" · "),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                modifier = Modifier.padding(start = 54.dp),
+            )
         }
     }
 }

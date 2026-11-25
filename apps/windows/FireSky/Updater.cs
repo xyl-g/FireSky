@@ -34,6 +34,7 @@ public sealed class Updater
     private string message = "";
     private long receivedBytes;
     private long totalBytes;
+    private double bytesPerSecond;
     private bool autoCheck = true;
     private CancellationTokenSource? checkOperation;
     private CancellationTokenSource? downloadOperation;
@@ -43,6 +44,7 @@ public sealed class Updater
     public string Message => message;
     public long ReceivedBytes => receivedBytes;
     public long TotalBytes => totalBytes;
+    public double BytesPerSecond => bytesPerSecond;
     public bool AutoCheck => autoCheck;
     public bool IsUpdateAvailable => phase == Phase.Available;
 
@@ -156,10 +158,14 @@ public sealed class Updater
         var handler = new HttpClientHandler
         {
             UseProxy = true,
-            Proxy = EnvironmentProxy(),
             DefaultProxyCredentials = CredentialCache.DefaultCredentials,
             AutomaticDecompression = DecompressionMethods.None,
         };
+        // 仅在环境变量显式配置代理时覆盖；未配置时不赋值 null，避免关闭 Windows 系统代理（WinINET/PAC）。
+        if (EnvironmentProxy() is { } envProxy)
+        {
+            handler.Proxy = envProxy;
+        }
         var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(timeoutSeconds) };
         var version = CurrentVersion();
         client.DefaultRequestHeaders.UserAgent.ParseAdd(
@@ -170,15 +176,30 @@ public sealed class Updater
     private static IWebProxy? EnvironmentProxy()
     {
         var environment = Environment.GetEnvironmentVariables();
-        var proxy = (environment["https_proxy"] ?? environment["HTTPS_PROXY"]
+        var raw = (environment["https_proxy"] ?? environment["HTTPS_PROXY"]
             ?? environment["all_proxy"] ?? environment["ALL_PROXY"]) as string;
+        var proxy = raw?.Trim();
         if (string.IsNullOrWhiteSpace(proxy)) return null;
         try
         {
-            if (!proxy.Contains("://")) proxy = $"http://{proxy}";
+            if (!proxy.Contains("://", StringComparison.Ordinal)) proxy = $"http://{proxy}";
             return new WebProxy(new Uri(proxy));
         }
         catch (UriFormatException) { return null; }
+    }
+
+    public void OpenDownloadInBrowser()
+    {
+        var url = info?.AssetUrl ?? $"https://github.com/{Repository}/releases/latest";
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception error)
+        {
+            message = FriendlyUpdateError(error);
+            Notify();
+        }
     }
 
     private sealed class UpdateException(string message) : Exception(message);
@@ -283,6 +304,7 @@ public sealed class Updater
         phase = Phase.Downloading;
         receivedBytes = 0;
         totalBytes = target.AssetBytes;
+        bytesPerSecond = 0;
         message = "";
         Notify();
         downloadOperation?.Cancel();
@@ -293,6 +315,7 @@ public sealed class Updater
         {
             var archive = await DownloadZip(target, token);
             await VerifyChecksum(target, archive, token);
+            bytesPerSecond = 0;
             phase = Phase.Installing;
             Notify();
             await InstallArchive(target, archive);
@@ -302,12 +325,14 @@ public sealed class Updater
         }
         catch (OperationCanceledException) when (token.IsCancellationRequested)
         {
+            bytesPerSecond = 0;
             phase = Phase.Available;
             message = L10n.T("已取消下载；未安装任何内容。");
             Notify();
         }
         catch (Exception error)
         {
+            bytesPerSecond = 0;
             phase = Phase.Failed;
             message = FriendlyUpdateError(error);
             Notify();
@@ -320,7 +345,7 @@ public sealed class Updater
         downloadOperation?.Cancel();
     }
 
-    /// <summary>流式下载 zip 到临时目录，按 1 MiB 落盘并刷新进度。</summary>
+    /// <summary>流式下载 zip 到临时目录，按 1 MiB 落盘并节流刷新进度与实时速度。</summary>
     private async Task<string> DownloadZip(Info target, CancellationToken token)
     {
         using var client = MakeClient(600);
@@ -335,8 +360,12 @@ public sealed class Updater
         Directory.CreateDirectory(Path.GetDirectoryName(archive)!);
         if (File.Exists(archive)) File.Delete(archive);
         await using var stream = await response.Content.ReadAsStreamAsync(token);
-        await using var output = new FileStream(archive, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        await using var output = new FileStream(archive, FileMode.CreateNew, FileAccess.Write, FileShare.None,
+            bufferSize: 1 << 20, FileOptions.Asynchronous | FileOptions.SequentialScan);
         var buffer = new byte[1 << 20];
+        var sw = Stopwatch.StartNew();
+        long lastNotifyMs = 0;
+        long lastNotifyBytes = 0;
         while (true)
         {
             token.ThrowIfCancellationRequested();
@@ -344,7 +373,17 @@ public sealed class Updater
             if (read == 0) break;
             await output.WriteAsync(buffer.AsMemory(0, read), token);
             receivedBytes += read;
+            var elapsedMs = sw.ElapsedMilliseconds - lastNotifyMs;
+            if (elapsedMs >= 200)
+            {
+                var instant = (receivedBytes - lastNotifyBytes) / (elapsedMs / 1000.0);
+                bytesPerSecond = bytesPerSecond > 0 ? (0.3 * instant + 0.7 * bytesPerSecond) : instant;
+                lastNotifyMs = sw.ElapsedMilliseconds;
+                lastNotifyBytes = receivedBytes;
+                Notify();
+            }
         }
+        Notify();
         if (totalBytes > 0 && receivedBytes != totalBytes)
         {
             File.Delete(archive);

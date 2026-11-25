@@ -90,17 +90,20 @@ public sealed partial class MainWindow
         if (phase == Updater.Phase.Downloading)
         {
             var total = updater.TotalBytes;
+            var speedSuffix = updater.BytesPerSecond > 0
+                ? $" · {FormatBytes((long)updater.BytesPerSecond)}/s"
+                : "";
             UpdaterDownloadBar.IsIndeterminate = total <= 0;
             if (total > 0)
             {
                 UpdaterDownloadBar.Maximum = total;
                 UpdaterDownloadBar.Value = updater.ReceivedBytes;
                 UpdaterDownloadText.Text =
-                    $"已下载 {FormatBytes(updater.ReceivedBytes)} / {FormatBytes(total)}";
+                    $"已下载 {FormatBytes(updater.ReceivedBytes)} / {FormatBytes(total)}{speedSuffix}";
             }
             else
             {
-                UpdaterDownloadText.Text = $"已下载 {FormatBytes(updater.ReceivedBytes)}";
+                UpdaterDownloadText.Text = $"已下载 {FormatBytes(updater.ReceivedBytes)}{speedSuffix}";
             }
         }
         // 侧栏设置入口绿色徽标（更新入口在设置 → 通用）。
@@ -143,6 +146,9 @@ public sealed partial class MainWindow
 
     private void OnCancelUpdateDownload(object sender, RoutedEventArgs args)
         => updater.CancelDownload();
+
+    private void OnOpenUpdateInBrowser(object sender, RoutedEventArgs args)
+        => updater.OpenDownloadInBrowser();
 
     private void OnUpdaterAutoCheckToggled(object sender, RoutedEventArgs args)
     {

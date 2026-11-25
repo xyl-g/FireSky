@@ -92,6 +92,16 @@
     <string name="sync_now">立即同步</string>
     <string name="sync_save">保存同步设置</string>
     <string name="sync_status_title">同步状态</string>
+    <string name="sync_status_in_progress">后台同步中</string>
+    <string name="sync_status_synced">已同步</string>
+    <string name="sync_status_current">已是最新</string>
+    <string name="sync_status_failed">失败</string>
+    <string name="sync_status_cancelled">已取消</string>
+    <string name="sync_status_never">从未同步</string>
+    <string name="sync_last_cycle_fmt">最近周期 %1$s</string>
+    <string name="sync_failures_fmt">连续失败 %1$d 次</string>
+    <string name="sync_cooldown_retry_fmt">退避冷却中 · 预计 %1$s 自动重试</string>
+    <string name="sync_cooldown_manual_hint">退避冷却中 · 立即同步可马上重试</string>
     <string name="sync_configured_on">后台同步已启用</string>
     <string name="sync_configured_off">已配置，当前关闭</string>
     <string name="retention_section">存储与保留</string>

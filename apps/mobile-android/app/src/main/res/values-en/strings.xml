@@ -92,6 +92,16 @@
     <string name="sync_now">Sync now</string>
     <string name="sync_save">Save sync settings</string>
     <string name="sync_status_title">Sync status</string>
+    <string name="sync_status_in_progress">Syncing in background</string>
+    <string name="sync_status_synced">Synced</string>
+    <string name="sync_status_current">Up to date</string>
+    <string name="sync_status_failed">Failed</string>
+    <string name="sync_status_cancelled">Cancelled</string>
+    <string name="sync_status_never">Never synced</string>
+    <string name="sync_last_cycle_fmt">Latest cycle %1$s</string>
+    <string name="sync_failures_fmt">%1$d consecutive failures</string>
+    <string name="sync_cooldown_retry_fmt">Cooling down · auto retry at %1$s</string>
+    <string name="sync_cooldown_manual_hint">Cooling down · tap Sync Now to retry</string>
     <string name="sync_configured_on">Background sync enabled</string>
     <string name="sync_configured_off">Configured, currently off</string>
     <string name="retention_section">Storage &amp; Retention</string>

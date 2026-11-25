@@ -71,5 +71,23 @@ struct UpdaterChecks {
                          digest)
         }
         try? FileManager.default.removeItem(at: temporary)
+        // 代理配置解析：无环境变量时保持 nil（默认走 macOS 系统代理）；HTTP(S) 补全 HTTPS 键；SOCKS 仅配 SOCKS。
+        precondition(Updater.proxyDictionary(environment: [:]) == nil)
+        precondition(Updater.proxyDictionary(environment: ["HTTPS_PROXY": "  "]) == nil)
+        let httpProxy = Updater.proxyDictionary(environment: ["HTTPS_PROXY": "http://127.0.0.1:7890"])
+        precondition(httpProxy != nil)
+        precondition((httpProxy?[kCFNetworkProxiesHTTPEnable as String] as? Bool) == true)
+        precondition((httpProxy?["HTTPSEnable"] as? Bool) == true)
+        precondition((httpProxy?["HTTPSProxy"] as? String) == "127.0.0.1")
+        precondition((httpProxy?["HTTPSPort"] as? Int) == 7890)
+        let bareProxy = Updater.proxyDictionary(environment: ["https_proxy": "127.0.0.1:7890"])
+        precondition((bareProxy?["HTTPSEnable"] as? Bool) == true)
+        precondition((bareProxy?["HTTPSProxy"] as? String) == "127.0.0.1")
+        precondition((bareProxy?["HTTPSPort"] as? Int) == 7890)
+        let socksProxy = Updater.proxyDictionary(environment: ["ALL_PROXY": "socks5://127.0.0.1:7891"])
+        precondition((socksProxy?["SOCKSEnable"] as? Bool) == true)
+        precondition((socksProxy?["SOCKSProxy"] as? String) == "127.0.0.1")
+        precondition((socksProxy?["SOCKSPort"] as? Int) == 7891)
+        precondition(socksProxy?["HTTPSEnable"] == nil)
     }
 }

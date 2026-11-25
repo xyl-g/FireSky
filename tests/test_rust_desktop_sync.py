@@ -267,6 +267,21 @@ def test_three_failed_rounds_trip_the_breaker_and_manual_channels_unlock(
         due = call("due", "data_sync_due", {"now_utc": NOW})["result"]
         assert due["sources"]["cams"]["reason"] == "suspended_failures"
         assert due["due_for_any"] is False
+        # Cooldown exposes next_retry_at_utc, stays blocked inside cooldown,
+        # and automatically becomes due (half-open retry) once cooldown elapses!
+        attempt = read_state_source(tmp_path, "cams")["last_attempt_utc"]
+        assert due["sources"]["cams"]["next_retry_at_utc"] is not None
+        status_res = call("status", "data_sync_settings", {})["result"]
+        assert status_res["state"]["sources"]["cams"]["next_retry_at_utc"] is not None
+        from datetime import datetime, timedelta
+        attempt_dt = datetime.fromisoformat(attempt.replace("Z", "+00:00"))
+        due_after_cooldown = call(
+            "due-after",
+            "data_sync_due",
+            {"now_utc": (attempt_dt + timedelta(minutes=61)).isoformat().replace("+00:00", "Z")},
+        )["result"]
+        assert due_after_cooldown["due_for_any"] is True
+        assert due_after_cooldown["sources"]["cams"]["reason"] == "retry_after_cooldown"
         # Unlock channel one (design 8.3/16-1): re-saving settings clears the
         # breaker but keeps last_cycle/last_result bookkeeping intact.
         saved = call(
@@ -285,6 +300,20 @@ def test_three_failed_rounds_trip_the_breaker_and_manual_channels_unlock(
         assert state["suspended"] is False
         assert state["consecutive_failures"] == 1
         assert state["last_cycle"] is None
+        # Holding per-source sync-cams.lock reports sync_in_progress only for
+        # cams without blocking gfs.
+        import fcntl
+        lock_file = state_path(tmp_path).with_name("sync-cams.lock")
+        with open(lock_file, "w") as fh:
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            try:
+                call("save-all", "save_data_sync_settings", {"settings": all_sources_settings()})
+                due_locked = call("due-locked", "data_sync_due", {"now_utc": NOW})["result"]
+                assert due_locked["sources"]["cams"]["reason"] == "sync_in_progress"
+                assert due_locked["sources"]["cams"]["in_progress"] is True
+                assert due_locked["sources"]["gfs"]["in_progress"] is False
+            finally:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 
 def test_failed_round_refuses_fallback_and_preserves_existing_cache(

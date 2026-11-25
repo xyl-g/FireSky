@@ -1995,7 +1995,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                   let sources = due["due_sources"] as? [String], !sources.isEmpty else { return }
             // tick 静默（设计 11.3）：轮级错误不写界面文案，逐源结果留在
             // 状态文件与任务历史，下个心跳重新判定。
-            _ = await runDataSyncRound(sources: sources)
+            _ = await runDataSyncRound(sources: sources, paramsOverride: ["sources": sources, "auto_tick": true])
         } catch {
             // tick 保持静默：失败留在每源状态与任务历史里，下个心跳重新判定。
         }
@@ -2012,7 +2012,11 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     /// busy 由 store.busy 表达手动会话，同步不占用它。返回轮次结果与轮级
     /// 错误：每源成败写在状态文件与任务历史里，但轮级拒绝（busy 让路、
     /// 源未启用、状态写盘失败）不会进入任何持久记录，手动路径必须展示。
-    private func runDataSyncRound(sources: [String], force: Bool = false) async -> (response: JSONObject?, error: Error?) {
+    private func runDataSyncRound(
+        sources: [String],
+        force: Bool = false,
+        paramsOverride: JSONObject? = nil
+    ) async -> (response: JSONObject?, error: Error?) {
         dataSyncRunning = true
         dataSyncProgress = [:]
         dataSyncActiveSource = ""
@@ -2022,7 +2026,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         }
         var response: JSONObject?
         var roundError: Error?
-        var params: JSONObject = ["sources": sources]
+        var params: JSONObject = paramsOverride ?? ["sources": sources]
         if force { params["force"] = true }
         do {
             response = try await engine.call("data_sync_run", params,
@@ -2081,6 +2085,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             case "current": text = "已是最新"
             case "failed": text = "失败"
             case "cancelled": text = "已取消"
+            case "in_progress": text = "后台同步中"
             default: text = status.isEmpty ? "无结果" : status
             }
             return "\(labels[name] ?? name) \(text)"

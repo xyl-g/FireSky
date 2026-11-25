@@ -35,13 +35,18 @@ use std::{
 const MAX_BYTES: u64 = 16 * 1024;
 const SETTINGS_CONTRACT: &str = "rust-data-sync-settings-v1";
 const STATE_CONTRACT: &str = "rust-data-sync-state-v1";
-const SOURCES: [&str; 3] = ["cams", "gfs", "ec"];
+/// Fast sources (`gfs`, `ec`) always execute before slow ADS-queued `cams`.
+const SOURCES: [&str; 3] = ["gfs", "ec", "cams"];
 const MIN_INTERVAL_MINUTES: u32 = 5;
 const MAX_INTERVAL_MINUTES: u32 = 1440;
 const MIN_LEAD_HORIZON_HOURS: u32 = 3;
 const MAX_LEAD_HORIZON_HOURS: u32 = 240;
-/// Circuit-breaker threshold adopted from design section 16 decision 1.
+/// Circuit-breaker cooldown threshold: at 3+ consecutive failures a source
+/// enters exponential backoff (`30m -> 60m -> 120m -> 240m`) rather than
+/// halting indefinitely.
 const SUSPENSION_THRESHOLD: u32 = 3;
+const MIN_COOLDOWN_MINUTES: i64 = 30;
+const MAX_COOLDOWN_MINUTES: i64 = 240;
 /// Publication probes reuse the bounded `desktop_publications` timeout
 /// contract (upper limit 60 s; results carry its 300 s cache).
 const PROBE_TIMEOUT_SECONDS: f64 = 60.0;
@@ -238,18 +243,38 @@ fn retention_configured(workspace: &Path) -> Result<bool, String> {
 }
 
 /// Merged settings + state + retention status (design 9/11.1: the macOS page
-/// renders the per-source last_cycle/last_result rows and the unconfigured-
-/// retention soft warning from this single response).
+/// renders the per-source last_cycle/last_result rows and the backoff /
+/// cross-process active flags from this single response).
 pub fn status(workspace: &Path) -> Result<Value, String> {
     let file = settings_path(workspace);
     let settings = read_settings(&file)?;
     let state = read_state(&state_path(workspace));
+    let mut sources_json = serde_json::to_value(&state).unwrap_or_else(|_| json!({}));
+    if let Some(map) = sources_json.as_object_mut() {
+        for name in SOURCES {
+            if let (Some(src_state), Some(entry)) = (
+                state.source(name),
+                map.get_mut(name).and_then(Value::as_object_mut),
+            ) {
+                entry.insert(
+                    "in_progress".into(),
+                    json!(source_lock_active(workspace, name)),
+                );
+                let retry_json = settings
+                    .interval_minutes
+                    .and_then(|interval| next_retry_at(src_state, interval))
+                    .map(|ts| json!(time_contract::iso(ts)))
+                    .unwrap_or(Value::Null);
+                entry.insert("next_retry_at_utc".into(), retry_json);
+            }
+        }
+    }
     Ok(json!({
         "contract": SETTINGS_CONTRACT,
         "settings": settings,
         "configured": settings != Settings::default(),
         "path": file,
-        "state": {"contract": STATE_CONTRACT, "sources": state},
+        "state": {"contract": STATE_CONTRACT, "sources": sources_json},
         "retention_configured": retention_configured(workspace)?,
         "runtime_python_used": false,
     }))
@@ -410,20 +435,56 @@ fn with_state_lock<T>(operation: impl FnOnce() -> T) -> T {
     operation()
 }
 
+fn source_lock_path(state_file: &Path, name: &str) -> PathBuf {
+    state_file.with_file_name(format!("sync-{name}.lock"))
+}
+
+fn source_lock_active(workspace: &Path, name: &str) -> bool {
+    let path = source_lock_path(&state_path(workspace), name);
+    if !path.exists() {
+        return false;
+    }
+    crate::cache_lock::Lock::acquire(&path, 0.0).is_err()
+}
+
+/// Cooldown duration (minutes) before a suspended source automatically probes
+/// again: `30m -> 60m -> 120m -> 240m` (capped at 4h, floored by `interval_minutes`).
+fn cooldown_minutes(consecutive_failures: u32, interval_minutes: u32) -> i64 {
+    let base = i64::from(interval_minutes);
+    if consecutive_failures < SUSPENSION_THRESHOLD {
+        return base;
+    }
+    let tier = (consecutive_failures - SUSPENSION_THRESHOLD).min(3);
+    let step_base = base.max(MIN_COOLDOWN_MINUTES);
+    (step_base << tier).min(MAX_COOLDOWN_MINUTES).max(base)
+}
+
+fn next_retry_at(state: &SourceState, interval_minutes: u32) -> Option<DateTime<Utc>> {
+    if !state.suspended {
+        return None;
+    }
+    let attempt = state
+        .last_attempt_utc
+        .as_deref()
+        .and_then(|value| time_contract::parse_utc(value).ok())?;
+    Some(attempt + Duration::minutes(cooldown_minutes(state.consecutive_failures, interval_minutes)))
+}
+
 /// Per-source attempt bookkeeping, executed when that source actually starts:
-/// a manual round on a suspended source starts a fresh failure budget, and a
-/// source that is never reached (cancelled earlier in the round) consumes
-/// neither an attempt nor the unlock.
+/// manual rounds (`reset_breaker = true`) clear the failure budget immediately,
+/// while automatic cooldown retries (`reset_breaker = false`) preserve the
+/// failure count so repeated failures continue stepping through backoff tiers.
 fn commit_source_attempt(
     state_file: &Path,
     name: &str,
     now: DateTime<Utc>,
+    reset_breaker: bool,
 ) -> Result<SourceState, String> {
     with_state_lock(|| {
         let mut latest = read_state(state_file);
         let snapshot = latest.source(name).cloned().unwrap_or_default();
         if let Some(source) = latest.source_mut(name) {
-            if source.suspended {
+            if reset_breaker && source.suspended {
                 source.suspended = false;
                 source.consecutive_failures = 0;
             }
@@ -687,28 +748,42 @@ fn due_for_source(
     now: DateTime<Utc>,
     coverage_matches: bool,
 ) -> (bool, String) {
+    let mut after_cooldown = false;
     if state.suspended {
-        return (false, "suspended_failures".into());
+        match next_retry_at(state, interval_minutes) {
+            Some(next_at) if now >= next_at => {
+                after_cooldown = true;
+            }
+            _ => return (false, "suspended_failures".into()),
+        }
     }
-    if let Some(attempt) = state
-        .last_attempt_utc
-        .as_deref()
-        .and_then(|value| time_contract::parse_utc(value).ok())
-    {
-        if now - attempt < Duration::minutes(i64::from(interval_minutes)) {
-            return (false, "interval_not_elapsed".into());
+    if !after_cooldown {
+        if let Some(attempt) = state
+            .last_attempt_utc
+            .as_deref()
+            .and_then(|value| time_contract::parse_utc(value).ok())
+        {
+            if now - attempt < Duration::minutes(i64::from(interval_minutes)) {
+                return (false, "interval_not_elapsed".into());
+            }
         }
     }
     let Some(publication) = publication.filter(|p| p.verified && p.cycle.is_some()) else {
-        // v1.9.6 欠账重试：上一轮真实下载失败（非探测失败）且间隔已过时，
-        // 即使发布探测暂未核验也再次尝试——run() 会重新探测，ADS 恢复可达
-        // （如代理就绪）后自动补齐失败周期，无需手动干预。探测失败（网络
-        // 层，未消耗间隔）不触发重试，避免上游不可达时空转放大。
+        // v1.9.6 欠账重试 + 退避自愈：上一轮真实下载失败（非探测失败）且
+        // 间隔/冷却已过时，即使发布探测暂未核验也再次尝试——run() 会重新探测，
+        // ADS 恢复可达后自动补齐失败周期，无需手动干预。探测失败不触发重试。
         let retryable = state.last_result.as_ref().is_some_and(|result| {
             result["status"].as_str() == Some("failed") && result["probe_only"] != true
         });
         return if retryable {
-            (true, "retry_after_failure".into())
+            (
+                true,
+                if after_cooldown {
+                    "retry_after_cooldown".into()
+                } else {
+                    "retry_after_failure".into()
+                },
+            )
         } else {
             (false, "publication_unverified".into())
         };
@@ -760,8 +835,9 @@ fn probe_publications(
 }
 
 /// `data_sync_due`: no side effects beyond the shared publication-probe cache.
-/// A busy engine (manual prepare/forecast or a running sync round) reports
-/// `busy` without probing; disabled sources report `disabled`.
+/// A busy engine (manual prepare/forecast or an active in-process sync) reports
+/// `busy`; a per-source cross-process lock reports `sync_in_progress` only for
+/// that locked source while unlocked sources stay evaluable.
 pub fn due(workspace: &Path, busy: bool, now_utc: Option<&str>) -> Result<Value, String> {
     let settings = load(workspace)?;
     let state = read_state(&state_path(workspace));
@@ -773,14 +849,28 @@ pub fn due(workspace: &Path, busy: bool, now_utc: Option<&str>) -> Result<Value,
     } else {
         Vec::new()
     };
-    let publications = if names.is_empty() || busy {
+    let in_progress_sources: Vec<&'static str> = if busy {
+        Vec::new()
+    } else {
+        names
+            .iter()
+            .copied()
+            .filter(|name| source_lock_active(workspace, name))
+            .collect()
+    };
+    let probe_names: Vec<&'static str> = names
+        .iter()
+        .copied()
+        .filter(|name| !in_progress_sources.contains(name))
+        .collect();
+    let publications = if probe_names.is_empty() || busy {
         Map::new()
     } else {
         // Enabled settings always carry an interval (validated on save/load).
         settings
             .interval_minutes
             .ok_or("data sync interval is not configured")?;
-        probe_publications(&names, now_utc, false)?
+        probe_publications(&probe_names, now_utc, false)?
     };
     let now = match now_utc {
         Some(value) => time_contract::parse_utc(value)?,
@@ -789,12 +879,20 @@ pub fn due(workspace: &Path, busy: bool, now_utc: Option<&str>) -> Result<Value,
     let mut sources = Map::new();
     let mut due_sources = Vec::new();
     for name in SOURCES {
+        let in_progress = in_progress_sources.contains(&name);
         let state_fields = |source: &SourceState| {
+            let next_retry = settings
+                .interval_minutes
+                .and_then(|interval| next_retry_at(source, interval))
+                .map(|ts| json!(time_contract::iso(ts)))
+                .unwrap_or(Value::Null);
             json!({
                 "suspended": source.suspended,
                 "consecutive_failures": source.consecutive_failures,
                 "last_cycle": source.last_cycle,
                 "last_attempt_utc": source.last_attempt_utc,
+                "next_retry_at_utc": next_retry,
+                "in_progress": in_progress,
             })
         };
         let Some(source_state) = state.source(name) else {
@@ -814,6 +912,19 @@ pub fn due(workspace: &Path, busy: bool, now_utc: Option<&str>) -> Result<Value,
         }
         if busy {
             let mut row = json!({"due": false, "reason": "busy", "publication": Value::Null});
+            if let Some(fields) = row.as_object_mut() {
+                if let Some(state_json) = state_fields(source_state).as_object() {
+                    for (key, value) in state_json {
+                        fields.insert(key.clone(), value.clone());
+                    }
+                }
+            }
+            sources.insert(name.to_owned(), row);
+            continue;
+        }
+        if in_progress {
+            let mut row =
+                json!({"due": false, "reason": "sync_in_progress", "publication": Value::Null});
             if let Some(fields) = row.as_object_mut() {
                 if let Some(state_json) = state_fields(source_state).as_object() {
                     for (key, value) in state_json {
@@ -1343,64 +1454,67 @@ pub fn run(
 
     let state_file = state_path(context.workspace);
     let task_json = task_id.map(|value| json!(value)).unwrap_or(Value::Null);
+    let auto_tick = params
+        .get("auto_tick")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
 
-    // Cross-process round lock: a scheduled helper (launchd / Task Scheduler)
-    // and the app are separate processes, so the in-process `sync` mutex cannot
-    // coordinate them. Try-lock (0s): contention means another process is
-    // already running a round; fail visibly instead of double-downloading.
-    let lock_path = state_file.with_file_name("sync.lock");
-    if let Some(parent) = lock_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    let _round_lock = crate::cache_lock::Lock::acquire(&lock_path, 0.0)
-        .map_err(|_| {
-            // Name the holder when known: the lock file carries the owning PID
-            // so a yielding round (and the UI) can tell which process is syncing
-            // instead of guessing "the background helper".
-            let holder = std::fs::read_to_string(&lock_path)
-                .ok()
-                .and_then(|text| text.trim().parse::<u32>().ok())
-                .filter(|pid| *pid > 0);
-            match holder {
-                Some(pid) => {
-                    format!("another data sync round is active in another process (pid {pid})")
-                }
-                None => "another data sync round is active in another process".to_string(),
-            }
-        })?;
-    // Record this round's PID for contenders; the flock stays on the open fd
-    // held by `_round_lock`, so rewriting the content does not release it.
-    let _ = std::fs::write(&lock_path, std::process::id().to_string());
+    // Filter out sources already actively locked by another process so an
+    // hour-long CAMS ADS queue never blocks GFS/EC or wastes a probe call.
+    let probe_targets: Vec<&'static str> = requested
+        .iter()
+        .copied()
+        .filter(|name| !source_lock_active(context.workspace, name))
+        .collect();
 
     // The publication probe runs before ANY state write: a failed probe
     // consumes neither the interval gate nor the breaker budget, and the
     // per-source failed rows keep the state file consistent with reality.
-    let publications = match probe_publications(&requested, None, force) {
-        Ok(value) => value,
-        Err(error) => {
-            commit_probe_failure(&state_file, &requested, &error, task_id)?;
-            let mut results = Map::new();
-            for name in &requested {
-                results.insert(
-                    (*name).to_owned(),
-                    json!({
-                        "status": "failed",
-                        "cycle": Value::Null,
-                        "cycle_label": Value::Null,
-                        "publication_verified": false,
-                        "error": clip(&error, 800),
-                        "retention": Value::Null,
-                        "task_id": task_json,
-                    }),
-                );
+    let publications = if probe_targets.is_empty() {
+        Map::new()
+    } else {
+        match probe_publications(&probe_targets, None, force) {
+            Ok(value) => value,
+            Err(error) => {
+                commit_probe_failure(&state_file, &probe_targets, &error, task_id)?;
+                let mut results = Map::new();
+                for name in &requested {
+                    if probe_targets.contains(name) {
+                        results.insert(
+                            (*name).to_owned(),
+                            json!({
+                                "status": "failed",
+                                "cycle": Value::Null,
+                                "cycle_label": Value::Null,
+                                "publication_verified": false,
+                                "error": clip(&error, 800),
+                                "retention": Value::Null,
+                                "task_id": task_json,
+                            }),
+                        );
+                    } else {
+                        results.insert(
+                            (*name).to_owned(),
+                            json!({
+                                "status": "in_progress",
+                                "cycle": Value::Null,
+                                "cycle_label": Value::Null,
+                                "publication_verified": false,
+                                "message": format!("{} 后台同步仍在进行中，本轮跳过", source_label(name)),
+                                "retention": Value::Null,
+                                "task_id": task_json,
+                            }),
+                        );
+                    }
+                }
+                return Ok(json!({
+                    "contract": "rust-data-sync-v1",
+                    "runtime_python_used": false,
+                    "started_at_utc": started_at,
+                    "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
+                    "sources": Value::Object(results),
+                }));
             }
-            return Ok(json!({
-                "contract": "rust-data-sync-v1",
-                "runtime_python_used": false,
-                "started_at_utc": started_at,
-                "elapsed_ms": started.elapsed().as_secs_f64() * 1000.0,
-                "sources": Value::Object(results),
-            }));
         }
     };
 
@@ -1452,6 +1566,50 @@ pub fn run(
             results.insert((*name).to_owned(), source);
             continue;
         }
+        // Per-source cross-process lock (`sync-{name}.lock`): guarantees the same
+        // source is never downloaded twice concurrently while letting unlocked fast
+        // sources (`gfs`/`ec`) run freely even when `cams` is queued in ADS.
+        let lock_path = source_lock_path(&state_file, name);
+        if let Some(parent) = lock_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let _source_lock = match crate::cache_lock::Lock::acquire(&lock_path, 0.0) {
+            Ok(guard) => {
+                // Keep the open fd holding the flock while updating the PID hint.
+                let _ = std::fs::write(&lock_path, std::process::id().to_string());
+                guard
+            }
+            Err(_) => {
+                let holder = std::fs::read_to_string(&lock_path)
+                    .ok()
+                    .and_then(|text| text.trim().parse::<u32>().ok())
+                    .filter(|pid| *pid > 0);
+                let message = match holder {
+                    Some(pid) => format!(
+                        "{} 后台同步仍在进行中（pid {pid}），本轮跳过",
+                        source_label(name)
+                    ),
+                    None => format!("{} 后台同步仍在进行中，本轮跳过", source_label(name)),
+                };
+                let source = json!({
+                    "status": "in_progress",
+                    "cycle": cycle_json.clone(),
+                    "cycle_label": label_json.clone(),
+                    "publication_verified": verified,
+                    "message": message,
+                    "retention": Value::Null,
+                    "task_id": task_json.clone(),
+                });
+                let _ = progress(json!({
+                    "stage": "sync",
+                    "percent": (index + 1) * 100 / total,
+                    "source": name,
+                    "message": message,
+                }));
+                results.insert((*name).to_owned(), source);
+                continue;
+            }
+        };
         let message = format!("正在同步 {} 最新周期", source_label(name));
         if progress(
             json!({"stage":"sync","percent":index * 100 / total,"source":name,"message":message}),
@@ -1470,13 +1628,14 @@ pub fn run(
             results.insert((*name).to_owned(), source);
             continue;
         }
-        // This source actually starts now: the short critical section unlocks
-        // a suspended source (manual channel, design 8.3) and records its
-        // attempt. Sources cancelled before their turn consume neither.
+        // This source actually starts now: manual runs reset the breaker
+        // immediately; automatic cooldown retries keep consecutive_failures
+        // intact so repeated failures escalate cleanly (`30m -> 60m -> 120m -> 240m`).
         let source_state = match commit_source_attempt(
             &state_file,
             name,
             DateTime::<Utc>::from(SystemTime::now()),
+            !auto_tick,
         ) {
             Ok(snapshot) => snapshot,
             Err(error) => return Err(error),
@@ -1837,44 +1996,14 @@ mod tests {
     }
 
     #[test]
-    fn run_fails_visibly_when_another_process_holds_the_round_lock() {
+    fn run_skips_locked_source_in_progress_and_preserves_failures() {
         let workspace = tempfile::tempdir().unwrap();
         save(workspace.path(), json!({"settings": settings_enabled()})).unwrap();
-        let lock_path = state_path(workspace.path()).with_file_name("sync.lock");
+        let lock_path = source_lock_path(&state_path(workspace.path()), "cams");
         fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
         // flock is per open-file-description, so a second fd in this process
         // contends exactly like a separate helper process would.
         let _held = crate::cache_lock::Lock::acquire(&lock_path, 0.0).unwrap();
-        let context = RunContext {
-            workspace: workspace.path(),
-            cams_cache_dir: workspace.path().join("cams"),
-            gfs_cache_dir: workspace.path().join("gfs"),
-            ecmwf_cache_dir: workspace.path().join("ec"),
-        };
-        let cancel = std::sync::atomic::AtomicBool::new(false);
-        let err = run(
-            &context,
-            json!({"sources": ["cams"]}),
-            None,
-            &cancel,
-            &|_| Ok(()),
-        )
-        .unwrap_err();
-        assert!(
-            err.contains("another data sync round is active in another process"),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn round_lock_busy_error_names_the_holder_pid() {
-        let workspace = tempfile::tempdir().unwrap();
-        save(workspace.path(), json!({"settings": settings_enabled()})).unwrap();
-        let lock_path = state_path(workspace.path()).with_file_name("sync.lock");
-        fs::create_dir_all(lock_path.parent().unwrap()).unwrap();
-        let _held = crate::cache_lock::Lock::acquire(&lock_path, 0.0).unwrap();
-        // A live holder writes its PID into the lock file; the yielding round
-        // must surface it so the UI can attribute the busy state correctly.
         fs::write(&lock_path, "4242").unwrap();
         let context = RunContext {
             workspace: workspace.path(),
@@ -1883,18 +2012,24 @@ mod tests {
             ecmwf_cache_dir: workspace.path().join("ec"),
         };
         let cancel = std::sync::atomic::AtomicBool::new(false);
-        let err = run(
+        let round = run(
             &context,
             json!({"sources": ["cams"]}),
             None,
             &cancel,
             &|_| Ok(()),
         )
-        .unwrap_err();
-        assert!(
-            err.contains("another data sync round is active in another process (pid 4242)"),
-            "{err}"
-        );
+        .unwrap();
+        assert_eq!(round["sources"]["cams"]["status"], "in_progress");
+        let message = round["sources"]["cams"]["message"].as_str().unwrap_or("");
+        assert!(message.contains("pid 4242"), "{message}");
+        let state = read_state(&state_path(workspace.path()));
+        assert_eq!(state.cams.consecutive_failures, 0);
+        assert_eq!(state.cams.suspended, false);
+        let due_value = due(workspace.path(), false, None).unwrap();
+        assert_eq!(due_value["sources"]["cams"]["reason"], "sync_in_progress");
+        assert_eq!(due_value["sources"]["cams"]["in_progress"], true);
+        assert_eq!(due_value["sources"]["gfs"]["in_progress"], false);
     }
 
     #[test]
@@ -2182,9 +2317,10 @@ mod tests {
         assert!(requested_sources(&json!({"sources": []})).is_err());
         assert!(requested_sources(&json!({"sources": ["satellite"]})).is_err());
         assert!(requested_sources(&json!({"sources": ["cams", 1]})).is_err());
+        assert_eq!(SOURCES, ["gfs", "ec", "cams"]);
         assert_eq!(
             requested_sources(&json!({"sources": ["ec", "cams", "ec"]})).unwrap(),
-            vec!["cams", "ec"]
+            vec!["ec", "cams"]
         );
     }
 
@@ -2285,9 +2421,8 @@ mod tests {
         fs::create_dir_all(state_file.parent().unwrap()).unwrap();
         persist_state(&state_file, &state_with_failures(3, true)).unwrap();
         let now = Utc.with_ymd_and_hms(2026, 11, 13, 15, 0, 0).unwrap();
-        // The snapshot returned before the unlock is what the round uses for
-        // its current-cycle comparison.
-        let snapshot = commit_source_attempt(&state_file, "cams", now).unwrap();
+        // Manual run resets breaker immediately (`reset_breaker = true`).
+        let snapshot = commit_source_attempt(&state_file, "cams", now, true).unwrap();
         assert_eq!(snapshot.consecutive_failures, 3);
         let committed = read_state(&state_file);
         assert_eq!(committed.cams.suspended, false);
@@ -2296,6 +2431,24 @@ mod tests {
             committed.cams.last_attempt_utc.as_deref(),
             Some("2026-11-13T15:00:00+00:00")
         );
+        // Automatic background retry preserves `consecutive_failures` so a repeat
+        // failure escalates through the cooldown tiers instead of resetting to 1.
+        persist_state(&state_file, &state_with_failures(3, true)).unwrap();
+        let _ = commit_source_attempt(&state_file, "cams", now, false).unwrap();
+        let auto_committed = read_state(&state_file);
+        assert_eq!(auto_committed.cams.suspended, true);
+        assert_eq!(auto_committed.cams.consecutive_failures, 3);
+        let outcomes = vec![RoundOutcome {
+            name: "cams".into(),
+            status: "failed",
+            last_cycle: None,
+            coverage_fingerprint: None,
+            source: json!({"error": "ads failed"}),
+        }];
+        commit_round_outcomes(&state_file, &outcomes, None).unwrap();
+        let escalated = read_state(&state_file);
+        assert_eq!(escalated.cams.consecutive_failures, 4);
+        assert_eq!(escalated.cams.suspended, true);
         // A source cancelled before its turn is never committed at all: gfs
         // keeps neither an attempt nor state changes.
         let committed = read_state(&state_file);
@@ -2488,6 +2641,47 @@ mod tests {
         assert_eq!(
             asset_transfer_budget(std::time::Duration::from_secs(10), 120.0, 512 * 1024 * 1024),
             std::time::Duration::from_secs(10)
+        );
+    }
+
+    #[test]
+    fn cooldown_exponential_backoff_and_half_open_auto_recovery() {
+        assert_eq!(cooldown_minutes(1, 15), 15);
+        assert_eq!(cooldown_minutes(2, 15), 15);
+        assert_eq!(cooldown_minutes(3, 15), 30);
+        assert_eq!(cooldown_minutes(4, 15), 60);
+        assert_eq!(cooldown_minutes(5, 15), 120);
+        assert_eq!(cooldown_minutes(6, 15), 240);
+        assert_eq!(cooldown_minutes(10, 15), 240);
+        assert_eq!(cooldown_minutes(3, 60), 60);
+        assert_eq!(cooldown_minutes(4, 60), 120);
+        assert_eq!(cooldown_minutes(5, 60), 240);
+        assert_eq!(cooldown_minutes(3, 360), 360);
+
+        let now = Utc.with_ymd_and_hms(2026, 11, 25, 4, 0, 0).unwrap();
+        let cycle = Utc.with_ymd_and_hms(2026, 11, 25, 0, 0, 0).unwrap();
+        let state = SourceState {
+            suspended: true,
+            consecutive_failures: 3,
+            last_attempt_utc: Some(time_contract::iso(now - Duration::minutes(20))),
+            last_result: Some(json!({"status": "failed", "errors": ["ADS job ended with status failed"]})),
+            ..Default::default()
+        };
+        // Still inside 30-minute cooldown -> stays paused.
+        assert_eq!(
+            due_for_source(&state, 15, Some(&publication(Some(cycle), true)), now, false),
+            (false, "suspended_failures".into())
+        );
+        // Past 30-minute cooldown -> half-open auto-retry!
+        let past = now + Duration::minutes(11);
+        assert_eq!(
+            due_for_source(&state, 15, Some(&publication(Some(cycle), true)), past, false),
+            (true, "new_cycle:2026-11-13 12Z".into())
+        );
+        // Even if publication probe is temporarily unverified, real failure auto-retries after cooldown.
+        assert_eq!(
+            due_for_source(&state, 15, None, past, false),
+            (true, "retry_after_cooldown".into())
         );
     }
 }

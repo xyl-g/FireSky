@@ -111,6 +111,7 @@ func statusText(_ status: String) -> String {
     case "current": return "已是最新"
     case "failed": return "失败"
     case "cancelled": return "已取消"
+    case "in_progress": return "后台同步中"
     default: return status.isEmpty ? "无结果" : status
     }
 }

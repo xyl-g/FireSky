@@ -753,7 +753,7 @@ impl Runtime {
                         gfs_cache_dir: self.inventory.gfs_cache_dir.clone(),
                         ecmwf_cache_dir: self.inventory.ecmwf_cache_dir.clone(),
                     },
-                    json!({ "sources": sources }),
+                    json!({ "sources": sources, "auto_tick": true }),
                     task_id,
                     &cancel,
                     &progress,
