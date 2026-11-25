@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		00E1E39F26737DBE101F7F77 /* RemoteHttpTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA17F045258BA0753FAB78CF /* RemoteHttpTransportTests.swift */; };
 		0FEF9C69BB160C56A5839D53 /* MapZoom.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4058C36876785CBDCC9A297 /* MapZoom.swift */; };
+		10801C0ECC2E05D6571E122B /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EC80A282A8C6939A18715435 /* Assets.xcassets */; };
 		146251A5F7BE8C96EFC89EEE /* WorkbenchKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1CFF6D650BEE78B45DDC04D /* WorkbenchKit.swift */; };
 		1F6B4BDE8156F49B412B9F64 /* EngineTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6847846E81761D5EF31E3F31 /* EngineTransport.swift */; };
 		2FE8DB5D775590EF59211867 /* ObservationDate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FDCF5F598D054D3E7C573BA /* ObservationDate.swift */; };
@@ -98,6 +99,7 @@
 		D1409135B9272E743DE3E0F6 /* FireSkyMobileUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FireSkyMobileUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D81B4D235B3643D578531E81 /* FireSkyMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FireSkyMobileApp.swift; sourceTree = "<group>"; };
 		EA17F045258BA0753FAB78CF /* RemoteHttpTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHttpTransportTests.swift; sourceTree = "<group>"; };
+		EC80A282A8C6939A18715435 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		F87B853B985D90E3FC45AAE8 /* RegionalWorkbenchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegionalWorkbenchView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -157,6 +159,7 @@
 		654C8812EEF35B7133EB72B7 /* FireSkyMobile */ = {
 			isa = PBXGroup;
 			children = (
+				EC80A282A8C6939A18715435 /* Assets.xcassets */,
 				7A0581E99BA2990A41972A34 /* Info.plist */,
 				566BB7E73D68300A72E87A2E /* App */,
 				EA151607D0B521BFF26D33E2 /* Engine */,
@@ -262,6 +265,7 @@
 			buildConfigurationList = F8C704F7E06479ABAA1EC378 /* Build configuration list for PBXNativeTarget "FireSkyMobile" */;
 			buildPhases = (
 				E88DC2A698FDF4825DCCD67B /* Sources */,
+				543531D1D16897D0920287E5 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -315,6 +319,17 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		543531D1D16897D0920287E5 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				10801C0ECC2E05D6571E122B /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		21C582B9D9252B20BA672CC6 /* Sources */ = {

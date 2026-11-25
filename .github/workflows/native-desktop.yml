@@ -305,6 +305,9 @@ jobs:
           test -d "$APP_PATH"
           mkdir -p "$RUNNER_TEMP/ipa-stage/Payload"
           cp -R "$APP_PATH" "$RUNNER_TEMP/ipa-stage/Payload/"
+          # Add a standard Ad-Hoc signature slot + CodeResources so sideloaders (AltStore/SideStore/Sideloadly) can re-sign cleanly.
+          codesign --force --deep --sign - "$RUNNER_TEMP/ipa-stage/Payload/FireSkyMobile.app"
+          otool -l "$RUNNER_TEMP/ipa-stage/Payload/FireSkyMobile.app/FireSkyMobile" | grep -q LC_CODE_SIGNATURE
           (cd "$RUNNER_TEMP/ipa-stage" && zip -qry "$RUNNER_TEMP/FireSky-ios-arm64.ipa" Payload)
           test -s "$RUNNER_TEMP/FireSky-ios-arm64.ipa"
       - name: Upload iOS IPA artifact
