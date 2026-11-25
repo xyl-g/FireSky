@@ -6,6 +6,14 @@ final class FireSkyMobileUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    private func assertDisappears(_ element: XCUIElement, timeout: TimeInterval = 5, message: String = "") {
+        if !element.exists { return }
+        let gone = NSPredicate(format: "exists == false")
+        let exp = XCTNSPredicateExpectation(predicate: gone, object: element)
+        let result = XCTWaiter.wait(for: [exp], timeout: timeout)
+        XCTAssertEqual(result, .completed, message.isEmpty ? "Element did not disappear within \(timeout)s: \(element)" : message)
+    }
+
     func testAppearanceSwitching() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-UITestMockMode", "-appLanguage", "zh"]
@@ -49,7 +57,7 @@ final class FireSkyMobileUITests: XCTestCase {
         attachment.lifetime = .keepAlways
         add(attachment)
         app.buttons["Cancel"].tap()
-        XCTAssertFalse(download.exists)
+        assertDisappears(download, timeout: 5, message: "取消后预检弹层未关闭")
     }
 
     func testPointForecastChain() throws {
@@ -85,7 +93,7 @@ final class FireSkyMobileUITests: XCTestCase {
         // forecast 完成 → hero 两侧模型状态为「预测完成」，sheet 关闭
         let done = app.staticTexts["预测完成"].firstMatch
         XCTAssertTrue(done.waitForExistence(timeout: 25), "预测完成后未出现结果摘要")
-        XCTAssertFalse(app.buttons["确定预测"].exists, "预测完成 sheet 应已关闭")
+        assertDisappears(app.buttons["确定预测"], timeout: 5, message: "预测完成 sheet 应已关闭")
     }
 
     func testReadOnlyTabsAndServerStatus() throws {
