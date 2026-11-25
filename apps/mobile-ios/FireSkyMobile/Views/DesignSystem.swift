@@ -199,6 +199,7 @@ struct FireSkySurface: ViewModifier {
         let shadowRadius: CGFloat = usesShadow ? (role == .content ? 10 : 7) : 0
         let shadowY: CGFloat = usesShadow ? (role == .content ? 4 : 2) : 0
         if usesSystemMaterial {
+            #if compiler(>=6.2)
             if #available(iOS 26.0, *) {
                 Color.clear.glassEffect(.regular, in: .rect(cornerRadius: radius))
                     .shadow(color: shadowColor, radius: shadowRadius, y: shadowY)
@@ -206,6 +207,10 @@ struct FireSkySurface: ViewModifier {
                 RoundedRectangle(cornerRadius: radius).fill(.regularMaterial)
                     .shadow(color: shadowColor, radius: shadowRadius, y: shadowY)
             }
+            #else
+            RoundedRectangle(cornerRadius: radius).fill(.regularMaterial)
+                .shadow(color: shadowColor, radius: shadowRadius, y: shadowY)
+            #endif
         } else {
             RoundedRectangle(cornerRadius: radius).fill(solidFill)
                 .shadow(color: shadowColor, radius: shadowRadius, y: shadowY)
