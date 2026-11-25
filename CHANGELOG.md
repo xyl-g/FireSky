@@ -8,6 +8,20 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v1.10.4 (2026-11-25)
+
+macOS 菜单栏常驻与后台助手协同、CAMS ADS 排队轮询抗抖动、iOS 侧载 IPA 图标与 Ad-Hoc 签名修复，以及按路径精准触发的 CI / 独立移动端发版流水线。
+macOS menu-bar background persistence with launchd helper handoff, resilient CAMS ADS queue polling, iOS sideload IPA icon & Ad-Hoc signature fix, and path-gated CI / independent mobile releases.
+
+- **macOS 关窗驻留后台与同步调度协同**：[FireSkyApp.swift](apps/macos/Sources/FireSkyNative/FireSkyApp.swift) 将主窗口改为关闭后驻留顶部菜单栏图标（`NSStatusItem`，实时显示后台同步/本地服务/助手状态，支持一键呼出主窗口、立即同步与退出），点击 Dock 图标也可重开窗口，`Cmd+Q` 或菜单点击退出才终止应用与本地 HTTP 服务；[Store.swift](apps/macos/Sources/FireSkyNative/Store.swift) 在已安装并加载 `launchd` 后台同步助手时让出定时 `syncTick` 给独立 `FireSkySyncHelper` 进程，避免主应用抢跑排队轮询并导致退出被拦截。
+  Updated macOS [FireSkyApp.swift](apps/macos/Sources/FireSkyNative/FireSkyApp.swift) so closing the main window keeps FireSky running in the menu bar (`NSStatusItem` with status indicator, reopen/sync/quit actions, and Dock reopen), while [Store.swift](apps/macos/Sources/FireSkyNative/Store.swift) yields scheduled `syncTick` rounds to the installed `launchd` `FireSkySyncHelper` daemon so quitting the GUI app isn't blocked by background queue waits.
+- **CAMS ADS 队列轮询抗抖动**：[engine/src/ads.rs](engine/src/ads.rs) 将队列状态轮询默认间隔放宽至 `2s → 20s` 降低服务端限流压力，并将瞬时 `5xx`、`429`、`408` 与网络波动归类为可恢复状态（按 `20s → 30s → 45s → 60s` 退避并发送心跳事件继续等待 2 小时总配额），接回账本遇瞬时 `500` 时保持指纹接回而不重复 `POST` 提交；[engine/src/cams_data.rs](engine/src/cams_data.rs) 补充对应中文重试进度提示。
+  Hardened ADS job polling in [engine/src/ads.rs](engine/src/ads.rs) (`2s → 20s` cadence, exponential backoff `20s → 60s` on transient `5xx`/`429`/network blips without breaking the 2-hour queue wait or re-submitting ledger jobs) and added retry progress messaging in [engine/src/cams_data.rs](engine/src/cams_data.rs).
+- **iOS 侧载 IPA 图标与 Ad-Hoc 签名槽位**：新增不透明 1024×1024 [AppIcon](apps/mobile-ios/FireSkyMobile/Assets.xcassets) 并更新 [native-desktop.yml](.github/workflows/native-desktop.yml) 在打包 `.ipa` 前执行 `codesign --force --deep --sign -` 写入标准 `LC_CODE_SIGNATURE` 槽位与 `_CodeSignature/CodeResources`，修复 AltStore / SideStore / Sideloadly 安装失败。
+  Added an opaque 1024×1024 iOS [AppIcon](apps/mobile-ios/FireSkyMobile/Assets.xcassets) catalog and an Ad-Hoc `codesign --force --deep --sign -` slot in [native-desktop.yml](.github/workflows/native-desktop.yml) so AltStore / SideStore / Sideloadly can re-sign `FireSky-ios-arm64.ipa` cleanly.
+- **CI 路径过滤与独立移动端发布**：[ci.yml](.github/workflows/ci.yml) 通过 `dorny/paths-filter` 按改动目录精确触发对应平台验证并消除重复构建；[native-desktop.yml](.github/workflows/native-desktop.yml) 仅在 `v*` / `mobile-v*`（带 `--latest=false` 不顶掉桌面端更新器）或手动 `workflow_dispatch`（支持选端与 `--clobber` 补丁已有 Release）时执行发版打包。
+  Refactored [ci.yml](.github/workflows/ci.yml) to path-gate daily jobs and eliminate duplicate runs, and updated [native-desktop.yml](.github/workflows/native-desktop.yml) for `v*` full releases, `--latest=false` `mobile-v*` releases, and selective `workflow_dispatch` patching.
+
 ## v1.10.3 (2026-11-25)
 
 移动端只读瘦客户端加固、Android 嵌入式交互地图与 UI 升级，以及 CAMS ADS 排队任务持久化接回。

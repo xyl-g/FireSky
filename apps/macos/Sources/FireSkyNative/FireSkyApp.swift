@@ -5,12 +5,13 @@ import UserNotifications
 @main
 struct FireSkyApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
+    @Environment(\.openWindow) private var openWindow
     @StateObject private var store = Store()
     @StateObject private var updater = Updater()
     @StateObject private var reminders = ReminderCenter()
     @StateObject private var localServer = LocalServerController()
     var body: some Scene {
-        WindowGroup("FireSky") {
+        Window("FireSky", id: "main") {
             WorkbenchRootView().environmentObject(store)
                 .environmentObject(updater)
                 .environmentObject(reminders)
@@ -19,6 +20,12 @@ struct FireSkyApp: App {
                 .onAppear {
                     delegate.store = store
                     delegate.localServer = localServer
+                    delegate.openMainWindow = { [openWindow] in
+                        openWindow(id: "main")
+                    }
+                    if delegate.mainWindow == nil {
+                        delegate.mainWindow = NSApp.windows.first(where: { $0.canBecomeMain && !$0.isSheet })
+                    }
                     delegate.scheduleSnapshot()
                     localServer.refreshTokenPreview(workspace: store.workspace)
                     if !store.isSnapshotRun && localServer.autoStart && !localServer.running && !localServer.starting {
@@ -54,9 +61,12 @@ struct FireSkyApp: App {
 }
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSMenuDelegate {
     weak var store: Store?
     weak var localServer: LocalServerController?
+    weak var mainWindow: NSWindow?
+    var openMainWindow: (() -> Void)?
+    private var statusItem: NSStatusItem?
     private var scheduled = false
     /// v1.9.7 退出守卫防循环：用户本轮已确认过「继续运行」的时间戳——
     /// 系统注销/关机会反复发起 terminate，不再每次都弹确认框（5s 内
@@ -75,6 +85,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // v1.9.8 走查：快照/夹具运行（CI 冒烟）延迟出窗是预期行为，跳过
         // 兜底，避免与截图流程竞争窗口状态。
         if ProcessInfo.processInfo.environment["FIRESKY_NATIVE_SNAPSHOT"] == nil {
+            setupStatusItem()
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
                 guard self != nil,
                       NSApp.windows.first(where: { $0.isVisible && !$0.isSheet }) == nil
@@ -91,6 +102,104 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
            Bundle.main.bundlePath.hasPrefix("/Volumes/") {
             DispatchQueue.main.async { self.promptInstallToApplications() }
         }
+    }
+
+    private func setupStatusItem() {
+        guard statusItem == nil else { return }
+        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let button = item.button {
+            if let image = NSImage(systemSymbolName: "sun.horizon.fill", accessibilityDescription: "FireSky") {
+                image.isTemplate = true
+                button.image = image
+            } else {
+                button.title = "FS"
+            }
+            button.toolTip = "FireSky"
+        }
+        let menu = NSMenu()
+        menu.delegate = self
+        item.menu = menu
+        statusItem = item
+    }
+
+    nonisolated func menuNeedsUpdate(_ menu: NSMenu) {
+        MainActor.assumeIsolated {
+            rebuildStatusMenu(menu)
+        }
+    }
+
+    private func rebuildStatusMenu(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let statusTitle: String
+        if store?.dataSyncRunning == true {
+            statusTitle = L10n.text("后台同步进行中…", "Background sync running…")
+        } else if let server = localServer, server.running {
+            statusTitle = L10n.text("本地服务运行中（端口 \(server.port)）", "Local server running (port \(server.port))")
+        } else if store?.helperLoaded == true {
+            statusTitle = L10n.text("后台同步助手运行中", "Sync helper active")
+        } else {
+            statusTitle = L10n.text("FireSky 后台运行中", "FireSky running in background")
+        }
+        let statusEntry = NSMenuItem(title: statusTitle, action: nil, keyEquivalent: "")
+        statusEntry.isEnabled = false
+        menu.addItem(statusEntry)
+        menu.addItem(.separator())
+
+        let showItem = NSMenuItem(
+            title: L10n.text("打开 FireSky 主窗口", "Open FireSky Window"),
+            action: #selector(showMainWindowAction),
+            keyEquivalent: ""
+        )
+        showItem.target = self
+        menu.addItem(showItem)
+
+        let syncItem = NSMenuItem(
+            title: L10n.text("立即同步数据", "Sync Data Now"),
+            action: #selector(syncNowAction),
+            keyEquivalent: ""
+        )
+        syncItem.target = self
+        syncItem.isEnabled = (store?.online == true && store?.busy == false && store?.dataSyncRunning == false && store?.dataSyncEnabled == true)
+        menu.addItem(syncItem)
+
+        menu.addItem(.separator())
+        let quitItem = NSMenuItem(
+            title: L10n.text("退出 FireSky", "Quit FireSky"),
+            action: #selector(quitAppAction),
+            keyEquivalent: "q"
+        )
+        quitItem.target = self
+        menu.addItem(quitItem)
+    }
+
+    func showMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        if let window = NSApp.windows.first(where: { !$0.isSheet && ($0.isVisible || $0.isMiniaturized) }) {
+            window.deminiaturize(nil)
+            window.makeKeyAndOrderFront(nil)
+        } else {
+            openMainWindow?()
+            NSApp.activate(ignoringOtherApps: true)
+        }
+    }
+
+    @objc private func showMainWindowAction() {
+        showMainWindow()
+    }
+
+    @objc private func syncNowAction() {
+        store?.runDataSyncNow()
+    }
+
+    @objc private func quitAppAction() {
+        NSApp.terminate(nil)
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag {
+            showMainWindow()
+        }
+        return false
     }
 
     /// DMG 内双击启动的安装引导：
@@ -146,7 +255,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
 
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        ProcessInfo.processInfo.environment["FIRESKY_NATIVE_SNAPSHOT"] != nil
+    }
     /// UX #12：仍有任务在运行时退出需要显式确认；快照/夹具运行直接放行。
     /// v1.9.7：确认过「继续运行」后 5s 内不再重复弹窗（注销/关机重试场景）；
     /// 「仍要退出」后强制放行后续 terminate，修复确认框循环。
@@ -180,6 +291,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         }
     }
     func applicationWillTerminate(_ notification: Notification) {
+        if let statusItem {
+            NSStatusBar.system.removeStatusItem(statusItem)
+            self.statusItem = nil
+        }
         localServer?.stop()
         store?.shutdown()
     }

@@ -7,9 +7,12 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 
 > English documentation: [README.en.md](README.en.md)
 
-> 当前版本 **v1.10.3**（见[下载安装](#下载安装releases)）：macOS DMG（双架构）、
+> 当前版本 **v1.10.4**（见[下载安装](#下载安装releases)）：macOS DMG（双架构）、
 > Windows zip + 安装器（x64/ARM64）、Android 通用 APK 与 iOS 未签名 IPA
-> 全部随 CI `v*` tag 自动直发 Release。v1.10.3 为 Android 补齐**嵌入式交互地图**
+> 全部随 CI `v*` tag 自动直发 Release（移动端亦支持 `mobile-v*` 独立热修）。v1.10.4 为
+> macOS 新增**关窗驻留菜单栏后台**（`NSStatusItem` 与 `launchd` 助手调度协同，不再阻塞退出），
+> 加固 **CAMS ADS 队列轮询抗瞬时 500/429 抖动**，补齐 iOS IPA 图标与 Ad-Hoc 签名，并按路径精准门控 CI；
+> v1.10.3 为 Android 补齐**嵌入式交互地图**
 > （浅/深色双主题与全屏选点），将 iOS / Android 收口为**严格只读瘦客户端**
 > （远端不暴露写/删配置入口，避免手机误改桌面数据），并新增 **CAMS ADS 任务持久接回**
 > 与大快照冷启动防 OOM；v1.10.2 优化了**桌面端应用内更新下载速度与默认系统代理兼容**，
@@ -71,7 +74,7 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 ## 下载安装（Releases）
 
 正式版统一从 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) 下载
-（当前 **v1.10.3**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
+（当前 **v1.10.4**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
 与各资产放在同一目录执行）：
 
 ```bash

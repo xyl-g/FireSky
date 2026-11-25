@@ -7,10 +7,14 @@ native desktop clients**. The physics follows the methodology of the
 
 > 中文文档：[README.md](README.md)
 
-> Current release **v1.10.3** (see [Download & install](#download--install-releases)):
+> Current release **v1.10.4** (see [Download & install](#download--install-releases)):
 > macOS DMGs (dual arch), Windows zip + installer (x64/ARM64), universal Android
 > APK, and unsigned sideloadable iOS `.ipa` are all built and attached to GitHub
-> Releases automatically on `v*` tags. v1.10.3 brings **embedded interactive maps & UI
+> Releases automatically on `v*` tags (with independent `mobile-v*` mobile releases).
+> v1.10.4 adds **macOS close-to-menu-bar background mode** (yielding scheduled syncs
+> to the `launchd` helper so quitting isn't blocked), **resilient CAMS ADS queue
+> polling** across transient `5xx`/`429` errors, iOS IPA `AppIcon` + Ad-Hoc signature
+> compatibility for AltStore/SideStore, and path-gated CI; v1.10.3 brings **embedded interactive maps & UI
 > polish** on Android, hardens iOS & Android into **strictly read-only thin clients**,
 > adds **CAMS ADS job persistence & reattach**, and prevents startup OOM on large
 > regional snapshots. v1.10.2 dramatically speeds up **in-app
@@ -84,7 +88,7 @@ native desktop clients**. The physics follows the methodology of the
 
 Official builds are published on
 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) (current:
-**v1.10.3**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
+**v1.10.4**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
 file names; run it in the directory holding the assets):
 
 ```bash

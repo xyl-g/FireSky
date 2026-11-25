@@ -518,8 +518,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             }
             await loadRetentionSettings()
             await loadDataSyncSettings()
-            startSyncTick()
             refreshHelperStatus()
+            startSyncTick()
             status = "引擎已连接"
             if page == .data {
                 await loadInventory()
@@ -1989,6 +1989,13 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     private func syncTick() async {
         guard online, !busy, !probingDownloads, !dataSyncRunning,
               dataSyncLoaded, dataSyncEnabled else { return }
+        refreshHelperStatus()
+        // 已安装并正常运行 launchd 后台同步助手时，把定时调度让给独立 helper 进程，
+        // 避免主应用进程自己挂起排队轮询（导致退出主应用被「正在同步」拦截）。
+        if helperInstalled && helperLoaded && !helperWorkspaceMismatch {
+            await refreshDataSyncState()
+            return
+        }
         do {
             let due = try await engine.call("data_sync_due")
             guard !Task.isCancelled, due["due_for_any"] as? Bool == true,
