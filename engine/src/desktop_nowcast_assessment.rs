@@ -1362,6 +1362,8 @@ pub struct CandidateSignalOutput {
     cloud_ice_kg_kg: Option<f64>,
     atmospheric_clarity_score: f64,
     illumination_score: f64,
+    horizon_gap_score: f64,
+    overcast_shadow_factor: f64,
     footprint_azimuth_width_deg: Option<f64>,
     footprint_near_distance_km: Option<f64>,
     footprint_far_distance_km: Option<f64>,
@@ -1661,6 +1663,133 @@ fn binned_path_aod(rows: &[(f64, f64)], fallback_aod550: f64) -> (f64, f64) {
     (statistics_mean(&bin_means), maximum - minimum)
 }
 
+#[derive(Clone, Copy, Debug)]
+struct HorizonIlluminationDiscrimination {
+    horizon_gap_score: f64,
+    overcast_shadow_factor: f64,
+}
+
+/// Blocking optical depth below (or intersecting) the incoming solar ray in a
+/// single far sunward column. Elevated clouds well above the ray do not block
+/// illumination from below.
+fn column_sub_ray_blocking_depth(
+    features: &[Feature<'_>],
+    column: &CloudColumnOutput,
+    ray_height_m: f64,
+) -> f64 {
+    if ray_height_m <= 0.0 {
+        return 1.0;
+    }
+    let mut max_block = 0.0f64;
+    let mut tau_sum = 0.0f64;
+    for (_, position) in &column.layers {
+        let feature = &features[*position];
+        let opacity = feature
+            .lightpath_opacity()
+            .max(lightpath_blocker_opacity_standalone(feature));
+        if opacity <= 0.0 {
+            continue;
+        }
+        let base_m = estimated_cloud_base_table(feature.row);
+        let top_m = feature.height_m().max(base_m);
+        if base_m > ray_height_m + 850.0 {
+            continue;
+        }
+        let intersection = vertical_ray_intersection_score(ray_height_m, base_m, top_m, 850.0);
+        let is_overcast_layer = feature.pressure_hpa() >= 500 || column.deep_cloud_risk >= 0.45;
+        let sub_ray = if top_m <= ray_height_m && is_overcast_layer && ray_height_m <= 12_000.0 {
+            let vertical_gap = (ray_height_m - top_m).max(0.0);
+            0.45 + 0.55 * clamp(1.0 - vertical_gap / 6500.0)
+        } else {
+            0.0
+        };
+        let layer_block = opacity * intersection.max(sub_ray);
+        if layer_block > 0.0 {
+            max_block = max_block.max(layer_block);
+            tau_sum += layer_block;
+        }
+    }
+    let deep_floor =
+        if column.deep_cloud_risk > 0.45 && column.cloud_base_m <= ray_height_m + 850.0 {
+            0.75 * column.deep_cloud_risk
+        } else {
+            0.0
+        };
+    clamp(max_block.max(0.60 * tau_sum).max(deep_floor))
+}
+
+/// Discriminate solid overcast blocking the far sunward horizon from a clear
+/// far-horizon sunward gap beneath elevated high/mid clouds at negative solar
+/// elevation.
+fn assess_horizon_illumination_discrimination(
+    features: &[Feature<'_>],
+    columns: &[(ColumnKey, CloudColumnOutput)],
+    candidate_distance_km: f64,
+    candidate_cloud_base_m: f64,
+    required_height_m: f64,
+    solar_elevation_deg: f64,
+    solar_azimuth_deg: f64,
+) -> HorizonIlluminationDiscrimination {
+    if solar_elevation_deg >= 0.0 {
+        return HorizonIlluminationDiscrimination {
+            horizon_gap_score: 1.0,
+            overcast_shadow_factor: 1.0,
+        };
+    }
+    let mut weight_sum = 0.0f64;
+    let mut weighted_block_sum = 0.0f64;
+    let mut weighted_overcast_sum = 0.0f64;
+    let mut peak_block = 0.0f64;
+    for (_, column) in columns {
+        if column.distance_km <= candidate_distance_km + 8.0
+            || column.distance_km > MAX_SOLAR_INFLOW_BLOCKER_DISTANCE_KM
+        {
+            continue;
+        }
+        let az_delta = angular_difference_deg(column.bearing_deg, solar_azimuth_deg);
+        if az_delta > 22.0 {
+            continue;
+        }
+        let align_weight = clamp(1.0 - az_delta / 24.0);
+        if align_weight <= 0.0 {
+            continue;
+        }
+        let ray_height_m = solar_ray_height_at_distance_m(
+            candidate_distance_km,
+            candidate_cloud_base_m,
+            column.distance_km,
+            solar_elevation_deg,
+        );
+        let col_block = column_sub_ray_blocking_depth(features, column, ray_height_m);
+        weight_sum += align_weight;
+        weighted_block_sum += align_weight * col_block;
+        weighted_overcast_sum += align_weight * smooth_gate(col_block, 0.20, 0.65);
+        peak_block = peak_block.max(col_block * align_weight);
+    }
+    if weight_sum <= 0.0 {
+        return HorizonIlluminationDiscrimination {
+            horizon_gap_score: 1.0,
+            overcast_shadow_factor: 1.0,
+        };
+    }
+    let weighted_block_mean = clamp(weighted_block_sum / weight_sum);
+    let overcast_coverage = clamp(weighted_overcast_sum / weight_sum);
+    let horizon_gap_score = clamp(1.0 - (0.65 * weighted_block_mean + 0.35 * peak_block));
+    let clear_elevated_gap =
+        candidate_cloud_base_m > required_height_m + 400.0 && horizon_gap_score >= 0.72;
+    let overcast_shadow_factor = if clear_elevated_gap {
+        1.0
+    } else {
+        let shadow_strength =
+            smooth_gate(1.0 - horizon_gap_score, 0.22, 0.75) * (0.45 + 0.55 * overcast_coverage);
+        clamp(1.0 - 0.85 * shadow_strength)
+    };
+    HorizonIlluminationDiscrimination {
+        horizon_gap_score,
+        overcast_shadow_factor,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn assess_candidates(
     features: &[Feature<'_>],
@@ -1799,7 +1928,21 @@ fn assess_candidates(
         let aerosol_sensitivity = clamp(spread);
         let clearance_weight = eligible_row.clearance_weight;
         let cloud_base_m = candidate_cloud_base(feature);
-        let illumination_score = clamp((cloud_base_m - required_height + 700.0) / 2600.0);
+        let horizon_disc = assess_horizon_illumination_discrimination(
+            features,
+            columns,
+            feature.distance_km(),
+            cloud_base_m,
+            required_height,
+            solar_elevation_deg,
+            solar_azimuth_deg,
+        );
+        let raw_illumination_score = clamp((cloud_base_m - required_height + 700.0) / 2600.0);
+        let illumination_score = if solar_elevation_deg < 0.0 {
+            clamp(raw_illumination_score * (0.35 + 0.65 * horizon_disc.overcast_shadow_factor))
+        } else {
+            raw_illumination_score
+        };
         let cloud_evidence_score = feature_cloud_presence_score(feature);
         let explicit_presence = explicit_cloud_presence_opt(feature);
         if let Some(explicit_presence) = explicit_presence {
@@ -1829,8 +1972,18 @@ fn assess_candidates(
         };
         let suitability_factor = 0.72 + 0.28 * high_suitability;
         let horizon_view_factor = 0.65 + 0.35 * eligible_row.horizon_weight;
-        let dawn_boost = if solar_elevation_deg < 0.0 {
+        let raw_dawn_boost = if solar_elevation_deg < 0.0 {
             (1.0 + solar_elevation_deg.abs() / 15.0).min(1.35)
+        } else {
+            1.0
+        };
+        let dawn_boost = if solar_elevation_deg < 0.0 {
+            1.0 + (raw_dawn_boost - 1.0) * horizon_disc.overcast_shadow_factor
+        } else {
+            raw_dawn_boost
+        };
+        let negative_shadow_attenuation = if solar_elevation_deg < 0.0 {
+            0.45 + 0.55 * horizon_disc.overcast_shadow_factor
         } else {
             1.0
         };
@@ -1847,7 +2000,8 @@ fn assess_candidates(
             * eligible_row.sight_weight
             * horizon_view_factor
             * explicit_gate
-            * dawn_boost;
+            * dawn_boost
+            * negative_shadow_attenuation;
         let min_score = if solar_elevation_deg < 0.0 {
             (0.15 + solar_elevation_deg * 0.012).max(0.06)
         } else {
@@ -1885,6 +2039,8 @@ fn assess_candidates(
             cloud_ice_kg_kg: feature.cloud_ice_kg_kg(),
             atmospheric_clarity_score: atmospheric_clarity,
             illumination_score,
+            horizon_gap_score: horizon_disc.horizon_gap_score,
+            overcast_shadow_factor: horizon_disc.overcast_shadow_factor,
             footprint_azimuth_width_deg: feature.footprint_azimuth_width_deg(),
             footprint_near_distance_km: feature.footprint_near_distance_km(),
             footprint_far_distance_km: feature.footprint_far_distance_km(),
@@ -1983,6 +2139,8 @@ struct AssessmentModelStepOutput {
     observation_burnable: bool,
     observation_score_ceiling: Option<f64>,
     surface_weather_penalty: SurfaceWeatherPenaltyOutput,
+    horizon_gap_score: f64,
+    overcast_shadow_factor: f64,
 }
 
 /// Project a full step onto the "model" wire shape by moving its fields
@@ -2032,6 +2190,8 @@ impl From<AssessmentStepOutput> for AssessmentModelStepOutput {
             observation_burnable: step.observation_burnable,
             observation_score_ceiling: step.observation_score_ceiling,
             surface_weather_penalty: step.surface_weather_penalty,
+            horizon_gap_score: step.horizon_gap_score,
+            overcast_shadow_factor: step.overcast_shadow_factor,
         }
     }
 }
@@ -2504,6 +2664,208 @@ mod tests {
         let metrics = v2_feature_metrics_row(&row, 1000.0, 0.0);
         assert_eq!(metrics[1], 0.8);
         assert_eq!(metrics[0], 0.8);
+    }
+
+    fn feature_row_opt(cells: [(usize, f64); 8]) -> Vec<Option<f64>> {
+        let mut out = vec![None; FEATURE_ROW_V2_FIELD_COUNT];
+        for (index, value) in cells {
+            out[index] = Some(value);
+        }
+        out
+    }
+
+    fn horizon_test_scan(
+        solar_elevation_deg: f64,
+        far_columns: Vec<Vec<Option<f64>>>,
+    ) -> ScanInput {
+        // Identical elevated high cloud candidate at 120 km along solar azimuth 270 deg.
+        let mut features = vec![
+            feature_row_opt([
+                (0, 30.0),
+                (1, 118.8),
+                (2, 120.0),
+                (3, 270.0),
+                (4, 300.0),
+                (5, 9000.0),
+                (6, 88.0),
+                (FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY, 0.85),
+            ]),
+        ];
+        features.extend(far_columns);
+        let mut scan = empty_scan(features);
+        scan.solar_elevation_deg = solar_elevation_deg;
+        scan.solar_azimuth_deg = 270.0;
+        scan
+    }
+
+    #[test]
+    fn negative_elevation_overcast_horizon_reduces_illumination_vs_clear_gap() {
+        // Clear far-horizon gap beneath elevated cirrus at 260 km (above the ray)
+        // and clear sunward horizon beyond.
+        let clear_gap_far = vec![260.0, 420.0, 600.0]
+            .into_iter()
+            .flat_map(|dist| {
+                let mut rows = vec![feature_row_opt([
+                    (0, 30.0),
+                    (1, 120.0 - dist / 96.0),
+                    (2, dist),
+                    (3, 270.0),
+                    (4, 850.0),
+                    (5, 1500.0),
+                    (6, 20.0),
+                    (FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY, 0.0),
+                ])];
+                if dist <= 280.0 {
+                    rows.push(feature_row_opt([
+                        (0, 30.0),
+                        (1, 120.0 - dist / 96.0),
+                        (2, dist),
+                        (3, 270.0),
+                        (4, 250.0),
+                        (5, 10800.0),
+                        (6, 78.0),
+                        (FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY, 0.70),
+                    ]));
+                }
+                rows
+            })
+            .collect();
+
+        // Solid multi-layer overcast blocking the far sunward horizon below the ray.
+        let overcast_far = vec![260.0, 420.0, 600.0]
+            .into_iter()
+            .flat_map(|dist| {
+                vec![
+                    feature_row_opt([
+                        (0, 30.0),
+                        (1, 120.0 - dist / 96.0),
+                        (2, dist),
+                        (3, 270.0),
+                        (4, 850.0),
+                        (5, 1500.0),
+                        (6, 95.0),
+                        (FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY, 0.92),
+                    ]),
+                    feature_row_opt([
+                        (0, 30.0),
+                        (1, 120.0 - dist / 96.0),
+                        (2, dist),
+                        (3, 270.0),
+                        (4, 700.0),
+                        (5, 3100.0),
+                        (6, 94.0),
+                        (FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY, 0.90),
+                    ]),
+                    feature_row_opt([
+                        (0, 30.0),
+                        (1, 120.0 - dist / 96.0),
+                        (2, dist),
+                        (3, 270.0),
+                        (4, 500.0),
+                        (5, 5600.0),
+                        (6, 92.0),
+                        (FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY, 0.88),
+                    ]),
+                ]
+            })
+            .collect();
+
+        let clear_res =
+            build_result(batch_request(vec![horizon_test_scan(-3.0, clear_gap_far)])).unwrap();
+        let overcast_res =
+            build_result(batch_request(vec![horizon_test_scan(-3.0, overcast_far)])).unwrap();
+
+        let AssessmentScanOutput::Full(clear_step) = &clear_res.scans[0] else {
+            panic!("expected full step");
+        };
+        let AssessmentScanOutput::Full(overcast_step) = &overcast_res.scans[0] else {
+            panic!("expected full step");
+        };
+
+        let clear_top = clear_step.top_candidate.as_ref().unwrap();
+        let overcast_top = overcast_step.top_candidate.as_ref().unwrap();
+
+        assert!(
+            clear_top.cloud_base_m > clear_top.illumination_height_m + 400.0,
+            "elevated cloud base should exceed required illumination height + 400m"
+        );
+        assert!(clear_step.horizon_gap_score >= 0.85);
+        assert_eq!(clear_step.overcast_shadow_factor, 1.0);
+        assert!(
+            clear_top.illumination_score > 0.95,
+            "clear far-horizon gap should retain full geometric brilliance: {}",
+            clear_top.illumination_score
+        );
+
+        assert!(
+            overcast_step.horizon_gap_score < 0.30,
+            "solid overcast should yield low horizon_gap_score, got {}",
+            overcast_step.horizon_gap_score
+        );
+        assert!(
+            overcast_step.overcast_shadow_factor < 0.40,
+            "solid overcast should yield low overcast_shadow_factor, got {}",
+            overcast_step.overcast_shadow_factor
+        );
+        assert!(
+            overcast_top.illumination_score < clear_top.illumination_score,
+            "solid overcast illumination ({}) must be strictly lower than clear gap ({})",
+            overcast_top.illumination_score,
+            clear_top.illumination_score
+        );
+        assert!(
+            overcast_top.score < clear_top.score,
+            "solid overcast candidate score ({}) must not inflate via dawn_boost above clear gap ({})",
+            overcast_top.score,
+            clear_top.score
+        );
+
+        let encoded = serde_json::to_value(&overcast_res).unwrap();
+        assert!(encoded["scans"][0]["horizon_gap_score"].is_f64());
+        assert!(encoded["scans"][0]["overcast_shadow_factor"].is_f64());
+    }
+
+    #[test]
+    fn negative_elevation_low_overcast_deck_suppresses_dawn_boost() {
+        let low_overcast_far: Vec<Vec<Option<f64>>> = vec![240.0, 380.0, 540.0]
+            .into_iter()
+            .map(|dist| {
+                feature_row_opt([
+                    (0, 30.0),
+                    (1, 120.0 - dist / 96.0),
+                    (2, dist),
+                    (3, 270.0),
+                    (4, 850.0),
+                    (5, 1500.0),
+                    (6, 96.0),
+                    (FEATURE_ROW_V2_HORIZONTAL_CLOUD_PROBABILITY, 0.92),
+                ])
+            })
+            .collect();
+
+        let neg_overcast = build_result(batch_request(vec![horizon_test_scan(
+            -3.5,
+            low_overcast_far.clone(),
+        )]))
+        .unwrap();
+        let pos_overcast = build_result(batch_request(vec![horizon_test_scan(
+            1.0,
+            low_overcast_far,
+        )]))
+        .unwrap();
+
+        let AssessmentScanOutput::Full(neg_step) = &neg_overcast.scans[0] else {
+            panic!("expected full step");
+        };
+        let AssessmentScanOutput::Full(pos_step) = &pos_overcast.scans[0] else {
+            panic!("expected full step");
+        };
+        let neg_top = neg_step.top_candidate.as_ref().unwrap();
+        let pos_top = pos_step.top_candidate.as_ref().unwrap();
+
+        assert!(neg_step.overcast_shadow_factor < 0.70);
+        assert!(neg_top.illumination_score < pos_top.illumination_score);
+        assert!(neg_top.score < pos_top.score);
     }
 }
 
@@ -5420,6 +5782,8 @@ pub struct AssessmentStepOutput {
     observation_burnable: bool,
     observation_score_ceiling: Option<f64>,
     surface_weather_penalty: SurfaceWeatherPenaltyOutput,
+    horizon_gap_score: f64,
+    overcast_shadow_factor: f64,
     // Kept alongside (not TimeStepAssessment fields) for the differential.
     columns: Vec<CloudColumnOutput>,
     candidate_signals: Vec<CandidateSignalOutput>,
@@ -5453,6 +5817,33 @@ fn assemble_step(
     full_detail: bool,
 ) -> AssessmentStepOutput {
     let top = signals.first().cloned();
+    let step_horizon_disc = if let Some(signal) = &top {
+        HorizonIlluminationDiscrimination {
+            horizon_gap_score: signal.horizon_gap_score,
+            overcast_shadow_factor: signal.overcast_shadow_factor,
+        }
+    } else if scan.solar_elevation_deg < 0.0 {
+        let ref_height = crate::native::required_illumination_height_m(
+            0.0,
+            scan.solar_elevation_deg,
+            0.0,
+        )
+        .max(1500.0);
+        assess_horizon_illumination_discrimination(
+            features,
+            columns,
+            0.0,
+            ref_height,
+            ref_height,
+            scan.solar_elevation_deg,
+            scan.solar_azimuth_deg,
+        )
+    } else {
+        HorizonIlluminationDiscrimination {
+            horizon_gap_score: 1.0,
+            overcast_shadow_factor: 1.0,
+        }
+    };
     let top_boundary = boundary_signals.first().cloned();
     let top_local_deck = local_deck_signals.first().cloned();
     let top_remote_boundary = remote_boundary_signals.first().cloned();
@@ -5949,6 +6340,13 @@ fn assemble_step(
     if aerosol_quality == "fallback" {
         reasons.push("当前气溶胶使用的是回退值，置信度会偏低。".to_string());
     }
+    if scan.solar_elevation_deg < 0.0 && step_horizon_disc.overcast_shadow_factor < 0.85 {
+        reasons.push(format!(
+            "负太阳高度角远地平线缝隙评分 {:.0}/100，连续阴云遮影系数 {:.2}，已抑制晨昏仰角增益并下调受光亮度。",
+            step_horizon_disc.horizon_gap_score * 100.0,
+            step_horizon_disc.overcast_shadow_factor
+        ));
+    }
     // The scene diagnosis provides the final regime (it can demote to
     // clear/convective even when the scoring regime differs).
     AssessmentStepOutput {
@@ -5998,6 +6396,8 @@ fn assemble_step(
         observation_burnable: true,
         observation_score_ceiling: None,
         surface_weather_penalty: weather.clone(),
+        horizon_gap_score: step_horizon_disc.horizon_gap_score,
+        overcast_shadow_factor: step_horizon_disc.overcast_shadow_factor,
         columns: if full_detail {
             columns.iter().map(|(_, column)| column.clone()).collect()
         } else {

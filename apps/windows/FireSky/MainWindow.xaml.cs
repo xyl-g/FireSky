@@ -1111,7 +1111,7 @@ public sealed partial class MainWindow : Window
         if (!initialized || ShowGridToggle == null) return;
         showRegionalSmooth = ShowSmoothToggle?.IsChecked == true;
         showRegionalGrid = ShowGridToggle.IsChecked == true;
-        showRegionalSamples = ShowSamplesToggle.IsChecked == true;
+        showRegionalSamples = ShowSamplesToggle?.IsChecked == true;
         SaveSettings();
         _ = UpdateMap();
     }
@@ -1227,7 +1227,7 @@ public sealed partial class MainWindow : Window
                 cancellation: operation.Token);
             operation.Token.ThrowIfCancellationRequested();
             AdoptResult(response, kind, payload);
-            if (result["model_results"]?["gfs"] == null && result["model_results"]?["ec"] != null)
+            if (result?["model_results"]?["gfs"] == null && result?["model_results"]?["ec"] != null)
                 ResultModel.SelectedIndex = 1;
             Status.Text = L10n.T("预测完成");
             RenderResult();

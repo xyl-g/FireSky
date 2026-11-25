@@ -1,7 +1,9 @@
 package com.firesky.mobile.engine
 
 import org.json.JSONObject
+import java.io.BufferedReader
 import java.io.IOException
+import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URI
 import java.net.URLEncoder
@@ -10,7 +12,7 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
 /**
- * 远程 Mac 服务状态快照（对应 GET /api/v1/firesky/desktop/status）。
+ * 远程服务器状态快照（对应 GET /api/v1/firesky/desktop/status）。
  */
 data class RemoteServerStatus(
     val instanceId: String,
@@ -21,18 +23,18 @@ data class RemoteServerStatus(
 )
 
 /**
- * RemoteHttpTransport：通过 HTTP/HTTPS 对接 FireSky Mac 端桌面 HTTP 边界
- * （engine/src/http/desktop.rs & security.rs），实现完整 EngineTransport 契约。
+ * RemoteHttpTransport：通过 HTTP/HTTPS + SSE 实时流对接 FireSky 服务器桌面 HTTP 边界
+ * （Mac / Windows / Docker + Cloudflare Tunnel 或局域网 HTTP），实现完整 EngineTransport 契约。
  *
  * 协议要点：
  * - `GET  <base>/api/v1/firesky/desktop/status` → 发现 `instance_id` / `workspace` / `protocol`；
  * - `POST <base>/api/v1/firesky/desktop/jobs` → 202 Accepted 提交作业；遇 `409 engine_exited`
  *   自动刷新 `/desktop/status` 并重试一次；
- * - `GET  <base>/api/v1/firesky/desktop/jobs/<request_id>?instance_id=<instance_id>` → 自适应轮询
- *   （前 2s 每 150ms，2s–10s 每 350ms，10s 后每 600ms），增量透出 progress，终态后释放作业；
+ * - `GET  <base>/api/v1/firesky/desktop/jobs/<request_id>/events?instance_id=<instance_id>` →
+ *   优先建立 SSE (`Accept: text/event-stream`) 实时增量流；遇 `404`/`405`/非 2xx 或断流自动回退
+ *   自适应轮询（`GET /desktop/jobs/<request_id>?instance_id=...`）；终态后自动 `release`；
  * - `POST <base>/api/v1/firesky/desktop/jobs/<request_id>/cancel` → 取消远程作业；
- * - 所有请求仅携带 `Accept: application/json`、`Content-Type: application/json`（POST）与
- *   可选 `Authorization: Bearer <token>`，永不发送 `Origin` 头，且异常文案永不泄露明文令牌。
+ * - 永不发送 `Origin` 头，且异常文案永不泄露明文令牌。
  */
 class RemoteHttpTransport(
     baseUrl: String = "",
@@ -40,6 +42,7 @@ class RemoteHttpTransport(
     private val pollDelayProvider: (elapsedMs: Long) -> Long = ::defaultPollDelayMs,
     private val connectTimeoutMs: Int = DEFAULT_CONNECT_TIMEOUT_MS,
     private val readTimeoutMs: Int = DEFAULT_READ_TIMEOUT_MS,
+    private val sseReadTimeoutMs: Int = DEFAULT_SSE_READ_TIMEOUT_MS,
 ) : EngineTransport {
 
     @Volatile
@@ -62,6 +65,7 @@ class RemoteHttpTransport(
 
     private val statusLock = Any()
     private val cancelledIds = ConcurrentHashMap.newKeySet<String>()
+    private val activeConnections = ConcurrentHashMap<String, HttpURLConnection>()
 
     @Volatile
     private var executor: ExecutorService? = null
@@ -118,6 +122,10 @@ class RemoteHttpTransport(
         running = false
         instanceId = null
         cancelledIds.clear()
+        activeConnections.values.forEach { conn ->
+            runCatching { conn.disconnect() }
+        }
+        activeConnections.clear()
         executor?.shutdownNow()
         executor = null
     }
@@ -144,7 +152,7 @@ class RemoteHttpTransport(
                 readTimeoutMs = readTimeoutMs,
             )
 
-            // 409 engine_exited：Mac 端服务已重启，重新拉取 /desktop/status 并重试一次。
+            // 409 engine_exited：服务端实例已重启，重新拉取 /desktop/status 并重试一次。
             if (submitResp.statusCode == 409 && isEngineExited(submitResp.body)) {
                 currentInstance = refreshInstanceId(base, token)
                 val retryBody = JSONObject()
@@ -170,13 +178,198 @@ class RemoteHttpTransport(
                 postCancelQuietly(id, currentInstance)
             }
 
-            pollUntilTerminal(base, token, id, currentInstance, method)
+            val sseOutcome = subscribeSseUntilTerminal(base, token, id, currentInstance, method)
+            if (!sseOutcome.terminal && running) {
+                pollUntilTerminal(
+                    base = base,
+                    token = token,
+                    id = id,
+                    currentInstance = currentInstance,
+                    method = method,
+                    initialLastSeq = sseOutcome.lastSeq,
+                )
+            }
         } catch (error: Exception) {
             if (!running) return
             val safeMessage = sanitizeMessage(error.message ?: "远程请求失败。", token)
             emitErrorFrame(id, safeMessage.ifEmpty { "远程请求失败。" })
         } finally {
             cancelledIds.remove(id)
+            activeConnections.remove(id)
+        }
+    }
+
+    private data class SseOutcome(val terminal: Boolean, val lastSeq: Long)
+
+    /**
+     * 优先订阅 SSE 实时事件流；若服务端返回 404/405/非 2xx 或在终态前断开，
+     * 透明回退到自适应轮询并保留已收到的 `lastSeq` 避免重复进度帧。
+     */
+    private fun subscribeSseUntilTerminal(
+        base: String,
+        token: String,
+        id: String,
+        currentInstance: String,
+        method: String,
+    ): SseOutcome {
+        val encodedId = URLEncoder.encode(id, "UTF-8")
+        val encodedInstance = URLEncoder.encode(currentInstance, "UTF-8")
+        val eventsUrl = "$base$API_PREFIX/desktop/jobs/$encodedId/events?instance_id=$encodedInstance"
+        var lastSeq = -1L
+        var connection: HttpURLConnection? = null
+        try {
+            connection = (URI.create(eventsUrl).toURL().openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                this.connectTimeout = connectTimeoutMs
+                this.readTimeout = sseReadTimeoutMs
+                useCaches = false
+                setRequestProperty("Accept", "text/event-stream")
+                setRequestProperty("Cache-Control", "no-cache")
+                val trimmedToken = token.trim()
+                if (trimmedToken.isNotEmpty()) {
+                    setRequestProperty("Authorization", "Bearer $trimmedToken")
+                }
+            }
+            activeConnections[id] = connection
+            val code = connection.responseCode
+            if (!running) return SseOutcome(terminal = true, lastSeq = lastSeq)
+
+            if (code !in 200..299) {
+                val errBody = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                if (code == 409 && isEngineExited(errBody)) {
+                    synchronized(statusLock) {
+                        if (instanceId == currentInstance) instanceId = null
+                    }
+                    throw EngineError(mapHttpError(code, errBody, method, token))
+                }
+                // 404 / 405 / 其他非 2xx：回退至轮询端点
+                return SseOutcome(terminal = false, lastSeq = lastSeq)
+            }
+
+            BufferedReader(InputStreamReader(connection.inputStream, Charsets.UTF_8)).use { reader ->
+                val dataBuffer = StringBuilder()
+                while (running) {
+                    val line = reader.readLine() ?: break
+                    when {
+                        line.isEmpty() -> {
+                            if (dataBuffer.isNotEmpty()) {
+                                val payload = dataBuffer.toString()
+                                dataBuffer.setLength(0)
+                                val (terminal, updatedSeq) = processSsePayload(
+                                    payload = payload,
+                                    base = base,
+                                    token = token,
+                                    id = id,
+                                    currentInstance = currentInstance,
+                                    lastSeq = lastSeq,
+                                )
+                                lastSeq = updatedSeq
+                                if (terminal) return SseOutcome(terminal = true, lastSeq = lastSeq)
+                            }
+                        }
+                        line.startsWith(":") -> Unit // SSE keepalive comment
+                        line.startsWith("data:") -> {
+                            val chunk = line.removePrefix("data:").let {
+                                if (it.startsWith(" ")) it.substring(1) else it
+                            }
+                            if (dataBuffer.isNotEmpty()) dataBuffer.append('\n')
+                            dataBuffer.append(chunk)
+                        }
+                    }
+                }
+                if (running && dataBuffer.isNotEmpty()) {
+                    val (terminal, updatedSeq) = processSsePayload(
+                        payload = dataBuffer.toString(),
+                        base = base,
+                        token = token,
+                        id = id,
+                        currentInstance = currentInstance,
+                        lastSeq = lastSeq,
+                    )
+                    lastSeq = updatedSeq
+                    if (terminal) return SseOutcome(terminal = true, lastSeq = lastSeq)
+                }
+            }
+            return SseOutcome(terminal = false, lastSeq = lastSeq)
+        } catch (error: EngineError) {
+            throw error
+        } catch (_: IOException) {
+            // 流提前断开或读取超时，透明回退至自适应轮询
+            return SseOutcome(terminal = false, lastSeq = lastSeq)
+        } finally {
+            activeConnections.remove(id, connection)
+            runCatching { connection?.disconnect() }
+        }
+    }
+
+    private fun processSsePayload(
+        payload: String,
+        base: String,
+        token: String,
+        id: String,
+        currentInstance: String,
+        lastSeq: Long,
+    ): Pair<Boolean, Long> {
+        val snapshot = runCatching { JSONObject(payload) }.getOrNull() ?: return false to lastSeq
+        return applySnapshot(snapshot, base, token, id, currentInstance, lastSeq)
+    }
+
+    private fun applySnapshot(
+        snapshot: JSONObject,
+        base: String,
+        token: String,
+        id: String,
+        currentInstance: String,
+        previousSeq: Long,
+    ): Pair<Boolean, Long> {
+        var lastSeq = previousSeq
+        val seq = snapshot.optLong("progress_seq", 0L)
+        val progressObj = snapshot.optJSONObject("progress")
+        if (seq > lastSeq && progressObj != null) {
+            lastSeq = seq
+            emitFrame(
+                JSONObject()
+                    .put("id", id)
+                    .put("type", "progress")
+                    .put("event", progressObj),
+            )
+        }
+
+        return when (val status = snapshot.optString("status")) {
+            "", "running" -> false to lastSeq
+            "done" -> {
+                releaseJobQuietly(base, token, id, currentInstance)
+                val resultObj = snapshot.optJSONObject("result") ?: JSONObject()
+                emitFrame(
+                    JSONObject()
+                        .put("id", id)
+                        .put("type", "result")
+                        .put("result", resultObj),
+                )
+                true to lastSeq
+            }
+            "failed", "cancelled" -> {
+                releaseJobQuietly(base, token, id, currentInstance)
+                val rawError = snapshot.optJSONObject("error")
+                val rawMessage = rawError?.optString("message").orEmpty().ifEmpty {
+                    if (status == "cancelled") "desktop operation cancelled" else "操作失败"
+                }
+                val safeError = JSONObject()
+                    .put("code", rawError?.optString("code").orEmpty().ifEmpty { status })
+                    .put("message", sanitizeMessage(rawMessage, token))
+                emitFrame(
+                    JSONObject()
+                        .put("id", id)
+                        .put("type", "error")
+                        .put("error", safeError),
+                )
+                true to lastSeq
+            }
+            else -> {
+                releaseJobQuietly(base, token, id, currentInstance)
+                emitErrorFrame(id, "远程任务返回未知状态：$status")
+                true to lastSeq
+            }
         }
     }
 
@@ -186,12 +379,13 @@ class RemoteHttpTransport(
         id: String,
         currentInstance: String,
         method: String,
+        initialLastSeq: Long = -1L,
     ) {
         val encodedId = URLEncoder.encode(id, "UTF-8")
         val encodedInstance = URLEncoder.encode(currentInstance, "UTF-8")
         val pollUrl = "$base$API_PREFIX/desktop/jobs/$encodedId?instance_id=$encodedInstance"
         val startedAtMs = System.currentTimeMillis()
-        var lastSeq = -1L
+        var lastSeq = initialLastSeq
 
         while (running) {
             val resp = executeHttp(
@@ -216,62 +410,16 @@ class RemoteHttpTransport(
             val snapshot = runCatching { JSONObject(resp.body) }.getOrNull()
                 ?: throw EngineError("远程服务器返回了无效的任务状态。")
 
-            val seq = snapshot.optLong("progress_seq", 0L)
-            val progressObj = snapshot.optJSONObject("progress")
-            if (seq > lastSeq && progressObj != null) {
-                lastSeq = seq
-                emitFrame(
-                    JSONObject()
-                        .put("id", id)
-                        .put("type", "progress")
-                        .put("event", progressObj),
-                )
-            }
+            val (terminal, updatedSeq) = applySnapshot(snapshot, base, token, id, currentInstance, lastSeq)
+            lastSeq = updatedSeq
+            if (terminal) return
 
-            when (snapshot.optString("status")) {
-                "running" -> {
-                    val elapsed = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(0L)
-                    val delayMs = pollDelayProvider(elapsed).coerceAtLeast(1L)
-                    try {
-                        Thread.sleep(delayMs)
-                    } catch (_: InterruptedException) {
-                        return
-                    }
-                }
-                "done" -> {
-                    releaseJobQuietly(base, token, id, currentInstance)
-                    val resultObj = snapshot.optJSONObject("result") ?: JSONObject()
-                    emitFrame(
-                        JSONObject()
-                            .put("id", id)
-                            .put("type", "result")
-                            .put("result", resultObj),
-                    )
-                    return
-                }
-                "failed", "cancelled" -> {
-                    releaseJobQuietly(base, token, id, currentInstance)
-                    val rawError = snapshot.optJSONObject("error")
-                    val jobStatus = snapshot.optString("status")
-                    val rawMessage = rawError?.optString("message").orEmpty().ifEmpty {
-                        if (jobStatus == "cancelled") "desktop operation cancelled" else "操作失败"
-                    }
-                    val safeError = JSONObject()
-                        .put("code", rawError?.optString("code").orEmpty().ifEmpty { jobStatus })
-                        .put("message", sanitizeMessage(rawMessage, token))
-                    emitFrame(
-                        JSONObject()
-                            .put("id", id)
-                            .put("type", "error")
-                            .put("error", safeError),
-                    )
-                    return
-                }
-                else -> {
-                    releaseJobQuietly(base, token, id, currentInstance)
-                    emitErrorFrame(id, "远程任务返回未知状态：${snapshot.optString("status")}")
-                    return
-                }
+            val elapsed = (System.currentTimeMillis() - startedAtMs).coerceAtLeast(0L)
+            val delayMs = pollDelayProvider(elapsed).coerceAtLeast(1L)
+            try {
+                Thread.sleep(delayMs)
+            } catch (_: InterruptedException) {
+                return
             }
         }
     }
@@ -336,6 +484,7 @@ class RemoteHttpTransport(
         private const val API_PREFIX = "/api/v1/firesky"
         private const val DEFAULT_CONNECT_TIMEOUT_MS = 10_000
         private const val DEFAULT_READ_TIMEOUT_MS = 15_000
+        private const val DEFAULT_SSE_READ_TIMEOUT_MS = 60_000
         private const val RELEASE_READ_TIMEOUT_MS = 3_000
 
         /** 自适应轮询间隔：前 2s 为 150ms，2s–10s 为 350ms，10s 后为 600ms。 */
@@ -408,7 +557,7 @@ class RemoteHttpTransport(
             val running = json.optBoolean("running", false)
             val protocol = json.optInt("protocol", -1)
             if (instanceId.isEmpty() || !running) {
-                throw EngineError("远程 Mac 引擎尚未就绪。")
+                throw EngineError("远程 FireSky 服务器尚未就绪。")
             }
             if (protocol != 1) {
                 throw EngineError("远程服务器协议版本不匹配（protocol=$protocol）。")

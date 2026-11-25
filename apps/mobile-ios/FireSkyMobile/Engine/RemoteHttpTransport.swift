@@ -1,17 +1,17 @@
 import Foundation
 import Security
 
-/// 远程服务器配置（本机引擎 vs Mac 远程 HTTP / Cloudflare Tunnel）。
+/// 远程服务器配置（Mac / Windows / Docker HTTP 或 Cloudflare Tunnel）。
 struct RemoteServerConfig: Equatable {
-    var mode: String // "local" | "remote"
+    var mode: String // "remote"
     var serverURL: String
 
-    var isRemote: Bool { mode == "remote" }
+    var isRemote: Bool { true }
 
-    static let defaultMode = "local"
+    static let defaultMode = "remote"
 }
 
-/// 远程 Mac 服务 `/desktop/status` 响应摘要。
+/// 远程服务器 `/desktop/status` 响应摘要。
 struct RemoteServerStatus: Equatable {
     let instanceID: String
     let workspace: String
@@ -85,8 +85,8 @@ enum ServerCredentialStore {
     }
 }
 
-/// 远程 HTTP 传输层：通过 Mac HTTP `/api/v1/firesky/desktop/*` 异步作业端点
-/// 承载与桌面 / FFI 完全同构的 JSON-lines 协议帧。
+/// 远程 HTTP 传输层：通过 FireSky HTTP `/api/v1/firesky/desktop/*` 异步作业端点
+/// 承载 JSON-lines 协议帧；优先订阅 SSE `/events` 实时流，不可用或断流时自动回退自适应轮询。
 @MainActor
 final class RemoteHttpTransport: EngineTransport {
     var onFrame: ((Data) -> Void)?
@@ -279,8 +279,8 @@ final class RemoteHttpTransport: EngineTransport {
                 )
                 if case .engineExited = startOutcome {
                     throw EngineError(message: L10n.text(
-                        "Mac 端服务实例已刷新但仍冲突，请重试。",
-                        "Mac server instance changed again; please retry."
+                        "服务端实例已刷新但仍冲突，请重试。",
+                        "Server instance changed again; please retry."
                     ))
                 }
             }
@@ -289,7 +289,15 @@ final class RemoteHttpTransport: EngineTransport {
                 await sendCancel(requestID: id, instanceID: currentInstance)
             }
 
-            try await pollUntilTerminal(id: id, method: method, instanceID: currentInstance)
+            let streamOutcome = try await streamEventsUntilTerminal(id: id, instanceID: currentInstance)
+            if case .fallback(let lastSeq) = streamOutcome {
+                try await pollUntilTerminal(
+                    id: id,
+                    method: method,
+                    instanceID: currentInstance,
+                    initialLastSeq: lastSeq
+                )
+            }
         } catch is CancellationError {
             return
         } catch let error as EngineError {
@@ -312,6 +320,11 @@ final class RemoteHttpTransport: EngineTransport {
     private enum StartOutcome {
         case accepted
         case engineExited
+    }
+
+    private enum SSEStreamOutcome {
+        case terminal
+        case fallback(lastSeq: UInt64)
     }
 
     private func ensureInstanceID() async throws -> String {
@@ -382,9 +395,133 @@ final class RemoteHttpTransport: EngineTransport {
         throw Self.mapHTTPError(statusCode: statusCode, data: data, method: method)
     }
 
-    private func pollUntilTerminal(id: String, method: String, instanceID: String) async throws {
-        let startedAt = Date()
+    // MARK: - SSE 实时流 + 自适应轮询回退
+
+    private func streamEventsUntilTerminal(id: String, instanceID: String) async throws -> SSEStreamOutcome {
+        let request = Self.makeRequest(
+            baseURL: baseURL,
+            relativePath: "api/v1/firesky/desktop/jobs/\(id)/events",
+            queryItems: [URLQueryItem(name: "instance_id", value: instanceID)],
+            method: "GET",
+            token: token,
+            accept: "text/event-stream"
+        )
         var lastSeq: UInt64 = 0
+        do {
+            let (bytes, response) = try await session.bytes(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode) else {
+                return .fallback(lastSeq: 0)
+            }
+
+            var lineBuffer = Data()
+            var pendingDataLines: [String] = []
+
+            func processPayload(_ payload: String) async -> Bool {
+                guard let data = payload.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? JSONObject else {
+                    return false
+                }
+                if let seqNumber = json["progress_seq"] as? NSNumber {
+                    let seq = seqNumber.uint64Value
+                    if seq > lastSeq, let progress = json["progress"] as? JSONObject {
+                        lastSeq = seq
+                        emit(["id": id, "type": "progress", "event": progress])
+                    }
+                }
+                let jobStatus = (json["status"] as? String) ?? "running"
+                switch jobStatus {
+                case "running":
+                    return false
+                case "done":
+                    await releaseJob(requestID: id, instanceID: instanceID)
+                    let result = json["result"] as? JSONObject ?? [:]
+                    emit(["id": id, "type": "result", "result": result])
+                    return true
+                case "failed", "cancelled":
+                    await releaseJob(requestID: id, instanceID: instanceID)
+                    var errorPayload = json["error"] as? JSONObject ?? [:]
+                    if errorPayload["message"] == nil {
+                        errorPayload["message"] = jobStatus == "cancelled"
+                            ? "desktop operation cancelled"
+                            : L10n.text("远程任务执行失败。", "Remote job failed.")
+                    }
+                    emit(["id": id, "type": "error", "error": errorPayload])
+                    return true
+                default:
+                    return false
+                }
+            }
+
+            func consumeLine(_ rawLine: String) async -> Bool {
+                let line = rawLine.hasSuffix("\r") ? String(rawLine.dropLast()) : rawLine
+                if line.isEmpty {
+                    guard !pendingDataLines.isEmpty else { return false }
+                    let joined = pendingDataLines.joined(separator: "\n")
+                    pendingDataLines.removeAll(keepingCapacity: true)
+                    return await processPayload(joined)
+                }
+                if line.hasPrefix(":") {
+                    return false
+                }
+                if line.hasPrefix("data:") {
+                    var value = String(line.dropFirst(5))
+                    if value.hasPrefix(" ") {
+                        value.removeFirst()
+                    }
+                    pendingDataLines.append(value)
+                    let candidate = pendingDataLines.joined(separator: "\n")
+                    if let data = candidate.data(using: .utf8),
+                       (try? JSONSerialization.jsonObject(with: data)) is JSONObject {
+                        pendingDataLines.removeAll(keepingCapacity: true)
+                        return await processPayload(candidate)
+                    }
+                }
+                return false
+            }
+
+            for try await byte in bytes {
+                try Task.checkCancellation()
+                guard started else { return .terminal }
+                if byte == 0x0A { // '\n'
+                    let line = String(data: lineBuffer, encoding: .utf8) ?? ""
+                    lineBuffer.removeAll(keepingCapacity: true)
+                    if await consumeLine(line) {
+                        return .terminal
+                    }
+                } else {
+                    lineBuffer.append(byte)
+                }
+            }
+
+            if !lineBuffer.isEmpty, let trailing = String(data: lineBuffer, encoding: .utf8) {
+                if await consumeLine(trailing) {
+                    return .terminal
+                }
+            }
+            if !pendingDataLines.isEmpty {
+                let joined = pendingDataLines.joined(separator: "\n")
+                pendingDataLines.removeAll()
+                if await processPayload(joined) {
+                    return .terminal
+                }
+            }
+            return .fallback(lastSeq: lastSeq)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return .fallback(lastSeq: lastSeq)
+        }
+    }
+
+    private func pollUntilTerminal(
+        id: String,
+        method: String,
+        instanceID: String,
+        initialLastSeq: UInt64 = 0
+    ) async throws {
+        let startedAt = Date()
+        var lastSeq = initialLastSeq
 
         while started {
             try Task.checkCancellation()
@@ -407,8 +544,8 @@ final class RemoteHttpTransport: EngineTransport {
             if statusCode == 409, Self.parseErrorCode(from: data) == "engine_exited" {
                 self.instanceID = nil
                 throw EngineError(message: L10n.text(
-                    "Mac 端服务已重启，请重试。",
-                    "Mac server restarted; please retry."
+                    "服务端实例已重启，请重试。",
+                    "Server instance restarted; please retry."
                 ))
             }
             guard (200..<300).contains(statusCode) else {
@@ -509,6 +646,7 @@ final class RemoteHttpTransport: EngineTransport {
         queryItems: [URLQueryItem] = [],
         method: String,
         token: String,
+        accept: String = "application/json",
         body: Data? = nil
     ) -> URLRequest {
         var url = baseURL.appendingPathComponent(relativePath)
@@ -520,7 +658,7 @@ final class RemoteHttpTransport: EngineTransport {
         }
         var request = URLRequest(url: url)
         request.httpMethod = method
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue(accept, forHTTPHeaderField: "Accept")
         if !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
@@ -565,8 +703,8 @@ final class RemoteHttpTransport: EngineTransport {
               !instanceID.isEmpty,
               json["running"] as? Bool == true else {
             throw EngineError(message: L10n.text(
-                "远程服务状态响应无效，请确认目标为 FireSky Mac 桌面服务。",
-                "Invalid status response; ensure the URL points to a FireSky Mac server."
+                "远程服务状态响应无效，请确认目标为 FireSky 桌面/Docker 服务。",
+                "Invalid status response; ensure the URL points to a FireSky server."
             ))
         }
         let workspace = json["workspace"] as? String ?? ""
@@ -617,8 +755,8 @@ final class RemoteHttpTransport: EngineTransport {
         }
         if statusCode == 429 {
             return EngineError(message: L10n.text(
-                "Mac 端任务队列繁忙，请稍后重试。",
-                "Mac server is busy; please try again shortly."
+                "服务端任务队列繁忙，请稍后重试。",
+                "Server is busy; please try again shortly."
             ))
         }
         if !serverMessage.isEmpty {
@@ -638,7 +776,7 @@ final class RemoteHttpTransport: EngineTransport {
             case .cannotFindHost, .dnsLookupFailed:
                 return L10n.text("无法解析服务器域名，请检查服务器地址。", "Could not resolve server host; check the URL.")
             case .cannotConnectToHost, .networkConnectionLost, .notConnectedToInternet:
-                return L10n.text("无法连接到远程服务器，请确认 Mac 服务已开启且网络可达。", "Could not connect to remote server; ensure Mac service is running.")
+                return L10n.text("无法连接到远程服务器，请确认服务端已开启且网络可达。", "Could not connect to remote server; ensure the server is running.")
             case .secureConnectionFailed, .serverCertificateUntrusted, .serverCertificateHasBadDate, .serverCertificateNotYetValid:
                 return L10n.text("TLS 安全连接失败，请检查 HTTPS 证书或隧道地址。", "TLS connection failed; check the HTTPS certificate or tunnel URL.")
             case .appTransportSecurityRequiresSecureConnection:

@@ -121,6 +121,53 @@ class MockEngineChainTest {
     }
 
     @Test
+    fun mockRegionalAndNowcastChains() {
+        val client = EngineClient(MockTransport())
+        client.start(JSONObject())
+        try {
+            runBlocking {
+                val hello = withTimeout(10_000) { client.call("hello") }
+                assertTrue((hello.optJSONArray("regions")?.length() ?: 0) >= 1)
+
+                val regionalCheck = withTimeout(10_000) {
+                    client.call(
+                        "check",
+                        JSONObject().put("kind", "regional").put("payload", payload().put("model_source", "gfs").put("regions", org.json.JSONArray(listOf("china")))),
+                    )
+                }
+                val regSession = regionalCheck.optString("session")
+                withTimeout(20_000) { client.call("prepare", JSONObject().put("session", regSession)) }
+                val regForecast = withTimeout(20_000) {
+                    client.call("forecast", JSONObject().put("session", regSession).put("confirmed", true))
+                }
+                val gfsReg = regForecast.optJSONObject("model_results")?.optJSONObject("gfs")
+                assertNotNull(gfsReg)
+                assertTrue((gfsReg?.optJSONArray("points")?.length() ?: 0) > 0)
+                assertEquals("available", gfsReg?.optJSONObject("city_ranking")?.optString("status"))
+
+                val nowcastCheck = withTimeout(10_000) {
+                    client.call(
+                        "check",
+                        JSONObject().put("kind", "nowcast").put("payload", payload().put("forecast_mode", "nowcast").put("model_source", "satellite")),
+                    )
+                }
+                val nowSession = nowcastCheck.optString("session")
+                withTimeout(20_000) { client.call("prepare", JSONObject().put("session", nowSession)) }
+                val nowForecast = withTimeout(20_000) {
+                    client.call("forecast", JSONObject().put("session", nowSession).put("confirmed", true))
+                }
+                val nowcastObj = nowForecast.optJSONObject("nowcast")
+                assertNotNull(nowcastObj)
+                assertTrue(nowcastObj!!.has("lagrangian_b13_trend_k_per_hour"))
+                assertTrue(nowcastObj.has("horizon_gap_score"))
+                assertTrue(nowcastObj.has("overcast_shadow_factor"))
+            }
+        } finally {
+            client.stop()
+        }
+    }
+
+    @Test
     fun stopFailsPendingCalls() {
         val client = EngineClient(MockTransport())
         client.start(JSONObject())

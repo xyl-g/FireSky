@@ -923,6 +923,14 @@ fn report_payload(
     adjustment["solar_path_profile"] = diagnostic
         .map(|v| v["cross_section"]["profile"].clone())
         .unwrap_or(json!([]));
+    adjustment["horizon_gap_score"] = diagnostic
+        .and_then(|v| v["horizon_gap_score"].as_f64())
+        .map(|v| json!(v))
+        .unwrap_or_else(|| json!(1.0));
+    adjustment["overcast_shadow_factor"] = diagnostic
+        .and_then(|v| v["overcast_shadow_factor"].as_f64())
+        .map(|v| json!(v))
+        .unwrap_or_else(|| json!(1.0));
     let adjustment_object = adjustment
         .as_object_mut()
         .ok_or("native nowcast adjustment is invalid")?;
@@ -1341,6 +1349,8 @@ mod tests {
         ] {
             assert!(report.get(key).is_some(), "missing forecast field {key}");
         }
+        assert!(report["nowcast"]["horizon_gap_score"].is_f64());
+        assert!(report["nowcast"]["overcast_shadow_factor"].is_f64());
     }
 
     #[test]

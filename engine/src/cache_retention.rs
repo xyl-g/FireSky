@@ -82,17 +82,6 @@ impl ResultSummary {
     }
 }
 
-fn env_path(workspace: &Path, key: &str, default: &str) -> PathBuf {
-    let path = env::var_os(key)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(default));
-    if path.is_absolute() {
-        path
-    } else {
-        workspace.join(path)
-    }
-}
-
 fn nonnegative(value: Option<&Value>, key: &str, max: f64) -> Result<Option<f64>, String> {
     value
         .map(|value| {

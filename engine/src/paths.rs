@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 use std::{
     env, fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    sync::atomic::AtomicBool,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -234,7 +234,7 @@ pub fn migrate(workspace: &Path) -> Result<Value, String> {
             && dir_contents(&to)[0] == from
         {
             let staged = to.parent().unwrap().join("reports-migrating-tmp");
-            let mut step = || -> Result<(), String> {
+            let step = || -> Result<(), String> {
                 fs::rename(&from, &staged).map_err(|e| e.to_string())?;
                 fs::remove_dir_all(&to).map_err(|e| e.to_string())?;
                 fs::rename(&staged, &to).map_err(|e| e.to_string())
@@ -320,7 +320,6 @@ pub fn migrate(workspace: &Path) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     fn remove_env(key: &str) {
         // 测试进程内不遗留跨用例的覆盖变量。

@@ -355,10 +355,15 @@ private fun ForecastResultCard(state: WorkbenchState, taskId: String) {
             state.taskResult != null -> {
                 WorkSurface(Modifier.fillMaxWidth(), grouped = true, cornerRadius = 10.dp) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        val results = state.taskResult?.optJSONObject("model_results") ?: JSONObject()
-                        val errors = state.taskResult?.optJSONObject("model_errors") ?: JSONObject()
-                        for (model in COMPARISON_MODELS) {
-                            ForecastResultModelRow(model, results.optJSONObject(model), errors.optString(model))
+                        val taskResult = state.taskResult!!
+                        if (taskResult.has("nowcast") && !taskResult.has("model_results")) {
+                            ForecastResultModelRow("NOWCAST", taskResult, "")
+                        } else {
+                            val results = taskResult.optJSONObject("model_results") ?: JSONObject()
+                            val errors = taskResult.optJSONObject("model_errors") ?: JSONObject()
+                            for (model in COMPARISON_MODELS) {
+                                ForecastResultModelRow(model, results.optJSONObject(model), errors.optString(model))
+                            }
                         }
                     }
                 }

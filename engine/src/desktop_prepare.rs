@@ -8,7 +8,7 @@ use crate::{
     ads, cams, cams_data, desktop_context, ecmwf_data, gfs_data, request_file, time_contract,
 };
 use chrono::{DateTime, Duration, Utc};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
@@ -295,7 +295,7 @@ pub(crate) fn date_policy(
     })
 }
 
-pub(crate) fn payload_policy(input: &Input) -> Result<DatePolicy, String> {
+fn payload_policy(input: &Input) -> Result<DatePolicy, String> {
     date_policy(
         input.payload["target_date"].as_str().unwrap_or(""),
         input.payload["timezone_name"].as_str().unwrap_or("UTC"),

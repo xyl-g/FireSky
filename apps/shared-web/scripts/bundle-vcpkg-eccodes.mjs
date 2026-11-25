@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { copyEccodesDefinitions } from "./bundle-macos-eccodes.mjs";
 import { copyTreeDereferenced } from "./native-target.mjs";
 export const METADATA_NAME = "BUNDLE-METADATA.json";
 
@@ -81,7 +82,9 @@ export function bundleVcpkgEccodes({ installed, ports, triplet, output }) {
       for (const name of ["definitions", "samples"]) {
         const path = join(prefix, "share/eccodes", name);
         if (!existsSync(path)) throw new Error(`Installed vcpkg ecCodes ${name} missing`);
-        copyTreeDereferenced(path, join(output, "share/eccodes", name));
+        const destination = join(output, "share/eccodes", name);
+        if (name === "definitions") copyEccodesDefinitions(path, destination);
+        else copyTreeDereferenced(path, destination);
         files.push(`eccodes/share/eccodes/${name}`);
       }
     }

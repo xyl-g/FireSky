@@ -8,63 +8,147 @@ struct PointWorkbenchView: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var modeIndicator
+
+    private var isRegularPoint: Bool {
+        store.activeWorkbenchMode == .point && sizeClass == .regular && !typeSize.isAccessibilitySize
+    }
 
     var body: some View {
         Group {
-            if sizeClass == .regular && !typeSize.isAccessibilitySize {
+            if isRegularPoint {
                 VStack(alignment: .leading, spacing: 10) {
-                    if store.isRemoteMode {
-                        remoteServerPill
-                            .padding(.horizontal, 18)
-                            .padding(.top, 12)
-                    }
-                    HStack(alignment: .top, spacing: 16) {
-                        ScrollView { VStack(spacing: 12) { controls; runControls }.padding(1) }.frame(width: 320)
+                    workbenchHeaderBar
+                        .padding(.horizontal, 18)
+                        .padding(.top, 12)
+                    if store.needsRemoteOnboarding {
                         ScrollView {
-                            VStack(spacing: 12) { hero; results }.padding(1)
-                        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                            RemoteOnboardingCard()
+                                .padding(.horizontal, 18)
+                                .padding(.bottom, 18)
+                        }
+                    } else {
+                        HStack(alignment: .top, spacing: 16) {
+                            ScrollView { VStack(spacing: 12) { controls; runControls }.padding(1) }.frame(width: 320)
+                            ScrollView {
+                                VStack(spacing: 12) { hero; results }.padding(1)
+                            }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        }
+                        .padding(.horizontal, 18)
+                        .padding(.bottom, 18)
                     }
-                    .padding(.horizontal, 18)
-                    .padding(.bottom, 18)
-                    .padding(.top, store.isRemoteMode ? 0 : 18)
                 }
             } else {
                 ScrollView {
                     VStack(spacing: 14) {
-                        if store.isRemoteMode {
-                            remoteServerPill
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                        workbenchHeaderBar
+                        if store.needsRemoteOnboarding {
+                            RemoteOnboardingCard()
+                        } else if store.activeWorkbenchMode == .regional {
+                            RegionalWorkbenchView()
+                        } else if store.activeWorkbenchMode == .nowcast {
+                            NowcastWorkbenchView()
+                        } else {
+                            controls
+                            hero
+                            results
                         }
-                        controls
-                        hero
-                        results
                     }.padding(.horizontal, 16).padding(.vertical, 12)
                 }
                 .safeAreaInset(edge: .bottom, spacing: 0) {
-                    VStack(spacing: 0) {
-                        Divider().opacity(0.45)
-                        runControls.padding(.horizontal, 16).padding(.vertical, 10)
+                    if store.activeWorkbenchMode == .point && !store.needsRemoteOnboarding {
+                        VStack(spacing: 0) {
+                            Divider().opacity(0.45)
+                            runControls.padding(.horizontal, 16).padding(.vertical, 10)
+                        }
+                        .background(.regularMaterial)
                     }
-                    .background(.regularMaterial)
                 }
             }
         }
         .workPageBackground()
     }
 
+    @ViewBuilder
+    private var workbenchHeaderBar: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if store.isRemoteMode && !store.needsRemoteOnboarding {
+                HStack {
+                    remoteServerPill
+                    Spacer(minLength: 0)
+                }
+            }
+            if !store.needsRemoteOnboarding {
+                workbenchModeSwitcher
+            }
+        }
+    }
+
+    private var workbenchModeSwitcher: some View {
+        HStack(spacing: 4) {
+            ForEach(WorkbenchMode.allCases) { mode in
+                let selected = store.workbenchMode == mode.rawValue
+                Button {
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                        store.switchWorkbenchMode(mode)
+                    }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: mode.symbol)
+                            .font(.system(size: 12, weight: selected ? .semibold : .regular))
+                        Text(mode.title)
+                            .font(.subheadline.weight(selected ? .semibold : .regular))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 38)
+                    .foregroundStyle(selected ? Color.primary : Color.secondary)
+                    .background {
+                        if selected {
+                            Capsule()
+                                .fill(scheme == .dark ? Color.white.opacity(0.11) : Color.white.opacity(0.95))
+                                .matchedGeometryEffect(id: "ios-wb-mode-pill", in: modeIndicator)
+                        }
+                    }
+                    .overlay(alignment: .bottom) {
+                        if selected {
+                            Capsule().fill(warm).frame(width: 22, height: 2.5)
+                                .offset(y: -2)
+                                .matchedGeometryEffect(id: "ios-wb-mode-line", in: modeIndicator)
+                        }
+                    }
+                    .contentShape(Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(store.busy)
+                .accessibilityIdentifier("workbench-mode-\(mode.rawValue)")
+                .accessibilityAddTraits(selected ? .isSelected : [])
+            }
+        }
+        .padding(4)
+        .background(
+            Capsule().fill(scheme == .dark ? Color(0x16, 0x1E, 0x2E) : Color(0xEA, 0xF0, 0xF6))
+        )
+        .overlay {
+            Capsule().strokeBorder(FSDesign.surfaceBorder(role: .grouped, dark: scheme == .dark, emphasized: false), lineWidth: 1)
+        }
+    }
+
     private var remoteServerPill: some View {
         let dark = scheme == .dark
         return Button {
-            store.settingsCategory = "高级"
+            store.settingsCategory = "通用"
             store.page = .settings
         } label: {
             HStack(spacing: 7) {
                 Circle()
                     .fill(store.online ? Color.green : Color.orange)
                     .frame(width: 7, height: 7)
-                Label(L10n.text("远程 Mac", "Remote Mac"), systemImage: "network")
+                Label(store.remoteServerHostLabel, systemImage: "network")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.primary)
+                    .lineLimit(1)
                 if !store.remoteWorkspace.isEmpty {
                     Text("· \(URL(fileURLWithPath: store.remoteWorkspace).lastPathComponent)")
                         .font(.caption2)
@@ -374,7 +458,7 @@ struct WorkParametersView: View {
     }
 }
 
-private struct WorkDateButton: View {
+struct WorkDateButton: View {
     @EnvironmentObject private var store: Store
     var body: some View {
         Button {

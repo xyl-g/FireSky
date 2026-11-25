@@ -281,7 +281,7 @@ fn candidates(
 
 /// 模型源（gfs/ecmwf/cams）候选：GRIB 按周期分组 + 索引/元数据 sidecar。
 fn model_candidates(
-    workspace: &Path,
+    _workspace: &Path,
     scope: &Scope,
     root: &Path,
     cancel: &AtomicBool,
@@ -448,7 +448,7 @@ pub fn execute(workspace: &Path, params: &Value, cancel: &AtomicBool) -> Result<
     if params["confirm"] != json!(true) {
         return Err("data delete execute requires confirm=true".into());
     }
-    let (candidates, category_protected) = candidates(workspace, &scope, cancel)?;
+    let (candidates, _category_protected) = candidates(workspace, &scope, cancel)?;
     if candidates.is_empty() {
         return Err("nothing to delete for this scope".into());
     }

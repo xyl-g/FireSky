@@ -1,9 +1,41 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, statSync, writeFileSync, chmodSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync, chmodSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { copyTreeDereferenced, inspectBinary } from "./native-target.mjs";
 export const METADATA_NAME = "BUNDLE-METADATA.json";
+export const UNUSED_ECCODES_DEFINITION_DIRS = Object.freeze([
+  "bufr",
+  "grib1",
+  "grib3",
+  "taf",
+  "metar",
+  "gts",
+  "hdf5",
+  "cdf",
+  "tide",
+  "budg",
+  "diag",
+  "wrap",
+]);
+
+/** Copy ecCodes definitions while pruning unused format directories (FireSky only decodes GRIB2). */
+export function copyEccodesDefinitions(source, destination) {
+  const unused = new Set(UNUSED_ECCODES_DEFINITION_DIRS);
+  mkdirSync(destination, { recursive: true });
+  for (const entry of readdirSync(source)) {
+    const srcPath = join(source, entry);
+    const dstPath = join(destination, entry);
+    if (unused.has(entry) && statSync(srcPath).isDirectory()) {
+      rmSync(dstPath, { recursive: true, force: true });
+      continue;
+    }
+    copyTreeDereferenced(srcPath, dstPath);
+  }
+  for (const dir of UNUSED_ECCODES_DEFINITION_DIRS) {
+    rmSync(join(destination, dir), { recursive: true, force: true });
+  }
+}
 
 function command(name, args) {
   const result = spawnSync(name, args, { encoding: "utf8", maxBuffer: 32 * 1024 * 1024 });
@@ -73,7 +105,9 @@ export function bundleMacosEccodes(resources, { env = process.env, execute = com
   for (const name of ["definitions", "samples"]) {
     const source = join(prefix, "share/eccodes", name);
     if (!existsSync(source)) throw new Error(`ecCodes ${name} missing: ${source}`);
-    copyTreeDereferenced(source, join(resources, "eccodes", name));
+    const destination = join(resources, "eccodes", name);
+    if (name === "definitions") copyEccodesDefinitions(source, destination);
+    else copyTreeDereferenced(source, destination);
   }
   if (env.FIRESKY_NATIVE_DEPENDENCIES_MANIFEST) {
     const metadata = JSON.parse(readFileSync(resolve(env.FIRESKY_NATIVE_DEPENDENCIES_MANIFEST), "utf8"));
