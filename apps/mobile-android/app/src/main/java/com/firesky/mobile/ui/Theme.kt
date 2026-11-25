@@ -1,5 +1,8 @@
 package com.firesky.mobile.ui
 
+import android.app.Activity
+import android.content.Context
+import android.content.ContextWrapper
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
@@ -26,21 +29,26 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Error
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PauseCircle
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextFieldColors
+import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,16 +68,19 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.drawscope.withTransform
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
 import com.firesky.mobile.R
 import kotlin.math.PI
 import kotlin.math.cos
@@ -110,6 +121,7 @@ fun AccentButton(
     title: String,
     enabled: Boolean = true,
     icon: ImageVector? = null,
+    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     val dark = LocalFireSkyDark.current
@@ -119,30 +131,30 @@ fun AccentButton(
             elevation = 6.dp,
             shape = shape,
             clip = false,
-            ambientColor = Color(0xFFB84B2E).copy(alpha = 0.35f),
-            spotColor = Color(0xFFB84B2E).copy(alpha = 0.30f),
+            ambientColor = Color(0xFFB84B2E).copy(alpha = 0.30f),
+            spotColor = Color(0xFFB84B2E).copy(alpha = 0.26f),
         )
     } else {
         Modifier
     }
+    val disabledBg = if (dark) Color(0xFF283448) else Color(0xFFE2E8F0)
+    val disabledFg = if (dark) Color(0xFF8899B2) else Color(0xFF8190A3)
     Button(
         onClick = onClick,
         enabled = enabled,
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
             .then(shadowMod)
-            .graphicsLayer { alpha = if (enabled) 1f else 0.45f }
             .background(
-                if (enabled) accentGradientBrush()
-                else SolidColor(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.24f)),
+                if (enabled) accentGradientBrush() else SolidColor(disabledBg),
                 shape,
             ),
         colors = ButtonDefaults.buttonColors(
             containerColor = Color.Transparent,
             contentColor = actionForeground(),
             disabledContainerColor = Color.Transparent,
-            disabledContentColor = if (dark) Color(0xFFE6EDF0) else Color.White,
+            disabledContentColor = disabledFg,
         ),
         elevation = ButtonDefaults.buttonElevation(0.dp, 0.dp, 0.dp, 0.dp, 0.dp),
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
@@ -161,6 +173,77 @@ fun AccentButton(
             fontSize = 15.sp,
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+    }
+}
+
+/** 柔和色调次级操作按钮（对齐 AccentButton 高度与圆角）。 */
+@Composable
+fun SecondaryButton(
+    title: String,
+    enabled: Boolean = true,
+    icon: ImageVector? = null,
+    loading: Boolean = false,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    val dark = LocalFireSkyDark.current
+    val shape = RoundedCornerShape(14.dp)
+    val bg = when {
+        !enabled && dark -> Color(0xFF1D2638)
+        !enabled -> Color(0xFFF1F5F9)
+        dark -> Color(0xFF222D42)
+        else -> Color(0xFFEEF3F8)
+    }
+    val fg = when {
+        !enabled && dark -> Color(0xFF6B7C95)
+        !enabled -> Color(0xFF94A3B8)
+        dark -> Color(0xFFE6EDF0)
+        else -> Color(0xFF233042)
+    }
+    val borderColor = when {
+        !enabled && dark -> Color(0xFF394760).copy(alpha = 0.4f)
+        !enabled -> Color(0xFFCBD5E1).copy(alpha = 0.55f)
+        dark -> Color(0xFF50617B).copy(alpha = 0.55f)
+        else -> Color(0xFFC9D5E1).copy(alpha = 0.85f)
+    }
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp),
+        shape = shape,
+        border = BorderStroke(0.75.dp, borderColor),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = bg,
+            contentColor = fg,
+            disabledContainerColor = bg,
+            disabledContentColor = fg,
+        ),
+        elevation = ButtonDefaults.buttonElevation(0.dp, 0.dp, 0.dp, 0.dp, 0.dp),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 12.dp),
+    ) {
+        if (loading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(15.dp),
+                strokeWidth = 1.75.dp,
+                color = fg,
+            )
+            Spacer(Modifier.width(7.dp))
+        } else if (icon != null) {
+            Icon(icon, contentDescription = null, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(7.dp))
+        }
+        Text(
+            title,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }
@@ -212,7 +295,9 @@ fun Modifier.fireSkyPageBackground(): Modifier {
 @Composable
 fun FireSkyBackdrop(modifier: Modifier = Modifier, content: @Composable () -> Unit) {
     Box(modifier.fireSkyPageBackground()) {
-        content()
+        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
+            content()
+        }
     }
 }
 
@@ -250,7 +335,7 @@ private val DarkScheme = darkColorScheme(
 
 private val LightScheme = lightColorScheme(
     primary = WarmLight,
-    onPrimary = Color(0xFF241810),
+    onPrimary = Color.White,
     primaryContainer = Color(0xFFF7E1D8),
     onPrimaryContainer = Color(0xFF9B401F),
     secondary = Teal,
@@ -265,6 +350,25 @@ private val LightScheme = lightColorScheme(
     onSurface = Color(0xFF1B2224),
 )
 
+/** 按比例行高的 Material 3 字体排版，避免小字号继承固定 24sp 行高产生过疏双倍行距。 */
+private val FireSkyTypography = Typography(
+    titleLarge = TextStyle(fontSize = 22.sp, lineHeight = 1.28.em, fontWeight = FontWeight.Bold),
+    titleMedium = TextStyle(fontSize = 15.sp, lineHeight = 1.35.em, fontWeight = FontWeight.SemiBold),
+    titleSmall = TextStyle(fontSize = 13.sp, lineHeight = 1.35.em, fontWeight = FontWeight.SemiBold),
+    bodyLarge = TextStyle(fontSize = 15.sp, lineHeight = 1.42.em),
+    bodyMedium = TextStyle(fontSize = 13.sp, lineHeight = 1.42.em),
+    bodySmall = TextStyle(fontSize = 12.sp, lineHeight = 1.40.em),
+    labelLarge = TextStyle(fontSize = 14.sp, lineHeight = 1.35.em, fontWeight = FontWeight.Medium),
+    labelMedium = TextStyle(fontSize = 12.sp, lineHeight = 1.35.em, fontWeight = FontWeight.Medium),
+    labelSmall = TextStyle(fontSize = 11.sp, lineHeight = 1.35.em, fontWeight = FontWeight.Medium),
+)
+
+private tailrec fun Context.findActivity(): Activity? = when (this) {
+    is Activity -> this
+    is ContextWrapper -> baseContext.findActivity()
+    else -> null
+}
+
 @Composable
 fun FireSkyTheme(appearance: String, content: @Composable () -> Unit) {
     val dark = when (appearance) {
@@ -272,8 +376,22 @@ fun FireSkyTheme(appearance: String, content: @Composable () -> Unit) {
         "light" -> false
         else -> isSystemInDarkTheme()
     }
+    val view = LocalView.current
+    if (!view.isInEditMode) {
+        SideEffect {
+            val window = view.context.findActivity()?.window ?: return@SideEffect
+            WindowCompat.getInsetsController(window, view).apply {
+                isAppearanceLightStatusBars = !dark
+                isAppearanceLightNavigationBars = !dark
+            }
+        }
+    }
     CompositionLocalProvider(LocalFireSkyDark provides dark) {
-        MaterialTheme(colorScheme = if (dark) DarkScheme else LightScheme, content = content)
+        MaterialTheme(
+            colorScheme = if (dark) DarkScheme else LightScheme,
+            typography = FireSkyTypography,
+            content = content,
+        )
     }
 }
 
@@ -287,7 +405,7 @@ fun WorkSurface(
     content: @Composable () -> Unit,
 ) {
     val dark = LocalFireSkyDark.current
-    val radius = cornerRadius ?: if (grouped) 12.dp else 16.dp
+    val radius = cornerRadius ?: if (grouped) 14.dp else 20.dp
     val shape = RoundedCornerShape(radius)
     val fill = if (grouped) {
         if (dark) Color(0xFF202A3D) else Color(0xFFF3F6FA)
@@ -295,19 +413,19 @@ fun WorkSurface(
         if (dark) Color(0xFF182132) else Color(0xFFFCFDFF)
     }
     val borderColor = when {
-        emphasized -> if (dark) Color(0xFFFF9B6A).copy(alpha = 0.50f) else Color(0xFFC45B38).copy(alpha = 0.38f)
-        grouped -> if (dark) Color(0xFF50617B).copy(alpha = 0.45f) else Color(0xFFD8E1EA).copy(alpha = 0.85f)
-        else -> if (dark) Color(0xFF4B5D78).copy(alpha = 0.50f) else Color(0xFFC9D5E1).copy(alpha = 0.75f)
+        emphasized -> if (dark) Color(0xFFFF9B6A).copy(alpha = 0.50f) else Color(0xFFC45B38).copy(alpha = 0.36f)
+        grouped -> if (dark) Color.White.copy(alpha = 0.08f) else Color(0xFFD8E1EA).copy(alpha = 0.78f)
+        else -> if (dark) Color.White.copy(alpha = 0.09f) else Color(0xFFC9D5E1).copy(alpha = 0.60f)
     }
     val shadowModifier = if (dark || grouped) {
         Modifier
     } else {
         Modifier.shadow(
-            elevation = 2.dp,
+            elevation = 3.dp,
             shape = shape,
             clip = false,
-            ambientColor = Color(0xFF2A3C58).copy(alpha = 0.18f),
-            spotColor = Color(0xFF2A3C58).copy(alpha = 0.14f),
+            ambientColor = Color(0xFF2A3C58).copy(alpha = 0.14f),
+            spotColor = Color(0xFF2A3C58).copy(alpha = 0.10f),
         )
     }
     Surface(
@@ -370,16 +488,15 @@ fun SoftPillChip(
     leadingDotColor: Color? = null,
 ) {
     val dark = LocalFireSkyDark.current
-    val bg = tint?.copy(alpha = if (dark) 0.16f else 0.12f)
-        ?: if (dark) Color(0xFF202A3D) else Color(0xFFF0F4F8)
+    val resolvedTint = tint ?: if (dark) Color(0xFF9EB0C9) else Color(0xFF5D6D82)
+    val bg = resolvedTint.copy(alpha = if (dark) 0.16f else 0.10f)
     val fg = tint ?: MaterialTheme.colorScheme.onSurfaceVariant
-    val border = tint?.copy(alpha = 0.28f)
-        ?: if (dark) Color(0xFF4B5D78).copy(alpha = 0.40f) else Color(0xFFC9D5E1).copy(alpha = 0.65f)
+    val border = resolvedTint.copy(alpha = if (dark) 0.30f else 0.24f)
     Box(
         modifier = modifier
             .background(bg, CircleShape)
             .border(0.75.dp, border, CircleShape)
-            .padding(horizontal = 9.dp, vertical = 4.dp),
+            .padding(horizontal = 10.dp, vertical = 4.dp),
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -445,7 +562,7 @@ fun CapsuleCategoryBar(
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .heightIn(min = 40.dp)
+                    .heightIn(min = 38.dp)
                     .then(pillShadow)
                     .clip(CircleShape)
                     .background(pillFill, CircleShape)
@@ -462,7 +579,7 @@ fun CapsuleCategoryBar(
                             icon,
                             contentDescription = null,
                             modifier = Modifier.size(15.dp),
-                            tint = if (selected) MaterialTheme.colorScheme.onSurface
+                            tint = if (selected) warm
                             else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
                         )
                     }
@@ -474,16 +591,6 @@ fun CapsuleCategoryBar(
                         else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                    )
-                }
-                if (selected) {
-                    Box(
-                        Modifier
-                            .align(Alignment.BottomCenter)
-                            .padding(bottom = 2.dp)
-                            .width(22.dp)
-                            .height(2.5.dp)
-                            .background(warm, CircleShape),
                     )
                 }
             }
@@ -763,6 +870,35 @@ fun FireSkyMarkScene(size: Dp = 96.dp, modifier: Modifier = Modifier) {
             }
         }
         FireSkyMark(Modifier.size(size * 0.62f))
+    }
+}
+
+/** 瘦客户端只读边界提示条（锁图标 + 柔和底色）。 */
+@Composable
+fun ReadOnlyNoticeBanner(text: String, modifier: Modifier = Modifier) {
+    val dark = LocalFireSkyDark.current
+    val tint = coolAccentColor()
+    val bg = tint.copy(alpha = if (dark) 0.12f else 0.08f)
+    val border = tint.copy(alpha = if (dark) 0.28f else 0.22f)
+    Surface(
+        modifier = modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = bg,
+        border = BorderStroke(0.75.dp, border),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Icon(Icons.Filled.Lock, contentDescription = null, modifier = Modifier.size(15.dp), tint = tint)
+            Text(
+                text,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.76f),
+                modifier = Modifier.weight(1f),
+            )
+        }
     }
 }
 

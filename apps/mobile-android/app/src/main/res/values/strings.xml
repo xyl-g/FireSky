@@ -2,9 +2,9 @@
     <string name="app_name">FireSky</string>
 
     <!-- 导航 -->
-    <string name="nav_point">单点预测</string>
-    <string name="nav_data">数据管理</string>
-    <string name="nav_history">任务历史</string>
+    <string name="nav_point">工作台</string>
+    <string name="nav_data">数据</string>
+    <string name="nav_history">历史</string>
     <string name="nav_settings">设置</string>
 
     <!-- 通用 -->
@@ -25,12 +25,14 @@
     <string name="settings_title">设置</string>
     <string name="settings_general">通用</string>
     <string name="settings_data">数据</string>
+    <string name="settings_server_status">服务端</string>
     <string name="settings_advanced">高级</string>
     <string name="settings_general_subtitle">本机显示偏好、语言与运行状态</string>
-    <string name="settings_data_subtitle">下载源、Copernicus ADS 凭据、后台同步与保留策略</string>
+    <string name="settings_data_subtitle">只读服务端状态（CAMS 凭据、后台同步与保留策略）</string>
     <string name="settings_advanced_subtitle">远程服务器连接（Mac / CF Tunnel / LAN）与协议诊断</string>
     <string name="runtime_summary_title">运行状态摘要</string>
     <string name="runtime_manage_data">管理数据源与同步</string>
+    <string name="runtime_view_server">查看服务端状态</string>
     <string name="runtime_engine">本地引擎</string>
     <string name="runtime_remote_mac">远程 Mac</string>
     <string name="runtime_remote_server">远程服务器</string>
@@ -81,6 +83,12 @@
     <string name="cams_tut4_title">返回 FireSky 保存 Key</string>
     <string name="cams_tut4_detail">粘贴到上方输入框并保存，再到准备面板下载数据。</string>
     <string name="cams_check_note">这里只检查本地配置是否完整；Token 是否有效在实际下载时验证。</string>
+    <string name="cams_status_checking">正在检查服务器配置</string>
+    <string name="cams_status_configured">已检测到 Key，下载时验证授权。</string>
+    <string name="cams_status_wrong_endpoint">接口地址不是 Copernicus ADS，请在服务器端修正。</string>
+    <string name="cams_status_tls_disabled">配置关闭了 TLS 验证，请在服务器端重新保存以启用安全连接。</string>
+    <string name="cams_status_unreadable">配置文件无法读取或格式有误，请在服务器端修正。</string>
+    <string name="cams_status_missing">服务器尚未配置 CAMS Key，缺少气溶胶数据时无法下载。</string>
     <string name="sync_section">后台同步</string>
     <string name="sync_enable">启用后台同步</string>
     <string name="sync_retention_warning">未配置缓存保留策略，缓存将随同步增长；可在下方「存储与保留」中设置。</string>
@@ -119,7 +127,7 @@
     <string name="retention_clean_now">立即按策略清理</string>
     <string name="retention_save">保存保留设置</string>
     <string name="retention_configured_note">已启用自定义保留策略</string>
-    <string name="section_engine">本地引擎</string>
+    <string name="section_engine">远程连接</string>
     <string name="engine_connected">引擎已连接</string>
     <string name="transport_label">传输通道</string>
     <string name="transport_mock">Mock（进程内模拟）</string>
@@ -414,7 +422,9 @@
 
     <!-- 数据管理 -->
     <string name="data_title">数据管理</string>
-    <string name="data_dir_line">数据目录：App 沙箱（cache/）· 已统计占用仅覆盖模式数据（GFS / EC / CAMS）</string>
+    <string name="data_dir_line">服务端数据库存与缓存占用（GFS / EC / CAMS）</string>
+    <string name="go_configure_server">配置远程服务器</string>
+    <string name="onboarding_features_caption">连接服务端后即刻解锁</string>
     <string name="data_offline">引擎未连接，无法读取库存与地形状态。</string>
     <string name="local_data">本地数据</string>
     <string name="cd_refresh_inventory">刷新本地清单</string>
@@ -467,6 +477,18 @@
     <string name="tile_exists">已有本地瓦片</string>
     <string name="tile_missing">未下载</string>
     <string name="terrain_target_line">目标 %1$s（%2$.4f° N, %3$.4f° E）· 瓦片 %4$s · %5$s</string>
+
+    <!-- 地图选点与只读瘦客户端边界 -->
+    <string name="map_expand">大地图</string>
+    <string name="map_picker_title">地图选点</string>
+    <string name="map_picker_done">完成</string>
+    <string name="map_tap_hint">点按地图任意位置即可选点</string>
+    <string name="readonly_data_notice">只读视图：移动端仅查看服务端数据与地形库存，清理或下载操作请在桌面端完成。</string>
+    <string name="readonly_settings_notice">只读视图：移动端不修改服务端配置；如需调整 CAMS Key、同步周期或保留策略，请在桌面端设置。</string>
+    <string name="sync_status_enabled">已启用</string>
+    <string name="sync_status_disabled">已关闭</string>
+    <string name="sync_sources_label">同步数据源</string>
+    <string name="retention_unlimited_summary">当前未设保留上限，请在桌面端按需配置规则。</string>
 
     <!-- 状态（引擎返回的中文状态 → 当前语言） -->
     <string name="st_completed">已完成</string>

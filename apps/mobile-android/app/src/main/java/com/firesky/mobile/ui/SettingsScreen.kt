@@ -2,6 +2,7 @@ package com.firesky.mobile.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -18,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -97,23 +99,28 @@ fun SettingsScreen(store: WorkbenchStore, state: WorkbenchState) {
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(stringResource(R.string.settings_title), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                stringResource(R.string.settings_title),
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
             Text(
                 when (state.settingsCategory) {
                     "数据" -> stringResource(R.string.settings_data_subtitle)
                     "高级" -> stringResource(R.string.settings_advanced_subtitle)
                     else -> stringResource(R.string.settings_general_subtitle)
                 },
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f),
             )
         }
         CapsuleCategoryBar(
             options = SettingsCategories,
             titles = listOf(
                 stringResource(R.string.settings_general),
-                stringResource(R.string.settings_data),
+                stringResource(R.string.settings_server_status),
                 stringResource(R.string.settings_advanced),
             ),
             icons = listOf(Icons.Filled.Tune, Icons.Filled.Storage, Icons.Filled.Memory),
@@ -124,44 +131,7 @@ fun SettingsScreen(store: WorkbenchStore, state: WorkbenchState) {
             DismissibleErrorBanner(pageError, onDismiss = { store.clearError() })
         }
         when (state.settingsCategory) {
-            "数据" -> {
-                var sourcesY by remember { mutableIntStateOf(0) }
-                var camsY by remember { mutableIntStateOf(0) }
-                var syncY by remember { mutableIntStateOf(0) }
-                var retentionY by remember { mutableIntStateOf(0) }
-
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    AnchorPillChip(stringResource(R.string.anchor_sources)) {
-                        scope.launch { scrollState.animateScrollTo(sourcesY) }
-                    }
-                    AnchorPillChip(stringResource(R.string.anchor_cams)) {
-                        scope.launch { scrollState.animateScrollTo(camsY) }
-                    }
-                    AnchorPillChip(stringResource(R.string.anchor_sync)) {
-                        scope.launch { scrollState.animateScrollTo(syncY) }
-                    }
-                    AnchorPillChip(stringResource(R.string.anchor_retention)) {
-                        scope.launch { scrollState.animateScrollTo(retentionY) }
-                    }
-                }
-                Box(Modifier.onGloballyPositioned { sourcesY = it.positionInParent().y.roundToInt() }) {
-                    DataSourceSection(store, state)
-                }
-                Box(Modifier.onGloballyPositioned { camsY = it.positionInParent().y.roundToInt() }) {
-                    CamsSection(store, state)
-                }
-                Box(Modifier.onGloballyPositioned { syncY = it.positionInParent().y.roundToInt() }) {
-                    DataSyncSection(store, state)
-                }
-                Box(Modifier.onGloballyPositioned { retentionY = it.positionInParent().y.roundToInt() }) {
-                    RetentionSection(store, state)
-                }
-            }
+            "数据" -> ServerStatusSection(store, state)
             "高级" -> EngineSection(store, state)
             else -> GeneralSection(store, state)
         }
@@ -252,17 +222,51 @@ private fun IndentedDivider() {
 }
 
 @Composable
-private fun RadioRow(label: String, selected: Boolean, onSelect: () -> Unit) {
+private fun SelectableSourceRow(label: String, selected: Boolean, onSelect: () -> Unit) {
+    val dark = LocalFireSkyDark.current
+    val warm = MaterialTheme.colorScheme.primary
+    val fill = when {
+        selected && dark -> warm.copy(alpha = 0.14f)
+        selected -> warm.copy(alpha = 0.08f)
+        dark -> Color(0xFF202A3D)
+        else -> Color(0xFFF3F6FA)
+    }
+    val border = when {
+        selected -> warm.copy(alpha = if (dark) 0.48f else 0.36f)
+        dark -> Color(0xFF50617B).copy(alpha = 0.38f)
+        else -> Color(0xFFD8E1EA).copy(alpha = 0.85f)
+    }
     Row(
         Modifier
             .fillMaxWidth()
-            .heightIn(min = 44.dp)
-            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect),
+            .heightIn(min = 46.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .background(fill, RoundedCornerShape(12.dp))
+            .border(0.75.dp, border, RoundedCornerShape(12.dp))
+            .selectable(selected = selected, role = Role.RadioButton, onClick = onSelect)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        RadioButton(selected = selected, onClick = null)
-        Spacer(Modifier.width(8.dp))
-        Text(label, fontSize = 14.sp)
+        if (selected) {
+            Icon(Icons.Filled.CheckCircle, contentDescription = null, modifier = Modifier.size(18.dp), tint = warm)
+        } else {
+            Box(
+                Modifier
+                    .size(18.dp)
+                    .border(
+                        1.5.dp,
+                        MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                        CircleShape,
+                    ),
+            )
+        }
+        Text(
+            label,
+            fontSize = 13.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.85f),
+        )
     }
 }
 
@@ -342,7 +346,7 @@ private fun RuntimeSummaryCard(store: WorkbenchStore, state: WorkbenchState) {
                     modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = { store.setSettingsCategory("数据") }) {
-                    Text(stringResource(R.string.runtime_manage_data), fontSize = 12.sp)
+                    Text(stringResource(R.string.runtime_view_server), fontSize = 12.sp)
                     Spacer(Modifier.width(4.dp))
                     Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null, modifier = Modifier.size(14.dp))
                 }
@@ -451,227 +455,177 @@ private fun StatusSummaryBadge(title: String, value: String, healthy: Boolean, m
     }
 }
 
+/** 服务端只读状态视图（CAMS 状态 + 后台同步运行状态 + 保留规则摘要；所有写操作留在桌面端）。 */
 @Composable
-private fun DataSourceSection(store: WorkbenchStore, state: WorkbenchState) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionCaption(stringResource(R.string.section_datasource))
-        Section(
-            title = stringResource(R.string.section_datasource),
-            icon = Icons.Filled.CloudQueue,
-            iconTint = coolAccentColor(),
-        ) {
-            Column {
-                RadioRow(stringResource(R.string.src_ecmwf), state.ecmwfSource == "ecmwf") {
-                    store.setEcmwfSource("ecmwf")
-                }
-                RadioRow(stringResource(R.string.src_aws), state.ecmwfSource == "aws") {
-                    store.setEcmwfSource("aws")
-                }
-                RadioRow(stringResource(R.string.src_google), state.ecmwfSource == "google") {
-                    store.setEcmwfSource("google")
-                }
-            }
-            Text(
-                stringResource(R.string.datasource_note),
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-            )
-        }
+private fun ServerStatusSection(store: WorkbenchStore, state: WorkbenchState) {
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        ReadOnlyNoticeBanner(stringResource(R.string.readonly_settings_notice))
+        CamsStatusCard(store, state)
+        DataSyncReadOnlyCard(state)
+        RetentionReadOnlyCard(state)
     }
 }
 
 @Composable
-private fun CamsSection(store: WorkbenchStore, state: WorkbenchState) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionCaption(stringResource(R.string.cams_section))
-        Section(
-            title = stringResource(R.string.cams_section),
-            icon = Icons.Filled.Key,
-            iconTint = MaterialTheme.colorScheme.primary,
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Icon(
-                    Icons.Filled.CheckCircle,
-                    contentDescription = null,
-                    Modifier.size(18.dp),
-                    tint = if (store.camsConfigured) Color(0xFF3B9C57)
-                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
-                )
-                Text(store.camsConfigurationDescription, fontSize = 12.sp, modifier = Modifier.weight(1f))
-                TextButton(onClick = { store.refreshCAMSConfiguration() }, enabled = state.online) {
-                    Text(stringResource(R.string.recheck), fontSize = 11.sp)
-                }
+private fun CamsStatusCard(store: WorkbenchStore, state: WorkbenchState) {
+    Section(
+        title = stringResource(R.string.cams_section),
+        icon = Icons.Filled.Key,
+        iconTint = MaterialTheme.colorScheme.primary,
+        trailing = {
+            TextButton(onClick = { store.refreshCAMSConfiguration() }, enabled = state.online) {
+                Text(stringResource(R.string.recheck), fontSize = 11.sp)
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = state.camsKeyDraft,
-                    onValueChange = store::setCAMSKeyDraft,
-                    enabled = !state.isRemoteTransport,
-                    label = { Text(stringResource(R.string.cams_token_label), fontSize = 11.sp) },
-                    singleLine = true,
-                    shape = SoftInputShape,
-                    colors = softInputColors(),
-                    visualTransformation = PasswordVisualTransformation(),
-                    textStyle = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.weight(1f),
-                )
-                if (state.savingCAMS) {
-                    CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
-                }
-                Button(
-                    onClick = { store.saveCAMSKey() },
-                    enabled = !state.isRemoteTransport && state.online && store.canSaveCAMS && !state.savingCAMS &&
-                        state.camsKeyDraft.trim().isNotEmpty(),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        contentColor = actionForeground(),
-                    ),
-                    shape = RoundedCornerShape(12.dp),
-                ) { Text(stringResource(R.string.save_key), fontSize = 12.sp) }
-            }
-            Text(
-                stringResource(if (state.isRemoteTransport) R.string.cams_remote_readonly_note else R.string.cams_note),
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+        },
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+            Icon(
+                Icons.Filled.CheckCircle,
+                contentDescription = null,
+                Modifier.size(18.dp),
+                tint = if (store.camsConfigured) Color(0xFF2E8B72)
+                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
             )
-            if (!state.isRemoteTransport && state.camsConfiguration != null && !store.canSaveCAMS) {
-                Text(
-                    stringResource(R.string.cams_env_override),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                )
+            Text(camsStatusDescription(state.camsConfiguration), fontSize = 12.sp, modifier = Modifier.weight(1f))
+        }
+        Text(
+            stringResource(R.string.cams_remote_readonly_note),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+        )
+    }
+}
+
+/** 只读后台同步状态卡。 */
+@Composable
+private fun DataSyncReadOnlyCard(state: WorkbenchState) {
+    val enabledSources = listOfNotNull(
+        if (state.dataSyncGFS) "GFS" else null,
+        if (state.dataSyncEC) "EC" else null,
+        if (state.dataSyncCAMS) "CAMS" else null,
+    )
+    Section(
+        title = stringResource(R.string.sync_section),
+        icon = Icons.Filled.Sync,
+        iconTint = coolAccentColor(),
+        trailing = {
+            val statusColor = if (state.dataSyncEnabled) Color(0xFF2E8B72) else MaterialTheme.colorScheme.onSurfaceVariant
+            SoftPillChip(
+                text = stringResource(if (state.dataSyncEnabled) R.string.sync_status_enabled else R.string.sync_status_disabled),
+                tint = statusColor,
+                leadingDotColor = statusColor,
+            )
+        },
+    ) {
+        if (state.dataSyncEnabled && !state.dataSyncRetentionConfigured) {
+            Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Icon(Icons.Filled.Warning, contentDescription = null, modifier = Modifier.size(15.dp), tint = Color(0xFFD98F24))
+                Text(stringResource(R.string.sync_retention_warning), fontSize = 11.sp, color = Color(0xFFD98F24))
             }
-            if (state.camsMessage.isNotEmpty()) {
-                Text(
-                    state.camsMessage,
-                    fontSize = 12.sp,
-                    color = if (state.camsSaveFailed) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            ReadOnlyStatTile(
+                label = stringResource(R.string.sync_interval_label),
+                value = "${state.dataSyncInterval.ifEmpty { "15" }} ${stringResource(R.string.sync_interval_unit)}",
+                modifier = Modifier.weight(1f),
+            )
+            ReadOnlyStatTile(
+                label = stringResource(R.string.sync_horizon_label),
+                value = "${state.dataSyncLeadHorizon.ifEmpty { "72" }} ${stringResource(R.string.sync_horizon_unit)}",
+                modifier = Modifier.weight(1f),
+            )
+            ReadOnlyStatTile(
+                label = stringResource(R.string.sync_sources_label),
+                value = if (enabledSources.isEmpty()) "—" else enabledSources.joinToString("/"),
+                modifier = Modifier.weight(1f),
+            )
+        }
+        if (state.dataSyncLoaded) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
+            Text(
+                stringResource(R.string.sync_status_title),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
+            )
+            listOf("gfs" to "GFS", "ec" to "EC", "cams" to "CAMS").forEach { (key, label) ->
+                SyncSourceStatusRow(
+                    label = label,
+                    sourceState = state.dataSyncState.optJSONObject(key) ?: JSONObject(),
                 )
-            }
-            TextButton(onClick = { store.setShowCAMSTutorial(!state.showCAMSTutorial) }) {
-                Text(
-                    if (state.showCAMSTutorial) stringResource(R.string.cams_guide_hide)
-                    else stringResource(R.string.cams_guide),
-                    fontSize = 12.sp,
-                )
-            }
-            if (state.showCAMSTutorial) {
-                WorkSurface(Modifier.fillMaxWidth(), grouped = true, cornerRadius = 12.dp) {
-                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TutorialStep("1", stringResource(R.string.cams_tut1_title), stringResource(R.string.cams_tut1_detail))
-                        TutorialStep("2", stringResource(R.string.cams_tut2_title), stringResource(R.string.cams_tut2_detail))
-                        TutorialStep("3", stringResource(R.string.cams_tut3_title), stringResource(R.string.cams_tut3_detail))
-                        TutorialStep("4", stringResource(R.string.cams_tut4_title), stringResource(R.string.cams_tut4_detail))
-                        Text(
-                            stringResource(R.string.cams_check_note),
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                        )
-                    }
-                }
             }
         }
     }
 }
 
-/** 后台同步设置（5–1440 分钟周期，立即同步传 force=true）。 */
+/** 只读保留策略摘要卡。 */
 @Composable
-private fun DataSyncSection(store: WorkbenchStore, state: WorkbenchState) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionCaption(stringResource(R.string.sync_section))
-        Section(
-            title = stringResource(R.string.sync_section),
-            icon = Icons.Filled.Sync,
-            iconTint = coolAccentColor(),
-        ) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.sync_enable), fontSize = 13.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
-                Switch(checked = state.dataSyncEnabled, onCheckedChange = store::setDataSyncEnabled)
-            }
-            if (state.dataSyncEnabled && !state.dataSyncRetentionConfigured) {
-                Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Icon(Icons.Filled.Warning, contentDescription = null, modifier = Modifier.size(15.dp), tint = Color(0xFFD98F24))
-                    Text(stringResource(R.string.sync_retention_warning), fontSize = 11.sp, color = Color(0xFFD98F24))
-                }
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                SourceToggleChip("CAMS", state.dataSyncCAMS, state.dataSyncEnabled, store::setDataSyncCAMS, Modifier.weight(1f))
-                SourceToggleChip("GFS", state.dataSyncGFS, state.dataSyncEnabled, store::setDataSyncGFS, Modifier.weight(1f))
-                SourceToggleChip("EC", state.dataSyncEC, state.dataSyncEnabled, store::setDataSyncEC, Modifier.weight(1f))
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                NumericSettingField(
-                    label = stringResource(R.string.sync_interval_label),
-                    value = state.dataSyncInterval,
-                    suffix = stringResource(R.string.sync_interval_unit),
-                    placeholder = "15",
-                    onValueChange = store::setDataSyncInterval,
-                    modifier = Modifier.weight(1f),
-                )
-                NumericSettingField(
-                    label = stringResource(R.string.sync_horizon_label),
-                    value = state.dataSyncLeadHorizon,
-                    suffix = stringResource(R.string.sync_horizon_unit),
-                    placeholder = "72",
-                    onValueChange = store::setDataSyncLeadHorizon,
-                    modifier = Modifier.weight(1f),
+private fun RetentionReadOnlyCard(state: WorkbenchState) {
+    val activeRulesCount = listOf(
+        state.retentionGFS, state.retentionECMWF, state.retentionCAMS,
+        state.retentionSatelliteDays, state.retentionReportDays, state.retentionMapDays,
+    ).count { it.trim().isNotEmpty() }
+    val unlimited = stringResource(R.string.retention_unlimited)
+    val cyclesUnit = stringResource(R.string.retention_unit_cycles)
+    val daysUnit = stringResource(R.string.retention_unit_days)
+    fun formatRule(raw: String, unit: String): String =
+        raw.trim().takeIf { it.isNotEmpty() }?.let { "$it $unit" } ?: unlimited
+
+    Section(
+        title = stringResource(R.string.retention_section),
+        icon = Icons.Filled.Storage,
+        iconTint = MaterialTheme.colorScheme.primary,
+        trailing = {
+            if (activeRulesCount > 0) {
+                SoftPillChip(
+                    text = stringResource(R.string.retention_rules_active_fmt, activeRulesCount),
+                    tint = MaterialTheme.colorScheme.primary,
                 )
             }
+        },
+    ) {
+        if (activeRulesCount == 0 && !state.retentionConfigured) {
             Text(
-                stringResource(R.string.sync_note),
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                stringResource(R.string.retention_unlimited_summary),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
             )
-            if (state.dataSyncMessage.isNotEmpty()) {
-                Text(
-                    state.dataSyncMessage,
-                    fontSize = 11.sp,
-                    color = if (state.dataSyncSaveFailed) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
-                )
-            } else if (state.dataSyncConfigured) {
-                Text(
-                    stringResource(if (state.dataSyncEnabled) R.string.sync_configured_on else R.string.sync_configured_off),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                )
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = { store.runDataSyncNow() },
-                    enabled = state.online && !state.busy && !state.dataSyncRunning,
-                    modifier = Modifier.weight(1f).height(42.dp),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Icon(Icons.Filled.Sync, contentDescription = null, modifier = Modifier.size(15.dp))
-                    Spacer(Modifier.width(5.dp))
-                    Text(stringResource(R.string.sync_now), fontSize = 12.sp)
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ReadOnlyStatTile(stringResource(R.string.retention_gfs), formatRule(state.retentionGFS, cyclesUnit), Modifier.weight(1f))
+                    ReadOnlyStatTile(stringResource(R.string.retention_ec), formatRule(state.retentionECMWF, cyclesUnit), Modifier.weight(1f))
+                    ReadOnlyStatTile(stringResource(R.string.retention_cams), formatRule(state.retentionCAMS, cyclesUnit), Modifier.weight(1f))
                 }
-                Button(
-                    onClick = { store.saveDataSyncSettings() },
-                    enabled = state.online && !state.savingDataSync && !state.busy,
-                    modifier = Modifier.weight(1f).height(42.dp),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text(stringResource(R.string.sync_save), fontSize = 12.sp)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    ReadOnlyStatTile(stringResource(R.string.retention_sat), formatRule(state.retentionSatelliteDays, daysUnit), Modifier.weight(1f))
+                    ReadOnlyStatTile(stringResource(R.string.retention_reports), formatRule(state.retentionReportDays, daysUnit), Modifier.weight(1f))
+                    ReadOnlyStatTile(stringResource(R.string.retention_maps), formatRule(state.retentionMapDays, daysUnit), Modifier.weight(1f))
                 }
             }
-            if (state.dataSyncLoaded) {
-                HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
-                Text(
-                    stringResource(R.string.sync_status_title),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
-                )
-                listOf("cams" to "CAMS", "gfs" to "GFS", "ec" to "EC").forEach { (key, label) ->
-                    SyncSourceStatusRow(
-                        label = label,
-                        sourceState = state.dataSyncState.optJSONObject(key) ?: JSONObject(),
-                    )
-                }
-            }
+        }
+    }
+}
+
+@Composable
+private fun ReadOnlyStatTile(label: String, value: String, modifier: Modifier = Modifier) {
+    WorkSurface(modifier = modifier, grouped = true, cornerRadius = 12.dp) {
+        Column(Modifier.padding(horizontal = 10.dp, vertical = 9.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                label,
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.60f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                value,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                style = TextStyle(fontFeatureSettings = "tnum"),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }
@@ -727,140 +681,14 @@ private fun SyncSourceStatusRow(label: String, sourceState: JSONObject) {
 }
 
 @Composable
-private fun SourceToggleChip(
-    label: String,
-    checked: Boolean,
-    enabled: Boolean,
-    onCheckedChange: (Boolean) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(modifier, verticalAlignment = Alignment.CenterVertically) {
-        Checkbox(checked = checked, onCheckedChange = onCheckedChange, enabled = enabled)
-        Text(label, fontSize = 12.sp)
-    }
-}
-
-/** 存储与保留策略（含「立即按策略清理」调用 apply_retention_settings）。 */
-@Composable
-private fun RetentionSection(store: WorkbenchStore, state: WorkbenchState) {
-    val activeRulesCount = listOf(
-        state.retentionGFS, state.retentionECMWF, state.retentionCAMS,
-        state.retentionSatelliteDays, state.retentionReportDays, state.retentionMapDays,
-    ).count { it.trim().isNotEmpty() }
-
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionCaption(stringResource(R.string.retention_section))
-        Section(
-            title = stringResource(R.string.retention_section),
-            icon = Icons.Filled.Storage,
-            iconTint = MaterialTheme.colorScheme.primary,
-            trailing = {
-                if (activeRulesCount > 0) {
-                    SoftPillChip(
-                        text = stringResource(R.string.retention_rules_active_fmt, activeRulesCount),
-                        tint = MaterialTheme.colorScheme.primary,
-                    )
-                }
-            },
-        ) {
-            Text(
-                stringResource(R.string.retention_note),
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-            )
-            val unlimited = stringResource(R.string.retention_unlimited)
-            val cyclesUnit = stringResource(R.string.retention_unit_cycles)
-            val daysUnit = stringResource(R.string.retention_unit_days)
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                NumericSettingField(stringResource(R.string.retention_gfs), state.retentionGFS, cyclesUnit, unlimited, store::setRetentionGFS, Modifier.weight(1f))
-                NumericSettingField(stringResource(R.string.retention_ec), state.retentionECMWF, cyclesUnit, unlimited, store::setRetentionECMWF, Modifier.weight(1f))
-                NumericSettingField(stringResource(R.string.retention_cams), state.retentionCAMS, cyclesUnit, unlimited, store::setRetentionCAMS, Modifier.weight(1f))
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                NumericSettingField(stringResource(R.string.retention_sat), state.retentionSatelliteDays, daysUnit, unlimited, store::setRetentionSatelliteDays, Modifier.weight(1f))
-                NumericSettingField(stringResource(R.string.retention_reports), state.retentionReportDays, daysUnit, unlimited, store::setRetentionReportDays, Modifier.weight(1f))
-                NumericSettingField(stringResource(R.string.retention_maps), state.retentionMapDays, daysUnit, unlimited, store::setRetentionMapDays, Modifier.weight(1f))
-            }
-            if (state.retentionMessage.isNotEmpty()) {
-                Text(
-                    state.retentionMessage,
-                    fontSize = 11.sp,
-                    color = if (state.retentionSaveFailed) MaterialTheme.colorScheme.error
-                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.7f),
-                )
-            } else if (state.retentionConfigured) {
-                Text(
-                    stringResource(R.string.retention_configured_note),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                )
-            }
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = { store.applyRetentionNow() },
-                    enabled = state.online && state.retentionConfigured && !state.busy && !state.savingRetention && !state.applyingRetention,
-                    modifier = Modifier.weight(1f).height(42.dp),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    if (state.applyingRetention) {
-                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
-                        Spacer(Modifier.width(5.dp))
-                    } else {
-                        Icon(Icons.Filled.AutoAwesome, contentDescription = null, modifier = Modifier.size(15.dp))
-                        Spacer(Modifier.width(5.dp))
-                    }
-                    Text(stringResource(R.string.retention_clean_now), fontSize = 12.sp)
-                }
-                Button(
-                    onClick = { store.saveRetentionSettings() },
-                    enabled = state.online && !state.savingRetention && !state.applyingRetention && !state.busy,
-                    modifier = Modifier.weight(1f).height(42.dp),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text(stringResource(R.string.retention_save), fontSize = 12.sp)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun NumericSettingField(
-    label: String,
-    value: String,
-    suffix: String,
-    placeholder: String,
-    onValueChange: (String) -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(label, fontSize = 10.sp, maxLines = 1) },
-        placeholder = { Text(placeholder, fontSize = 11.sp) },
-        suffix = { Text(suffix, fontSize = 10.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f)) },
-        singleLine = true,
-        shape = SoftInputShape,
-        colors = softInputColors(),
-        textStyle = MaterialTheme.typography.bodySmall.merge(TextStyle(fontFeatureSettings = "tnum")),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        modifier = modifier,
-    )
-}
-
-@Composable
-private fun TutorialStep(number: String, title: String, detail: String) {
-    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(
-            number,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = MaterialTheme.colorScheme.primary,
-        )
-        Column {
-            Text(title, fontSize = 12.sp, fontWeight = FontWeight.Medium)
-            Text(detail, fontSize = 11.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
-        }
+private fun camsStatusDescription(configuration: JSONObject?): String {
+    configuration ?: return stringResource(R.string.cams_status_checking)
+    return when (configuration.optString("state")) {
+        "configured" -> stringResource(R.string.cams_status_configured)
+        "wrong_endpoint" -> stringResource(R.string.cams_status_wrong_endpoint)
+        "tls_disabled" -> stringResource(R.string.cams_status_tls_disabled)
+        "unreadable" -> stringResource(R.string.cams_status_unreadable)
+        else -> stringResource(R.string.cams_status_missing)
     }
 }
 
@@ -888,15 +716,12 @@ private fun EngineSection(store: WorkbenchStore, state: WorkbenchState) {
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        OutlinedButton(
-                            onClick = { store.connect() },
+                        SecondaryButton(
+                            title = stringResource(R.string.reconnect),
                             enabled = !state.busy && state.serverConfigured,
-                            shape = RoundedCornerShape(12.dp),
-                        ) {
-                            Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
-                            Spacer(Modifier.width(4.dp))
-                            Text(stringResource(R.string.reconnect), fontSize = 11.sp)
-                        }
+                            icon = Icons.Filled.Refresh,
+                            modifier = Modifier.width(126.dp),
+                        ) { store.connect() }
                     }
                 }
             }
@@ -906,24 +731,21 @@ private fun EngineSection(store: WorkbenchStore, state: WorkbenchState) {
 
 @Composable
 private fun RemoteServerSection(store: WorkbenchStore, state: WorkbenchState) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        SectionCaption(stringResource(R.string.remote_server_title))
-        Section(
-            title = stringResource(R.string.remote_server_title),
-            icon = Icons.Filled.CloudQueue,
-            iconTint = coolAccentColor(),
-            trailing = {
-                if (state.online) {
-                    SoftPillChip(
-                        text = stringResource(R.string.remote_connected_badge),
-                        tint = Color(0xFF3B9C57),
-                        leadingDotColor = Color(0xFF3B9C57),
-                    )
-                }
-            },
-        ) {
-            RemoteServerConnectionForm(store, state)
-        }
+    Section(
+        title = stringResource(R.string.remote_server_title),
+        icon = Icons.Filled.CloudQueue,
+        iconTint = coolAccentColor(),
+        trailing = {
+            if (state.online) {
+                SoftPillChip(
+                    text = stringResource(R.string.remote_connected_badge),
+                    tint = Color(0xFF2E8B72),
+                    leadingDotColor = Color(0xFF2E8B72),
+                )
+            }
+        },
+    ) {
+        RemoteServerConnectionForm(store, state)
     }
 }
 

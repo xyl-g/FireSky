@@ -157,7 +157,7 @@ struct SettingsView: View {
                         store.settingsCategory = "数据"
                     }
                 } label: {
-                    Label(L10n.text("管理数据源与同步", "Manage data & sync"),
+                    Label(L10n.text("查看服务端状态", "View server status"),
                           systemImage: "arrow.right.circle")
                         .font(.caption.weight(.medium))
                 }
@@ -227,13 +227,26 @@ struct SettingsView: View {
     // MARK: - 数据
 
     private let dataAnchors: [(String, String)] = [
-        ("下载源", "anchor-sources"), ("CAMS", "anchor-cams"),
-        ("连通性", "anchor-probe"), ("同步", "anchor-sync"),
-        ("保留", "anchor-retention"), ("海拔", "anchor-elevation"),
+        ("CAMS", "anchor-cams"), ("连通性", "anchor-probe"),
+        ("同步", "anchor-sync"), ("保留", "anchor-retention"),
+        ("海拔", "anchor-elevation"),
     ]
 
     private func dataSection(scrollProxy: ScrollViewProxy) -> some View {
         VStack(alignment: .leading, spacing: 16) {
+            Label(
+                L10n.text(
+                    "只读状态：CAMS Key、后台同步策略与存储保留规则请在桌面端配置。",
+                    "Read-only status: configure CAMS key, background sync, and retention rules on desktop."
+                ),
+                systemImage: "lock.shield"
+            )
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .fireSkySurface(role: .grouped, cornerRadius: 12)
+
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
                     ForEach(dataAnchors, id: \.1) { anchor in
@@ -258,11 +271,6 @@ struct SettingsView: View {
                     }
                 }
             }
-
-            dataSourcesBlock
-                .padding(16)
-                .fireSkySurface(role: .content, cornerRadius: 14)
-                .id("anchor-sources")
 
             camsBlock
                 .padding(16)
@@ -289,26 +297,6 @@ struct SettingsView: View {
         }
     }
 
-    private var dataSourcesBlock: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(L10n.t("下载源")).font(.headline)
-            HStack {
-                Text(L10n.t("EC 下载源")).font(.subheadline)
-                Spacer()
-                Picker(L10n.t("EC 下载源"), selection: $store.ecmwfSource) {
-                    Text(L10n.t("ECMWF 官方")).tag("ecmwf")
-                    Text(L10n.t("AWS 欧洲镜像")).tag("aws")
-                    Text(L10n.t("Google Cloud 镜像")).tag("google")
-                }
-                .pickerStyle(.menu)
-                .disabled(store.probingDownloads)
-            }
-            Text(L10n.t("EC 下载源同时用于下载探测、数据准备和预测。GFS 使用 NOAA NOMADS，CAMS 使用 Copernicus ADS。"))
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
     private var camsBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("CAMS · Copernicus ADS").font(.headline)
@@ -320,127 +308,51 @@ struct SettingsView: View {
                 Button { Task { await store.refreshCAMSConfiguration() } } label: {
                     Image(systemName: "arrow.clockwise").frame(minWidth: 32, minHeight: 32)
                 }.buttonStyle(.borderless)
-                    .disabled(!store.online || store.savingCAMS)
+                    .disabled(!store.online)
             }
-            HStack(spacing: 10) {
-                SecureField(L10n.t("粘贴 ADS Personal Access Token"), text: $store.camsKeyDraft) {
-                    store.saveCAMSKey()
-                }
-                .workInputField(cornerRadius: 8)
-                .disabled(store.isRemoteMode || !store.canSaveCAMS || store.savingCAMS || store.probingDownloads)
-                if store.savingCAMS { ProgressView() }
-                Button(L10n.t("保存 Key"), systemImage: "key.fill") { store.saveCAMSKey() }
-                    .disabled(store.isRemoteMode || !store.online || !store.canSaveCAMS || store.savingCAMS || store.probingDownloads
-                              || store.camsKeyDraft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            if store.isRemoteMode {
-                Label(
-                    L10n.text(
-                        "远程模式下 CAMS Key 为只读，请在 Mac 端本地配置。",
-                        "CAMS Key is read-only over remote HTTP; configure it locally on your Mac."
-                    ),
-                    systemImage: "lock.shield"
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text(L10n.t("仅以明文保存在本机配置文件，文件权限 0600；不会写入工程或显示已有 Key。"))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if !store.isRemoteMode, store.camsConfiguration != nil && !store.canSaveCAMS {
-                Text(L10n.t("环境变量正在覆盖配置。修改 CDSAPI_KEY / CDSAPI_URL 后需重新启动应用。"))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            if !store.camsMessage.isEmpty {
-                Text(store.camsMessage).font(.callout)
-                    .foregroundStyle(store.camsSaveFailed ? Color.red : Color.secondary)
-            }
-            DisclosureGroup(L10n.t("配置教程"), isExpanded: $store.showCAMSTutorial) {
-                VStack(alignment: .leading, spacing: 14) {
-                    tutorialStep("1", L10n.t("注册并登录 ADS"), detail: L10n.t("使用 ECMWF 账号登录 Atmosphere Data Store。")) {
-                        Link(L10n.t("打开 ADS"), destination: URL(string: "https://ads.atmosphere.copernicus.eu/")!)
-                    }
-                    tutorialStep("2", L10n.t("复制 Personal Access Token"), detail: L10n.t("在官方 API 配置页复制 key 后面的 Token，不要复制 url 或整段配置。")) {
-                        Link(L10n.t("获取 Token"), destination: URL(string: "https://ads.atmosphere.copernicus.eu/how-to-api")!)
-                    }
-                    tutorialStep("3", L10n.t("接受 CAMS 数据集条款"), detail: L10n.t("在数据集 Download 页底部接受 Terms of Use，完成网页端授权。")) {
-                        Link(L10n.t("打开数据集"), destination: URL(string: "https://ads.atmosphere.copernicus.eu/datasets/cams-global-atmospheric-composition-forecasts?tab=download")!)
-                    }
-                    tutorialStep("4", L10n.t("返回 FireSky 保存 Key"), detail: L10n.t("粘贴到上方输入框并保存，再到预测准备窗口下载数据。")) {
-                        EmptyView()
-                    }
-                    Text(L10n.t("这里只检查本地配置是否完整；Token 是否有效、数据集是否已授权，在实际下载时验证。"))
-                        .font(.caption).foregroundStyle(.secondary)
-                }.padding(.top, 12).padding(.bottom, 6)
-            }
+            Text(L10n.text(
+                "服务端状态只读；如需配置或更换 ADS Personal Access Token，请在桌面端修改。",
+                "Server status is read-only; configure or update the ADS Personal Access Token on desktop."
+            ))
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private var dataSyncBlock: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(L10n.t("后台同步")).font(.headline)
-            Toggle(L10n.t("启用后台同步"), isOn: $store.dataSyncEnabled)
-            if store.dataSyncEnabled && !store.dataSyncRetentionConfigured {
-                Label(L10n.t("未配置缓存保留策略，缓存将随同步增长；可在下方「存储与保留」中设置。"),
-                      systemImage: "exclamationmark.triangle.fill")
-                    .font(.caption).foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            HStack(spacing: 10) {
-                Toggle("CAMS", isOn: $store.dataSyncCAMS).disabled(!store.dataSyncEnabled)
-                Toggle("GFS", isOn: $store.dataSyncGFS).disabled(!store.dataSyncEnabled)
-                Toggle("EC", isOn: $store.dataSyncEC).disabled(!store.dataSyncEnabled)
-            }
-            .font(.subheadline)
-            HStack(spacing: 12) {
-                syncField(L10n.t("同步间隔"), text: $store.dataSyncInterval, suffix: L10n.t("分钟"))
-                syncField(L10n.t("GFS/EC 时效上限"), text: $store.dataSyncLeadHorizon, suffix: L10n.t("小时"))
-            }
-            if !store.regionDefinitions.isEmpty {
-                HStack {
-                    Text(L10n.t("锚定区域")).font(.subheadline)
-                    Spacer()
-                    Picker(L10n.t("锚定区域"), selection: $store.dataSyncAnchor) {
-                        Text(L10n.t("未设置")).tag("")
-                        ForEach(store.regionDefinitions.indices, id: \.self) { index in
-                            let region = store.regionDefinitions[index]
-                            Text(region["label"] as? String ?? region["code"] as? String ?? "")
-                                .tag(region["code"] as? String ?? "")
-                        }
-                    }.pickerStyle(.menu)
-                }
-            }
-            Text(L10n.text(
-                "监控间隔 5–1440 分钟（建议设为 10–15 分钟轻量监控上游更新，仅检测到新起报周期才下载，无更新不占带宽）；时效上限仅 GFS/EC 需要（3–240 小时、3 的倍数），CAMS 自动拉齐全部时效；锚定区域决定 CAMS 洲包络与 GFS/EC 下载范围。",
-                "Polling interval 5–1440 min (10–15 min recommended for lightweight upstream monitoring; downloads only when a newer cycle is published). Lead horizon applies to GFS/EC (3–240 h, multiples of 3)."
-            ))
-            .font(.caption).foregroundStyle(.secondary)
-            .fixedSize(horizontal: false, vertical: true)
+        let interval = store.dataSyncInterval.trimmingCharacters(in: .whitespacesAndNewlines)
+        let horizon = store.dataSyncLeadHorizon.trimmingCharacters(in: .whitespacesAndNewlines)
+        let anchorLabel = store.regionDefinitions.first(where: { ($0["code"] as? String ?? "") == store.dataSyncAnchor })?["label"] as? String
+        let enabledSources = [
+            store.dataSyncCAMS ? "CAMS" : nil,
+            store.dataSyncGFS ? "GFS" : nil,
+            store.dataSyncEC ? "EC" : nil,
+        ].compactMap { $0 }
 
-            if !store.dataSyncMessage.isEmpty {
-                Text(store.dataSyncMessage).font(.caption)
-                    .foregroundStyle(store.dataSyncSaveFailed ? Color.red : Color.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if store.dataSyncConfigured {
-                Text(store.dataSyncEnabled ? L10n.t("后台同步已启用") : L10n.text("已配置，当前关闭", "Configured, currently off"))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-
-            HStack(spacing: 12) {
-                if store.savingDataSync || store.dataSyncRunning { ProgressView().controlSize(.small) }
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text(L10n.t("后台同步")).font(.headline)
                 Spacer()
-                Button(L10n.t("立即同步"), systemImage: "arrow.triangle.2.circlepath") {
-                    store.runDataSyncNow()
-                }
-                .disabled(!store.online || store.busy || store.dataSyncRunning)
-                Button(L10n.t("保存同步设置"), systemImage: "externaldrive.badge.checkmark") {
-                    store.saveDataSyncSettings()
-                }
-                .disabled(!store.online || store.savingDataSync || store.busy)
+                Text(store.dataSyncEnabled
+                     ? L10n.text("已启用", "Enabled")
+                     : L10n.text("未启用", "Disabled"))
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(store.dataSyncEnabled ? Color.green : Color.secondary)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background((store.dataSyncEnabled ? Color.green : Color.secondary).opacity(0.12), in: Capsule())
             }
-            .font(.callout)
-
+            let summaryColumns = Array(repeating: GridItem(.flexible(), spacing: 10), count: sizeClass == .compact ? 2 : 3)
+            LazyVGrid(columns: summaryColumns, spacing: 10) {
+                readOnlyStatTile(L10n.text("启用数据源", "Sources"),
+                                 value: enabledSources.isEmpty ? L10n.t("未设置") : enabledSources.joined(separator: " / "))
+                readOnlyStatTile(L10n.t("同步间隔"),
+                                 value: interval.isEmpty ? L10n.t("未设置") : "\(interval) \(L10n.t("分钟"))")
+                readOnlyStatTile(L10n.t("GFS/EC 时效上限"),
+                                 value: horizon.isEmpty ? L10n.t("未设置") : "\(horizon) \(L10n.t("小时"))")
+                if let anchorLabel, !anchorLabel.isEmpty {
+                    readOnlyStatTile(L10n.t("锚定区域"), value: anchorLabel)
+                }
+            }
             if store.dataSyncLoaded {
                 Divider().opacity(0.4)
                 VStack(alignment: .leading, spacing: 6) {
@@ -488,7 +400,7 @@ struct SettingsView: View {
                 } ?? nextRetry
                 notes.append(L10n.text("退避冷却中 · 预计 \(shortTime) 自动重试", "Cooling down · auto retry at \(shortTime)"))
             } else {
-                notes.append(L10n.text("退避冷却中 · 立即同步可马上重试", "Cooling down · tap Sync Now to retry"))
+                notes.append(L10n.text("退避冷却中", "Cooling down"))
             }
         }
         return VStack(alignment: .leading, spacing: 2) {
@@ -524,42 +436,40 @@ struct SettingsView: View {
                         .background(warm.opacity(0.12), in: Capsule())
                 }
             }
-            Text(L10n.t("自动清理按周期、扫描或生成时间滚动保留；保存策略后可点击「立即按策略清理」立刻释放空间，后续也会在新数据校验成功后自动清理旧文件。占用中的文件会自动跳过。"))
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Text(L10n.text(
+                "仅展示桌面端当前生效的保留策略；修改或立即清理请在桌面端完成。",
+                "Displays active desktop retention rules only; modify or run cleanup on desktop."
+            ))
+            .font(.caption).foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
             let retentionColumns = Array(
                 repeating: GridItem(.flexible(), spacing: 10),
                 count: sizeClass == .compact ? 2 : 3
             )
             LazyVGrid(columns: retentionColumns, spacing: 10) {
-                retentionField(L10n.t("GFS 周期"), text: $store.retentionGFS, suffix: L10n.t("个"))
-                retentionField(L10n.t("EC 周期"), text: $store.retentionECMWF, suffix: L10n.t("个"))
-                retentionField(L10n.t("CAMS 周期"), text: $store.retentionCAMS, suffix: L10n.t("个"))
-                retentionField(L10n.t("卫星数据"), text: $store.retentionSatelliteDays, suffix: L10n.t("天"))
-                retentionField(L10n.t("历史报告"), text: $store.retentionReportDays, suffix: L10n.t("天"))
-                retentionField(L10n.t("报告地图"), text: $store.retentionMapDays, suffix: L10n.t("天"))
+                readOnlyStatTile(L10n.t("GFS 周期"), value: formatRetention(store.retentionGFS, suffix: L10n.t("个")))
+                readOnlyStatTile(L10n.t("EC 周期"), value: formatRetention(store.retentionECMWF, suffix: L10n.t("个")))
+                readOnlyStatTile(L10n.t("CAMS 周期"), value: formatRetention(store.retentionCAMS, suffix: L10n.t("个")))
+                readOnlyStatTile(L10n.t("卫星数据"), value: formatRetention(store.retentionSatelliteDays, suffix: L10n.t("天")))
+                readOnlyStatTile(L10n.t("历史报告"), value: formatRetention(store.retentionReportDays, suffix: L10n.t("天")))
+                readOnlyStatTile(L10n.t("报告地图"), value: formatRetention(store.retentionMapDays, suffix: L10n.t("天")))
             }
-            if !store.retentionMessage.isEmpty {
-                Text(store.retentionMessage).font(.caption)
-                    .foregroundStyle(store.retentionSaveFailed ? Color.red : Color.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if store.retentionConfigured {
-                Text(L10n.t("已启用自定义保留策略")).font(.caption).foregroundStyle(.secondary)
-            }
-            HStack(spacing: 12) {
-                if store.savingRetention || store.applyingRetention { ProgressView().controlSize(.small) }
-                Spacer()
-                Button(L10n.text("立即按策略清理", "Clean up now"), systemImage: "sparkles") {
-                    store.applyRetentionNow()
-                }
-                .disabled(!store.online || !store.retentionConfigured || store.busy || store.savingRetention || store.applyingRetention)
-                Button(L10n.t("保存保留设置"), systemImage: "externaldrive.badge.checkmark") {
-                    store.saveRetentionSettings()
-                }
-                .disabled(!store.online || store.savingRetention || store.applyingRetention || store.busy)
-            }
-            .font(.callout)
         }
+    }
+
+    private func formatRetention(_ raw: String, suffix: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? L10n.t("不限制") : "\(trimmed) \(suffix)"
+    }
+
+    private func readOnlyStatTile(_ title: String, value: String) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+            Text(value).font(.callout.weight(.medium)).monospacedDigit().lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .fireSkySurface(role: .grouped, cornerRadius: 10)
     }
 
     private var elevationSourceBlock: some View {
@@ -688,7 +598,7 @@ struct SettingsView: View {
     private func categoryTitle(_ key: String) -> String {
         switch key {
         case "通用": return L10n.catGeneral
-        case "数据": return L10n.catData
+        case "数据": return L10n.text("服务端", "Server")
         default: return L10n.catAdvanced
         }
     }
@@ -712,41 +622,5 @@ struct SettingsView: View {
             .frame(width: 34, height: 34)
             .background(Color.primary.opacity(scheme == .dark ? 0.07 : 0.05),
                         in: RoundedRectangle(cornerRadius: 8))
-    }
-
-    private func retentionField(_ title: String, text: Binding<String>, suffix: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            HStack(spacing: 4) {
-                TextField(L10n.t("不限制"), text: text)
-                    .workInputField(cornerRadius: 8)
-                    .keyboardType(.decimalPad)
-                Text(suffix).font(.caption2).foregroundStyle(.secondary)
-            }
-        }
-    }
-
-    private func syncField(_ title: String, text: Binding<String>, suffix: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title).font(.caption2).foregroundStyle(.secondary)
-            HStack(spacing: 4) {
-                TextField(L10n.t("未设置"), text: text)
-                    .workInputField(cornerRadius: 8)
-                    .keyboardType(.numberPad)
-                Text(suffix).font(.caption2).foregroundStyle(.secondary)
-            }
-        }.frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func tutorialStep<Content: View>(_ number: String, _ title: String, detail: String,
-                                             @ViewBuilder action: () -> Content) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            Text(number).font(.caption.weight(.semibold)).foregroundStyle(.secondary).frame(width: 18)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(title).font(.callout.weight(.medium))
-                Text(detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                action().font(.caption)
-            }
-        }
     }
 }

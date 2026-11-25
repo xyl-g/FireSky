@@ -397,7 +397,10 @@ fn download_cams(
                 area: json!(area),
                 target_utcs: targets.iter().copied().map(time_contract::iso).collect(),
                 target_utc: None,
-                config: ads::Config::default(),
+                config: ads::Config {
+                    job_ledger_path: Some(ads::ledger_path_for_cams_cache(&cache_dir)),
+                    ..Default::default()
+                },
                 allow_download: true,
                 require_exact_valid_time: true,
                 refresh_before_cycle: refresh.clone(),

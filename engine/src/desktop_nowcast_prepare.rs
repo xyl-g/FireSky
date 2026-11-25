@@ -216,7 +216,12 @@ fn cams_result(
                 area: area.clone(),
                 target_utcs: targets.clone(),
                 target_utc: None,
-                config: ads::Config::default(),
+                config: ads::Config {
+                    job_ledger_path: Some(ads::ledger_path_for_cams_cache(
+                        &input.config.cams_cache_dir,
+                    )),
+                    ..Default::default()
+                },
                 allow_download: true,
                 require_exact_valid_time: true,
                 refresh_before_cycle: refresh.clone(),

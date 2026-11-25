@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -46,6 +47,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -65,14 +67,19 @@ fun HistoryScreen(store: WorkbenchStore, state: WorkbenchState) {
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(stringResource(R.string.history_title), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                stringResource(R.string.history_title),
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Text(
                     if (state.taskHistoryLoaded) stringResource(R.string.history_summary_fmt, state.taskHistory.size, state.taskHistoryTotal)
                     else stringResource(R.string.history_subtitle),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f),
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(
@@ -103,16 +110,24 @@ fun HistoryScreen(store: WorkbenchStore, state: WorkbenchState) {
                     Column(
                         Modifier.fillMaxWidth().padding(24.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         FireSkyMarkScene(size = 64.dp)
-                        Text(stringResource(R.string.no_tasks), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                        Text(stringResource(R.string.no_tasks), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
                         Text(
                             if (state.online) stringResource(R.string.no_tasks_online)
                             else stringResource(R.string.no_tasks_offline),
                             fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                            textAlign = TextAlign.Center,
                         )
+                        if (!state.online) {
+                            Spacer(Modifier.height(2.dp))
+                            SecondaryButton(stringResource(R.string.go_configure_server)) {
+                                store.setSettingsCategory("高级")
+                                store.setPage("settings")
+                            }
+                        }
                     }
                 }
             }
@@ -153,23 +168,6 @@ fun HistoryScreen(store: WorkbenchStore, state: WorkbenchState) {
             }
         }
     }
-    if (state.pendingForgetTaskId != null) {
-        AlertDialog(
-            onDismissRequest = { store.setPendingForgetTask(null) },
-            title = { Text(stringResource(R.string.delete_task_title), fontSize = 16.sp) },
-            text = { Text(stringResource(R.string.delete_task_body), fontSize = 13.sp) },
-            confirmButton = {
-                Button(
-                    onClick = { store.forgetPendingTask() },
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFB5482F)),
-                    shape = RoundedCornerShape(12.dp),
-                ) { Text(stringResource(R.string.delete_record)) }
-            },
-            dismissButton = {
-                TextButton(onClick = { store.setPendingForgetTask(null) }) { Text(stringResource(R.string.keep_record)) }
-            },
-        )
-    }
 }
 
 @Composable
@@ -202,57 +200,41 @@ private fun HistoryRow(store: WorkbenchStore, state: WorkbenchState, item: TaskH
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.52f),
                     )
                 }
-                // 方案 D9：动作收进「…」菜单，危险项红字隔离。
-                var menuExpanded by remember { mutableStateOf(false) }
-                Box {
-                    IconButton(
-                        onClick = { menuExpanded = true },
-                        enabled = !state.busy,
-                        modifier = Modifier.size(30.dp),
-                    ) {
-                        Icon(Icons.Filled.MoreHoriz, contentDescription = stringResource(R.string.cd_task_actions), Modifier.size(16.dp))
-                    }
-                    DropdownMenu(
-                        expanded = menuExpanded,
-                        onDismissRequest = { menuExpanded = false },
-                    ) {
-                        if (item.canRestoreResult) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.restore_result), fontSize = 12.sp) },
-                                onClick = {
-                                    menuExpanded = false
-                                    store.restoreTaskResult(item)
-                                },
-                                enabled = !state.busy && state.restoringTaskId == null,
-                            )
+                if (item.canRestoreResult || item.retryPayload != null) {
+                    var menuExpanded by remember { mutableStateOf(false) }
+                    Box {
+                        IconButton(
+                            onClick = { menuExpanded = true },
+                            enabled = !state.busy,
+                            modifier = Modifier.size(30.dp),
+                        ) {
+                            Icon(Icons.Filled.MoreHoriz, contentDescription = stringResource(R.string.cd_task_actions), Modifier.size(16.dp))
                         }
-                        if (item.retryPayload != null) {
-                            DropdownMenuItem(
-                                text = { Text(stringResource(R.string.restore_params), fontSize = 12.sp) },
-                                onClick = {
-                                    menuExpanded = false
-                                    store.restoreTaskParameters(item)
-                                },
-                                enabled = !state.busy && item.status != "running" && state.restoringTaskId == null,
-                            )
-                        }
-                        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f))
-                        DropdownMenuItem(
-                            text = { Text(stringResource(R.string.delete_task_record), fontSize = 12.sp, color = MaterialTheme.colorScheme.error) },
-                            onClick = {
-                                menuExpanded = false
-                                store.setPendingForgetTask(item.taskId)
-                            },
-                            enabled = !state.busy && item.status != "running",
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Filled.Delete,
-                                    contentDescription = null,
-                                    Modifier.size(16.dp),
-                                    tint = MaterialTheme.colorScheme.error,
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false },
+                        ) {
+                            if (item.canRestoreResult) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.restore_result), fontSize = 12.sp) },
+                                    onClick = {
+                                        menuExpanded = false
+                                        store.restoreTaskResult(item)
+                                    },
+                                    enabled = !state.busy && state.restoringTaskId == null,
                                 )
-                            },
-                        )
+                            }
+                            if (item.retryPayload != null) {
+                                DropdownMenuItem(
+                                    text = { Text(stringResource(R.string.restore_params), fontSize = 12.sp) },
+                                    onClick = {
+                                        menuExpanded = false
+                                        store.restoreTaskParameters(item)
+                                    },
+                                    enabled = !state.busy && item.status != "running" && state.restoringTaskId == null,
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -306,11 +288,6 @@ private fun TaskDetail(state: WorkbenchState, item: TaskHistoryItem) {
                 }
             }
         }
-        Text(
-            stringResource(R.string.delete_note),
-            fontSize = 10.sp,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.52f),
-        )
     }
 }
 

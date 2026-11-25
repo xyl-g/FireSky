@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- 视觉主体由 Compose MaterialTheme（ui/Theme.kt）承载，此清单主题只负责窗口壳。 -->
-    <style name="Theme.FireSky" parent="android:Theme.Material.Light.NoActionBar" />
+    <!-- 视觉主体由 Compose MaterialTheme（ui/Theme.kt）与 enableEdgeToEdge() 承载，此清单主题只负责无操作栏透明窗口壳。 -->
+    <style name="Theme.FireSky" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
 </resources>

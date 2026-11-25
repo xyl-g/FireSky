@@ -226,16 +226,17 @@ struct InventoryView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    Label(L10n.text("只读视图：清理或下载地形请在桌面端完成", "Read-only view: clean or download terrain on desktop"), systemImage: "lock.shield")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .fireSkySurface(role: .grouped, cornerRadius: 12)
                     VStack(alignment: .leading, spacing: 4) {
                         Text(store.workspace).font(.caption).foregroundStyle(.secondary)
                             .lineLimit(1).truncationMode(.middle)
                         Text(L10n.t("已统计占用仅覆盖模式数据（GFS / EC / CAMS）；地形与卫星以目录为准。"))
                             .font(.caption2).foregroundStyle(.secondary)
-                    }
-                    if !store.dataDeleteMessage.isEmpty {
-                        Text(store.dataDeleteMessage)
-                            .font(.caption)
-                            .foregroundStyle(store.dataDeleteFailed ? Color.red : Color.secondary)
                     }
                     TerrainPanelView()
                     ForEach(Array(store.inventory.enumerated()), id: \.offset) { _, dataset in
@@ -250,13 +251,6 @@ struct InventoryView: View {
                                 Text("\(dataset["total_file_count"] as? Int ?? 0) 个文件").font(.callout)
                                 Text(String(format: "%.2f GB", (dataset["total_storage_mb"] as? Double ?? 0) / 1024))
                                     .font(.callout).foregroundStyle(.secondary).monospacedDigit()
-                                Button(role: .destructive) {
-                                    store.beginDataDelete(source: source, cycle: nil)
-                                } label: {
-                                    Image(systemName: "trash").frame(minWidth: 36, minHeight: 36)
-                                }
-                                .buttonStyle(.borderless)
-                                .disabled(store.busy || !store.online || store.dataDeleteRunning)
                             }
                             DisclosureGroup("\(cycles.count) 个周期", isExpanded: Binding(
                                 get: { store.expandedInventory.contains(source) },
@@ -268,13 +262,6 @@ struct InventoryView: View {
                                         Text(key).monospaced()
                                         Spacer()
                                         Text("\(item["files"] as? Int ?? 0) 个文件").foregroundStyle(.secondary)
-                                        Button(role: .destructive) {
-                                            store.beginDataDelete(source: source, cycle: key)
-                                        } label: {
-                                            Image(systemName: "trash").frame(minWidth: 32, minHeight: 32)
-                                        }
-                                        .buttonStyle(.borderless)
-                                        .disabled(store.busy || !store.online || store.dataDeleteRunning)
                                     }.font(.callout).padding(.vertical, 4)
                                 }
                             }
@@ -320,15 +307,6 @@ struct InventoryView: View {
                         Image(systemName: "arrow.clockwise")
                     }
                 }
-            }
-            .confirmationDialog(L10n.t("删除本地数据？"), isPresented: Binding(
-                get: { store.pendingDataDelete != nil && store.dataDeletePreview != nil },
-                set: { if !$0 { store.cancelDataDelete() } }
-            )) {
-                Button(L10n.t("删除"), role: .destructive) { store.executeDataDelete() }
-                Button(L10n.t("取消"), role: .cancel) { store.cancelDataDelete() }
-            } message: {
-                Text(deleteConfirmationText)
             }
         }
     }
@@ -415,29 +393,9 @@ struct InventoryView: View {
         default: return "folder"
         }
     }
-
-    private var deleteConfirmationText: String {
-        guard let preview = store.dataDeletePreview,
-              let scope = store.pendingDataDelete else {
-            return L10n.t("正在生成删除预览…")
-        }
-        let source = scope["source"] as? String ?? ""
-        let title = source == "ecmwf" ? "EC" : source.uppercased()
-        let files = (preview["file_count"] as? NSNumber)?.intValue ?? 0
-        let mb = (preview["total_mb"] as? NSNumber)?.doubleValue ?? 0
-        let protected = (preview["protected"] as? [Any])?.count ?? 0
-        if let cycle = scope["cycle"] as? String {
-            return L10n.tf("删除 %@ 的周期 %@：共 %d 个文件，预计释放 %.1f MB。占用中的文件会跳过；报告与任务记录不受影响。", title, cycle, files, mb)
-        }
-        var text = L10n.tf("清空 %@ 的全部本地数据：共 %d 个文件，预计释放 %.1f MB。占用中的文件会跳过。", title, files, mb)
-        if protected > 0 {
-            text += L10n.tf("当前有 %d 个文件被下载任务占用，将跳过。", protected)
-        }
-        return text
-    }
 }
 
-/// 地形卡（macOS TerrainPanelView 同构）：区域选择 → 非破坏性确认 → 批量下载 + 失败项重试。
+/// 地形卡（只读模式：显示远端 SRTM 覆盖与瓦片数；下载需在桌面端完成）。
 struct TerrainPanelView: View {
     @EnvironmentObject private var store: Store
 
@@ -449,90 +407,21 @@ struct TerrainPanelView: View {
                     Text(terrainSubtitle).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
-                if store.terrainLoading || store.terrainEstimateLoading { ProgressView().controlSize(.small) }
-            }
-            if store.terrainDownloading {
-                terrainProgress
+                if store.terrainLoading { ProgressView().controlSize(.small) }
             }
             if !store.terrainMessage.isEmpty {
                 Text(store.terrainMessage).font(.caption)
                     .foregroundStyle(store.terrainMessageFailed ? Color.red : Color.secondary)
             }
             localTilesLine
-            if !store.terrainDownloading {
-                HStack {
-                    Text(L10n.t("下载区域"))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    Picker(L10n.t("下载区域"), selection: $store.terrainRegion) {
-                        ForEach(TerrainRegion.allCases) { region in
-                            Text(region.rawValue).tag(region)
-                        }
-                    }
-                    .pickerStyle(.menu)
-                }
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 12) {
-                        terrainActionButtons
-                    }
-                    VStack(alignment: .leading, spacing: 6) {
-                        terrainActionButtons
-                    }
-                }
-                .font(.callout)
-            } else {
-                Button(store.terrainCancelling ? L10n.text("正在停止…", "Stopping…") : L10n.text("取消下载", "Cancel download"),
-                       systemImage: "stop.fill") {
-                    store.cancelTerrainDownload()
-                }
-                .frame(minHeight: 36)
-                .disabled(store.terrainCancelling)
-            }
         }
         .padding(16)
         .fireSkySurface(role: .content, cornerRadius: 14)
-        .confirmationDialog(downloadConfirmTitle, isPresented: Binding(
-            get: { store.showTerrainConfirm },
-            set: { if !$0 { store.dismissTerrainConfirm() } }
-        )) {
-            Button(L10n.t("开始下载")) { store.downloadTerrainRegion() }
-            Button(L10n.t("取消"), role: .cancel) { store.dismissTerrainConfirm() }
-        } message: {
-            Text(confirmText)
-        }
-    }
-
-    @ViewBuilder
-    private var terrainActionButtons: some View {
-        Button(L10n.t("下载区域地形"), systemImage: "globe") {
-            store.loadTerrainEstimate()
-        }
-        .frame(minHeight: 36)
-        .disabled(!store.online)
-        if store.terrainLastFailedCount > 0 {
-            Button(L10n.text("重试失败项（\(store.terrainLastFailedCount)）",
-                             "Retry failed (\(store.terrainLastFailedCount))"),
-                   systemImage: "arrow.clockwise.circle") {
-                store.retryFailedTerrainTiles()
-            }
-            .frame(minHeight: 36)
-            .disabled(!store.online)
-        }
-        Button(L10n.t("仅当前地点"), systemImage: "arrow.down.to.line") {
-            store.downloadTerrainPoint()
-        }
-        .frame(minHeight: 36)
-        .disabled(!store.online || store.terrain?["coverage_ok"] as? Bool == false)
-    }
-
-    private var downloadConfirmTitle: String {
-        store.terrainRegion == .global ? L10n.t("下载全球地形数据？") : L10n.tf("下载%@地形数据？", store.terrainRegion.rawValue)
     }
 
     private var terrainSubtitle: String {
         guard let terrain = store.terrain else {
-            return L10n.t("全球瓦片下载后会覆盖任意地点，无需再按点下载。")
+            return L10n.t("当前显示远端工作区已有地形瓦片；下载需在桌面端完成。")
         }
         if terrain["coverage_ok"] as? Bool == false {
             return L10n.t("当前纬度不在 SRTM 覆盖范围（-56 ≤ 纬度 < 60）。")
@@ -547,25 +436,6 @@ struct TerrainPanelView: View {
     }
 
     @ViewBuilder
-    private var terrainProgress: some View {
-        let progress = store.terrainProgress
-        let candidates = (progress["candidates"] as? NSNumber)?.intValue ?? 0
-        let percent = (progress["percent"] as? NSNumber)?.doubleValue ?? 0
-        VStack(alignment: .leading, spacing: 4) {
-            ProgressView(value: percent, total: 100)
-            let counts = "%.0f%% · 已下载 \((progress["downloaded"] as? NSNumber)?.intValue ?? 0)/\(candidates) · 已有 \((progress["existing"] as? NSNumber)?.intValue ?? 0) · 缺失 \((progress["absent"] as? NSNumber)?.intValue ?? 0) · 失败 \((progress["failed"] as? NSNumber)?.intValue ?? 0)"
-            let current = (progress["current_tile"] as? String ?? "").isEmpty
-                ? "" : " · 当前 \(progress["current_tile"] as? String ?? "")"
-            Text(counts + current)
-                .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
-            if let received = (progress["received_bytes"] as? NSNumber)?.int64Value, received > 0 {
-                Text(ByteCountFormatter.string(fromByteCount: received, countStyle: .file))
-                    .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
-            }
-        }
-    }
-
-    @ViewBuilder
     private var localTilesLine: some View {
         let count = (store.terrain?["tile_count"] as? NSNumber)?.intValue ?? 0
         if count > 8 {
@@ -574,19 +444,6 @@ struct TerrainPanelView: View {
             Text(L10n.tf("本地瓦片：%@", tiles.compactMap { $0["name"] as? String }.joined(separator: "、")))
                 .font(.caption).foregroundStyle(.secondary)
         }
-    }
-
-    private var confirmText: String {
-        let global = store.terrainEstimate?["global"] as? JSONObject ?? [:]
-        let candidates = (global["candidates"] as? NSNumber)?.intValue ?? 0
-        let existing = (global["existing"] as? NSNumber)?.intValue ?? 0
-        var text = L10n.tf("将下载%@的 SRTM 瓦片：候选 %d 块，本地已有 %d 块会自动跳过（海洋上的瓦片是很小的空值瓦片，同样会下载）。下载耗时较长且占用磁盘，可随时取消，重新开始会跳过已下载瓦片。", store.terrainRegion.rawValue, candidates, existing)
-        if let gb = (global["estimated_gb"] as? NSNumber)?.doubleValue {
-            text += String(format: "按抽样估算体积约 %.0f GB（实际体积以运行时用量为准）。", gb)
-        } else {
-            text += "暂时无法估算体积，开始后会显示实际用量。"
-        }
-        return text
     }
 }
 

@@ -7,9 +7,12 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 
 > English documentation: [README.en.md](README.en.md)
 
-> 当前版本 **v1.10.2**（见[下载安装](#下载安装releases)）：macOS DMG（双架构）、
+> 当前版本 **v1.10.3**（见[下载安装](#下载安装releases)）：macOS DMG（双架构）、
 > Windows zip + 安装器（x64/ARM64）、Android 通用 APK 与 iOS 未签名 IPA
-> 全部随 CI `v*` tag 自动直发 Release。v1.10.2 优化了**桌面端应用内更新下载速度与默认系统代理兼容**，
+> 全部随 CI `v*` tag 自动直发 Release。v1.10.3 为 Android 补齐**嵌入式交互地图**
+> （浅/深色双主题与全屏选点），将 iOS / Android 收口为**严格只读瘦客户端**
+> （远端不暴露写/删配置入口，避免手机误改桌面数据），并新增 **CAMS ADS 任务持久接回**
+> 与大快照冷启动防 OOM；v1.10.2 优化了**桌面端应用内更新下载速度与默认系统代理兼容**，
 > 以及**后台数据同步按数据源独立锁与指数退避自动恢复**（CAMS ADS 长时间排队不再阻塞 GFS/EC）；
 > v1.10.1 起 iOS / Android 全面转型纯原生瘦客户端（直连 Mac / Windows / Docker 服务端，
 > 支持区域预测热力图/城市排行与卫星实况、实时 SSE 进度推送）。UI 设计系统 v2
@@ -68,7 +71,7 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 ## 下载安装（Releases）
 
 正式版统一从 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) 下载
-（当前 **v1.10.2**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
+（当前 **v1.10.3**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
 与各资产放在同一目录执行）：
 
 ```bash

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -105,33 +106,39 @@ fun RegionalControlsCard(store: WorkbenchStore, state: WorkbenchState) {
                 }
             }
 
-            ExposedDropdownMenuBox(
-                expanded = regionDropdownExpanded,
-                onExpandedChange = { regionDropdownExpanded = it },
-            ) {
-                OutlinedTextField(
-                    value = selectedPreset.label,
-                    onValueChange = {},
-                    readOnly = true,
-                    shape = SoftInputShape,
-                    colors = softInputColors(),
-                    label = { Text(stringResource(R.string.regional_preset_label), fontSize = 11.sp) },
-                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(regionDropdownExpanded) },
-                    textStyle = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.menuAnchor().fillMaxWidth(),
+            Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(
+                    stringResource(R.string.regional_preset_label),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
                 )
-                ExposedDropdownMenu(
+                ExposedDropdownMenuBox(
                     expanded = regionDropdownExpanded,
-                    onDismissRequest = { regionDropdownExpanded = false },
+                    onExpandedChange = { regionDropdownExpanded = it },
                 ) {
-                    state.availableRegions.forEach { preset ->
-                        DropdownMenuItem(
-                            text = { Text("${preset.label} (${preset.code})", fontSize = 13.sp) },
-                            onClick = {
-                                store.selectRegionalPreset(preset.code)
-                                regionDropdownExpanded = false
-                            },
-                        )
+                    OutlinedTextField(
+                        value = selectedPreset.label,
+                        onValueChange = {},
+                        readOnly = true,
+                        shape = SoftInputShape,
+                        colors = softInputColors(),
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(regionDropdownExpanded) },
+                        textStyle = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.menuAnchor().fillMaxWidth(),
+                    )
+                    ExposedDropdownMenu(
+                        expanded = regionDropdownExpanded,
+                        onDismissRequest = { regionDropdownExpanded = false },
+                    ) {
+                        state.availableRegions.forEach { preset ->
+                            DropdownMenuItem(
+                                text = { Text("${preset.label} (${preset.code})", fontSize = 13.sp) },
+                                onClick = {
+                                    store.selectRegionalPreset(preset.code)
+                                    regionDropdownExpanded = false
+                                },
+                            )
+                        }
                     }
                 }
             }
@@ -156,7 +163,7 @@ fun RegionalControlsCard(store: WorkbenchStore, state: WorkbenchState) {
 fun RegionalResultSection(store: WorkbenchStore, state: WorkbenchState) {
     val activeResult = if (state.resultKind == "regional") state.result else null
     if (activeResult == null) {
-        RegionalEmptyCard()
+        RegionalEmptyCard(state)
         return
     }
 
@@ -182,19 +189,37 @@ fun RegionalResultSection(store: WorkbenchStore, state: WorkbenchState) {
 }
 
 @Composable
-private fun RegionalEmptyCard() {
+private fun RegionalEmptyCard(state: WorkbenchState) {
+    val dark = LocalFireSkyDark.current
     WorkSurface(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                FireSkyMarkScene(size = 54.dp)
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(stringResource(R.string.regional_empty_title), fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                IconBadge(Icons.Filled.Map, tint = coolAccentColor())
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(stringResource(R.string.regional_empty_title), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     Text(
                         stringResource(R.string.regional_empty_body),
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
                     )
                 }
+            }
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(210.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .border(0.75.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f), RoundedCornerShape(16.dp)),
+            ) {
+                RegionalLeafletMap(
+                    cells = emptyList(),
+                    cities = emptyList(),
+                    bounds = state.selectedRegionPreset.bounds,
+                    selectedCell = null,
+                    dark = dark,
+                    modifier = Modifier.fillMaxSize(),
+                    onTapLatLon = { _, _ -> },
+                )
             }
         }
     }
@@ -354,85 +379,32 @@ private fun RegionalHeatmapCard(
             Box(
                 Modifier
                     .fillMaxWidth()
-                    .height(230.dp)
-                    .clip(RoundedCornerShape(12.dp))
+                    .height(260.dp)
+                    .clip(RoundedCornerShape(16.dp))
                     .background(mapBg)
-                    .border(0.75.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f), RoundedCornerShape(12.dp)),
+                    .border(0.75.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f), RoundedCornerShape(16.dp)),
             ) {
-                Canvas(
-                    Modifier
-                        .matchParentSize()
-                        .pointerInput(allCells, model.cityRanking) {
-                            detectTapGestures { tap ->
-                                val w = size.width.toFloat().coerceAtLeast(1f)
-                                val h = size.height.toFloat().coerceAtLeast(1f)
-                                val tapLon = minLon + (tap.x / w) * xSpan
-                                val tapMercY = yMin + (tap.y / h) * ySpan
-                                val tapLat = inverseMercatorY(tapMercY)
-                                val nearest = (allCells + model.cityRanking).minByOrNull { c ->
-                                    val dLat = c.lat - tapLat
-                                    val dLon = c.lon - tapLon
-                                    dLat * dLat + dLon * dLon
-                                }
-                                if (nearest != null) {
-                                    val threshold = max(1.5, max(latStep, lonStep) * 1.4)
-                                    if (abs(nearest.lat - tapLat) <= threshold && abs(nearest.lon - tapLon) <= threshold) {
-                                        store.selectRegionalCell(nearest)
-                                    }
-                                }
+                RegionalLeafletMap(
+                    cells = allCells,
+                    cities = model.cityRanking,
+                    bounds = bounds,
+                    selectedCell = state.selectedRegionalCell,
+                    dark = dark,
+                    modifier = Modifier.fillMaxSize(),
+                    onTapLatLon = { tapLat, tapLon ->
+                        val nearest = (allCells + model.cityRanking).minByOrNull { c ->
+                            val dLat = c.lat - tapLat
+                            val dLon = c.lon - tapLon
+                            dLat * dLat + dLon * dLon
+                        }
+                        if (nearest != null) {
+                            val threshold = max(1.5, max(latStep, lonStep) * 1.4)
+                            if (abs(nearest.lat - tapLat) <= threshold && abs(nearest.lon - tapLon) <= threshold) {
+                                store.selectRegionalCell(nearest)
                             }
-                        },
-                ) {
-                    val w = size.width
-                    val h = size.height
-                    fun toX(lon: Double): Float = ((lon - minLon) / xSpan * w).toFloat()
-                    fun toY(lat: Double): Float = ((mercatorY(lat.coerceIn(-85.0, 85.0)) - yMin) / ySpan * h).toFloat()
-
-                    // 经纬参考网格
-                    var glon = (minLon / 10.0).toInt() * 10.0
-                    while (glon <= maxLon) {
-                        val x = toX(glon)
-                        drawLine(gridLineColor, Offset(x, 0f), Offset(x, h), strokeWidth = 1f)
-                        glon += 10.0
-                    }
-                    var glat = (minLat / 10.0).toInt() * 10.0
-                    while (glat <= maxLat) {
-                        val y = toY(glat)
-                        drawLine(gridLineColor, Offset(0f, y), Offset(w, y), strokeWidth = 1f)
-                        glat += 10.0
-                    }
-
-                    // 格点色块
-                    for (cell in allCells) {
-                        val left = toX(cell.lon - lonStep * 0.5)
-                        val right = toX(cell.lon + lonStep * 0.5)
-                        val top = toY(cell.lat + latStep * 0.5)
-                        val bottom = toY(cell.lat - latStep * 0.5)
-                        val cw = max(2f, right - left)
-                        val ch = max(2f, bottom - top)
-                        val color = cell.quality?.let { regionalDuskColor(it) } ?: missingColor
-                        drawRect(color = color, topLeft = Offset(left, top), size = Size(cw, ch))
-                    }
-
-                    // 高值城市标记点
-                    for (city in model.cityRanking.take(12)) {
-                        val cx = toX(city.lon)
-                        val cy = toY(city.lat)
-                        drawCircle(Color.White.copy(alpha = 0.9f), radius = 3.5.dp.toPx(), center = Offset(cx, cy))
-                        drawCircle(
-                            city.quality?.let { regionalDuskColor(it) } ?: missingColor,
-                            radius = 2.2.dp.toPx(),
-                            center = Offset(cx, cy),
-                        )
-                    }
-
-                    // 选中格点高亮环
-                    state.selectedRegionalCell?.let { sel ->
-                        val sx = toX(sel.lon)
-                        val sy = toY(sel.lat)
-                        drawCircle(selectedColor, radius = 6.5.dp.toPx(), center = Offset(sx, sy), style = Stroke(width = 2.dp.toPx()))
-                    }
-                }
+                        }
+                    },
+                )
             }
 
             RegionalLegendRow()

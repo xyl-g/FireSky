@@ -7,10 +7,13 @@ native desktop clients**. The physics follows the methodology of the
 
 > 中文文档：[README.md](README.md)
 
-> Current release **v1.10.2** (see [Download & install](#download--install-releases)):
+> Current release **v1.10.3** (see [Download & install](#download--install-releases)):
 > macOS DMGs (dual arch), Windows zip + installer (x64/ARM64), universal Android
 > APK, and unsigned sideloadable iOS `.ipa` are all built and attached to GitHub
-> Releases automatically on `v*` tags. v1.10.2 dramatically speeds up **in-app
+> Releases automatically on `v*` tags. v1.10.3 brings **embedded interactive maps & UI
+> polish** on Android, hardens iOS & Android into **strictly read-only thin clients**,
+> adds **CAMS ADS job persistence & reattach**, and prevents startup OOM on large
+> regional snapshots. v1.10.2 dramatically speeds up **in-app
 > updater downloads with proper default system-proxy routing**, and adds
 > **per-source locks & exponential-backoff auto-recovery** for background data sync
 > (so long CAMS ADS queues never block GFS/EC). Since v1.10.1, iOS & Android run as
@@ -81,7 +84,7 @@ native desktop clients**. The physics follows the methodology of the
 
 Official builds are published on
 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) (current:
-**v1.10.2**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
+**v1.10.3**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
 file names; run it in the directory holding the assets):
 
 ```bash

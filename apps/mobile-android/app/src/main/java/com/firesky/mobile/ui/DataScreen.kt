@@ -4,11 +4,13 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -61,6 +63,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.firesky.mobile.R
@@ -81,51 +85,54 @@ fun DataScreen(store: WorkbenchStore, state: WorkbenchState) {
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-            Text(stringResource(R.string.data_title), fontSize = 22.sp, fontWeight = FontWeight.Bold)
+        Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Text(
+                stringResource(R.string.data_title),
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onBackground,
+            )
             Text(
                 stringResource(R.string.data_dir_line),
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f),
             )
         }
         if (!state.online) {
             WorkSurface(Modifier.fillMaxWidth()) {
-                Text(
-                    stringResource(R.string.data_offline),
-                    Modifier.padding(16.dp),
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.error,
-                )
+                Column(
+                    Modifier.fillMaxWidth().padding(24.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    FireSkyMarkScene(size = 64.dp)
+                    Text(
+                        stringResource(R.string.engine_offline),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        stringResource(R.string.data_offline),
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                        textAlign = TextAlign.Center,
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    AccentButton(stringResource(R.string.go_configure_server)) {
+                        store.setSettingsCategory("高级")
+                        store.setPage("settings")
+                    }
+                }
             }
         } else {
             if (pageError.isNotEmpty()) {
                 DismissibleErrorBanner(pageError, onDismiss = { store.clearError() })
             }
-            if (state.dataDeleteMessage.isNotEmpty()) {
-                val msgColor = if (state.dataDeleteFailed) MaterialTheme.colorScheme.error
-                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.78f)
-                Surface(
-                    Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp),
-                    color = msgColor.copy(alpha = 0.09f),
-                    border = BorderStroke(0.75.dp, msgColor.copy(alpha = 0.28f)),
-                ) {
-                    Text(
-                        state.dataDeleteMessage,
-                        Modifier.padding(12.dp),
-                        fontSize = 12.sp,
-                        color = msgColor,
-                    )
-                }
-            }
+            ReadOnlyNoticeBanner(stringResource(R.string.readonly_data_notice))
             TerrainCard(store, state)
             InventoryCard(store, state)
             AuxiliaryCategoriesCard(state)
         }
-    }
-    if (state.pendingDataDelete != null && state.dataDeletePreview != null) {
-        DataDeleteDialog(store, state)
     }
 }
 
@@ -160,7 +167,7 @@ private fun InventoryCard(store: WorkbenchStore, state: WorkbenchState) {
             }
             (0 until datasets.length()).forEach { index ->
                 val dataset = datasets.optJSONObject(index) ?: return@forEach
-                DatasetRows(store, state, dataset)
+                DatasetRows(dataset)
                 if (index < datasets.length() - 1) {
                     HorizontalDivider(
                         thickness = 0.5.dp,
@@ -173,7 +180,7 @@ private fun InventoryCard(store: WorkbenchStore, state: WorkbenchState) {
 }
 
 @Composable
-private fun DatasetRows(store: WorkbenchStore, state: WorkbenchState, dataset: JSONObject) {
+private fun DatasetRows(dataset: JSONObject) {
     val source = dataset.optString("source")
     val title = if (source == "ecmwf") "EC" else source.uppercase()
     val cycles = dataset.optJSONObject("cycles") ?: JSONObject()
@@ -188,16 +195,13 @@ private fun DatasetRows(store: WorkbenchStore, state: WorkbenchState, dataset: J
                 fontSize = 11.sp,
                 style = numStyle,
             )
-            Spacer(Modifier.width(6.dp))
+            Spacer(Modifier.width(8.dp))
             Text(
                 "%.2f GB".format((dataset.optDouble("total_storage_mb").takeUnless { it.isNaN() } ?: 0.0) / 1024),
                 fontSize = 11.sp,
                 style = numStyle,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
             )
-            IconButton(onClick = { store.beginDataDelete(source, null) }, enabled = !state.busy) {
-                Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.cd_clear_source, title), Modifier.size(16.dp))
-            }
         }
         Row(
             Modifier
@@ -221,7 +225,7 @@ private fun DatasetRows(store: WorkbenchStore, state: WorkbenchState, dataset: J
         }
         if (expanded) {
             WorkSurface(Modifier.fillMaxWidth(), grouped = true, cornerRadius = 12.dp) {
-                Column(Modifier.padding(horizontal = 12.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     val keys = cycles.keys().asSequence().sortedDescending().toList()
                     keys.forEach { key ->
                         val item = cycles.optJSONObject(key) ?: JSONObject()
@@ -234,13 +238,6 @@ private fun DatasetRows(store: WorkbenchStore, state: WorkbenchState, dataset: J
                                 style = numStyle,
                                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
                             )
-                            IconButton(
-                                onClick = { store.beginDataDelete(source, key) },
-                                enabled = !state.busy,
-                                modifier = Modifier.size(30.dp),
-                            ) {
-                                Icon(Icons.Filled.Delete, contentDescription = stringResource(R.string.cd_delete_cycle, key), Modifier.size(14.dp))
-                            }
                         }
                     }
                 }
@@ -344,54 +341,9 @@ private fun categorySubtitle(key: String): String = when (key) {
     else -> ""
 }
 
-/** 删除确认：具体范围 + 文件数 + 预计释放；占用中跳过；不影响报告与任务记录。 */
-@Composable
-private fun DataDeleteDialog(store: WorkbenchStore, state: WorkbenchState) {
-    val scope = state.pendingDataDelete ?: return
-    val preview = state.dataDeletePreview ?: return
-    val source = scope.optString("source")
-    val title = if (source == "ecmwf") "EC" else source.uppercase()
-    val cycle = scope.optString("cycle", "").ifEmpty { null }
-    val files = preview.optInt("file_count", 0)
-    val mb = preview.optDouble("total_mb").takeUnless { it.isNaN() } ?: 0.0
-    val protected = preview.optJSONArray("protected")?.length() ?: 0
-    AlertDialog(
-        onDismissRequest = { store.cancelDataDelete() },
-        title = {
-            Text(
-                if (cycle == null) stringResource(R.string.clear_source_title, title)
-                else stringResource(R.string.delete_cycle_title),
-                fontSize = 16.sp,
-            )
-        },
-        text = {
-            Text(
-                (if (cycle == null) {
-                    stringResource(R.string.clear_source_body, title, files, mb)
-                } else {
-                    stringResource(R.string.delete_cycle_body, title, cycle, files, mb)
-                }) + if (protected > 0) stringResource(R.string.delete_protected_note, protected) else "",
-                fontSize = 13.sp,
-            )
-        },
-        confirmButton = {
-            Button(
-                onClick = { store.executeDataDelete() },
-                enabled = !state.dataDeleteRunning,
-                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                shape = RoundedCornerShape(12.dp),
-            ) { Text(stringResource(R.string.delete)) }
-        },
-        dismissButton = {
-            TextButton(onClick = { store.cancelDataDelete() }) { Text(stringResource(R.string.cancel)) }
-        },
-    )
-}
+// ---------------------------------------------------------------- 地形状态（只读）
 
-// ---------------------------------------------------------------- 地形区域下载
-
-/** 地形卡（macOS TerrainPanelView 同构）：区域选择 → 估算确认 → 批量下载 + 失败瓦片重试。 */
-@OptIn(ExperimentalMaterial3Api::class)
+/** 只读地形状态卡：展示当前观测点与服务端本地瓦片覆盖摘要。 */
 @Composable
 private fun TerrainCard(store: WorkbenchStore, state: WorkbenchState) {
     WorkSurface(Modifier.fillMaxWidth()) {
@@ -402,12 +354,13 @@ private fun TerrainCard(store: WorkbenchStore, state: WorkbenchState) {
                     Text(stringResource(R.string.terrain_title), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                     Text(terrainSubtitle(state), fontSize = 11.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f))
                 }
-                if (state.terrainLoading || state.terrainEstimateLoading) {
+                if (state.terrainLoading) {
                     CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                } else {
+                    IconButton(onClick = { store.loadTerrain() }) {
+                        Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.cd_refresh_terrain), Modifier.size(16.dp))
+                    }
                 }
-            }
-            if (state.terrainDownloading) {
-                TerrainProgress(state)
             }
             if (state.terrainMessage.isNotEmpty()) {
                 Text(
@@ -418,157 +371,8 @@ private fun TerrainCard(store: WorkbenchStore, state: WorkbenchState) {
                 )
             }
             localTilesLine(state)
-            if (!state.terrainDownloading) {
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RegionDropdown(state) { store.setTerrainRegion(it) }
-                    Spacer(Modifier.weight(1f))
-                    IconButton(onClick = { store.loadTerrain() }) {
-                        Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.cd_refresh_terrain), Modifier.size(16.dp))
-                    }
-                }
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Button(
-                        onClick = { store.loadTerrainEstimate() },
-                        enabled = state.online && !state.busy && !state.terrainEstimateLoading,
-                        modifier = Modifier.weight(1f).height(42.dp),
-                        shape = RoundedCornerShape(12.dp),
-                    ) { Text(stringResource(R.string.download_region), fontSize = 12.sp) }
-                    OutlinedButton(
-                        onClick = { store.downloadTerrainPoint() },
-                        enabled = state.online && !state.busy,
-                        modifier = Modifier.height(42.dp),
-                        shape = RoundedCornerShape(12.dp),
-                    ) { Text(stringResource(R.string.point_only), fontSize = 12.sp) }
-                }
-                if (state.terrainLastFailedCount > 0) {
-                    OutlinedButton(
-                        onClick = { store.retryFailedTerrainTiles() },
-                        enabled = state.online && !state.busy,
-                        modifier = Modifier.fillMaxWidth().height(42.dp),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        Icon(Icons.Filled.CloudQueue, contentDescription = null, modifier = Modifier.size(15.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text(stringResource(R.string.terrain_retry_failed_fmt, state.terrainLastFailedCount), fontSize = 12.sp)
-                    }
-                }
-            } else {
-                Button(
-                    onClick = { store.cancelTerrainDownload() },
-                    enabled = !state.terrainCancelling,
-                    modifier = Modifier.fillMaxWidth().height(42.dp),
-                    shape = RoundedCornerShape(12.dp),
-                ) {
-                    Text(
-                        if (state.terrainCancelling) stringResource(R.string.stopping)
-                        else stringResource(R.string.cancel_download),
-                        fontSize = 12.sp,
-                    )
-                }
-            }
         }
     }
-    if (state.showTerrainConfirm) {
-        TerrainConfirmDialog(store, state)
-    }
-}
-
-/** 批量进度（macOS globalProgress 同构）。 */
-@Composable
-private fun TerrainProgress(state: WorkbenchState) {
-    val progress = state.terrainProgress
-    val candidates = progress.optInt("candidates", 0)
-    val percent = progress.optDouble("percent").takeUnless { it.isNaN() } ?: 0.0
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        LinearProgressIndicator(
-            progress = { (percent / 100).toFloat() },
-            modifier = Modifier.fillMaxWidth().clip(CircleShape),
-        )
-        Text(
-            stringResource(
-                R.string.terrain_progress_fmt,
-                percent, progress.optInt("downloaded", 0), candidates,
-                progress.optInt("existing", 0), progress.optInt("absent", 0),
-                progress.optInt("failed", 0),
-            ) + (progress.optString("current_tile").takeIf { it.isNotEmpty() }
-                ?.let { stringResource(R.string.terrain_progress_current, it) } ?: ""),
-            fontSize = 11.sp,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-        )
-        val received = progress.optLong("received_bytes", 0)
-        if (received > 0) {
-            Text(
-                humanBytes(received),
-                fontSize = 11.sp,
-                style = TextStyle(fontFeatureSettings = "tnum"),
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-            )
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun RegionDropdown(state: WorkbenchState, onSelect: (String) -> Unit) {
-    var expanded by remember { mutableStateOf(false) }
-    ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
-        OutlinedTextField(
-            value = state.terrainRegion,
-            onValueChange = {},
-            readOnly = true,
-            shape = SoftInputShape,
-            colors = softInputColors(),
-            label = { Text(stringResource(R.string.region_label), fontSize = 10.sp) },
-            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
-            textStyle = MaterialTheme.typography.bodySmall,
-            modifier = Modifier.menuAnchor().width(130.dp),
-        )
-        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
-            TerrainRegion.labels.forEach { label ->
-                DropdownMenuItem(text = { Text(label, fontSize = 12.sp) }, onClick = {
-                    onSelect(label)
-                    expanded = false
-                })
-            }
-        }
-    }
-}
-
-/** 区域下载确认（非破坏性，跳过已有瓦片且可随时取消续传）。 */
-@Composable
-private fun TerrainConfirmDialog(store: WorkbenchStore, state: WorkbenchState) {
-    val global = state.terrainEstimate?.optJSONObject("global") ?: JSONObject()
-    val candidates = global.optInt("candidates", 0)
-    val existing = global.optInt("existing", 0)
-    val estimatedGb = global.optDouble("estimated_gb").takeUnless { it.isNaN() }
-    AlertDialog(
-        onDismissRequest = { store.dismissTerrainConfirm() },
-        title = { Text(stringResource(R.string.terrain_confirm_title, state.terrainRegion), fontSize = 16.sp) },
-        text = {
-            Text(
-                stringResource(R.string.terrain_confirm_body, state.terrainRegion, candidates, existing) +
-                    (estimatedGb?.let { stringResource(R.string.terrain_estimate, it) }
-                        ?: stringResource(R.string.terrain_no_estimate)),
-                fontSize = 13.sp,
-            )
-        },
-        confirmButton = {
-            Button(
-                onClick = { store.downloadTerrainRegion() },
-                shape = RoundedCornerShape(12.dp),
-            ) { Text(stringResource(R.string.start_download)) }
-        },
-        dismissButton = {
-            TextButton(onClick = { store.dismissTerrainConfirm() }) { Text(stringResource(R.string.cancel)) }
-        },
-    )
 }
 
 @Composable

@@ -63,16 +63,6 @@ struct HistoryView: View {
             }
         }
         .task(id: store.online) { store.loadTaskHistory() }
-        .confirmationDialog(L10n.text("删除任务记录？", "Delete task record?"), isPresented: Binding(
-            get: { store.pendingForgetTaskID != nil },
-            set: { if !$0 { store.setPendingForgetTask(nil) } }
-        )) {
-            Button(L10n.text("删除记录", "Delete record"), role: .destructive) { store.forgetPendingTask() }
-            Button(L10n.text("保留记录", "Keep record"), role: .cancel) { store.setPendingForgetTask(nil) }
-        } message: {
-            Text(L10n.text("只删除状态和事件，不删除已发布报告或天气数据。",
-                           "Only status and events are removed; published reports and weather data are kept."))
-        }
     }
 
     /// 统一空态（对齐 macOS NativeTaskHistoryView.emptyState）：FireSkyMarkScene + 标题 + 说明。
@@ -167,27 +157,22 @@ private struct HistoryRow: View {
                     Text(item.rowTimeLine).font(.caption2).foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
-                Spacer(minLength: 4)
-                Menu {
-                    if item.canRestoreResult {
-                        Button(L10n.text("恢复已发布结果", "Restore published result")) { store.restoreTaskResult(item) }
-                            .disabled(store.busy || store.restoringTaskID != nil)
-                    }
-                    if item.retryPayload != nil {
-                        Button(L10n.text("恢复参数并重新检查数据", "Restore parameters & re-check")) { store.restoreTaskParameters(item) }
-                            .disabled(store.busy || item.status == "running" || store.restoringTaskID != nil)
-                    }
-                    Divider()
-                    Button(role: .destructive) {
-                        store.setPendingForgetTask(item.taskID)
+                if item.canRestoreResult || item.retryPayload != nil {
+                    Spacer(minLength: 4)
+                    Menu {
+                        if item.canRestoreResult {
+                            Button(L10n.text("恢复已发布结果", "Restore published result")) { store.restoreTaskResult(item) }
+                                .disabled(store.busy || store.restoringTaskID != nil)
+                        }
+                        if item.retryPayload != nil {
+                            Button(L10n.text("恢复参数并重新检查数据", "Restore parameters & re-check")) { store.restoreTaskParameters(item) }
+                                .disabled(store.busy || item.status == "running" || store.restoringTaskID != nil)
+                        }
                     } label: {
-                        Label(L10n.text("删除任务记录", "Delete task record"), systemImage: "trash")
+                        Image(systemName: "ellipsis.circle")
+                            .foregroundStyle(.secondary)
+                            .frame(minWidth: 32, minHeight: 32)
                     }
-                    .disabled(store.busy || item.status == "running")
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .foregroundStyle(.secondary)
-                        .frame(minWidth: 32, minHeight: 32)
                 }
             }
             if isSelected {
@@ -249,9 +234,6 @@ private struct TaskDetail: View {
                     }
                 }
             }
-            Text(L10n.text("删除记录只删除状态和事件，不影响报告与天气数据。",
-                           "Deleting removes only status and events; reports and weather data are unaffected."))
-                .font(.caption2).foregroundStyle(.secondary)
         }
     }
 }

@@ -5,9 +5,11 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
@@ -16,8 +18,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
@@ -36,6 +40,7 @@ import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Map
+import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SatelliteAlt
@@ -46,6 +51,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
+import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -106,23 +112,27 @@ fun WorkbenchApp(store: WorkbenchStore) {
     val state by store.state.collectAsStateWithLifecycle()
     FireSkyTheme(state.appearance) {
         val dark = LocalFireSkyDark.current
-        val navBg = if (dark) Color(0xFF111826).copy(alpha = 0.96f) else Color(0xFFF5F7FA).copy(alpha = 0.96f)
-        val navDivider = if (dark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.06f)
+        val navBg = if (dark) Color(0xFF0E1524).copy(alpha = 0.94f) else Color(0xFFF6F7FA).copy(alpha = 0.96f)
+        val navDivider = if (dark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.07f)
 
         FireSkyBackdrop(Modifier.fillMaxSize()) {
             Scaffold(
                 containerColor = Color.Transparent,
+                contentColor = MaterialTheme.colorScheme.onBackground,
                 topBar = {
                     if (state.page == "workbench") {
-                        TopAppBar(
-                            title = { HeaderLine(store, state) },
-                            colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
-                            windowInsets = WindowInsets(0.dp),
-                        )
+                        Box(
+                            Modifier
+                                .fillMaxWidth()
+                                .statusBarsPadding()
+                                .padding(horizontal = 16.dp, vertical = 8.dp),
+                        ) {
+                            HeaderLine(store, state)
+                        }
                     }
                 },
                 bottomBar = {
-                    Column(Modifier.background(navBg)) {
+                    Column(Modifier.background(navBg).navigationBarsPadding()) {
                         HorizontalDivider(thickness = 0.5.dp, color = navDivider)
                         if (state.page == "workbench" && !state.showPreflight && (state.serverConfigured || state.online)) {
                             Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
@@ -132,6 +142,7 @@ fun WorkbenchApp(store: WorkbenchStore) {
                         NavigationBar(
                             containerColor = Color.Transparent,
                             tonalElevation = 0.dp,
+                            windowInsets = WindowInsets(0.dp),
                         ) {
                             NavigationItem("workbench", stringResource(R.string.nav_point), Icons.Filled.Place, state.page) {
                                 store.setPage("workbench")
@@ -214,16 +225,19 @@ private fun RowScope.NavigationItem(
 @Composable
 fun WorkbenchScreen(store: WorkbenchStore, state: WorkbenchState) {
     val pageError = state.errorText("workbench")
+    var showMapPicker by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp)
-            .padding(top = 4.dp, bottom = 14.dp),
+            .padding(top = 6.dp, bottom = 18.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         if (!state.serverConfigured && !state.online) {
             RemoteServerOnboardingCard(store, state)
+            FirstRunCapabilitiesStrip()
         } else {
             if (!state.online) {
                 OfflineBanner(state, onOpenSettings = {
@@ -234,38 +248,108 @@ fun WorkbenchScreen(store: WorkbenchStore, state: WorkbenchState) {
             if (state.online && pageError.isNotEmpty()) {
                 DismissibleErrorBanner(pageError, onDismiss = { store.clearError() })
             }
+
+            CapsuleCategoryBar(
+                options = listOf("point", "regional", "nowcast"),
+                titles = listOf(
+                    stringResource(R.string.mode_point),
+                    stringResource(R.string.mode_regional),
+                    stringResource(R.string.mode_nowcast),
+                ),
+                icons = listOf(Icons.Filled.Place, Icons.Filled.Map, Icons.Filled.SatelliteAlt),
+                selection = state.workbenchMode,
+                onSelect = { store.setWorkbenchMode(it) },
+            )
+
+            if (state.workbenchMode == "nowcast") {
+                NowcastGuidanceBanner()
+            }
+
+            if (state.workbenchMode == "regional") {
+                RegionalControlsCard(store, state)
+            } else {
+                LocationCard(store, state, onOpenMapPicker = { showMapPicker = true })
+            }
+
+            ParametersCard(store, state, showCoordinatesEditor = state.workbenchMode != "regional")
+
+            if (state.busy && !state.showPreflight) ProgressRow(store, state)
+
+            when (state.workbenchMode) {
+                "regional" -> RegionalResultSection(store, state)
+                "nowcast" -> NowcastResultSection(store, state)
+                else -> ResultSection(store, state)
+            }
         }
+    }
 
-        CapsuleCategoryBar(
-            options = listOf("point", "regional", "nowcast"),
-            titles = listOf(
-                stringResource(R.string.mode_point),
-                stringResource(R.string.mode_regional),
-                stringResource(R.string.mode_nowcast),
-            ),
-            icons = listOf(Icons.Filled.Place, Icons.Filled.Map, Icons.Filled.SatelliteAlt),
-            selection = state.workbenchMode,
-            onSelect = { store.setWorkbenchMode(it) },
-        )
+    if (showMapPicker) {
+        MapPickerDialog(store, state, onDismiss = { showMapPicker = false })
+    }
+}
 
-        if (state.workbenchMode == "nowcast") {
-            NowcastGuidanceBanner()
+@Composable
+private fun FirstRunCapabilitiesStrip() {
+    WorkSurface(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(
+                stringResource(R.string.onboarding_features_caption),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+            )
+            OnboardingFeatureRow(
+                icon = Icons.Filled.WbTwilight,
+                tint = MaterialTheme.colorScheme.primary,
+                title = stringResource(R.string.empty_feature_models_title),
+                detail = stringResource(R.string.empty_feature_models_desc),
+            )
+            HorizontalDivider(
+                Modifier.padding(start = 40.dp),
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f),
+            )
+            OnboardingFeatureRow(
+                icon = Icons.Filled.Map,
+                tint = coolAccentColor(),
+                title = stringResource(R.string.mode_regional),
+                detail = stringResource(R.string.regional_empty_body),
+            )
+            HorizontalDivider(
+                Modifier.padding(start = 40.dp),
+                thickness = 0.5.dp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f),
+            )
+            OnboardingFeatureRow(
+                icon = Icons.Filled.SatelliteAlt,
+                tint = Teal,
+                title = stringResource(R.string.mode_nowcast),
+                detail = stringResource(R.string.nowcast_empty_body),
+            )
         }
+    }
+}
 
-        if (state.workbenchMode == "regional") {
-            RegionalControlsCard(store, state)
-        } else {
-            LocationCard(store, state)
-        }
-
-        ParametersCard(store, state, showCoordinatesEditor = state.workbenchMode != "regional")
-
-        if (state.busy && !state.showPreflight) ProgressRow(store, state)
-
-        when (state.workbenchMode) {
-            "regional" -> RegionalResultSection(store, state)
-            "nowcast" -> NowcastResultSection(store, state)
-            else -> ResultSection(store, state)
+@Composable
+private fun OnboardingFeatureRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    tint: Color,
+    title: String,
+    detail: String,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        IconBadge(icon, tint = tint)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(title, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+            Text(
+                detail,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+            )
         }
     }
 }
@@ -273,17 +357,25 @@ fun WorkbenchScreen(store: WorkbenchStore, state: WorkbenchState) {
 @Composable
 private fun RemoteServerOnboardingCard(store: WorkbenchStore, state: WorkbenchState) {
     WorkSurface(Modifier.fillMaxWidth(), emphasized = true) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                IconBadge(Icons.Filled.CloudQueue, tint = MaterialTheme.colorScheme.primary)
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text(stringResource(R.string.onboarding_connect_title), fontSize = 15.sp, fontWeight = FontWeight.Bold)
-                    Text(
-                        stringResource(R.string.onboarding_connect_subtitle),
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
-                    )
-                }
+        Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Column(
+                Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                FireSkyMarkScene(size = 72.dp)
+                Text(
+                    stringResource(R.string.onboarding_connect_title),
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                )
+                Text(
+                    stringResource(R.string.onboarding_connect_subtitle),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.68f),
+                    textAlign = TextAlign.Center,
+                )
             }
             RemoteServerConnectionForm(store, state)
         }
@@ -293,43 +385,57 @@ private fun RemoteServerOnboardingCard(store: WorkbenchStore, state: WorkbenchSt
 /** 共享远程服务器表单（首次引导卡与设置页共用）。 */
 @Composable
 fun RemoteServerConnectionForm(store: WorkbenchStore, state: WorkbenchState) {
+    val labelColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.72f)
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        OutlinedTextField(
-            value = state.remoteServerUrl,
-            onValueChange = store::setRemoteServerUrl,
-            label = { Text(stringResource(R.string.remote_url_label), fontSize = 11.sp) },
-            placeholder = { Text(stringResource(R.string.remote_url_placeholder), fontSize = 12.sp) },
-            singleLine = true,
-            shape = SoftInputShape,
-            colors = softInputColors(),
-            textStyle = MaterialTheme.typography.bodySmall,
-            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(stringResource(R.string.remote_url_label), fontSize = 12.sp, fontWeight = FontWeight.Medium, color = labelColor)
             OutlinedTextField(
-                value = state.remoteTokenDraft,
-                onValueChange = store::setRemoteTokenDraft,
-                label = { Text(stringResource(R.string.remote_token_label), fontSize = 11.sp) },
+                value = state.remoteServerUrl,
+                onValueChange = store::setRemoteServerUrl,
                 placeholder = {
                     Text(
-                        stringResource(
-                            if (state.remoteTokenSaved) R.string.remote_token_saved_hint
-                            else R.string.remote_token_hint,
-                        ),
-                        fontSize = 11.sp,
+                        stringResource(R.string.remote_url_placeholder),
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 },
                 singleLine = true,
                 shape = SoftInputShape,
                 colors = softInputColors(),
-                visualTransformation = PasswordVisualTransformation(),
                 textStyle = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.weight(1f),
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                modifier = Modifier.fillMaxWidth(),
             )
-            if (state.remoteTokenSaved) {
-                TextButton(onClick = { store.clearRemoteToken() }) {
-                    Text(stringResource(R.string.remote_clear_token), fontSize = 11.sp)
+        }
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(stringResource(R.string.remote_token_label), fontSize = 12.sp, fontWeight = FontWeight.Medium, color = labelColor)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    value = state.remoteTokenDraft,
+                    onValueChange = store::setRemoteTokenDraft,
+                    placeholder = {
+                        Text(
+                            stringResource(
+                                if (state.remoteTokenSaved) R.string.remote_token_saved_hint
+                                else R.string.remote_token_hint,
+                            ),
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    singleLine = true,
+                    shape = SoftInputShape,
+                    colors = softInputColors(),
+                    visualTransformation = PasswordVisualTransformation(),
+                    textStyle = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f),
+                )
+                if (state.remoteTokenSaved) {
+                    TextButton(onClick = { store.clearRemoteToken() }) {
+                        Text(stringResource(R.string.remote_clear_token), fontSize = 11.sp)
+                    }
                 }
             }
         }
@@ -338,41 +444,35 @@ fun RemoteServerConnectionForm(store: WorkbenchStore, state: WorkbenchState) {
                 stringResource(R.string.remote_pairing_hint),
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.68f),
-                lineHeight = 15.sp,
-                modifier = Modifier.padding(10.dp),
+                modifier = Modifier.padding(11.dp),
             )
         }
         if (state.remoteTestMessage.isNotEmpty()) {
             Text(
                 state.remoteTestMessage,
-                fontSize = 11.sp,
-                color = if (state.remoteTestOk) Color(0xFF3B9C57) else MaterialTheme.colorScheme.error,
+                fontSize = 12.sp,
+                color = if (state.remoteTestOk) Color(0xFF2E8B72) else MaterialTheme.colorScheme.error,
             )
         }
         Row(
             Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            OutlinedButton(
-                onClick = { store.testRemoteServer() },
+            SecondaryButton(
+                title = stringResource(R.string.remote_test_connection),
                 enabled = !state.remoteTesting && state.remoteServerUrl.trim().isNotEmpty(),
-                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-                shape = RoundedCornerShape(14.dp),
+                loading = state.remoteTesting,
+                modifier = Modifier.weight(1f),
             ) {
-                if (state.remoteTesting) {
-                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
-                    Spacer(Modifier.width(6.dp))
-                }
-                Text(stringResource(R.string.remote_test_connection), fontSize = 13.sp, maxLines = 1)
+                store.testRemoteServer()
             }
-            Box(Modifier.weight(1f)) {
-                AccentButton(
-                    title = stringResource(R.string.remote_save_and_connect),
-                    enabled = !state.remoteTesting && state.remoteServerUrl.trim().isNotEmpty(),
-                ) {
-                    store.saveAndConnectRemoteServer()
-                }
+            AccentButton(
+                title = stringResource(R.string.remote_save_and_connect),
+                enabled = !state.remoteTesting && state.remoteServerUrl.trim().isNotEmpty(),
+                modifier = Modifier.weight(1f),
+            ) {
+                store.saveAndConnectRemoteServer()
             }
         }
     }
@@ -390,8 +490,9 @@ private fun HeaderLine(store: WorkbenchStore, state: WorkbenchState) {
         "regional" -> "${state.selectedRegionPreset.label} · ${state.regionalModel.uppercase()} · ${state.targetDate}"
         else -> "%s · %.4f° N, %.4f° E".format(loc.name, loc.lat, loc.lon)
     }
+    val dark = LocalFireSkyDark.current
     Row(
-        modifier = Modifier.fillMaxWidth().padding(end = 8.dp),
+        modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -399,7 +500,7 @@ private fun HeaderLine(store: WorkbenchStore, state: WorkbenchState) {
         Column(Modifier.weight(1f)) {
             Text(
                 stringResource(titleRes),
-                fontSize = 20.sp,
+                fontSize = 19.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
             )
@@ -412,9 +513,10 @@ private fun HeaderLine(store: WorkbenchStore, state: WorkbenchState) {
             )
         }
         val statusColor = when {
-            state.online -> Color(0xFF3B9C57)
-            state.serverConfigured -> Color(0xFFC98B2C)
-            else -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)
+            state.online -> Color(0xFF2E8B72)
+            state.serverConfigured -> Color(0xFFD98F24)
+            dark -> Color(0xFF94A3B8)
+            else -> Color(0xFF5A6B82)
         }
         Box(
             Modifier.clip(CircleShape).clickable {
@@ -441,39 +543,79 @@ private fun OfflineBanner(
     onOpenSettings: () -> Unit,
     onReconnect: () -> Unit,
 ) {
+    val dark = LocalFireSkyDark.current
     val errorColor = MaterialTheme.colorScheme.error
+    val pillBg = if (dark) Color.White.copy(alpha = 0.06f) else Color.White.copy(alpha = 0.72f)
+    val pillBorder = errorColor.copy(alpha = 0.28f)
+
     Surface(
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(12.dp),
-        color = errorColor.copy(alpha = 0.10f),
-        border = BorderStroke(0.75.dp, errorColor.copy(alpha = 0.34f)),
+        shape = RoundedCornerShape(16.dp),
+        color = errorColor.copy(alpha = if (dark) 0.14f else 0.08f),
+        border = BorderStroke(0.75.dp, errorColor.copy(alpha = 0.30f)),
     ) {
-        Row(
-            Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        Column(
+            Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            IconBadge(Icons.Filled.Warning, tint = errorColor)
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text(
-                    stringResource(R.string.engine_offline),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = errorColor,
-                )
-                if (state.error.isNotEmpty()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                IconBadge(Icons.Filled.Warning, tint = errorColor)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(
-                        state.error,
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                        stringResource(R.string.engine_offline),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = errorColor,
                     )
+                    if (state.error.isNotEmpty()) {
+                        Text(
+                            state.error,
+                            fontSize = 11.sp,
+                            lineHeight = 15.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.70f),
+                        )
+                    }
                 }
             }
-            TextButton(onClick = onOpenSettings) {
-                Text(stringResource(R.string.nav_settings), fontSize = 12.sp)
-            }
-            TextButton(onClick = onReconnect) {
-                Text(stringResource(R.string.reconnect), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Surface(
+                    onClick = onOpenSettings,
+                    shape = CircleShape,
+                    color = pillBg,
+                    border = BorderStroke(0.75.dp, pillBorder),
+                ) {
+                    Text(
+                        stringResource(R.string.nav_settings),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
+                Spacer(Modifier.width(8.dp))
+                Surface(
+                    onClick = onReconnect,
+                    shape = CircleShape,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = if (dark) 0.22f else 0.13f),
+                    border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)),
+                ) {
+                    Text(
+                        stringResource(R.string.reconnect),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                    )
+                }
             }
         }
     }
@@ -481,125 +623,239 @@ private fun OfflineBanner(
 
 // ---------------------------------------------------------------- 参数表单
 
-/** 观测点卡（WorkLocationView 同构；地图选点延后至 openQuestions D1）。 */
+/** 地图优先观测点卡（搜索 + GPS + 内嵌交互地图 + 全屏选点 + 收藏快捷切换）。 */
 @Composable
-private fun LocationCard(store: WorkbenchStore, state: WorkbenchState) {
+private fun LocationCard(
+    store: WorkbenchStore,
+    state: WorkbenchState,
+    onOpenMapPicker: () -> Unit,
+) {
     val loc = state.location
     val dark = LocalFireSkyDark.current
     val groupedFill = if (dark) Color(0xFF202A3D) else Color(0xFFF3F6FA)
-    val groupedBorder = if (dark) Color(0xFF50617B).copy(alpha = 0.45f) else Color(0xFFD8E1EA).copy(alpha = 0.85f)
+    val groupedBorder = if (dark) Color.White.copy(alpha = 0.09f) else Color(0xFFD8E1EA).copy(alpha = 0.85f)
+    val overlayBg = if (dark) Color(0xFF121B2E).copy(alpha = 0.88f) else Color(0xFFFCFDFF).copy(alpha = 0.92f)
+    val overlayBorder = if (dark) Color.White.copy(alpha = 0.12f) else Color(0xFFC9D5E1).copy(alpha = 0.78f)
 
     WorkSurface(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 IconBadge(Icons.Filled.Place)
-                Text(stringResource(R.string.obs_point), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                Text(
+                    stringResource(R.string.obs_point),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                Surface(
+                    onClick = onOpenMapPicker,
+                    shape = CircleShape,
+                    color = groupedFill,
+                    border = BorderStroke(0.75.dp, groupedBorder),
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.OpenInFull,
+                            contentDescription = null,
+                            modifier = Modifier.size(13.dp),
+                            tint = coolAccentColor(),
+                        )
+                        Text(
+                            stringResource(R.string.map_expand),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Medium,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
             }
+
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(
                     value = state.query,
                     onValueChange = store::setQuery,
                     modifier = Modifier.weight(1f),
                     singleLine = true,
-                    shape = SoftInputShape,
+                    shape = RoundedCornerShape(14.dp),
                     colors = softInputColors(),
-                    placeholder = { Text(stringResource(R.string.search_placeholder), fontSize = 12.sp) },
+                    leadingIcon = {
+                        Icon(
+                            Icons.Filled.Search,
+                            contentDescription = null,
+                            modifier = Modifier.size(17.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        )
+                    },
+                    trailingIcon = {
+                        if (state.query.isNotEmpty()) {
+                            IconButton(onClick = { store.setQuery("") }) {
+                                Icon(
+                                    Icons.Filled.Close,
+                                    contentDescription = stringResource(R.string.dismiss),
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        } else {
+                            IconButton(onClick = { store.search() }) {
+                                Icon(
+                                    Icons.Filled.Search,
+                                    contentDescription = stringResource(R.string.cd_search),
+                                    modifier = Modifier.size(17.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    },
+                    placeholder = {
+                        Text(
+                            stringResource(R.string.search_placeholder),
+                            fontSize = 12.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
                     textStyle = MaterialTheme.typography.bodySmall,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(onSearch = { store.search() }),
                 )
                 Surface(
-                    onClick = { store.search() },
-                    shape = CircleShape,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = if (dark) 0.18f else 0.12f),
-                    border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.30f)),
-                    modifier = Modifier.size(42.dp),
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            Icons.Filled.Search,
-                            contentDescription = stringResource(R.string.cd_search),
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-                }
-                Surface(
                     onClick = { store.locate() },
                     enabled = !state.busy,
-                    shape = CircleShape,
+                    shape = RoundedCornerShape(14.dp),
                     color = groupedFill,
                     border = BorderStroke(0.75.dp, groupedBorder),
-                    modifier = Modifier.size(42.dp),
+                    modifier = Modifier.size(48.dp),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             Icons.Filled.LocationOn,
                             contentDescription = stringResource(R.string.cd_locate),
                             tint = coolAccentColor(),
-                            modifier = Modifier.size(18.dp),
+                            modifier = Modifier.size(20.dp),
                         )
                     }
                 }
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(Modifier.size(8.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
-                    Text(loc.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        "%.4f° N, %.4f° E".format(loc.lat, loc.lon),
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f),
-                    )
-                }
-                TextButton(onClick = { store.starLocation() }) {
-                    Icon(Icons.Filled.Star, contentDescription = null, Modifier.size(14.dp))
-                    Spacer(Modifier.width(4.dp))
-                    Text(stringResource(R.string.star_location), fontSize = 11.sp)
-                }
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                ChipText(
-                    if (loc.metadataReady) stringResource(R.string.elevation_m, loc.elevation)
-                    else stringResource(R.string.elevation_unconfirmed),
+
+            Box(
+                Modifier
+                    .fillMaxWidth()
+                    .height(228.dp)
+                    .clip(RoundedCornerShape(18.dp))
+                    .border(0.75.dp, groupedBorder, RoundedCornerShape(18.dp)),
+            ) {
+                PointLocationMap(
+                    lat = loc.lat,
+                    lon = loc.lon,
+                    dark = dark,
+                    zoom = 11,
+                    modifier = Modifier.fillMaxSize(),
+                    onSelectPoint = { tapLat, tapLon -> store.selectPoint(tapLat, tapLon) },
                 )
-                ChipText(loc.timezone, modifier = Modifier.weight(1f, fill = false))
-            }
-            if (state.favorites.isNotEmpty()) {
-                HorizontalDivider(
-                    thickness = 0.5.dp,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
-                )
-                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    state.favorites.forEachIndexed { index, favorite ->
-                        Row(
-                            Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(10.dp))
-                                .clickable { store.applyFavorite(index) }
-                                .padding(horizontal = 6.dp, vertical = 7.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                Icons.Filled.Place,
-                                contentDescription = null,
-                                Modifier.size(14.dp),
-                                tint = MaterialTheme.colorScheme.primary,
-                            )
-                            Spacer(Modifier.width(8.dp))
+
+                Surface(
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .fillMaxWidth()
+                        .padding(8.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    color = overlayBg,
+                    border = BorderStroke(0.75.dp, overlayBorder),
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Box(Modifier.size(7.dp).background(MaterialTheme.colorScheme.primary, CircleShape))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
                             Text(
-                                favorite.optString("name", stringResource(R.string.favorite_name)),
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Medium,
+                                loc.name,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.SemiBold,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
-                            Spacer(Modifier.weight(1f))
                             Text(
-                                "%.4f, %.4f".format(favorite.optDouble("lat", 0.0), favorite.optDouble("lon", 0.0)),
-                                fontSize = 11.sp,
-                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+                                "%.2f°N, %.2f°E · %s".format(
+                                    loc.lat,
+                                    loc.lon,
+                                    if (loc.metadataReady) stringResource(R.string.elevation_m, loc.elevation)
+                                    else stringResource(R.string.elevation_unconfirmed),
+                                ),
+                                fontSize = 10.sp,
+                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.68f),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
                             )
+                        }
+                        Surface(
+                            onClick = { store.starLocation() },
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = if (dark) 0.20f else 0.12f),
+                            modifier = Modifier.size(32.dp),
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    Icons.Filled.Star,
+                                    contentDescription = stringResource(R.string.star_location),
+                                    modifier = Modifier.size(16.dp),
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (state.favorites.isNotEmpty()) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    state.favorites.forEachIndexed { index, favorite ->
+                        val favName = favorite.optString("name", stringResource(R.string.favorite_name))
+                        val isCurrent = favName == loc.name
+                        Surface(
+                            onClick = { store.applyFavorite(index) },
+                            shape = CircleShape,
+                            color = if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = if (dark) 0.20f else 0.12f)
+                            else groupedFill,
+                            border = BorderStroke(
+                                0.75.dp,
+                                if (isCurrent) MaterialTheme.colorScheme.primary.copy(alpha = 0.35f) else groupedBorder,
+                            ),
+                        ) {
+                            Row(
+                                Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(5.dp),
+                            ) {
+                                Icon(
+                                    Icons.Filled.Place,
+                                    contentDescription = null,
+                                    Modifier.size(12.dp),
+                                    tint = if (isCurrent) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                                Text(
+                                    favName,
+                                    fontSize = 11.sp,
+                                    fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
                 }
@@ -608,7 +864,7 @@ private fun LocationCard(store: WorkbenchStore, state: WorkbenchState) {
     }
 }
 
-/** 观测参数卡（WorkParametersView 同构）。 */
+/** 紧凑观测参数卡（日期与霞相紧凑排布，尽量减少首屏高度占用）。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ParametersCard(
@@ -625,17 +881,20 @@ private fun ParametersCard(
     val groupedBorder = if (dark) Color(0xFF50617B).copy(alpha = 0.45f) else Color(0xFFD8E1EA).copy(alpha = 0.85f)
 
     WorkSurface(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Column(Modifier.padding(horizontal = 14.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     IconBadge(Icons.Filled.Tune, tint = coolAccentColor())
                     Text(stringResource(R.string.obs_params), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
                 }
-                TextButton(onClick = { store.resetParameters() }) {
+                TextButton(
+                    onClick = { store.resetParameters() },
+                    modifier = Modifier.heightIn(min = 28.dp),
+                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
+                ) {
                     Text(stringResource(R.string.reset), fontSize = 11.sp)
                 }
             }
-            Text(stringResource(R.string.target_date), fontSize = 11.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f))
             Segmented(
                 options = listOf("今天", "明天", "自定义"),
                 titles = listOf(
@@ -655,27 +914,26 @@ private fun ParametersCard(
                     border = BorderStroke(0.75.dp, groupedBorder),
                 ) {
                     Row(
-                        Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center,
                     ) {
                         Icon(
                             Icons.Filled.CalendarToday,
                             contentDescription = null,
-                            modifier = Modifier.size(15.dp),
+                            modifier = Modifier.size(14.dp),
                             tint = MaterialTheme.colorScheme.primary,
                         )
-                        Spacer(Modifier.width(8.dp))
+                        Spacer(Modifier.width(7.dp))
                         Text(
                             state.targetDate.toString(),
-                            fontSize = 13.sp,
+                            fontSize = 12.sp,
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface,
                         )
                     }
                 }
             }
-            Text(stringResource(R.string.phenomenon_label), fontSize = 11.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f))
             Segmented(
                 options = listOf("dawn", "dusk"),
                 titles = listOf(
@@ -689,7 +947,7 @@ private fun ParametersCard(
             if (showCoordinatesEditor) {
                 TextButton(
                     onClick = { store.setEditingCoordinates(!state.editingCoordinates) },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 32.dp),
                 ) {
                     Text(
                         if (state.editingCoordinates) stringResource(R.string.collapse_coordinates)
@@ -818,7 +1076,7 @@ private fun ProgressRow(store: WorkbenchStore, state: WorkbenchState) {
 
 // ---------------------------------------------------------------- 通用小件
 
-/** WorkSegments 同构：紧凑流线型分段选择器（40dp 高，圆角 11dp 滑轨 + 8dp 悬浮胶囊）。 */
+/** WorkSegments 同构：紧凑流线型分段选择器（40dp 高，圆角 12dp 滑轨 + 9dp 悬浮胶囊）。 */
 @Composable
 fun Segmented(
     options: List<String>,
@@ -831,24 +1089,23 @@ fun Segmented(
     val dark = LocalFireSkyDark.current
     val trackFill = if (dark) Color(0xFF161E2E) else Color(0xFFEAF0F6)
     val trackBorder = if (dark) Color(0xFF50617B).copy(alpha = 0.42f) else Color(0xFFD8E1EA).copy(alpha = 0.80f)
-    val pillShape = RoundedCornerShape(8.dp)
+    val pillShape = RoundedCornerShape(9.dp)
 
     Row(
         modifier
             .fillMaxWidth()
             .heightIn(min = 40.dp)
             .selectableGroup()
-            .background(trackFill, RoundedCornerShape(11.dp))
-            .border(0.75.dp, trackBorder, RoundedCornerShape(11.dp))
+            .background(trackFill, RoundedCornerShape(12.dp))
+            .border(0.75.dp, trackBorder, RoundedCornerShape(12.dp))
             .padding(3.dp),
         horizontalArrangement = Arrangement.spacedBy(3.dp),
     ) {
         options.forEachIndexed { index, option ->
             val selected = selection == option
             val pillFill = when {
-                selected && accent && dark -> MaterialTheme.colorScheme.primary.copy(alpha = 0.20f)
-                selected && accent -> Color.White.copy(alpha = 0.96f)
-                selected && dark -> Color.White.copy(alpha = 0.12f)
+                selected && accent && dark -> MaterialTheme.colorScheme.primary.copy(alpha = 0.22f)
+                selected && dark -> Color.White.copy(alpha = 0.13f)
                 selected -> Color.White.copy(alpha = 0.96f)
                 else -> Color.Transparent
             }
@@ -863,11 +1120,6 @@ fun Segmented(
             } else {
                 Modifier
             }
-            val pillBorder = if (selected && accent) {
-                Modifier.border(0.75.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.30f), pillShape)
-            } else {
-                Modifier
-            }
             Box(
                 Modifier
                     .weight(1f)
@@ -875,7 +1127,6 @@ fun Segmented(
                     .then(pillShadow)
                     .clip(pillShape)
                     .background(pillFill, pillShape)
-                    .then(pillBorder)
                     .selectable(selected = selected, role = Role.Tab, onClick = { onSelect(option) })
                     .padding(horizontal = 6.dp, vertical = 7.dp),
                 contentAlignment = Alignment.Center,

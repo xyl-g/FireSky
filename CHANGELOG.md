@@ -8,6 +8,18 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v1.10.3 (2026-11-25)
+
+移动端只读瘦客户端加固、Android 嵌入式交互地图与 UI 升级，以及 CAMS ADS 排队任务持久化接回。
+Read-only mobile thin-client hardening, Android embedded interactive Leaflet maps & UI polish, plus CAMS ADS job ledger persistence and reattach.
+
+- **移动端严格只读瘦客户端（仅看预测不改远端）**：Rust HTTP 服务（[engine/src/http/desktop.rs](engine/src/http/desktop.rs)）将 `save_retention_settings` / `apply_retention_settings` / `save_data_sync_settings` / `data_sync_run` / `data_delete_preview` / `data_delete_execute` / `terrain_download` / `task_forget` 从远端白名单移除并返回 `404`；iOS 与 Android 同步收口数据管理、任务历史与设置「服务端」页为只读视图（保留只读状态展示与桌面端引导）。
+  Hardened remote HTTP thin-client boundaries by blocking server-mutation RPCs (`404 Not Found`) in Rust and converting iOS & Android Data, History, and Settings Server tabs into strictly read-only status views.
+- **Android 嵌入式交互地图与启动稳定性修复**：引入本地 Leaflet 1.9.4 + `https://appassets.androidplatform.net` 安全映射，在单点观测卡（228dp 地图优先卡片、浅色高德 `style=7` 街道图 / 深色反色夜间底图）、全屏点选弹层（`MapPickerDialog`）及区域范围/热力视图中支持交互选点与缩略图联动；优化未连接横幅与原生网络错误提示；修复连接桌面端存在大型区域预测快照时冷启动自动恢复触发 131 MB OOM 闪退（新增 48 MB 有界读取、`largeHeap` 与冷启动仅自动恢复单点/实况结果）。
+  Added interactive embedded Leaflet 1.9.4 maps on Android (228dp map-first LocationCard, fullscreen `MapPickerDialog`, regional `style=7` basemap & bounds/heatmap, light + inverted dark themes), sleeker offline/error banners, and startup OOM protection (48 MiB bounded HTTP reader, `largeHeap`, and skipping multi-dozen-MB regional auto-restore on cold boot).
+- **CAMS ADS 任务账本持久化与断线接回**：在 [engine/src/ads.rs](engine/src/ads.rs) 新增工作区 `state/ads-jobs.json` 任务账本（跨进程锁与原子写、不含密钥），按规范化请求指纹在取消、超时或重启后自动接回已排队/已完成的 ADS 任务而不再重复 `POST` 挤占并发配额，并在启动时尽力 `DELETE` 超过 24 小时的孤儿任务。
+  Added workspace `state/ads-jobs.json` ADS job ledger persistence with cross-process locking so cancelled/interrupted runs reattach to queued or completed ADS jobs instead of submitting duplicate requests, plus best-effort `DELETE` cleanup for stale (>24h) orphans.
+
 ## v1.10.2 (2026-11-25)
 
 桌面端应用内更新下载提速与默认系统代理修复，以及后台数据同步按数据源独立加锁与指数退避自动恢复。

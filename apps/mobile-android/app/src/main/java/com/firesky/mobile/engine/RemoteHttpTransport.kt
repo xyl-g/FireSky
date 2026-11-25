@@ -2,7 +2,9 @@ package com.firesky.mobile.engine
 
 import org.json.JSONObject
 import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.io.InputStreamReader
 import java.net.HttpURLConnection
 import java.net.URI
@@ -486,6 +488,7 @@ class RemoteHttpTransport(
         private const val DEFAULT_READ_TIMEOUT_MS = 15_000
         private const val DEFAULT_SSE_READ_TIMEOUT_MS = 60_000
         private const val RELEASE_READ_TIMEOUT_MS = 3_000
+        private const val MAX_RESPONSE_BYTES = 48 * 1024 * 1024
 
         /** 自适应轮询间隔：前 2s 为 150ms，2s–10s 为 350ms，10s 后为 600ms。 */
         fun defaultPollDelayMs(elapsedMs: Long): Long = when {
@@ -603,13 +606,47 @@ class RemoteHttpTransport(
                 }
                 val code = connection.responseCode
                 val stream = if (code in 200..299) connection.inputStream else connection.errorStream
-                val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+                val text = stream?.let { readBoundedUtf8(it, MAX_RESPONSE_BYTES) }.orEmpty()
                 return HttpResponse(code, text)
             } catch (error: IOException) {
-                val detail = sanitizeMessage(error.message ?: error.javaClass.simpleName, token)
-                throw EngineError("无法连接远程服务器：$detail")
+                val sanitized = sanitizeMessage(error.message ?: error.javaClass.simpleName, token)
+                val friendly = friendlyNetworkDetail(sanitized)
+                throw EngineError("无法连接远程服务器：$friendly")
             } finally {
                 connection?.disconnect()
+            }
+        }
+
+        private fun friendlyNetworkDetail(raw: String): String {
+            val lower = raw.lowercase()
+            return when {
+                "unexpected end of stream" in lower || "eof" in lower || "connection reset" in lower || "broken pipe" in lower ->
+                    "服务端未响应或连接已断开，请确认桌面端 FireSky 已启动"
+                "failed to connect" in lower || "econnrefused" in lower || "connect exception" in lower ->
+                    "无法连接到服务端，请确认桌面端已启动且地址端口正确"
+                "timed out" in lower || "timeout" in lower ->
+                    "连接超时，请检查服务端状态与网络连接"
+                "unable to resolve host" in lower || "unknownhost" in lower ->
+                    "无法解析服务器地址，请检查域名或网络"
+                else -> raw.replace(Regex("""on com\.android\.okhttp\.Address@[0-9a-fA-F]+"""), "").trim()
+            }
+        }
+
+        private fun readBoundedUtf8(stream: InputStream, maxBytes: Int): String {
+            stream.use { input ->
+                val out = ByteArrayOutputStream()
+                val buf = ByteArray(64 * 1024)
+                var total = 0
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    total += n
+                    if (total > maxBytes) {
+                        throw EngineError("服务端返回数据过大（超过 48 MB），请在桌面端查看完整结果。")
+                    }
+                    out.write(buf, 0, n)
+                }
+                return out.toString(Charsets.UTF_8.name())
             }
         }
 

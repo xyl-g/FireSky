@@ -1,12 +1,16 @@
 //! Bounded ADS v1 processing client. Never attach API credentials to assets.
+use crate::{cache_lock::Lock, paths, time_contract};
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use reqwest::{
     blocking::{Client, Response},
     header::{HeaderMap, HeaderValue},
-    Method, Url,
+    Method, StatusCode, Url,
 };
-use serde::Deserialize;
-use serde_json::{json, Value};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Map, Value};
+use sha2::{Digest, Sha256};
 use std::{
+    collections::BTreeMap,
     fs,
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -14,12 +18,14 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime},
 };
 
 pub(crate) const DATASET: &str = "cams-global-atmospheric-composition-forecasts";
 const MAX_JSON: u64 = 4 * 1024 * 1024;
 pub(crate) const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
+const JOB_LEDGER_CONTRACT: &str = "firesky-ads-jobs-v1";
+const MAX_LEDGER_BYTES: u64 = 1024 * 1024;
 
 fn http_failure(deadline: Instant, deadline_limited_timeout: bool) -> String {
     if deadline_limited_timeout || Instant::now() >= deadline {
@@ -40,6 +46,8 @@ pub struct Config {
     pub poll_max_seconds: f64,
     pub request_attempts: u32,
     pub lock_timeout_seconds: f64,
+    pub job_ledger_path: Option<PathBuf>,
+    pub job_max_age_seconds: f64,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -52,6 +60,8 @@ impl Default for Config {
             poll_max_seconds: 5.0,
             request_attempts: 3,
             lock_timeout_seconds: 300.0,
+            job_ledger_path: None,
+            job_max_age_seconds: 86400.0,
         }
     }
 }
@@ -63,6 +73,7 @@ impl Config {
             (self.poll_initial_seconds, 0.0, 120.0),
             (self.poll_max_seconds, 0.0, 120.0),
             (self.lock_timeout_seconds, 0.0, 3600.0),
+            (self.job_max_age_seconds, 1.0, 7.0 * 86400.0),
         ] {
             if !value.is_finite() || value < low || value > high {
                 return Err("invalid ADS timeout/poll configuration".into());
@@ -78,6 +89,143 @@ impl Config {
         }
         Ok(())
     }
+}
+
+pub(crate) fn ledger_path_for_cams_cache(cams_cache_dir: &Path) -> PathBuf {
+    if cams_cache_dir.file_name() == Some(std::ffi::OsStr::new("cams")) {
+        if let Some(parent) = cams_cache_dir.parent() {
+            let workspace = if parent.file_name() == Some(std::ffi::OsStr::new(".cache")) {
+                parent.parent().unwrap_or(parent)
+            } else {
+                parent
+            };
+            return paths::resolve(
+                workspace,
+                "",
+                ".firesky/state/ads-jobs.json",
+                "state/ads-jobs.json",
+            );
+        }
+    }
+    cams_cache_dir.join(".ads-jobs.json")
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct JobLedgerEntry {
+    monitor_url: String,
+    process_id: String,
+    submitted_at_utc: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+struct JobLedger {
+    contract: String,
+    jobs: BTreeMap<String, JobLedgerEntry>,
+}
+
+impl Default for JobLedger {
+    fn default() -> Self {
+        Self {
+            contract: JOB_LEDGER_CONTRACT.to_owned(),
+            jobs: BTreeMap::new(),
+        }
+    }
+}
+
+fn canonicalize_json(value: &Value) -> Value {
+    match value {
+        Value::Array(items) => Value::Array(items.iter().map(canonicalize_json).collect()),
+        Value::Object(map) => {
+            let mut entries: Vec<_> = map.iter().collect();
+            entries.sort_by(|(a, _), (b, _)| a.cmp(b));
+            let mut sorted = Map::with_capacity(entries.len());
+            for (k, v) in entries {
+                sorted.insert(k.clone(), canonicalize_json(v));
+            }
+            Value::Object(sorted)
+        }
+        other => other.clone(),
+    }
+}
+
+fn job_fingerprint(process_id: &str, inputs: &Value) -> String {
+    let canonical = serde_json::to_vec(&canonicalize_json(inputs)).unwrap_or_default();
+    let mut hasher = Sha256::new();
+    hasher.update(process_id.as_bytes());
+    hasher.update(b":");
+    hasher.update(&canonical);
+    hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+fn read_ledger_unlocked(path: &Path) -> JobLedger {
+    let Ok(meta) = fs::symlink_metadata(path) else {
+        return JobLedger::default();
+    };
+    if meta.file_type().is_symlink() || !meta.is_file() || meta.len() > MAX_LEDGER_BYTES {
+        return JobLedger::default();
+    }
+    let Ok(bytes) = fs::read(path) else {
+        return JobLedger::default();
+    };
+    let Ok(ledger) = serde_json::from_slice::<JobLedger>(&bytes) else {
+        return JobLedger::default();
+    };
+    if ledger.contract != JOB_LEDGER_CONTRACT {
+        return JobLedger::default();
+    }
+    ledger
+}
+
+fn update_ledger<T>(
+    path: &Path,
+    lock_timeout: f64,
+    operation: impl FnOnce(&mut JobLedger) -> T,
+) -> Result<T, String> {
+    if fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("ADS job ledger path cannot be a symlink".into());
+    }
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .ok_or("ADS job ledger path has no parent directory")?;
+    fs::create_dir_all(parent).map_err(|e| format!("cannot create ADS job ledger dir: {e}"))?;
+    let lock_path = path.with_file_name(format!(
+        "{}.lock",
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("ads-jobs")
+    ));
+    let _lock = Lock::acquire(&lock_path, lock_timeout)?;
+    let mut ledger = read_ledger_unlocked(path);
+    let before = ledger.clone();
+    let outcome = operation(&mut ledger);
+    if ledger != before || !path.exists() {
+        let bytes = serde_json::to_vec_pretty(&ledger)
+            .map_err(|e| format!("cannot serialize ADS job ledger: {e}"))?;
+        let mut temporary = tempfile::Builder::new()
+            .prefix(".ads-jobs-")
+            .tempfile_in(parent)
+            .map_err(|e| format!("cannot create ADS job ledger temp file: {e}"))?;
+        temporary
+            .write_all(&bytes)
+            .map_err(|e| format!("cannot write ADS job ledger: {e}"))?;
+        let _ = temporary.as_file().sync_all();
+        temporary
+            .persist(path)
+            .map_err(|e| format!("cannot persist ADS job ledger: {}", e.error))?;
+    }
+    Ok(outcome)
+}
+
+fn remove_ledger_entry(path: &Path, lock_timeout: f64, fingerprint: &str) {
+    let _ = update_ledger(path, lock_timeout, |ledger| {
+        ledger.jobs.remove(fingerprint);
+    });
 }
 
 fn safe_url(value: &str) -> Result<Url, String> {
@@ -312,19 +460,20 @@ impl<'a> Ads<'a> {
         self.check_cancelled()?;
         self.remaining().map(|_| ())
     }
-    fn json(
+    fn send_with_retry(
         &mut self,
         method: Method,
         url: &Url,
         body: Option<&Value>,
         retry: bool,
-    ) -> Result<Value, String> {
+    ) -> Result<Response, String> {
         let attempts = if retry {
             self.config.request_attempts
         } else {
             1
         };
         for attempt in 1..=attempts {
+            self.check_cancelled()?;
             let remaining = self.remaining()?;
             let request_timeout = Duration::from_secs_f64(self.config.timeout_seconds);
             let timeout = remaining.min(request_timeout);
@@ -339,30 +488,65 @@ impl<'a> Ads<'a> {
             }
             let response = request.send();
             let retryable = match &response {
-                Ok(r) => r.status().is_server_error() || r.status().as_u16() == 429,
+                Ok(r) => r.status().is_server_error() || r.status() == StatusCode::TOO_MANY_REQUESTS,
                 Err(_) => true,
             };
             if retryable && attempt < attempts {
                 self.pause(self.config.poll_max_seconds)?;
                 continue;
             }
-            let mut response = response.map_err(|error| {
+            return response.map_err(|error| {
                 // A budget-limited request can time out just before our Instant
                 // deadline because the transport timer uses its own clock.
                 http_failure(
                     self.deadline,
                     error.is_timeout() && remaining <= request_timeout,
                 )
-            })?;
-            if !response.status().is_success() {
-                return Err(format!(
-                    "ADS API HTTP status {}",
-                    response.status().as_u16()
-                ));
-            }
-            return read_json(&mut response);
+            });
         }
         unreachable!()
+    }
+    fn json(
+        &mut self,
+        method: Method,
+        url: &Url,
+        body: Option<&Value>,
+        retry: bool,
+    ) -> Result<Value, String> {
+        let mut response = self.send_with_retry(method, url, body, retry)?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "ADS API HTTP status {}",
+                response.status().as_u16()
+            ));
+        }
+        read_json(&mut response)
+    }
+    fn json_allow_not_found(
+        &mut self,
+        method: Method,
+        url: &Url,
+        body: Option<&Value>,
+        retry: bool,
+    ) -> Result<Option<Value>, String> {
+        let mut response = self.send_with_retry(method, url, body, retry)?;
+        if matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::GONE) {
+            return Ok(None);
+        }
+        if !response.status().is_success() {
+            return Err(format!(
+                "ADS API HTTP status {}",
+                response.status().as_u16()
+            ));
+        }
+        read_json(&mut response).map(Some)
+    }
+    fn delete_best_effort(&self, url: &Url) {
+        let Ok(remaining) = self.remaining() else {
+            return;
+        };
+        let timeout = remaining.min(Duration::from_secs_f64(self.config.timeout_seconds));
+        let _ = self.api.delete(url.clone()).timeout(timeout).send();
     }
     pub fn constraints(&mut self, inputs: &Value) -> Result<Value, String> {
         self.constraints_requests += 1;
@@ -386,49 +570,162 @@ impl<'a> Ads<'a> {
         self.retrieval_ms += started.elapsed().as_secs_f64() * 1000.0;
         result
     }
+    fn cleanup_stale_ledger(&self, ledger_path: &Path) {
+        let max_age = ChronoDuration::milliseconds((self.config.job_max_age_seconds * 1000.0) as i64);
+        let now = DateTime::<Utc>::from(SystemTime::now());
+        let Ok(stale_urls) = update_ledger(ledger_path, self.config.lock_timeout_seconds, |ledger| {
+            let stale_keys: Vec<String> = ledger
+                .jobs
+                .iter()
+                .filter_map(|(key, entry)| {
+                    let stale = time_contract::parse_utc(&entry.submitted_at_utc)
+                        .map(|submitted| now.signed_duration_since(submitted) > max_age)
+                        .unwrap_or(true);
+                    stale.then(|| key.clone())
+                })
+                .collect();
+            let mut urls = Vec::with_capacity(stale_keys.len());
+            for key in stale_keys {
+                if let Some(entry) = ledger.jobs.remove(&key) {
+                    urls.push(entry.monitor_url);
+                }
+            }
+            urls
+        }) else {
+            return;
+        };
+        for raw_url in stale_urls {
+            if self.check_cancelled().is_err() {
+                break;
+            }
+            if let Ok(url) = self.api_link(&self.base, &raw_url) {
+                self.delete_best_effort(&url);
+            }
+        }
+    }
     fn retrieve_inner(
         &mut self,
         inputs: &Value,
         target: &mut tempfile::NamedTempFile,
     ) -> Result<(), String> {
-        let execution = self.process("/execution");
-        self.submissions += 1;
-        // Retrying an ambiguous submission can create/bill duplicate jobs.
-        let job = self.json(
-            Method::POST,
-            &execution,
-            Some(&json!({"inputs":inputs})),
-            false,
-        )?;
-        let monitor = self.api_link(
-            &execution,
-            link(&job, "monitor").ok_or("ADS submission has no monitor link")?,
-        )?;
+        let ledger_path = self.config.job_ledger_path.clone();
+        let lock_timeout = self.config.lock_timeout_seconds;
+        let fingerprint = job_fingerprint(DATASET, inputs);
+        if let Some(path) = ledger_path.as_deref() {
+            self.cleanup_stale_ledger(path);
+        }
+
+        let mut monitor: Option<Url> = None;
+        let mut initial_state: Option<Value> = None;
+        let mut reattached = false;
+
+        if let Some(path) = ledger_path.as_deref() {
+            let recorded = update_ledger(path, lock_timeout, |ledger| {
+                ledger.jobs.get(&fingerprint).cloned()
+            })
+            .ok()
+            .flatten();
+            if let Some(entry) = recorded {
+                self.check_cancelled()?;
+                match self.api_link(&self.base, &entry.monitor_url) {
+                    Ok(candidate) => {
+                        match self.json_allow_not_found(Method::GET, &candidate, None, true)? {
+                            Some(state) => match state["status"].as_str() {
+                                Some("successful") => {
+                                    monitor = Some(candidate);
+                                    initial_state = Some(state);
+                                    reattached = true;
+                                }
+                                Some("accepted" | "running") => {
+                                    monitor = Some(candidate);
+                                    reattached = true;
+                                }
+                                _ => remove_ledger_entry(path, lock_timeout, &fingerprint),
+                            },
+                            None => remove_ledger_entry(path, lock_timeout, &fingerprint),
+                        }
+                    }
+                    Err(_) => remove_ledger_entry(path, lock_timeout, &fingerprint),
+                }
+            }
+        }
+
+        let monitor = match monitor {
+            Some(url) => url,
+            None => {
+                let execution = self.process("/execution");
+                self.submissions += 1;
+                // Retrying an ambiguous submission can create/bill duplicate jobs.
+                let job = self.json(
+                    Method::POST,
+                    &execution,
+                    Some(&json!({"inputs":inputs})),
+                    false,
+                )?;
+                let url = self.api_link(
+                    &execution,
+                    link(&job, "monitor").ok_or("ADS submission has no monitor link")?,
+                )?;
+                if let Some(path) = ledger_path.as_deref() {
+                    let entry = JobLedgerEntry {
+                        monitor_url: url.as_str().to_owned(),
+                        process_id: DATASET.to_owned(),
+                        submitted_at_utc: time_contract::iso(DateTime::<Utc>::from(
+                            SystemTime::now(),
+                        )),
+                    };
+                    let _ = update_ledger(path, lock_timeout, |ledger| {
+                        ledger.jobs.insert(fingerprint.clone(), entry);
+                    });
+                }
+                url
+            }
+        };
+
         let mut delay = self.config.poll_initial_seconds;
         let queued_at = Instant::now();
-        let state = loop {
-            self.check_cancelled()?;
-            let state = self.json(Method::GET, &monitor, None, true)?;
-            // v1.9.8：排队等待事件化——ADS 排队占 CAMS 准备大头，让
-            // 「慢」可见并维持 runtime 看门狗的活跃心跳。
+        let state = if let Some(state) = initial_state {
             self.emit(json!({
                 "stage": "ads_queue",
                 "status": state["status"],
-                "waited_s": queued_at.elapsed().as_secs_f64(),
+                "waited_s": 0.0,
+                "reattached": true,
             }))?;
-            match state["status"].as_str() {
-                Some("successful") => break state,
-                Some("accepted" | "running") => {
-                    self.pause(delay)?;
-                    delay = (delay * 1.5).min(self.config.poll_max_seconds);
+            state
+        } else {
+            loop {
+                self.check_cancelled()?;
+                let state = self.json(Method::GET, &monitor, None, true)?;
+                // v1.9.8：排队等待事件化——ADS 排队占 CAMS 准备大头，让
+                // 「慢」可见并维持 runtime 看门狗的活跃心跳。
+                self.emit(json!({
+                    "stage": "ads_queue",
+                    "status": state["status"],
+                    "waited_s": queued_at.elapsed().as_secs_f64(),
+                    "reattached": reattached,
+                }))?;
+                match state["status"].as_str() {
+                    Some("successful") => break state,
+                    Some("accepted" | "running") => {
+                        self.pause(delay)?;
+                        delay = (delay * 1.5).min(self.config.poll_max_seconds);
+                    }
+                    Some("failed" | "rejected" | "dismissed" | "deleted") => {
+                        if let Some(path) = ledger_path.as_deref() {
+                            remove_ledger_entry(path, lock_timeout, &fingerprint);
+                        }
+                        return Err(format!(
+                            "ADS job ended with status {}",
+                            state["status"].as_str().unwrap()
+                        ));
+                    }
+                    _ => {
+                        if let Some(path) = ledger_path.as_deref() {
+                            remove_ledger_entry(path, lock_timeout, &fingerprint);
+                        }
+                        return Err("ADS job has an unknown or missing status".into());
+                    }
                 }
-                Some("failed" | "rejected" | "dismissed" | "deleted") => {
-                    return Err(format!(
-                        "ADS job ended with status {}",
-                        state["status"].as_str().unwrap()
-                    ))
-                }
-                _ => return Err("ADS job has an unknown or missing status".into()),
             }
         };
         let results = match link(&state, "results") {
@@ -452,6 +749,9 @@ impl<'a> Ads<'a> {
             .filter(|b| (16..=MAX_DOWNLOAD).contains(b))
             .ok_or("invalid ADS asset size (16 bytes..512 MiB)")?;
         self.download(&url, bytes, target)?;
+        if let Some(path) = ledger_path.as_deref() {
+            remove_ledger_entry(path, lock_timeout, &fingerprint);
+        }
         self.downloads += 1;
         Ok(())
     }
@@ -657,5 +957,405 @@ mod tests {
             http_failure(Instant::now() - Duration::from_secs(1), false),
             "ADS operation deadline exceeded"
         );
+    }
+
+    struct MockAds {
+        base_url: String,
+        stop: Arc<AtomicBool>,
+        requests: Arc<std::sync::Mutex<Vec<(String, String)>>>,
+        handle: Option<std::thread::JoinHandle<()>>,
+    }
+
+    impl MockAds {
+        fn start<F>(handler: F) -> Self
+        where
+            F: Fn(&str, &str, usize) -> (u16, &'static str, Vec<u8>) + Send + Sync + 'static,
+        {
+            use std::io::{BufRead, BufReader};
+            use std::net::TcpListener;
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.set_nonblocking(true).unwrap();
+            let addr = listener.local_addr().unwrap();
+            let stop = Arc::new(AtomicBool::new(false));
+            let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let stop_flag = stop.clone();
+            let req_log = requests.clone();
+            let handle = std::thread::spawn(move || {
+                let mut seq = 0usize;
+                while !stop_flag.load(Ordering::Acquire) {
+                    match listener.accept() {
+                        Ok((mut stream, _)) => {
+                            let _ = stream.set_nonblocking(false);
+                            let mut reader = BufReader::new(stream.try_clone().unwrap());
+                            let mut line = String::new();
+                            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                                continue;
+                            }
+                            let mut parts = line.split_whitespace();
+                            let method = parts.next().unwrap_or("").to_owned();
+                            let path = parts.next().unwrap_or("").to_owned();
+                            let mut content_len = 0usize;
+                            loop {
+                                let mut hdr = String::new();
+                                if reader.read_line(&mut hdr).unwrap_or(0) == 0 {
+                                    break;
+                                }
+                                let trimmed = hdr.trim();
+                                if trimmed.is_empty() {
+                                    break;
+                                }
+                                if let Some((k, v)) = trimmed.split_once(':') {
+                                    if k.eq_ignore_ascii_case("content-length") {
+                                        content_len = v.trim().parse().unwrap_or(0);
+                                    }
+                                }
+                            }
+                            if content_len > 0 {
+                                let mut discard = vec![0u8; content_len];
+                                let _ = reader.read_exact(&mut discard);
+                            }
+                            seq += 1;
+                            req_log.lock().unwrap().push((method.clone(), path.clone()));
+                            let (code, ctype, body) = handler(&method, &path, seq);
+                            let reason = match code {
+                                200 => "OK",
+                                202 => "Accepted",
+                                404 => "Not Found",
+                                _ => "Error",
+                            };
+                            let resp_head = format!(
+                                "HTTP/1.1 {code} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                                body.len()
+                            );
+                            let _ = stream.write_all(resp_head.as_bytes());
+                            let _ = stream.write_all(&body);
+                            let _ = stream.flush();
+                        }
+                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(10));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            Self {
+                base_url: format!("http://127.0.0.1:{}", addr.port()),
+                stop,
+                requests,
+                handle: Some(handle),
+            }
+        }
+    }
+
+    impl Drop for MockAds {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Release);
+            if let Some(h) = self.handle.take() {
+                let _ = h.join();
+            }
+        }
+    }
+
+    fn test_config(base_url: &str, ledger_path: PathBuf) -> (tempfile::NamedTempFile, Config) {
+        let mut rc = tempfile::NamedTempFile::new().unwrap();
+        writeln!(rc, "url: {base_url}\nkey: test-ads-key").unwrap();
+        let config = Config {
+            api_url: Some(base_url.to_owned()),
+            credentials_file: Some(rc.path().to_path_buf()),
+            timeout_seconds: 5.0,
+            wait_timeout_seconds: 15.0,
+            poll_initial_seconds: 0.02,
+            poll_max_seconds: 0.05,
+            request_attempts: 1,
+            lock_timeout_seconds: 2.0,
+            job_ledger_path: Some(ledger_path),
+            job_max_age_seconds: 3600.0,
+        };
+        (rc, config)
+    }
+
+    #[test]
+    fn job_fingerprint_is_canonical_across_key_order() {
+        let a = json!({
+            "date": ["2026-11-24"],
+            "area": [81.0, 26.0, -11.0, 180.0],
+            "nested": {"b": 2, "a": 1}
+        });
+        let b = json!({
+            "nested": {"a": 1, "b": 2},
+            "area": [81.0, 26.0, -11.0, 180.0],
+            "date": ["2026-11-24"]
+        });
+        let c = json!({
+            "nested": {"a": 1, "b": 3},
+            "area": [81.0, 26.0, -11.0, 180.0],
+            "date": ["2026-11-24"]
+        });
+        assert_eq!(job_fingerprint(DATASET, &a), job_fingerprint(DATASET, &b));
+        assert_ne!(job_fingerprint(DATASET, &a), job_fingerprint(DATASET, &c));
+    }
+
+    #[test]
+    fn cancel_preserves_ledger_and_next_retrieve_reattaches_without_duplicate_post() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dir.path().join("state/ads-jobs.json");
+        let job_polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let polls_srv = job_polls.clone();
+        let server = MockAds::start(move |method, path, _| {
+            if method == "GET" && path == format!("/retrieve/v1/processes/{DATASET}") {
+                return (200, "application/json", br#"{"id":"cams"}"#.to_vec());
+            }
+            if method == "POST" && path == format!("/retrieve/v1/processes/{DATASET}/execution") {
+                return (
+                    202,
+                    "application/json",
+                    br#"{"links":[{"rel":"monitor","href":"/retrieve/v1/jobs/job-1"}]}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-1" {
+                let n = polls_srv.fetch_add(1, Ordering::SeqCst);
+                if n == 0 {
+                    return (
+                        200,
+                        "application/json",
+                        br#"{"status":"accepted"}"#.to_vec(),
+                    );
+                }
+                return (
+                    200,
+                    "application/json",
+                    br#"{"status":"successful","links":[{"rel":"results","href":"/retrieve/v1/jobs/job-1/results"}]}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-1/results" {
+                return (
+                    200,
+                    "application/json",
+                    br#"{"asset":{"value":{"href":"/retrieve/v1/assets/out.grib","file:size":16}}}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/assets/out.grib" {
+                return (200, "application/x-grib", b"0123456789abcdef".to_vec());
+            }
+            (404, "application/json", br#"{}"#.to_vec())
+        });
+
+        let (_rc, cfg) = test_config(&server.base_url, ledger.clone());
+        let inputs = json!({"date":["2026-11-24"],"time":["12:00"]});
+        let cancel = Arc::new(AtomicBool::new(false));
+        let cancel_sink = cancel.clone();
+        let mut out1 = tempfile::NamedTempFile::new().unwrap();
+        let err = {
+            let sink = |ev: Value| -> Result<(), String> {
+                if ev["stage"] == "ads_queue" {
+                    cancel_sink.store(true, Ordering::Release);
+                }
+                Ok(())
+            };
+            let mut ads = Ads::with_cancel_progress(cfg.clone(), Some(cancel.clone()), Some(&sink)).unwrap();
+            ads.retrieve(&inputs, &mut out1).unwrap_err()
+        };
+        assert!(err.contains("cancelled"), "{err}");
+        let saved = read_ledger_unlocked(&ledger);
+        assert_eq!(saved.jobs.len(), 1);
+
+        let events = std::sync::Mutex::new(Vec::<Value>::new());
+        let mut out2 = tempfile::NamedTempFile::new().unwrap();
+        {
+            let sink = |ev: Value| -> Result<(), String> {
+                events.lock().unwrap().push(ev);
+                Ok(())
+            };
+            let mut ads = Ads::with_cancel_progress(cfg, None, Some(&sink)).unwrap();
+            ads.retrieve(&inputs, &mut out2).unwrap();
+            assert_eq!(ads.submissions, 0);
+            assert_eq!(ads.downloads, 1);
+        }
+        assert_eq!(std::fs::read(out2.path()).unwrap(), b"0123456789abcdef");
+        assert!(read_ledger_unlocked(&ledger).jobs.is_empty());
+        let evs = events.into_inner().unwrap();
+        assert!(evs
+            .iter()
+            .any(|e| e["stage"] == "ads_queue" && e["reattached"] == json!(true)));
+        let reqs = server.requests.lock().unwrap();
+        let post_count = reqs
+            .iter()
+            .filter(|(m, p)| m == "POST" && p.ends_with("/execution"))
+            .count();
+        assert_eq!(post_count, 1);
+    }
+
+    #[test]
+    fn reattach_to_already_successful_job_skips_post_and_downloads() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dir.path().join("ads-jobs.json");
+        let server = MockAds::start(move |method, path, _| {
+            if method == "GET" && path == format!("/retrieve/v1/processes/{DATASET}") {
+                return (200, "application/json", br#"{"id":"cams"}"#.to_vec());
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-done" {
+                return (
+                    200,
+                    "application/json",
+                    br#"{"status":"successful","links":[{"rel":"results","href":"/retrieve/v1/jobs/job-done/results"}]}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-done/results" {
+                return (
+                    200,
+                    "application/json",
+                    br#"{"asset":{"value":{"href":"/retrieve/v1/assets/done.grib","file:size":16}}}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/assets/done.grib" {
+                return (200, "application/x-grib", b"abcdef0123456789".to_vec());
+            }
+            (404, "application/json", br#"{}"#.to_vec())
+        });
+        let (_rc, cfg) = test_config(&server.base_url, ledger.clone());
+        let inputs = json!({"date":["2026-11-24"]});
+        let fp = job_fingerprint(DATASET, &inputs);
+        update_ledger(&ledger, 2.0, |l| {
+            l.jobs.insert(
+                fp,
+                JobLedgerEntry {
+                    monitor_url: format!("{}/retrieve/v1/jobs/job-done", server.base_url),
+                    process_id: DATASET.into(),
+                    submitted_at_utc: time_contract::iso(DateTime::<Utc>::from(SystemTime::now())),
+                },
+            );
+        })
+        .unwrap();
+
+        let mut ads = Ads::new(cfg).unwrap();
+        let mut out = tempfile::NamedTempFile::new().unwrap();
+        ads.retrieve(&inputs, &mut out).unwrap();
+        assert_eq!(ads.submissions, 0);
+        assert_eq!(ads.downloads, 1);
+        assert_eq!(std::fs::read(out.path()).unwrap(), b"abcdef0123456789");
+        assert!(read_ledger_unlocked(&ledger).jobs.is_empty());
+    }
+
+    #[test]
+    fn terminal_failed_ledger_entry_is_dropped_and_resubmitted() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dir.path().join("ads-jobs.json");
+        let server = MockAds::start(move |method, path, _| {
+            if method == "GET" && path == format!("/retrieve/v1/processes/{DATASET}") {
+                return (200, "application/json", br#"{"id":"cams"}"#.to_vec());
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-bad" {
+                return (200, "application/json", br#"{"status":"failed"}"#.to_vec());
+            }
+            if method == "POST" && path == format!("/retrieve/v1/processes/{DATASET}/execution") {
+                return (
+                    202,
+                    "application/json",
+                    br#"{"links":[{"rel":"monitor","href":"/retrieve/v1/jobs/job-new"}]}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-new" {
+                return (
+                    200,
+                    "application/json",
+                    br#"{"status":"successful","links":[{"rel":"results","href":"/retrieve/v1/jobs/job-new/results"}]}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-new/results" {
+                return (
+                    200,
+                    "application/json",
+                    br#"{"asset":{"value":{"href":"/retrieve/v1/assets/new.grib","file:size":16}}}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/assets/new.grib" {
+                return (200, "application/x-grib", b"newjob0123456789".to_vec());
+            }
+            (404, "application/json", br#"{}"#.to_vec())
+        });
+        let (_rc, cfg) = test_config(&server.base_url, ledger.clone());
+        let inputs = json!({"date":["2026-11-24"]});
+        let fp = job_fingerprint(DATASET, &inputs);
+        update_ledger(&ledger, 2.0, |l| {
+            l.jobs.insert(
+                fp,
+                JobLedgerEntry {
+                    monitor_url: "/retrieve/v1/jobs/job-bad".into(),
+                    process_id: DATASET.into(),
+                    submitted_at_utc: time_contract::iso(DateTime::<Utc>::from(SystemTime::now())),
+                },
+            );
+        })
+        .unwrap();
+
+        let mut ads = Ads::new(cfg).unwrap();
+        let mut out = tempfile::NamedTempFile::new().unwrap();
+        ads.retrieve(&inputs, &mut out).unwrap();
+        assert_eq!(ads.submissions, 1);
+        assert_eq!(std::fs::read(out.path()).unwrap(), b"newjob0123456789");
+        assert!(read_ledger_unlocked(&ledger).jobs.is_empty());
+    }
+
+    #[test]
+    fn stale_ledger_entry_triggers_best_effort_delete_and_removal() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dir.path().join("ads-jobs.json");
+        let server = MockAds::start(move |method, path, _| {
+            if method == "GET" && path == format!("/retrieve/v1/processes/{DATASET}") {
+                return (200, "application/json", br#"{"id":"cams"}"#.to_vec());
+            }
+            if method == "DELETE" && path == "/retrieve/v1/jobs/job-stale" {
+                return (200, "application/json", br#"{}"#.to_vec());
+            }
+            if method == "POST" && path == format!("/retrieve/v1/processes/{DATASET}/execution") {
+                return (
+                    202,
+                    "application/json",
+                    br#"{"links":[{"rel":"monitor","href":"/retrieve/v1/jobs/job-fresh"}]}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-fresh" {
+                return (
+                    200,
+                    "application/json",
+                    br#"{"status":"successful","links":[{"rel":"results","href":"/retrieve/v1/jobs/job-fresh/results"}]}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-fresh/results" {
+                return (
+                    200,
+                    "application/json",
+                    br#"{"asset":{"value":{"href":"/retrieve/v1/assets/fresh.grib","file:size":16}}}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/assets/fresh.grib" {
+                return (200, "application/x-grib", b"fresh00123456789".to_vec());
+            }
+            (404, "application/json", br#"{}"#.to_vec())
+        });
+        let (_rc, cfg) = test_config(&server.base_url, ledger.clone());
+        let old_time = DateTime::<Utc>::from(SystemTime::now()) - ChronoDuration::hours(48);
+        update_ledger(&ledger, 2.0, |l| {
+            l.jobs.insert(
+                "stale-fingerprint".into(),
+                JobLedgerEntry {
+                    monitor_url: "/retrieve/v1/jobs/job-stale".into(),
+                    process_id: DATASET.into(),
+                    submitted_at_utc: time_contract::iso(old_time),
+                },
+            );
+        })
+        .unwrap();
+
+        let inputs = json!({"date":["2026-11-25"]});
+        let mut ads = Ads::new(cfg).unwrap();
+        let mut out = tempfile::NamedTempFile::new().unwrap();
+        ads.retrieve(&inputs, &mut out).unwrap();
+        assert_eq!(ads.submissions, 1);
+        assert!(read_ledger_unlocked(&ledger).jobs.is_empty());
+        let reqs = server.requests.lock().unwrap();
+        assert!(reqs
+            .iter()
+            .any(|(m, p)| m == "DELETE" && p == "/retrieve/v1/jobs/job-stale"));
     }
 }

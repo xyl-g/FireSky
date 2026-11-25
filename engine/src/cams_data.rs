@@ -915,6 +915,11 @@ fn run<'a>(
             progress.map(|outer| {
                 Box::new(move |event: Value| -> Result<(), String> {
                     let message = match event["stage"].as_str() {
+                        Some("ads_queue") if event["reattached"].as_bool() == Some(true) => format!(
+                            "CAMS 全球大气数据：已接回排队任务（{}）· 已等待 {:.0} 分钟",
+                            event["status"].as_str().unwrap_or("queued"),
+                            event["waited_s"].as_f64().unwrap_or(0.0) / 60.0,
+                        ),
                         Some("ads_queue") => format!(
                             "CAMS 全球大气数据：ADS 排队中（{}）· 已等待 {:.0} 分钟",
                             event["status"].as_str().unwrap_or("queued"),

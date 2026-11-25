@@ -2,9 +2,9 @@
     <string name="app_name">FireSky</string>
 
     <!-- Navigation -->
-    <string name="nav_point">Point Forecast</string>
-    <string name="nav_data">Data Management</string>
-    <string name="nav_history">Task History</string>
+    <string name="nav_point">Workbench</string>
+    <string name="nav_data">Data</string>
+    <string name="nav_history">History</string>
     <string name="nav_settings">Settings</string>
 
     <!-- Common -->
@@ -25,12 +25,14 @@
     <string name="settings_title">Settings</string>
     <string name="settings_general">General</string>
     <string name="settings_data">Data</string>
+    <string name="settings_server_status">Server</string>
     <string name="settings_advanced">Advanced</string>
     <string name="settings_general_subtitle">Display preferences, language and runtime status</string>
-    <string name="settings_data_subtitle">Sources, Copernicus ADS credentials, background sync and retention</string>
+    <string name="settings_data_subtitle">Read-only server status (CAMS credentials, background sync &amp; retention)</string>
     <string name="settings_advanced_subtitle">Remote server connection (Mac / CF Tunnel / LAN) &amp; protocol diagnostics</string>
     <string name="runtime_summary_title">Runtime Summary</string>
     <string name="runtime_manage_data">Manage data &amp; sync</string>
+    <string name="runtime_view_server">View server status</string>
     <string name="runtime_engine">Engine</string>
     <string name="runtime_remote_mac">Remote Mac</string>
     <string name="runtime_remote_server">Remote Server</string>
@@ -81,6 +83,12 @@
     <string name="cams_tut4_title">Return to FireSky and save the key</string>
     <string name="cams_tut4_detail">Paste it into the field above and save, then download data from the preparation panel.</string>
     <string name="cams_check_note">Only local configuration completeness is checked here; the token itself is validated during actual downloads.</string>
+    <string name="cams_status_checking">Checking server configuration…</string>
+    <string name="cams_status_configured">Key detected; authorized during download.</string>
+    <string name="cams_status_wrong_endpoint">Endpoint is not Copernicus ADS; fix it on the server.</string>
+    <string name="cams_status_tls_disabled">TLS verification is disabled; re-save on the server.</string>
+    <string name="cams_status_unreadable">Config file unreadable or malformed; fix it on the server.</string>
+    <string name="cams_status_missing">CAMS key not configured on server; aerosol downloads unavailable.</string>
     <string name="sync_section">Background Sync</string>
     <string name="sync_enable">Enable background sync</string>
     <string name="sync_retention_warning">No cache retention policy configured; cache will grow with sync. Set rules in Storage &amp; Retention below.</string>
@@ -119,7 +127,7 @@
     <string name="retention_clean_now">Clean up now</string>
     <string name="retention_save">Save retention</string>
     <string name="retention_configured_note">Custom retention policy active</string>
-    <string name="section_engine">Local engine</string>
+    <string name="section_engine">Remote Connection</string>
     <string name="engine_connected">Engine connected</string>
     <string name="transport_label">Transport</string>
     <string name="transport_mock">Mock (in-process)</string>
@@ -227,7 +235,7 @@
     <!-- Workbench -->
     <string name="point_title">Point Forecast</string>
     <string name="obs_point">Observer</string>
-    <string name="search_placeholder">Search a place, e.g. \"West Lake\" or \"Hangzhou\"</string>
+    <string name="search_placeholder">Search city or spot, e.g. West Lake</string>
     <string name="cd_search">Search location</string>
     <string name="cd_locate">Use current location</string>
     <string name="elevation_m">Elevation %1$.0f m</string>
@@ -414,7 +422,9 @@
 
     <!-- Data management -->
     <string name="data_title">Data Management</string>
-    <string name="data_dir_line">Data directory: app sandbox (cache/) · usage stats cover model data only (GFS / EC / CAMS)</string>
+    <string name="data_dir_line">Server data inventory &amp; cache usage (GFS / EC / CAMS)</string>
+    <string name="go_configure_server">Configure Server</string>
+    <string name="onboarding_features_caption">Unlocked once connected</string>
     <string name="data_offline">Engine offline; inventory and terrain status unavailable.</string>
     <string name="local_data">Local data</string>
     <string name="cd_refresh_inventory">Refresh inventory</string>
@@ -447,7 +457,7 @@
     <string name="delete_protected_note">%1$d files are held by download tasks and will be skipped.</string>
     <string name="terrain_title">Terrain SRTM</string>
     <string name="cd_refresh_terrain">Refresh terrain status</string>
-    <string name="download_region">Download region terrain</string>
+    <string name="download_region">Region terrain</string>
     <string name="point_only">Current spot only</string>
     <string name="stopping">Stopping…</string>
     <string name="cancel_download">Cancel download</string>
@@ -467,6 +477,18 @@
     <string name="tile_exists">Local tile exists</string>
     <string name="tile_missing">Not downloaded</string>
     <string name="terrain_target_line">Target %1$s (%2$.4f° N, %3$.4f° E) · tile %4$s · %5$s</string>
+
+    <!-- Map picker & read-only thin-client boundaries -->
+    <string name="map_expand">Full Map</string>
+    <string name="map_picker_title">Pick Location</string>
+    <string name="map_picker_done">Done</string>
+    <string name="map_tap_hint">Tap anywhere on map to pick a spot</string>
+    <string name="readonly_data_notice">Read-only view: browse server inventory &amp; terrain status here; manage or delete data on desktop.</string>
+    <string name="readonly_settings_notice">Read-only view: mobile never modifies server configuration. Adjust CAMS key, sync, or retention on desktop.</string>
+    <string name="sync_status_enabled">Enabled</string>
+    <string name="sync_status_disabled">Disabled</string>
+    <string name="sync_sources_label">Sources</string>
+    <string name="retention_unlimited_summary">No retention limits configured; edit rules on desktop if needed.</string>
 
     <!-- Status mapping (engine Chinese status → current language) -->
     <string name="st_completed">Completed</string>

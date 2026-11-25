@@ -1163,7 +1163,10 @@ fn sync_cams(
             area: json!(envelope),
             target_utcs: targets,
             target_utc: None,
-            config: crate::ads::Config::default(),
+            config: crate::ads::Config {
+                job_ledger_path: Some(state_path(context.workspace).with_file_name("ads-jobs.json")),
+                ..Default::default()
+            },
             allow_download: true,
             require_exact_valid_time: true,
             refresh_before_cycle: Some(time_contract::iso(cycle)),

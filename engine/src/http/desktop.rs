@@ -268,19 +268,11 @@ fn allowed_method(method: &str) -> bool {
             | "network_probe"
             | "cams_credentials"
             | "retention_settings"
-            | "save_retention_settings"
-            | "apply_retention_settings"
             | "data_sync_settings"
-            | "save_data_sync_settings"
-            | "data_sync_run"
-            | "data_delete_preview"
-            | "data_delete_execute"
             | "terrain_inventory"
-            | "terrain_download"
             | "profile_query"
             | "task_history"
             | "task_events"
-            | "task_forget"
             | "result_restore"
     )
 }
@@ -835,6 +827,18 @@ mod tests {
             ("request_id", json!("../request"), StatusCode::BAD_REQUEST),
             ("params", json!([]), StatusCode::BAD_REQUEST),
             ("method", json!("save_cams_key"), StatusCode::NOT_FOUND),
+            ("method", json!("save_retention_settings"), StatusCode::NOT_FOUND),
+            (
+                "method",
+                json!("apply_retention_settings"),
+                StatusCode::NOT_FOUND,
+            ),
+            ("method", json!("save_data_sync_settings"), StatusCode::NOT_FOUND),
+            ("method", json!("data_sync_run"), StatusCode::NOT_FOUND),
+            ("method", json!("data_delete_preview"), StatusCode::NOT_FOUND),
+            ("method", json!("data_delete_execute"), StatusCode::NOT_FOUND),
+            ("method", json!("terrain_download"), StatusCode::NOT_FOUND),
+            ("method", json!("task_forget"), StatusCode::NOT_FOUND),
             ("method", json!("arbitrary_method"), StatusCode::NOT_FOUND),
         ] {
             let mut body = base.clone();

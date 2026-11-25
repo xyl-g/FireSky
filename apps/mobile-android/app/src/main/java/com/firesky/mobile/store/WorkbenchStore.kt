@@ -201,7 +201,7 @@ class WorkbenchStore private constructor(
                 if (item.method != "forecast" || item.status != "done" || !item.canRestoreResult) continue
                 val retry = item.retryPayload ?: continue
                 val kind = retry.optString("kind").ifEmpty { "point" }
-                if (kind !in listOf("point", "regional", "nowcast")) continue
+                if (kind !in listOf("point", "nowcast")) continue
                 val response = activeEngine.call("result_restore", JSONObject().put("task_id", item.taskId))
                 val current = _state.value
                 if (current.busy || current.result != null || generation != revision) return
@@ -317,9 +317,18 @@ class WorkbenchStore private constructor(
 
     fun selectPoint(lat: Double, lon: Double) {
         if (_state.value.busy) return
+        val clampedLat = lat.coerceIn(-85.0, 85.0)
+        val normLon = ((lon + 540.0) % 360.0) - 180.0
+        val latLabel = if (clampedLat >= 0) "%.2f°N".format(clampedLat) else "%.2f°S".format(-clampedLat)
+        val lonLabel = if (normLon >= 0) "%.2f°E".format(normLon) else "%.2f°W".format(-normLon)
         _state.update {
             it.copy(
-                location = it.location.copy(lat = lat, lon = lon, name = "地图选点", metadataReady = false),
+                location = it.location.copy(
+                    lat = clampedLat,
+                    lon = normLon,
+                    name = "$latLabel, $lonLabel",
+                    metadataReady = false,
+                ),
             )
         }
         lookupMetadata()

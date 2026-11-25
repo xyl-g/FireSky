@@ -87,4 +87,58 @@ final class FireSkyMobileUITests: XCTestCase {
         XCTAssertTrue(done.waitForExistence(timeout: 25), "预测完成后未出现结果摘要")
         XCTAssertFalse(app.buttons["确定预测"].exists, "预测完成 sheet 应已关闭")
     }
+
+    func testReadOnlyTabsAndServerStatus() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-UITestMockMode", "-appLanguage", "zh"]
+        app.launch()
+
+        let later = app.buttons["稍后"]
+        if later.waitForExistence(timeout: 10) {
+            later.tap()
+        }
+
+        let wbShot = XCTAttachment(screenshot: app.screenshot())
+        wbShot.name = "ios-workbench-light"
+        wbShot.lifetime = .keepAlways
+        add(wbShot)
+
+        // 数据页：只读视图，不含删除按钮
+        app.tabBars.buttons.element(boundBy: 1).tap()
+        let readOnlyData = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "只读视图")
+        ).firstMatch
+        XCTAssertTrue(readOnlyData.waitForExistence(timeout: 10), "数据页缺少只读提示")
+        XCTAssertFalse(app.buttons["删除"].exists)
+        XCTAssertFalse(app.buttons["下载区域地形"].exists)
+        let dataShot = XCTAttachment(screenshot: app.screenshot())
+        dataShot.name = "ios-data-readonly"
+        dataShot.lifetime = .keepAlways
+        add(dataShot)
+
+        // 历史页：无删除任务提示
+        app.tabBars.buttons.element(boundBy: 2).tap()
+        sleep(1)
+        let historyShot = XCTAttachment(screenshot: app.screenshot())
+        historyShot.name = "ios-history-readonly"
+        historyShot.lifetime = .keepAlways
+        add(historyShot)
+
+        // 设置 -> 服务端页：只读状态，无远端写操作
+        app.tabBars.buttons.element(boundBy: 3).tap()
+        let serverTab = app.buttons["服务端"]
+        XCTAssertTrue(serverTab.waitForExistence(timeout: 10), "未找到服务端分类标签")
+        serverTab.tap()
+        let readOnlyServer = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "只读状态")
+        ).firstMatch
+        XCTAssertTrue(readOnlyServer.waitForExistence(timeout: 10), "服务端页缺少只读提示")
+        XCTAssertFalse(app.buttons["保存 Key"].exists)
+        XCTAssertFalse(app.buttons["立即同步"].exists)
+        XCTAssertFalse(app.buttons["保存保留设置"].exists)
+        let serverShot = XCTAttachment(screenshot: app.screenshot())
+        serverShot.name = "ios-settings-server-readonly"
+        serverShot.lifetime = .keepAlways
+        add(serverShot)
+    }
 }
