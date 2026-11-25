@@ -56,8 +56,8 @@ impl Default for Config {
             credentials_file: None,
             timeout_seconds: 120.0,
             wait_timeout_seconds: 7200.0,
-            poll_initial_seconds: 1.0,
-            poll_max_seconds: 5.0,
+            poll_initial_seconds: 2.0,
+            poll_max_seconds: 20.0,
             request_attempts: 3,
             lock_timeout_seconds: 300.0,
             job_ledger_path: None,
@@ -492,7 +492,7 @@ impl<'a> Ads<'a> {
                 Err(_) => true,
             };
             if retryable && attempt < attempts {
-                self.pause(self.config.poll_max_seconds)?;
+                self.pause(self.config.poll_max_seconds.min(5.0))?;
                 continue;
             }
             return response.map_err(|error| {
@@ -522,24 +522,47 @@ impl<'a> Ads<'a> {
         }
         read_json(&mut response)
     }
-    fn json_allow_not_found(
-        &mut self,
-        method: Method,
-        url: &Url,
-        body: Option<&Value>,
-        retry: bool,
-    ) -> Result<Option<Value>, String> {
-        let mut response = self.send_with_retry(method, url, body, retry)?;
-        if matches!(response.status(), StatusCode::NOT_FOUND | StatusCode::GONE) {
-            return Ok(None);
+    fn poll_job_status(&mut self, url: &Url) -> PollOutcome {
+        if let Err(err) = self.check_cancelled() {
+            return PollOutcome::Fatal(err);
         }
-        if !response.status().is_success() {
-            return Err(format!(
-                "ADS API HTTP status {}",
-                response.status().as_u16()
-            ));
+        let remaining = match self.remaining() {
+            Ok(value) => value,
+            Err(err) => return PollOutcome::Fatal(err),
+        };
+        let request_timeout = Duration::from_secs_f64(self.config.timeout_seconds);
+        let timeout = remaining.min(request_timeout);
+        let response = self.api.get(url.clone()).timeout(timeout).send();
+        let mut response = match response {
+            Ok(resp) => resp,
+            Err(error) => {
+                if (error.is_timeout() && remaining <= request_timeout)
+                    || Instant::now() >= self.deadline
+                {
+                    return PollOutcome::Fatal("ADS operation deadline exceeded".into());
+                }
+                return PollOutcome::Transient(
+                    "ADS HTTP request failed (URL/body redacted)".into(),
+                );
+            }
+        };
+        let status = response.status();
+        if matches!(status, StatusCode::NOT_FOUND | StatusCode::GONE) {
+            return PollOutcome::NotFound;
         }
-        read_json(&mut response).map(Some)
+        if status.is_server_error()
+            || status == StatusCode::TOO_MANY_REQUESTS
+            || status == StatusCode::REQUEST_TIMEOUT
+        {
+            return PollOutcome::Transient(format!("ADS API HTTP status {}", status.as_u16()));
+        }
+        if !status.is_success() {
+            return PollOutcome::Fatal(format!("ADS API HTTP status {}", status.as_u16()));
+        }
+        match read_json(&mut response) {
+            Ok(value) => PollOutcome::State(value),
+            Err(err) => PollOutcome::Transient(err),
+        }
     }
     fn delete_best_effort(&self, url: &Url) {
         let Ok(remaining) = self.remaining() else {
@@ -628,23 +651,30 @@ impl<'a> Ads<'a> {
             if let Some(entry) = recorded {
                 self.check_cancelled()?;
                 match self.api_link(&self.base, &entry.monitor_url) {
-                    Ok(candidate) => {
-                        match self.json_allow_not_found(Method::GET, &candidate, None, true)? {
-                            Some(state) => match state["status"].as_str() {
-                                Some("successful") => {
-                                    monitor = Some(candidate);
-                                    initial_state = Some(state);
-                                    reattached = true;
-                                }
-                                Some("accepted" | "running") => {
-                                    monitor = Some(candidate);
-                                    reattached = true;
-                                }
-                                _ => remove_ledger_entry(path, lock_timeout, &fingerprint),
-                            },
-                            None => remove_ledger_entry(path, lock_timeout, &fingerprint),
+                    Ok(candidate) => match self.poll_job_status(&candidate) {
+                        PollOutcome::State(state) => match state["status"].as_str() {
+                            Some("successful") => {
+                                monitor = Some(candidate);
+                                initial_state = Some(state);
+                                reattached = true;
+                            }
+                            Some("accepted" | "running") => {
+                                monitor = Some(candidate);
+                                reattached = true;
+                            }
+                            _ => remove_ledger_entry(path, lock_timeout, &fingerprint),
+                        },
+                        PollOutcome::NotFound => {
+                            remove_ledger_entry(path, lock_timeout, &fingerprint);
                         }
-                    }
+                        PollOutcome::Transient(_) => {
+                            // Keep the ledger entry and enter the resilient polling loop instead of
+                            // failing or submitting a duplicate job.
+                            monitor = Some(candidate);
+                            reattached = true;
+                        }
+                        PollOutcome::Fatal(err) => return Err(err),
+                    },
                     Err(_) => remove_ledger_entry(path, lock_timeout, &fingerprint),
                 }
             }
@@ -683,6 +713,13 @@ impl<'a> Ads<'a> {
         };
 
         let mut delay = self.config.poll_initial_seconds;
+        let base_retry_delay = self
+            .config
+            .poll_max_seconds
+            .max(self.config.poll_initial_seconds);
+        let mut retry_delay = base_retry_delay;
+        let retry_max_delay = (base_retry_delay * 3.0).min(60.0);
+        let mut consecutive_transient_errors: u32 = 0;
         let queued_at = Instant::now();
         let state = if let Some(state) = initial_state {
             self.emit(json!({
@@ -695,36 +732,70 @@ impl<'a> Ads<'a> {
         } else {
             loop {
                 self.check_cancelled()?;
-                let state = self.json(Method::GET, &monitor, None, true)?;
-                // v1.9.8：排队等待事件化——ADS 排队占 CAMS 准备大头，让
-                // 「慢」可见并维持 runtime 看门狗的活跃心跳。
-                self.emit(json!({
-                    "stage": "ads_queue",
-                    "status": state["status"],
-                    "waited_s": queued_at.elapsed().as_secs_f64(),
-                    "reattached": reattached,
-                }))?;
-                match state["status"].as_str() {
-                    Some("successful") => break state,
-                    Some("accepted" | "running") => {
-                        self.pause(delay)?;
-                        delay = (delay * 1.5).min(self.config.poll_max_seconds);
+                match self.poll_job_status(&monitor) {
+                    PollOutcome::State(state) => {
+                        consecutive_transient_errors = 0;
+                        retry_delay = base_retry_delay;
+                        // v1.9.8：排队等待事件化——ADS 排队占 CAMS 准备大头，让
+                        // 「慢」可见并维持 runtime 看门狗的活跃心跳。
+                        self.emit(json!({
+                            "stage": "ads_queue",
+                            "status": state["status"],
+                            "waited_s": queued_at.elapsed().as_secs_f64(),
+                            "reattached": reattached,
+                        }))?;
+                        match state["status"].as_str() {
+                            Some("successful") => break state,
+                            Some("accepted" | "running") => {
+                                self.pause(delay)?;
+                                delay = (delay * 1.5).min(self.config.poll_max_seconds);
+                            }
+                            Some("failed" | "rejected" | "dismissed" | "deleted") => {
+                                if let Some(path) = ledger_path.as_deref() {
+                                    remove_ledger_entry(path, lock_timeout, &fingerprint);
+                                }
+                                return Err(format!(
+                                    "ADS job ended with status {}",
+                                    state["status"].as_str().unwrap()
+                                ));
+                            }
+                            _ => {
+                                if let Some(path) = ledger_path.as_deref() {
+                                    remove_ledger_entry(path, lock_timeout, &fingerprint);
+                                }
+                                return Err("ADS job has an unknown or missing status".into());
+                            }
+                        }
                     }
-                    Some("failed" | "rejected" | "dismissed" | "deleted") => {
+                    PollOutcome::Transient(err) => {
+                        consecutive_transient_errors += 1;
+                        self.emit(json!({
+                            "stage": "ads_queue",
+                            "status": "retrying",
+                            "waited_s": queued_at.elapsed().as_secs_f64(),
+                            "reattached": reattached,
+                            "retry_error": err,
+                            "consecutive_errors": consecutive_transient_errors,
+                        }))?;
+                        if let Err(pause_err) = self.pause(retry_delay) {
+                            if pause_err.contains("ADS operation deadline exceeded") {
+                                return Err(format!(
+                                    "ADS operation deadline exceeded (last poll error: {err})"
+                                ));
+                            }
+                            return Err(pause_err);
+                        }
+                        retry_delay = (retry_delay * 1.5).min(retry_max_delay);
+                    }
+                    PollOutcome::NotFound => {
                         if let Some(path) = ledger_path.as_deref() {
                             remove_ledger_entry(path, lock_timeout, &fingerprint);
                         }
-                        return Err(format!(
-                            "ADS job ended with status {}",
-                            state["status"].as_str().unwrap()
-                        ));
+                        return Err(
+                            "ADS job was removed or expired on server (HTTP 404/410)".into(),
+                        );
                     }
-                    _ => {
-                        if let Some(path) = ledger_path.as_deref() {
-                            remove_ledger_entry(path, lock_timeout, &fingerprint);
-                        }
-                        return Err("ADS job has an unknown or missing status".into());
-                    }
+                    PollOutcome::Fatal(err) => return Err(err),
                 }
             }
         };
@@ -877,10 +948,17 @@ impl<'a> Ads<'a> {
             if result.is_ok() || attempt == self.config.request_attempts {
                 return result;
             }
-            self.pause(self.config.poll_max_seconds)?;
+            self.pause(self.config.poll_max_seconds.min(5.0))?;
         }
         unreachable!()
     }
+}
+
+enum PollOutcome {
+    State(Value),
+    NotFound,
+    Transient(String),
+    Fatal(String),
 }
 
 fn read_json(response: &mut Response) -> Result<Value, String> {
@@ -1357,5 +1435,172 @@ mod tests {
         assert!(reqs
             .iter()
             .any(|(m, p)| m == "DELETE" && p == "/retrieve/v1/jobs/job-stale"));
+    }
+
+    #[test]
+    fn poll_survives_transient_500_and_429_burst_until_job_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dir.path().join("ads-jobs.json");
+        let job_polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let polls_srv = job_polls.clone();
+        let server = MockAds::start(move |method, path, _| {
+            if method == "GET" && path == format!("/retrieve/v1/processes/{DATASET}") {
+                return (200, "application/json", br#"{"id":"cams"}"#.to_vec());
+            }
+            if method == "POST" && path == format!("/retrieve/v1/processes/{DATASET}/execution") {
+                return (
+                    202,
+                    "application/json",
+                    br#"{"links":[{"rel":"monitor","href":"/retrieve/v1/jobs/job-flaky"}]}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-flaky" {
+                let n = polls_srv.fetch_add(1, Ordering::SeqCst);
+                return match n {
+                    0 | 1 => (500, "application/json", br#"{"detail":"err"}"#.to_vec()),
+                    2 => (502, "application/json", br#"{"detail":"bad gw"}"#.to_vec()),
+                    3 => (429, "application/json", br#"{"detail":"slow"}"#.to_vec()),
+                    4 => (500, "application/json", br#"{"detail":"err"}"#.to_vec()),
+                    5 => (503, "application/json", br#"{"detail":"unavail"}"#.to_vec()),
+                    6 => (200, "application/json", br#"{"status":"running"}"#.to_vec()),
+                    _ => (
+                        200,
+                        "application/json",
+                        br#"{"status":"successful","links":[{"rel":"results","href":"/retrieve/v1/jobs/job-flaky/results"}]}"#.to_vec(),
+                    ),
+                };
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-flaky/results" {
+                return (
+                    200,
+                    "application/json",
+                    br#"{"asset":{"value":{"href":"/retrieve/v1/assets/flaky.grib","file:size":16}}}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/assets/flaky.grib" {
+                return (200, "application/x-grib", b"flaky0123456789a".to_vec());
+            }
+            (404, "application/json", br#"{}"#.to_vec())
+        });
+
+        let (_rc, cfg) = test_config(&server.base_url, ledger.clone());
+        let events = std::sync::Mutex::new(Vec::<Value>::new());
+        let mut out = tempfile::NamedTempFile::new().unwrap();
+        {
+            let sink = |ev: Value| -> Result<(), String> {
+                events.lock().unwrap().push(ev);
+                Ok(())
+            };
+            let mut ads = Ads::with_cancel_progress(cfg, None, Some(&sink)).unwrap();
+            let inputs = json!({"date":["2026-11-25"]});
+            ads.retrieve(&inputs, &mut out).unwrap();
+            assert_eq!(ads.submissions, 1);
+            assert_eq!(ads.downloads, 1);
+        }
+        assert_eq!(std::fs::read(out.path()).unwrap(), b"flaky0123456789a");
+        assert!(read_ledger_unlocked(&ledger).jobs.is_empty());
+        let evs = events.into_inner().unwrap();
+        assert!(evs
+            .iter()
+            .any(|e| e["stage"] == "ads_queue" && e["status"] == json!("retrying")));
+    }
+
+    #[test]
+    fn poll_fails_immediately_on_non_retryable_403() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dir.path().join("ads-jobs.json");
+        let server = MockAds::start(move |method, path, _| {
+            if method == "GET" && path == format!("/retrieve/v1/processes/{DATASET}") {
+                return (200, "application/json", br#"{"id":"cams"}"#.to_vec());
+            }
+            if method == "POST" && path == format!("/retrieve/v1/processes/{DATASET}/execution") {
+                return (
+                    202,
+                    "application/json",
+                    br#"{"links":[{"rel":"monitor","href":"/retrieve/v1/jobs/job-403"}]}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-403" {
+                return (403, "application/json", br#"{"detail":"forbidden"}"#.to_vec());
+            }
+            (404, "application/json", br#"{}"#.to_vec())
+        });
+
+        let (_rc, cfg) = test_config(&server.base_url, ledger);
+        let mut ads = Ads::new(cfg).unwrap();
+        let mut out = tempfile::NamedTempFile::new().unwrap();
+        let inputs = json!({"date":["2026-11-25"]});
+        let err = ads.retrieve(&inputs, &mut out).unwrap_err();
+        assert!(err.contains("ADS API HTTP status 403"), "{err}");
+        let reqs = server.requests.lock().unwrap();
+        let poll_count = reqs
+            .iter()
+            .filter(|(m, p)| m == "GET" && p == "/retrieve/v1/jobs/job-403")
+            .count();
+        assert_eq!(poll_count, 1);
+    }
+
+    #[test]
+    fn reattach_survives_transient_500_without_duplicate_submission() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dir.path().join("ads-jobs.json");
+        let job_polls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let polls_srv = job_polls.clone();
+        let server = MockAds::start(move |method, path, _| {
+            if method == "GET" && path == format!("/retrieve/v1/processes/{DATASET}") {
+                return (200, "application/json", br#"{"id":"cams"}"#.to_vec());
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-reattach" {
+                let n = polls_srv.fetch_add(1, Ordering::SeqCst);
+                if n < 2 {
+                    return (500, "application/json", br#"{"detail":"transient"}"#.to_vec());
+                }
+                return (
+                    200,
+                    "application/json",
+                    br#"{"status":"successful","links":[{"rel":"results","href":"/retrieve/v1/jobs/job-reattach/results"}]}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-reattach/results" {
+                return (
+                    200,
+                    "application/json",
+                    br#"{"asset":{"value":{"href":"/retrieve/v1/assets/reattach.grib","file:size":16}}}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/assets/reattach.grib" {
+                return (200, "application/x-grib", b"reattach01234567".to_vec());
+            }
+            (404, "application/json", br#"{}"#.to_vec())
+        });
+
+        let (_rc, cfg) = test_config(&server.base_url, ledger.clone());
+        let inputs = json!({"date":["2026-11-25"]});
+        let fp = job_fingerprint(DATASET, &inputs);
+        update_ledger(&ledger, 2.0, |l| {
+            l.jobs.insert(
+                fp,
+                JobLedgerEntry {
+                    monitor_url: "/retrieve/v1/jobs/job-reattach".into(),
+                    process_id: DATASET.into(),
+                    submitted_at_utc: time_contract::iso(DateTime::<Utc>::from(SystemTime::now())),
+                },
+            );
+        })
+        .unwrap();
+
+        let mut ads = Ads::new(cfg).unwrap();
+        let mut out = tempfile::NamedTempFile::new().unwrap();
+        ads.retrieve(&inputs, &mut out).unwrap();
+        assert_eq!(ads.submissions, 0);
+        assert_eq!(ads.downloads, 1);
+        assert_eq!(std::fs::read(out.path()).unwrap(), b"reattach01234567");
+        assert!(read_ledger_unlocked(&ledger).jobs.is_empty());
+        let reqs = server.requests.lock().unwrap();
+        let post_count = reqs
+            .iter()
+            .filter(|(m, p)| m == "POST" && p.ends_with("/execution"))
+            .count();
+        assert_eq!(post_count, 0);
     }
 }
