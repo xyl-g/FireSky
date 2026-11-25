@@ -1,7 +1,6 @@
 import XCTest
 
-/// UI 冒烟：MockTransport 通道下驱动 check→prepare→forecast 全链路。
-/// 对应 MN1 验收「模拟器内 hello→check→prepare→forecast 全链路」的 UI 面。
+/// UI 冒烟：MockTransport 通道下（-UITestMockMode）驱动 check→prepare→forecast 全链路。
 final class FireSkyMobileUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
@@ -9,7 +8,7 @@ final class FireSkyMobileUITests: XCTestCase {
 
     func testAppearanceSwitching() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-engineTransport", "mock", "-appLanguage", "zh"]
+        app.launchArguments = ["-UITestMockMode", "-appLanguage", "zh"]
         app.launch()
         let later = app.buttons["稍后"]
         if later.waitForExistence(timeout: 10) { later.tap() }
@@ -29,7 +28,7 @@ final class FireSkyMobileUITests: XCTestCase {
 
     func testLargeTextPreparation() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-engineTransport", "mock", "-appLanguage", "en",
+        app.launchArguments = ["-UITestMockMode", "-appLanguage", "en",
                                "-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
         app.launch()
         let later = app.buttons["稍后"]
@@ -55,9 +54,8 @@ final class FireSkyMobileUITests: XCTestCase {
 
     func testPointForecastChain() throws {
         let app = XCUIApplication()
-        // v1.1.0 起 Store 默认 ffi 真引擎；UI 冒烟仍走 Mock 链路（确定性数据、
-        // 无网络依赖）。经 UserDefaults argument domain 显式固定 mock 通道。
-        app.launchArguments += ["-engineTransport", "mock", "-appLanguage", "zh"]
+        app.launchArguments.append("-UITestMockMode")
+        app.launchArguments += ["-appLanguage", "zh"]
         app.launch()
 
         // 首启 CAMS 提醒（Mock hello 返回未配置）→ 稍后

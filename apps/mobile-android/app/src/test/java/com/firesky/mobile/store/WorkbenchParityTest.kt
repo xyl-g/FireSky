@@ -126,4 +126,143 @@ class WorkbenchParityTest {
         assertEquals("杭州 · 2026-11-24", editedState.resultTitle)
         assertEquals("dusk", editedState.resultPhenomenon)
     }
+
+    @Test
+    fun parsesRegionalModelAndCityRankingContract() {
+        val report = JSONObject()
+            .put("cycle_time_utc", "2026-11-24T00:00:00Z")
+            .put("precision", JSONObject().put("point_spacing_deg", 0.25).put("model_grid_spacing_deg", 0.25))
+            .put("regions", JSONArray(listOf("china")))
+            .put("point_count", 2)
+            .put("success_count", 2)
+            .put("error_count", 0)
+            .put(
+                "points",
+                JSONArray()
+                    .put(
+                        JSONObject()
+                            .put("lat", 30.25)
+                            .put("lon", 120.25)
+                            .put("peak_quality_index", 2.05)
+                            .put("quality_index", 1.90)
+                            .put("peak_quality_level", "绝佳")
+                            .put("best_time_local", "2026-11-24T17:45:00")
+                            .put("dominant_burnable_pressure_family", "high")
+                            .put("confidence_score", 0.85)
+                            .put("quality_components", JSONObject().put("burnable_cloud_coverage_effective", 0.64).put("duration_minutes", 40.0)),
+                    )
+                    .put(
+                        JSONObject()
+                            .put("lat", 31.25)
+                            .put("lon", 121.50)
+                            .put("peak_quality_index", 1.30)
+                            .put("quality_level", "优秀"),
+                    ),
+            )
+            .put("errors", JSONArray())
+            .put(
+                "city_ranking",
+                JSONObject()
+                    .put("status", "available")
+                    .put(
+                        "items",
+                        JSONArray()
+                            .put(JSONObject().put("name", "上海").put("lat", 31.23).put("lon", 121.47).put("peak_quality_index", 1.72))
+                            .put(JSONObject().put("name", "杭州").put("lat", 30.27).put("lon", 120.15).put("peak_quality_index", 2.15)),
+                    ),
+            )
+
+        val forecast = parseRegionalForecast(
+            JSONObject().put("model_results", JSONObject().put("gfs", report)).put("model_errors", JSONObject()),
+        )
+        val gfs = forecast.model("gfs")
+        assertTrue(gfs.available)
+        assertEquals(2, gfs.validCount)
+        assertEquals(1, gfs.highCount)
+        assertEquals(0, gfs.missingCount)
+        assertEquals(2.05, gfs.peak!!.quality!!, 1e-6)
+        assertEquals("available", gfs.cityRankingStatus)
+        assertEquals("杭州", gfs.cityRanking.first().name)
+        assertEquals(2.15, gfs.cityRanking.first().quality!!, 1e-6)
+        assertEquals("点 0.25° · 模型 0.25°", gfs.precision)
+    }
+
+    @Test
+    fun parsesNowcastProfileStatsAndCells() {
+        val report = JSONObject()
+            .put("best_time_local", "2026-11-24T17:55:00")
+            .put(
+                "steps",
+                JSONArray().put(
+                    JSONObject()
+                        .put("valid_time_local", "2026-11-24T17:55:00")
+                        .put("valid", true)
+                        .put("solar_azimuth_deg", 250.0),
+                ),
+            )
+            .put(
+                "nowcast",
+                JSONObject().put(
+                    "satellite_vertical_profile",
+                    JSONObject()
+                        .put("status", "available")
+                        .put("valid_time_utc", "2026-11-24T09:20:00Z")
+                        .put("sample_count", 2)
+                        .put("usable_sample_count", 2)
+                        .put("coverage", 0.95)
+                        .put("pressure_levels_hpa", JSONArray(listOf(300, 500)))
+                        .put("bands", JSONArray(listOf("B07", "B13", "B15")))
+                        .put(
+                            "samples",
+                            JSONArray().put(
+                                JSONObject()
+                                    .put("distance_km", 80.0)
+                                    .put("bearing_deg", 250.0)
+                                    .put("status", "retrieved")
+                                    .put(
+                                        "levels",
+                                        JSONArray()
+                                            .put(JSONObject().put("pressure_hpa", 300).put("height_m", 9100.0).put("status", "retrieved").put("hsd_posterior_percent", 75.0))
+                                            .put(JSONObject().put("pressure_hpa", 500).put("height_m", 5600.0).put("status", "retrieved").put("hsd_posterior_percent", 35.0)),
+                                    ),
+                            ),
+                        ),
+                ),
+            )
+
+        val stats = parseNowcastProfileStats(report)
+        assertTrue(stats.present)
+        assertEquals("完整覆盖", stats.statusLabel)
+        assertEquals("2/2", stats.sampleText)
+        assertEquals("95%", stats.coverageText)
+        assertEquals(listOf("B07", "B13", "B15"), stats.bands)
+
+        val cells = parseNowcastProfileCells(report)
+        assertEquals(2, cells.size)
+        assertEquals(35.0, cells[0].probability!!, 1e-6)
+        assertEquals(75.0, cells[1].probability!!, 1e-6)
+    }
+
+    @Test
+    fun parsesHelloRegionsAndBuildsRegionalAndNowcastPayloads() {
+        val hello = JSONObject().put(
+            "regions",
+            JSONArray()
+                .put(JSONObject().put("code", "china").put("label", "中国").put("bounds", JSONArray(listOf(73.0, 18.0, 136.0, 54.0))))
+                .put(JSONObject().put("code", "east-asia").put("label", "东亚").put("bounds", JSONArray(listOf(63.0, 12.0, 155.0, 60.0)))),
+        )
+        val presets = parseRegionalPresets(hello)
+        assertEquals(2, presets.size)
+        assertEquals("china", presets[0].code)
+
+        val state = WorkbenchState(workbenchMode = "regional", selectedRegionCode = "china", regionalModel = "ec")
+        val regionalPayload = buildForecastPayload(state, "regional")
+        assertEquals("ec", regionalPayload.optString("model_source"))
+        assertEquals("china", regionalPayload.optJSONArray("regions")?.optString(0))
+
+        val nowcastPayload = buildForecastPayload(state, "nowcast")
+        assertEquals("nowcast", nowcastPayload.optString("forecast_mode"))
+        assertEquals("satellite", nowcastPayload.optString("model_source"))
+        assertEquals("auto", nowcastPayload.optString("satellite_source"))
+    }
 }

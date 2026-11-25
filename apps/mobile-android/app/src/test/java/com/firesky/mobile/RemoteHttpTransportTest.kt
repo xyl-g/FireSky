@@ -69,6 +69,26 @@ class RemoteHttpTransportTest {
             out.use { it.write(bytes) }
         }
 
+        fun replySse(events: List<JSONObject>, delayBetweenMs: Long = 10L) {
+            val respHeaders = cls.getMethod("getResponseHeaders").invoke(raw)
+            headersCls.getMethod("add", String::class.java, String::class.java)
+                .invoke(respHeaders, "Content-Type", "text/event-stream")
+            headersCls.getMethod("add", String::class.java, String::class.java)
+                .invoke(respHeaders, "Cache-Control", "no-cache")
+            // 0 = chunked transfer encoding in com.sun.net.httpserver.HttpExchange
+            cls.getMethod("sendResponseHeaders", Int::class.javaPrimitiveType, Long::class.javaPrimitiveType)
+                .invoke(raw, 200, 0L)
+            val out = cls.getMethod("getResponseBody").invoke(raw) as OutputStream
+            out.use { stream ->
+                for (event in events) {
+                    val line = "data: $event\n\n".toByteArray(Charsets.UTF_8)
+                    stream.write(line)
+                    stream.flush()
+                    if (delayBetweenMs > 0) Thread.sleep(delayBetweenMs)
+                }
+            }
+        }
+
         fun close() {
             cls.getMethod("close").invoke(raw)
         }
@@ -505,6 +525,258 @@ class RemoteHttpTransportTest {
                 assertEquals("cancelled", last.optJSONObject("error")?.optString("code"))
             } finally {
                 transport.stop()
+            }
+        }
+    }
+
+    @Test
+    fun sseStreamingDeliversProgressAndDoneWithoutPolling() {
+        val token = "sse-stream-secret-token"
+        val pollHits = AtomicInteger(0)
+        val sseHits = AtomicInteger(0)
+        val releaseHits = AtomicInteger(0)
+        val acceptHeaders = CopyOnWriteArrayList<String?>()
+        var capturedRequestId = ""
+
+        withServer({ exchange ->
+            when {
+                exchange.requestMethod == "GET" && exchange.requestURI.path == "/api/v1/firesky/desktop/status" -> {
+                    exchange.replyJson(
+                        200,
+                        JSONObject()
+                            .put("instance_id", "inst-sse")
+                            .put("running", true)
+                            .put("workspace", "/Users/mac/FireSky")
+                            .put("protocol", 1)
+                            .put("engine", "firesky-rust"),
+                    )
+                }
+                exchange.requestMethod == "POST" && exchange.requestURI.path == "/api/v1/firesky/desktop/jobs" -> {
+                    val req = JSONObject(exchange.readBody())
+                    capturedRequestId = req.getString("request_id")
+                    exchange.replyJson(
+                        202,
+                        JSONObject()
+                            .put("request_id", capturedRequestId)
+                            .put("instance_id", "inst-sse")
+                            .put("status", "running"),
+                    )
+                }
+                exchange.requestMethod == "GET" && exchange.requestURI.path == "/api/v1/firesky/desktop/jobs/$capturedRequestId/events" -> {
+                    sseHits.incrementAndGet()
+                    acceptHeaders.add(exchange.header("Accept"))
+                    assertEquals("instance_id=inst-sse", exchange.requestURI.rawQuery)
+                    exchange.replySse(
+                        listOf(
+                            JSONObject()
+                                .put("request_id", capturedRequestId)
+                                .put("instance_id", "inst-sse")
+                                .put("status", "running")
+                                .put("progress_seq", 1)
+                                .put("progress", JSONObject().put("percent", 25.0).put("source", "gfs").put("message", "准备 GFS")),
+                            JSONObject()
+                                .put("request_id", capturedRequestId)
+                                .put("instance_id", "inst-sse")
+                                .put("status", "running")
+                                .put("progress_seq", 2)
+                                .put("progress", JSONObject().put("percent", 75.0).put("source", "ec").put("message", "计算 EC")),
+                            JSONObject()
+                                .put("request_id", capturedRequestId)
+                                .put("instance_id", "inst-sse")
+                                .put("status", "done")
+                                .put("progress_seq", 3)
+                                .put("progress", JSONObject().put("percent", 100.0).put("source", "assess").put("message", "完成"))
+                                .put("result", JSONObject().put("streamed", true).put("score", 2.3)),
+                        ),
+                    )
+                }
+                exchange.requestMethod == "GET" && exchange.requestURI.path == "/api/v1/firesky/desktop/jobs/$capturedRequestId" -> {
+                    pollHits.incrementAndGet()
+                    exchange.replyJson(500, JSONObject())
+                }
+                exchange.requestMethod == "POST" && exchange.requestURI.path == "/api/v1/firesky/desktop/jobs/$capturedRequestId/release" -> {
+                    releaseHits.incrementAndGet()
+                    exchange.replyJson(200, JSONObject().put("released", true))
+                }
+                else -> exchange.replyJson(404, JSONObject())
+            }
+        }) { baseUrl ->
+            val client = EngineClient(RemoteHttpTransport(baseUrl, token, pollDelayProvider = { 5L }))
+            client.start(JSONObject())
+            try {
+                val progressEvents = Collections.synchronizedList(mutableListOf<JSONObject>())
+                val result = runBlocking {
+                    withTimeout(10_000) {
+                        client.call("forecast", JSONObject().put("kind", "regional")) { event ->
+                            progressEvents.add(event)
+                        }
+                    }
+                }
+                assertTrue(result.optBoolean("streamed"))
+                assertEquals(2.3, result.optDouble("score"), 1e-6)
+                assertEquals(1, sseHits.get())
+                assertEquals("SSE 成功时不应回退轮询", 0, pollHits.get())
+                assertEquals(1, releaseHits.get())
+                assertEquals(listOf("text/event-stream"), acceptHeaders)
+                assertEquals(3, progressEvents.size)
+                assertEquals(25.0, progressEvents[0].optDouble("percent"), 1e-6)
+                assertEquals(75.0, progressEvents[1].optDouble("percent"), 1e-6)
+                assertEquals(100.0, progressEvents[2].optDouble("percent"), 1e-6)
+            } finally {
+                client.stop()
+            }
+        }
+    }
+
+    @Test
+    fun sse404FallsBackCleanlyToAdaptivePolling() {
+        val sseAttempts = AtomicInteger(0)
+        val pollAttempts = AtomicInteger(0)
+        var capturedRequestId = ""
+
+        withServer({ exchange ->
+            when {
+                exchange.requestMethod == "GET" && exchange.requestURI.path == "/api/v1/firesky/desktop/status" -> {
+                    exchange.replyJson(
+                        200,
+                        JSONObject()
+                            .put("instance_id", "inst-fallback")
+                            .put("running", true)
+                            .put("workspace", "/Users/mac/FireSky")
+                            .put("protocol", 1)
+                            .put("engine", "firesky-rust"),
+                    )
+                }
+                exchange.requestMethod == "POST" && exchange.requestURI.path == "/api/v1/firesky/desktop/jobs" -> {
+                    val req = JSONObject(exchange.readBody())
+                    capturedRequestId = req.getString("request_id")
+                    exchange.replyJson(
+                        202,
+                        JSONObject()
+                            .put("request_id", capturedRequestId)
+                            .put("instance_id", "inst-fallback")
+                            .put("status", "running"),
+                    )
+                }
+                exchange.requestMethod == "GET" && exchange.requestURI.path == "/api/v1/firesky/desktop/jobs/$capturedRequestId/events" -> {
+                    sseAttempts.incrementAndGet()
+                    exchange.replyJson(404, JSONObject().put("error", JSONObject().put("code", "not_found").put("message", "sse not supported")))
+                }
+                exchange.requestMethod == "GET" && exchange.requestURI.path == "/api/v1/firesky/desktop/jobs/$capturedRequestId" -> {
+                    when (pollAttempts.incrementAndGet()) {
+                        1 -> exchange.replyJson(
+                            200,
+                            JSONObject()
+                                .put("request_id", capturedRequestId)
+                                .put("instance_id", "inst-fallback")
+                                .put("status", "running")
+                                .put("progress_seq", 1)
+                                .put("progress", JSONObject().put("percent", 50.0)),
+                        )
+                        else -> exchange.replyJson(
+                            200,
+                            JSONObject()
+                                .put("request_id", capturedRequestId)
+                                .put("instance_id", "inst-fallback")
+                                .put("status", "done")
+                                .put("progress_seq", 2)
+                                .put("progress", JSONObject().put("percent", 100.0))
+                                .put("result", JSONObject().put("fallback_ok", true)),
+                        )
+                    }
+                }
+                exchange.requestMethod == "POST" && exchange.requestURI.path == "/api/v1/firesky/desktop/jobs/$capturedRequestId/release" -> {
+                    exchange.replyJson(200, JSONObject().put("released", true))
+                }
+                else -> exchange.replyJson(404, JSONObject())
+            }
+        }) { baseUrl ->
+            val client = EngineClient(RemoteHttpTransport(baseUrl, "tok", pollDelayProvider = { 5L }))
+            client.start(JSONObject())
+            try {
+                val progressEvents = Collections.synchronizedList(mutableListOf<JSONObject>())
+                val result = runBlocking {
+                    withTimeout(10_000) {
+                        client.call("forecast", JSONObject()) { event -> progressEvents.add(event) }
+                    }
+                }
+                assertTrue(result.optBoolean("fallback_ok"))
+                assertEquals(1, sseAttempts.get())
+                assertEquals(2, pollAttempts.get())
+                assertEquals(2, progressEvents.size)
+            } finally {
+                client.stop()
+            }
+        }
+    }
+
+    @Test
+    fun sseDisconnectMidStreamFallsBackToPollingWithoutDuplicateSeq() {
+        var capturedRequestId = ""
+
+        withServer({ exchange ->
+            when {
+                exchange.requestMethod == "GET" && exchange.requestURI.path == "/api/v1/firesky/desktop/status" -> {
+                    exchange.replyJson(
+                        200,
+                        JSONObject()
+                            .put("instance_id", "inst-mid")
+                            .put("running", true)
+                            .put("workspace", "/Users/mac/FireSky")
+                            .put("protocol", 1)
+                            .put("engine", "firesky-rust"),
+                    )
+                }
+                exchange.requestMethod == "POST" && exchange.requestURI.path == "/api/v1/firesky/desktop/jobs" -> {
+                    val req = JSONObject(exchange.readBody())
+                    capturedRequestId = req.getString("request_id")
+                    exchange.replyJson(202, JSONObject().put("request_id", capturedRequestId).put("instance_id", "inst-mid").put("status", "running"))
+                }
+                exchange.requestMethod == "GET" && exchange.requestURI.path == "/api/v1/firesky/desktop/jobs/$capturedRequestId/events" -> {
+                    // 发送 seq=1 后提前断流，未发送终态
+                    exchange.replySse(
+                        listOf(
+                            JSONObject()
+                                .put("request_id", capturedRequestId)
+                                .put("instance_id", "inst-mid")
+                                .put("status", "running")
+                                .put("progress_seq", 1)
+                                .put("progress", JSONObject().put("percent", 30.0)),
+                        ),
+                        delayBetweenMs = 0L,
+                    )
+                }
+                exchange.requestMethod == "GET" && exchange.requestURI.path == "/api/v1/firesky/desktop/jobs/$capturedRequestId" -> {
+                    exchange.replyJson(
+                        200,
+                        JSONObject()
+                            .put("request_id", capturedRequestId)
+                            .put("instance_id", "inst-mid")
+                            .put("status", "done")
+                            .put("progress_seq", 1)
+                            .put("progress", JSONObject().put("percent", 30.0))
+                            .put("result", JSONObject().put("resumed", true)),
+                    )
+                }
+                exchange.requestMethod == "POST" && exchange.requestURI.path == "/api/v1/firesky/desktop/jobs/$capturedRequestId/release" -> {
+                    exchange.replyJson(200, JSONObject().put("released", true))
+                }
+                else -> exchange.replyJson(404, JSONObject())
+            }
+        }) { baseUrl ->
+            val client = EngineClient(RemoteHttpTransport(baseUrl, "tok", pollDelayProvider = { 5L }))
+            client.start(JSONObject())
+            try {
+                val progressEvents = Collections.synchronizedList(mutableListOf<JSONObject>())
+                val result = runBlocking {
+                    withTimeout(10_000) {
+                        client.call("prepare", JSONObject()) { event -> progressEvents.add(event) }
+                    }
+                }
+                assertTrue(result.optBoolean("resumed"))
+                assertEquals("相同 progress_seq 不应重复触发回调", 1, progressEvents.size)
+            } finally {
+                client.stop()
             }
         }
     }

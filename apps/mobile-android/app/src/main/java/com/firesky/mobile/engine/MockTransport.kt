@@ -7,20 +7,13 @@ import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.cos
+import kotlin.math.exp
+import kotlin.math.sin
 
 /**
- * MockTransport：进程内模拟 desktop JSON-lines 服务，让 Android 骨架在 engine-mobile FFI
- * （MN2 产出 `libengine_mobile.so`）接入前即可编译、运行
- * hello → search/metadata → check → publications → prepare → forecast 全链路。
- *
- * 帧语义与真实引擎一致（engine/src/rpc.rs）：
- * - result / error / progress 三类下行帧；
- * - `cancel(request_id)` 打断在途任务并以 error 帧收尾（消息「任务已取消」）；
- * - 超 1 MiB 行回 `{"id":null,"type":"error","code":"invalid_request"}`；
- * - check→publications→prepare→forecast 会话令牌语义（session token）。
- *
- * 预置缓存样本（对齐 MN1 验收「allow_download:false + 预置缓存样本」）：
- * GFS/EC 数据标记已就绪，CAMS 缺失 → 演示「下载缺失数据」→ prepare 进度链。
+ * MockTransport：进程内模拟 desktop JSON-lines 服务，严格仅用于离线单元测试与 Compose UI 测试。
+ * 支持 point / regional / nowcast 全链路（hello → check → publications → prepare → forecast）。
  */
 class MockTransport : EngineTransport {
 
@@ -31,8 +24,8 @@ class MockTransport : EngineTransport {
     private val cancelledId = AtomicReference<String?>(null)
     private var worker: ExecutorService? = null
 
-    // 以下状态仅在 mock 引擎单线程（worker）内读写。
     private var sessionToken: String? = null
+    private var lastKind: String = "point"
     private var lastPayload: JSONObject? = null
     private var datasets: List<Triple<String, String, Boolean>> = emptyList()
     private var camsConfigured = false
@@ -47,6 +40,7 @@ class MockTransport : EngineTransport {
         stop()
         cancelledId.set(null)
         sessionToken = null
+        lastKind = "point"
         lastPayload = null
         camsConfigured = false
         retentionSettings = JSONObject()
@@ -70,7 +64,6 @@ class MockTransport : EngineTransport {
     override fun send(frame: String) {
         if (!running.get()) throw EngineError("引擎未连接，请检查设置。")
         if (frame.toByteArray(Charsets.UTF_8).size > EngineClient.MAX_LINE_BYTES) {
-            // 对齐 rpc.rs：超限行直接回 invalid_request，不中断服务。
             emitFrame(
                 JSONObject()
                     .put("id", JSONObject.NULL)
@@ -151,7 +144,7 @@ class MockTransport : EngineTransport {
         "task_history" -> taskHistory()
         "task_events" -> taskEvents()
         "task_forget" -> JSONObject().put("forgotten", true)
-        "result_restore" -> resultRestore()
+        "result_restore" -> resultRestore(params)
         "data_delete_preview" -> dataDeletePreview()
         "data_delete_execute" -> dataDeleteExecute()
         "terrain_inventory" -> terrainInventory(params)
@@ -162,24 +155,32 @@ class MockTransport : EngineTransport {
         else -> throw EngineError("unsupported method: $method")
     }
 
-    private fun hello(): JSONObject = JSONObject()
-        .put("protocol", 1)
-        .put("engine", "firesky-mock")
-        .put("migration_stage", "mock-transport")
-        .put(
-            "capabilities",
-            JSONArray(
-                listOf(
-                    "score_window", "check_desktop_data", "desktop_inventory",
-                    "desktop_publications", "desktop_prepare", "desktop_session", "location",
-                    "data_sync", "task_history", "task_events", "task_forget", "result_restore",
-                    "data_delete", "terrain_inventory", "terrain_download",
+    private fun hello(): JSONObject {
+        val regions = JSONArray()
+            .put(JSONObject().put("code", "china").put("label", "中国").put("bounds", JSONArray(listOf(73.0, 18.0, 136.0, 54.0))))
+            .put(JSONObject().put("code", "east-asia").put("label", "东亚").put("bounds", JSONArray(listOf(63.0, 12.0, 155.0, 60.0))))
+            .put(JSONObject().put("code", "southeast-asia").put("label", "东南亚").put("bounds", JSONArray(listOf(85.0, -20.0, 155.0, 35.0))))
+            .put(JSONObject().put("code", "europe").put("label", "欧洲").put("bounds", JSONArray(listOf(-25.0, 25.0, 50.0, 75.0))))
+        return JSONObject()
+            .put("protocol", 1)
+            .put("engine", "firesky-mock")
+            .put("workspace", "/mock/firesky")
+            .put("migration_stage", "mock-transport")
+            .put(
+                "capabilities",
+                JSONArray(
+                    listOf(
+                        "point", "regional", "nowcast",
+                        "score_window", "check_desktop_data", "desktop_inventory",
+                        "desktop_publications", "desktop_prepare", "desktop_session", "location",
+                        "data_sync", "task_history", "task_events", "task_forget", "result_restore",
+                        "data_delete", "terrain_inventory", "terrain_download",
+                    ),
                 ),
-            ),
-        )
-        // v1 范围：无区域预测（MOBILE_NATIVE_PLAN.md §3）。
-        .put("regions", JSONArray())
-        .put("cams_credentials", camsCredentials())
+            )
+            .put("regions", regions)
+            .put("cams_credentials", camsCredentials())
+    }
 
     private fun search(params: JSONObject): JSONObject {
         val query = params.optString("query", "").trim()
@@ -203,10 +204,12 @@ class MockTransport : EngineTransport {
     }
 
     private fun check(params: JSONObject): JSONObject {
-        if (params.optString("kind") != "point") {
-            throw EngineError("v1 仅支持单点预测（kind=point），区域预测已按蓝图排除。")
+        val kind = params.optString("kind", "point")
+        if (kind !in listOf("point", "regional", "nowcast")) {
+            throw EngineError("unsupported check kind: $kind")
         }
         val payload = params.optJSONObject("payload") ?: JSONObject()
+        lastKind = kind
         lastPayload = payload
         val token = UUID.randomUUID().toString()
         sessionToken = token
@@ -218,7 +221,7 @@ class MockTransport : EngineTransport {
         val pending = datasets.filter { !it.third }
         if (pending.isNotEmpty()) {
             for ((source, _, _) in pending) {
-                stage(requestId, source, "正在准备 $source 数据", steps = 8, delayMs = 90)
+                stage(requestId, source, "正在准备 $source 数据", steps = 6, delayMs = 40)
             }
         }
         datasets = datasets.map { it.copy(third = true) }
@@ -229,16 +232,33 @@ class MockTransport : EngineTransport {
         sessionToken ?: throw EngineError("会话不存在，请重新检查数据。")
         val payload = lastPayload ?: JSONObject()
         if (!datasets.all { it.third }) throw EngineError("本地数据不完整，请先准备数据。")
-        stage(requestId, "gfs", "正在计算 GFS", steps = 6, delayMs = 80)
-        stage(requestId, "ec", "正在计算 ECMWF", steps = 6, delayMs = 80)
-        stage(requestId, "assess", "正在评估霞光质量", steps = 4, delayMs = 80)
         val payloadDate = payload.optString("target_date").ifEmpty { java.time.LocalDate.now().toString() }
-        val gfs = pointReport(payloadDate, peakIndex = 1.82, peakMinute = 19 * 60 + 5, spread = 46.0)
-        val ec = pointReport(payloadDate, peakIndex = 1.58, peakMinute = 19 * 60 + 25, spread = 58.0)
-        return JSONObject()
-            .put("report", availabilityReport())
-            .put("model_results", JSONObject().put("gfs", gfs).put("ec", ec))
-            .put("model_errors", JSONObject())
+
+        return when (lastKind) {
+            "regional" -> {
+                val model = payload.optString("model_source", "gfs").takeIf { it == "gfs" || it == "ec" } ?: "gfs"
+                val regionCode = payload.optJSONArray("regions")?.optString(0)?.ifEmpty { null } ?: "china"
+                stage(requestId, model, "正在计算 ${model.uppercase()} 区域网格", steps = 5, delayMs = 40)
+                stage(requestId, "city_ranking", "正在汇总城市榜单", steps = 3, delayMs = 30)
+                regionalForecastResult(payloadDate, model, regionCode)
+            }
+            "nowcast" -> {
+                stage(requestId, "hsd", "正在解码 Himawari B07/B13/B15 通道", steps = 4, delayMs = 40)
+                stage(requestId, "nowcast", "正在追踪卫星云体平流与垂直先验", steps = 4, delayMs = 40)
+                nowcastReport(payloadDate, payload.optString("name", "杭州"), payload.optString("phenomenon", "dusk"))
+            }
+            else -> {
+                stage(requestId, "gfs", "正在计算 GFS", steps = 5, delayMs = 40)
+                stage(requestId, "ec", "正在计算 ECMWF", steps = 5, delayMs = 40)
+                stage(requestId, "assess", "正在评估霞光质量", steps = 3, delayMs = 30)
+                val gfs = pointReport(payloadDate, peakIndex = 1.82, peakMinute = 19 * 60 + 5, spread = 46.0)
+                val ec = pointReport(payloadDate, peakIndex = 1.58, peakMinute = 19 * 60 + 25, spread = 58.0)
+                JSONObject()
+                    .put("report", availabilityReport())
+                    .put("model_results", JSONObject().put("gfs", gfs).put("ec", ec))
+                    .put("model_errors", JSONObject())
+            }
+        }
     }
 
     private fun dismiss(): JSONObject {
@@ -247,26 +267,78 @@ class MockTransport : EngineTransport {
     }
 
     private fun taskHistory(): JSONObject {
-        val payload = JSONObject()
+        val pointPayload = JSONObject()
             .put("kind", "point")
-            .put("payload", JSONObject()
-                .put("name", "杭州").put("lat", 30.2741).put("lon", 120.1551)
-                .put("target_date", "2026-11-09").put("phenomenon", "dusk"))
+            .put(
+                "payload",
+                JSONObject()
+                    .put("name", "杭州").put("lat", 30.2741).put("lon", 120.1551)
+                    .put("target_date", "2026-11-09").put("phenomenon", "dusk"),
+            )
+        val regionalPayload = JSONObject()
+            .put("kind", "regional")
+            .put(
+                "payload",
+                JSONObject()
+                    .put("regions", JSONArray(listOf("china")))
+                    .put("model_source", "gfs")
+                    .put("target_date", "2026-11-10")
+                    .put("phenomenon", "dusk"),
+            )
+        val nowcastPayload = JSONObject()
+            .put("kind", "nowcast")
+            .put(
+                "payload",
+                JSONObject()
+                    .put("name", "杭州").put("lat", 30.2741).put("lon", 120.1551)
+                    .put("target_date", "2026-11-11").put("phenomenon", "dusk"),
+            )
         val running = JSONObject()
             .put("task_id", "b".repeat(64)).put("method", "prepare").put("status", "running")
             .put("created_at_utc", "2026-11-21T09:00:00.000Z")
             .put("updated_at_utc", "2026-11-21T09:01:00.000Z")
             .put("cancel_requested", false)
             .put("event_seq", 2).put("progress", JSONObject().put("percent", 40.0))
-            .put("retry_request", payload)
-        val done = JSONObject()
+            .put("retry_request", pointPayload)
+        val donePoint = JSONObject()
             .put("task_id", "a".repeat(64)).put("method", "forecast").put("status", "done")
             .put("created_at_utc", "2026-11-20T12:27:33.706Z")
             .put("updated_at_utc", "2026-11-20T12:27:42.600Z")
             .put("cancel_requested", false)
-            .put("event_seq", 5).put("retry_request", payload)
-            .put("result_ref", JSONObject().put("snapshot", JSONObject()
-                .put("contract", "firesky-result-snapshot-v1").put("sha256", "c".repeat(64))))
+            .put("event_seq", 5).put("retry_request", pointPayload)
+            .put(
+                "result_ref",
+                JSONObject().put(
+                    "snapshot",
+                    JSONObject().put("contract", "firesky-result-snapshot-v1").put("sha256", "c".repeat(64)),
+                ),
+            )
+        val doneRegional = JSONObject()
+            .put("task_id", "e".repeat(64)).put("method", "forecast").put("status", "done")
+            .put("created_at_utc", "2026-11-20T11:10:00.000Z")
+            .put("updated_at_utc", "2026-11-20T11:12:00.000Z")
+            .put("cancel_requested", false)
+            .put("event_seq", 4).put("retry_request", regionalPayload)
+            .put(
+                "result_ref",
+                JSONObject().put(
+                    "snapshot",
+                    JSONObject().put("contract", "firesky-result-snapshot-v1").put("sha256", "1".repeat(64)),
+                ),
+            )
+        val doneNowcast = JSONObject()
+            .put("task_id", "f".repeat(64)).put("method", "forecast").put("status", "done")
+            .put("created_at_utc", "2026-11-20T10:15:00.000Z")
+            .put("updated_at_utc", "2026-11-20T10:16:00.000Z")
+            .put("cancel_requested", false)
+            .put("event_seq", 3).put("retry_request", nowcastPayload)
+            .put(
+                "result_ref",
+                JSONObject().put(
+                    "snapshot",
+                    JSONObject().put("contract", "firesky-result-snapshot-v1").put("sha256", "2".repeat(64)),
+                ),
+            )
         val sync = JSONObject()
             .put("task_id", "d".repeat(64)).put("method", "data_sync").put("status", "done")
             .put("created_at_utc", "2026-11-20T04:00:00.000Z")
@@ -275,9 +347,9 @@ class MockTransport : EngineTransport {
         return JSONObject()
             .put("schema", "firesky-task-history-v1")
             .put("automatic_restart", false)
-            .put("total", 3)
+            .put("total", 5)
             .put("issues", JSONArray())
-            .put("tasks", JSONArray().put(running).put(done).put(sync))
+            .put("tasks", JSONArray().put(running).put(donePoint).put(doneRegional).put(doneNowcast).put(sync))
     }
 
     private fun taskEvents(): JSONObject {
@@ -292,17 +364,28 @@ class MockTransport : EngineTransport {
         }
         return JSONObject()
             .put("task_id", "a".repeat(64))
-            .put("events", JSONArray()
-                .put(event(1, "running", null, "", "预测计算已开始"))
-                .put(event(2, "progress", 30.0, "prepare", "正在准备 GFS 与 CAMS 数据"))
-                .put(event(3, "progress", 70.0, "prepare", "GFS 数据已就绪"))
-                .put(event(4, "progress", 90.0, "forecast", "预测计算进行中"))
-                .put(event(5, "done", null, "", "预测完成")))
+            .put(
+                "events",
+                JSONArray()
+                    .put(event(1, "running", null, "", "预测计算已开始"))
+                    .put(event(2, "progress", 30.0, "prepare", "正在准备 GFS 与 CAMS 数据"))
+                    .put(event(3, "progress", 70.0, "prepare", "GFS 数据已就绪"))
+                    .put(event(4, "progress", 90.0, "forecast", "预测计算进行中"))
+                    .put(event(5, "done", null, "", "预测完成")),
+            )
             .put("next_seq", 6).put("truncated", false)
     }
 
-    private fun resultRestore(): JSONObject = JSONObject()
-        .put("model_results", JSONObject().put("gfs", JSONObject().put("score", 0.8)))
+    private fun resultRestore(params: JSONObject): JSONObject = when (params.optString("task_id")) {
+        "e".repeat(64) -> regionalForecastResult("2026-11-10", "gfs", "china")
+        "f".repeat(64) -> nowcastReport("2026-11-11", "杭州", "dusk")
+        else -> JSONObject().put(
+            "model_results",
+            JSONObject()
+                .put("gfs", pointReport("2026-11-09", peakIndex = 1.75, peakMinute = 18 * 60 + 50, spread = 44.0))
+                .put("ec", pointReport("2026-11-09", peakIndex = 1.52, peakMinute = 19 * 60 + 10, spread = 54.0)),
+        )
+    }
 
     private fun dataDeletePreview(): JSONObject = JSONObject()
         .put("contract", "rust-data-delete-preview-v1")
@@ -320,41 +403,55 @@ class MockTransport : EngineTransport {
         val result = JSONObject()
             .put("contract", "rust-terrain-inventory-v1")
             .put("tile_count", 3)
-            .put("tiles", JSONArray()
-                .put(JSONObject().put("name", "N30E119").put("bytes", 25_934_402))
-                .put(JSONObject().put("name", "N30E120").put("bytes", 25_934_402))
-                .put(JSONObject().put("name", "N31E120").put("bytes", 25_934_402)))
+            .put(
+                "tiles",
+                JSONArray()
+                    .put(JSONObject().put("name", "N30E119").put("bytes", 25_934_402))
+                    .put(JSONObject().put("name", "N30E120").put("bytes", 25_934_402))
+                    .put(JSONObject().put("name", "N31E120").put("bytes", 25_934_402)),
+            )
             .put("coverage_ok", true)
-            .put("tile", JSONObject().put("name", "N30E120").put("exists", true).put("bytes", 25_934_402)
-                .put("lat_range", JSONArray(listOf(30.0, 31.0))).put("lon_range", JSONArray(listOf(120.0, 121.0))))
+            .put(
+                "tile",
+                JSONObject().put("name", "N30E120").put("exists", true).put("bytes", 25_934_402)
+                    .put("lat_range", JSONArray(listOf(30.0, 31.0))).put("lon_range", JSONArray(listOf(120.0, 121.0))),
+            )
         if (params.optBoolean("estimate_global", false)) {
-            // 与真引擎同口径：bounds（缺省全球）→ 候选数 + 已有 + 估算体积。
             val bounds = params.optJSONObject("bounds") ?: JSONObject()
                 .put("south", -56).put("north", 59).put("west", -180).put("east", 179)
             val candidates = (bounds.optInt("north", 0) - bounds.optInt("south", 0) + 1) *
                 (bounds.optInt("east", 0) - bounds.optInt("west", 0) + 1)
-            result.put("global", JSONObject()
-                .put("candidates", candidates)
-                .put("existing", 2)
-                .put("estimated_bytes", candidates * 6_000_000L)
-                .put("estimated_gb", candidates * 0.006)
-                .put("bounds", bounds))
+            result.put(
+                "global",
+                JSONObject()
+                    .put("candidates", candidates)
+                    .put("existing", 2)
+                    .put("estimated_bytes", candidates * 6_000_000L)
+                    .put("estimated_gb", candidates * 0.006)
+                    .put("bounds", bounds),
+            )
         }
         return result
     }
 
-    /** mock 批量下载：模拟 4 块瓦片进度后完成（真下载走 JniTransport 真引擎）。 */
     private fun terrainDownload(requestId: String): JSONObject {
         val total = 4
         for (index in 1..total) {
-            if (index > 1) Thread.sleep(400)
-            emitFrame(JSONObject().put("id", requestId).put("type", "progress").put("event",
-                JSONObject().put("terrain", JSONObject()
-                    .put("stage", "global").put("candidates", total)
-                    .put("downloaded", index).put("absent", 0).put("failed", 0)
-                    .put("existing", 0).put("received_bytes", index * 10_000_000L)
-                    .put("percent", index * 100.0 / total)
-                    .put("current_tile", "N30E11$index"))))
+            if (index > 1) Thread.sleep(150)
+            emitFrame(
+                JSONObject().put("id", requestId).put("type", "progress").put(
+                    "event",
+                    JSONObject().put(
+                        "terrain",
+                        JSONObject()
+                            .put("stage", "global").put("candidates", total)
+                            .put("downloaded", index).put("absent", 0).put("failed", 0)
+                            .put("existing", 0).put("received_bytes", index * 10_000_000L)
+                            .put("percent", index * 100.0 / total)
+                            .put("current_tile", "N30E11$index"),
+                    ),
+                ),
+            )
         }
         return JSONObject()
             .put("contract", "rust-terrain-download-v1")
@@ -376,16 +473,16 @@ class MockTransport : EngineTransport {
                     .put("cycles", JSONObject(cycles.toString()))
                     .put("total_file_count", if (ready) 84 else 0)
                     .put("total_storage_mb", if (ready) 2048.0 else 0.0)
-                    .put("path", "/data/data/com.firesky.mobile/files/cache/$source"),
+                    .put("path", "/mock/cache/$source"),
             )
         }
         val categories = JSONArray()
-            .put(JSONObject().put("category", "point-forecasts").put("path", "/data/data/com.firesky.mobile/files/cache/point-forecasts").put("file_count", 4).put("bytes", 2_400_000L))
-            .put(JSONObject().put("category", "regional-forecasts").put("path", "/data/data/com.firesky.mobile/files/cache/regional-forecasts").put("file_count", 0).put("bytes", 0L))
-            .put(JSONObject().put("category", "map-frames").put("path", "/data/data/com.firesky.mobile/files/cache/map-frames").put("file_count", 0).put("bytes", 0L))
-            .put(JSONObject().put("category", "reports").put("path", "/data/data/com.firesky.mobile/files/reports").put("file_count", 2).put("bytes", 480_000L))
-            .put(JSONObject().put("category", "satellite").put("path", "/data/data/com.firesky.mobile/files/cache/himawari-hsd").put("file_count", 0).put("bytes", 0L))
-            .put(JSONObject().put("category", "srtm").put("path", "/data/data/com.firesky.mobile/files/cache/srtm").put("file_count", 3).put("bytes", 77_803_206L))
+            .put(JSONObject().put("category", "point-forecasts").put("path", "/mock/cache/point-forecasts").put("file_count", 4).put("bytes", 2_400_000L))
+            .put(JSONObject().put("category", "regional-forecasts").put("path", "/mock/cache/regional-forecasts").put("file_count", 2).put("bytes", 18_500_000L))
+            .put(JSONObject().put("category", "map-frames").put("path", "/mock/cache/map-frames").put("file_count", 1).put("bytes", 4_200_000L))
+            .put(JSONObject().put("category", "reports").put("path", "/mock/reports").put("file_count", 3).put("bytes", 720_000L))
+            .put(JSONObject().put("category", "satellite").put("path", "/mock/cache/himawari-hsd").put("file_count", 2).put("bytes", 34_000_000L))
+            .put(JSONObject().put("category", "srtm").put("path", "/mock/cache/srtm").put("file_count", 3).put("bytes", 77_803_206L))
         return JSONObject()
             .put("datasets", rows)
             .put("categories", JSONObject().put("contract", "firesky-data-categories-v1").put("categories", categories))
@@ -453,10 +550,7 @@ class MockTransport : EngineTransport {
     private fun camsCredentials(): JSONObject = JSONObject()
         .put("configured", camsConfigured)
         .put("can_save", true)
-        .put(
-            "state",
-            if (camsConfigured) "configured" else "unconfigured",
-        )
+        .put("state", if (camsConfigured) "configured" else "unconfigured")
 
     private fun saveCamsKey(params: JSONObject): JSONObject {
         val key = params.optString("key", "").trim()
@@ -467,7 +561,6 @@ class MockTransport : EngineTransport {
 
     // ---------------------------------------------------------------- 合成报告
 
-    /** 数据可用性报告（对应 Store.applyReport 读取的 report 结构）。 */
     private fun availabilityReport(): JSONObject {
         val rows = JSONArray()
         for ((source, title, ready) in datasets) {
@@ -479,19 +572,234 @@ class MockTransport : EngineTransport {
                     .put("verified", true)
                     .put("is_latest", true)
                     .put("missing_count", 0)
-                    .put(
-                        "detail",
-                        if (ready) "本地预置缓存样本（模拟传输）" else "需下载本次数据（模拟传输）",
-                    ),
+                    .put("detail", if (ready) "服务端已就绪（模拟传输）" else "需准备本次数据（模拟传输）"),
             )
         }
         return JSONObject().put("ready", datasets.all { it.third }).put("datasets", rows)
     }
 
-    /**
-     * 合成单点报告：以目标日期傍晚为窗生成正弦质量曲线，结构与桌面 point 预测
-     * 的 report 键一致（ForecastComparison.swift / Workbench.swift metricSpec 消费）。
-     */
+    private fun regionalForecastResult(date: String, model: String, regionCode: String): JSONObject {
+        val points = JSONArray()
+        var lat = 20.0
+        while (lat <= 50.0) {
+            var lon = 76.0
+            while (lon <= 132.0) {
+                val wave = 0.95 + 0.72 * sin((lat - 26.0) * 0.17) * cos((lon - 114.0) * 0.08) +
+                    0.35 * exp(-((lat - 31.0) * (lat - 31.0) + (lon - 120.0) * (lon - 120.0)) / 95.0)
+                val q = wave.coerceIn(0.15, 2.38)
+                points.put(
+                    JSONObject()
+                        .put("lat", lat)
+                        .put("lon", lon)
+                        .put("peak_quality_index", q)
+                        .put("quality_index", (q * 0.92).coerceAtLeast(0.1))
+                        .put("peak_quality_level", qualityLevel(q))
+                        .put("quality_level", qualityLevel(q))
+                        .put("best_time_local", "${date}T17:45:00")
+                        .put("confidence_score", 0.78)
+                        .put("dominant_burnable_pressure_family", if (q >= 1.2) "high" else "middle")
+                        .put("timezone_name", "Asia/Shanghai")
+                        .put(
+                            "quality_components",
+                            JSONObject()
+                                .put("burnable_cloud_coverage_effective", 0.58)
+                                .put("duration_minutes", 36.0)
+                                .put("quality_aod550", 0.24)
+                                .put("incoming_aod_adjustment", 0.04)
+                                .put("observer_aod_adjustment", 0.02),
+                        ),
+                )
+                lon += 2.0
+            }
+            lat += 2.0
+        }
+
+        val cities = listOf(
+            Triple("杭州", 30.2741 to 120.1551, 2.18),
+            Triple("上海", 31.2304 to 121.4737, 2.04),
+            Triple("南京", 32.0603 to 118.7969, 1.92),
+            Triple("厦门", 24.4798 to 118.0894, 1.84),
+            Triple("成都", 30.5728 to 104.0668, 1.71),
+            Triple("北京", 39.9042 to 116.4074, 1.56),
+            Triple("青岛", 36.0671 to 120.3826, 1.48),
+            Triple("昆明", 25.0389 to 102.7183, 1.35),
+        )
+        val cityItems = JSONArray()
+        for ((name, coords, score) in cities) {
+            cityItems.put(
+                JSONObject()
+                    .put("name", name)
+                    .put("lat", coords.first)
+                    .put("lon", coords.second)
+                    .put("peak_quality_index", score)
+                    .put("quality_index", score * 0.94)
+                    .put("peak_quality_level", qualityLevel(score))
+                    .put("quality_level", qualityLevel(score))
+                    .put("best_time_local", "${date}T17:48:00")
+                    .put("confidence_score", 0.81)
+                    .put("dominant_burnable_pressure_family", "high")
+                    .put("timezone_name", "Asia/Shanghai")
+                    .put(
+                        "quality_components",
+                        JSONObject()
+                            .put("burnable_cloud_coverage_effective", 0.64)
+                            .put("duration_minutes", 40.0)
+                            .put("quality_aod550", 0.22)
+                            .put("incoming_aod_adjustment", 0.05)
+                            .put("observer_aod_adjustment", 0.03),
+                    ),
+            )
+        }
+
+        val report = JSONObject()
+            .put("scope", "regional")
+            .put("regions", JSONArray(listOf(regionCode)))
+            .put("target_date", date)
+            .put("model_source", model)
+            .put("cycle_time_utc", "${date}T00:00:00Z")
+            .put("precision", JSONObject().put("point_spacing_deg", 2.0).put("model_grid_spacing_deg", 0.25))
+            .put("point_count", points.length())
+            .put("success_count", points.length())
+            .put("error_count", 0)
+            .put("points", points)
+            .put("errors", JSONArray())
+            .put("timing", JSONObject().put("prefetch_seconds", 1.4))
+            .put(
+                "city_ranking",
+                JSONObject()
+                    .put("contract", "rust-regional-city-ranking-v1")
+                    .put("status", "available")
+                    .put("source", "china-city-catalog")
+                    .put("model_source", model)
+                    .put("items", cityItems),
+            )
+
+        return JSONObject()
+            .put("report", availabilityReport())
+            .put("model_results", JSONObject().put(model, report))
+            .put("model_errors", JSONObject())
+    }
+
+    private fun nowcastReport(date: String, name: String, phenomenon: String): JSONObject {
+        val steps = JSONArray()
+        var bestIndex = 0.0
+        var bestTime = "${date}T17:55:00"
+        for (minute in 17 * 60..19 * 60 step 5) {
+            val delta = (minute - (17 * 60 + 55)).toDouble()
+            val quality = 0.22 + 1.66 * exp(-(delta * delta) / (2 * 32.0 * 32.0))
+            val solar = 7.0 * cos(delta / 160.0 * kotlin.math.PI / 2) - 1.2
+            val time = "%sT%02d:%02d:00".format(date, minute / 60, minute % 60)
+            if (quality > bestIndex) {
+                bestIndex = quality
+                bestTime = time
+            }
+            steps.put(
+                JSONObject()
+                    .put("valid_time_local", time)
+                    .put("valid", true)
+                    .put("instant_quality_index", quality)
+                    .put("instant_quality_level", qualityLevel(quality))
+                    .put("solar_elevation_deg", solar)
+                    .put("solar_azimuth_deg", 251.2),
+            )
+        }
+        val profileSamples = JSONArray()
+        for (dist in listOf(40.0, 120.0, 200.0, 320.0)) {
+            val levels = JSONArray()
+                .put(JSONObject().put("pressure_hpa", 300).put("height_m", 9100.0).put("status", "retrieved").put("hsd_posterior_percent", 72.0))
+                .put(JSONObject().put("pressure_hpa", 500).put("height_m", 5600.0).put("status", "retrieved").put("hsd_posterior_percent", 38.0))
+                .put(JSONObject().put("pressure_hpa", 700).put("height_m", 3000.0).put("status", "retrieved").put("hsd_posterior_percent", 12.0))
+            profileSamples.put(
+                JSONObject()
+                    .put("distance_km", dist)
+                    .put("bearing_deg", 251.2)
+                    .put("status", "retrieved")
+                    .put("levels", levels),
+            )
+        }
+        val nowcastObs = JSONObject()
+            .put("source", "NOAA Himawari-9 HSD")
+            .put("image_channel", "B07/B13/B15")
+            .put("image_valid_time_utc", "${date}T09:20:00Z")
+            .put("near_cloud_ratio", 0.34)
+            .put("far_cloud_ratio", 0.52)
+            .put("cloud_blanket_score", 0.41)
+            .put("cloud_texture_score", 0.68)
+            .put("horizon_clearance_score", 0.79)
+            .put("horizon_gap_score", 0.74)
+            .put("overcast_shadow_factor", 0.16)
+            .put("lagrangian_b13_trend_k_per_hour", -1.85)
+            .put("satellite_low_cloud_state", "clear")
+            .put("cloud_type_label", "")
+            .put("satellite_motion_quality", "strong")
+            .put("geometric_path_blocking_risk", 0.21)
+            .put("geometric_path_samples", 18)
+            .put("calibrated_sample_coverage_ratio", 0.94)
+            .put("confidence", 0.82)
+            .put("effective_convective_risk", 0.08)
+            .put("effective_path_blocking_risk", 0.19)
+            .put("convective_score_ceiling", 0.92)
+            .put("motion_correlation", 0.86)
+            .put("satellite_motion_age_minutes", 10.0)
+            .put("satellite_advection_horizon_hours", 1.25)
+            .put("radar_source", "CMA-Mosaic")
+            .put("radar_valid_time_utc", "${date}T09:18:00Z")
+            .put("radar_age_minutes", 12.0)
+            .put("radar_max_dbz", 14.0)
+            .put("radar_local_precip_ratio", 0.0)
+            .put("radar_path_precip_ratio", 0.02)
+            .put("radar_reliability_score", 0.91)
+            .put(
+                "satellite_vertical_profile",
+                JSONObject()
+                    .put("status", "available")
+                    .put("valid_time_utc", "${date}T09:20:00Z")
+                    .put("sample_count", 4)
+                    .put("usable_sample_count", 4)
+                    .put("unknown_sample_count", 0)
+                    .put("coverage", 0.96)
+                    .put("pressure_levels_hpa", JSONArray(listOf(300, 500, 700)))
+                    .put("bands", JSONArray(listOf("B07", "B13", "B15")))
+                    .put("samples", profileSamples),
+            )
+
+        return JSONObject()
+            .put("contract", "rust-nowcast-runtime-v1")
+            .put("observer_name", name)
+            .put("phenomenon", phenomenon)
+            .put("target_date", date)
+            .put("model_source", "satellite")
+            .put("forecast_mode", "nowcast")
+            .put("compute_backend", "cpu")
+            .put("cycle_time_utc", "${date}T09:20:00Z")
+            .put("peak_quality_index", bestIndex)
+            .put("peak_quality_level", qualityLevel(bestIndex))
+            .put("quality_index", bestIndex * 0.93)
+            .put("quality_level", qualityLevel(bestIndex * 0.93))
+            .put("best_time_local", bestTime)
+            .put("duration_status", "estimated")
+            .put("duration_minutes", 35.0)
+            .put("confidence_score", 0.82)
+            .put("selected_regime", "high-canvas")
+            .put("timing_window", JSONObject().put("start_time_local", "${date}T17:35:00").put("end_time_local", "${date}T18:10:00"))
+            .put("aerosol", JSONObject().put("aod550", 0.24).put("source", "CAMS").put("quality", "cams"))
+            .put(
+                "quality_components",
+                JSONObject()
+                    .put("coverage_base_score", 0.76)
+                    .put("raw_quality_index", 1.79)
+                    .put("forward_burnable_cloud_ratio_peak", 0.56)
+                    .put("forward_burnable_cloud_load_effective", 0.62)
+                    .put("solar_incoming_block_risk_mean", 0.18)
+                    .put("quality_aod550", 0.24),
+            )
+            .put("map_capability", JSONObject().put("available", false).put("reason", "native-nowcast-map-publication-not-requested"))
+            .put("nowcast", nowcastObs)
+            .put("cross_section", mockCrossSection(bestTime))
+            .put("steps", steps)
+            .put("summary", JSONArray(listOf("Himawari 卫星实况：高空卷云适中、地平线通透度良好。")))
+    }
+
     private fun pointReport(date: String, peakIndex: Double, peakMinute: Int, spread: Double): JSONObject {
         val steps = JSONArray()
         var bestIndex = 0.0
@@ -500,8 +808,8 @@ class MockTransport : EngineTransport {
         var windowEnd = ""
         for (minute in 17 * 60..20 * 60 + 30 step 5) {
             val delta = (minute - peakMinute).toDouble()
-            val quality = 0.12 + peakIndex * kotlin.math.exp(-(delta * delta) / (2 * spread * spread))
-            val solar = 8.0 * kotlin.math.cos(delta / 190.0 * kotlin.math.PI / 2) - 1.0
+            val quality = 0.12 + peakIndex * exp(-(delta * delta) / (2 * spread * spread))
+            val solar = 8.0 * cos(delta / 190.0 * kotlin.math.PI / 2) - 1.0
             val time = "%sT%02d:%02d:00".format(date, minute / 60, minute % 60)
             val valid = quality > 0.15
             if (valid && quality > bestIndex) {
@@ -562,10 +870,7 @@ class MockTransport : EngineTransport {
                     ),
             )
             .put("cross_section", mockCrossSection(bestTime))
-            .put(
-                "aerosol",
-                JSONObject().put("aod550", 0.28).put("source", "CAMS").put("quality", "cams"),
-            )
+            .put("aerosol", JSONObject().put("aod550", 0.28).put("source", "CAMS").put("quality", "cams"))
             .put("summary", "模拟结果：傍晚高云量适中，霞光窗口集中，建议提前 15 分钟到场。")
             .put("cycle_time_utc", "2026-11-12T12:00:00Z")
             .put("steps", steps)
@@ -641,7 +946,6 @@ class MockTransport : EngineTransport {
 
     // ---------------------------------------------------------------- 进度链
 
-    /** 分阶段发 progress 帧（对应桌面 progress 三链语义），可被 cancel 打断。 */
     private fun stage(requestId: String, source: String, label: String, steps: Int, delayMs: Long) {
         for (step in 1..steps) {
             checkCancelled(requestId)
@@ -662,10 +966,7 @@ class MockTransport : EngineTransport {
         JSONObject()
             .put("id", requestId)
             .put("type", "progress")
-            .put(
-                "event",
-                JSONObject().put("percent", percent).put("source", source).put("message", message),
-            )
+            .put("event", JSONObject().put("percent", percent).put("source", source).put("message", message))
 
     private fun checkCancelled(requestId: String) {
         if (cancelledId.compareAndSet(requestId, null)) throw EngineError("任务已取消")

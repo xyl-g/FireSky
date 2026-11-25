@@ -6,129 +6,6 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
-// ---------------------------------------------------------------------------
-// MN2 真引擎接线（任务书 T1 §5.2）：
-//   cargoAndroidEngine → linkEngineJni → jniLibs/arm64-v8a/libengine_mobile.so
-//   copyEccodesDefinitions → assets/eccodes/definitions（JniTransport 解包到 filesDir）
-// 模块目录 apps/mobile-android/app 的 ../../../ = 仓库根；仓库根与模块内双
-// settings 入口通用。生成物（jniLibs/assets）已由根 .gitignore 排除。
-// ---------------------------------------------------------------------------
-val repoRoot = projectDir.resolve("../../..").canonicalFile
-val engineMobileDir = repoRoot.resolve("engine-mobile")
-val crossLibDir = repoRoot.resolve(".cache/mm0-cross/build-android/lib")
-val jniLibDir = projectDir.resolve("src/main/jniLibs/arm64-v8a")
-val definitionsAssetDir = projectDir.resolve("src/main/assets/eccodes/definitions")
-
-// NDK 路径：local.properties 的 ndk.dir（T0 已写好，双入口各一份），
-// 其次 ANDROID_NDK_ROOT 环境变量，最后 Homebrew 默认 symlink。
-val ndkDir: File = run {
-    val props = Properties()
-    val localProps = rootProject.file("local.properties")
-    if (localProps.isFile) localProps.inputStream().use { props.load(it) }
-    val fromProps = props.getProperty("ndk.dir")
-    val fromEnv = System.getenv("ANDROID_NDK_ROOT")
-    File(fromProps ?: fromEnv ?: "/opt/homebrew/share/android-ndk")
-}
-
-// brew ecCodes definitions 完整树（与桌面内容一致；131MB，裁剪是后续优化）。
-val hostDefinitionsDir = File(
-    System.getenv("FIRESKY_ECCODES_DEFINITIONS") ?: "/opt/homebrew/share/eccodes/definitions",
-)
-
-// NDK 工具链 host 标签按平台派生（v1.9.7 CI 走查：仓库 .cargo/config.toml
-// 不得携带机器绝对路径——darwin NDK 路径会让 ubuntu runner 的 cc-rs 直接
-// 失败；改为任务内按本机 NDK 注入 CC/AR/linker，任何机器均可用）。
-val ndkHostTag = run {
-    val os = System.getProperty("os.name").lowercase()
-    when {
-        os.contains("windows") -> "windows-x86_64"
-        os.contains("mac") || os.contains("darwin") -> "darwin-x86_64"
-        else -> "linux-x86_64"
-    }
-}
-val ndkClang: String = ndkDir
-    .resolve("toolchains/llvm/prebuilt/$ndkHostTag/bin/aarch64-linux-android26-clang")
-    .absolutePath
-val ndkAr: String = ndkDir
-    .resolve("toolchains/llvm/prebuilt/$ndkHostTag/bin/llvm-ar")
-    .absolutePath
-
-val cargoAndroidEngine = tasks.register<Exec>("cargoAndroidEngine") {
-    group = "firesky"
-    description = "交叉编译 engine-mobile 静态库（aarch64-linux-android，release）"
-    workingDir = engineMobileDir
-    environment("MM0_ECCODES_ANDROID_LIB", crossLibDir.absolutePath)
-    // cc-rs 与 cargo linker 均按本机 NDK 注入（不依赖仓库级绝对路径）。
-    environment("CC_aarch64_linux_android", ndkClang)
-    environment("AR_aarch64_linux_android", ndkAr)
-    environment("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", ndkClang)
-    // rustup 优先于 Homebrew rust（MM0 坑 11）；全局 ~/.cargo/config.toml 已钉扎 rustc。
-    environment(
-        "PATH",
-        "${System.getProperty("user.home")}/.cargo/bin${File.pathSeparator}${System.getenv("PATH")}",
-    )
-    commandLine("cargo", "build", "--release", "--target", "aarch64-linux-android")
-    doFirst {
-        if (!crossLibDir.resolve("libeccodes.a").isFile || !crossLibDir.resolve("libaec.a").isFile) {
-            throw GradleException(
-                "缺少交叉编译产物 ${crossLibDir}/lib{eccodes,aec}.a——先运行 bash .cache/mm0-cross/build-all.sh",
-            )
-        }
-    }
-}
-
-val linkEngineJni = tasks.register<Exec>("linkEngineJni") {
-    group = "firesky"
-    description = "把 JNI shim + engine-mobile/ecCodes/libaec 静态库链接为 libengine_mobile.so"
-    dependsOn(cargoAndroidEngine)
-    workingDir = repoRoot
-    // host 标签按平台派生（v1.9.8 走查：硬编码 darwin-x86_64 使 ubuntu
-    // runner 的 linkEngineJni 直接失败）；Apple Silicon 上 darwin-aarch64
-    // 存在则优先，否则回退按 OS 派生的标签。
-    val prebuilt = ndkDir.resolve("toolchains/llvm/prebuilt")
-    val hostTag = when {
-        prebuilt.resolve("darwin-aarch64").isDirectory -> "darwin-aarch64"
-        else -> ndkHostTag
-    }
-    val clang = prebuilt.resolve("$hostTag/bin/aarch64-linux-android26-clang")
-    val staticLib = engineMobileDir.resolve("target/aarch64-linux-android/release/libengine_mobile.a")
-    val output = jniLibDir.resolve("libengine_mobile.so")
-    commandLine(
-        clang.absolutePath, "-shared", "-O2",
-        "-I", engineMobileDir.resolve("include").absolutePath,
-        "-o", output.absolutePath,
-        engineMobileDir.resolve("jni/fsm_jni.c").absolutePath,
-        // 三个 .a 用 --start-group 包住，避免循环依赖导致的未解析符号。
-        "-Wl,--start-group",
-        staticLib.absolutePath,
-        crossLibDir.resolve("libeccodes.a").absolutePath,
-        crossLibDir.resolve("libaec.a").absolutePath,
-        "-Wl,--end-group",
-        "-lc++_static", "-lc++abi", "-lm", "-ldl", "-llog",
-        "-Wl,-z,max-page-size=16384",
-    )
-    doFirst {
-        jniLibDir.mkdirs()
-        if (!staticLib.isFile) {
-            throw GradleException("缺少 $staticLib——cargoAndroidEngine 未产出静态库")
-        }
-    }
-}
-
-val copyEccodesDefinitions = tasks.register<Copy>("copyEccodesDefinitions") {
-    group = "firesky"
-    description = "复制宿主 ecCodes definitions 完整树到 APK assets（生成物不入库）"
-    from(hostDefinitionsDir)
-    into(definitionsAssetDir)
-    doFirst {
-        if (!hostDefinitionsDir.isDirectory) {
-            throw GradleException(
-                "宿主缺少 ecCodes definitions（brew install eccodes 或设 FIRESKY_ECCODES_DEFINITIONS）",
-            )
-        }
-    }
-}
-
 // release 签名：keystore 与口令在仓库外 ~/.firesky-release/（永不入库）。
 // 后续更新必须使用同一 keystore，妥善备份。
 val releaseKeystorePropsFile = File(System.getProperty("user.home"), ".firesky-release/keystore.properties")
@@ -145,13 +22,9 @@ android {
         applicationId = "com.firesky.mobile"
         minSdk = 26
         targetSdk = 34
-        versionCode = 24
-        versionName = "1.10.0"
+        versionCode = 25
+        versionName = "1.10.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
-        // 真引擎 .so 仅 arm64-v8a（AVD firesky34 同架构）。
-        ndk {
-            abiFilters += "arm64-v8a"
-        }
     }
 
     signingConfigs {
@@ -187,28 +60,6 @@ android {
     buildFeatures {
         compose = true
     }
-
-    packaging {
-        jniLibs {
-            // 引擎 derived cache 的 cache_identity 会对解码器模块做
-            // dladdr → canonicalize → 读文件哈希（engine/src/grib.rs::loaded_module_path）。
-            // AGP 默认 useLegacyPackaging=false 时 .so 直接从 base.apk 内加载，
-            // dladdr 返回 "base.apk!/lib/arm64-v8a/libengine_mobile.so" 这类虚拟路径，
-            // canonicalize 报 ENOENT → forecast 两模型齐失败（MN2 实测 strace 定位）。
-            // 置 true 让安装时把 .so 提取为 lib/arm64 下的实体文件（与 iOS bundle 同构）。
-            useLegacyPackaging = true
-        }
-    }
-}
-
-// 真引擎接线挂到 preBuild：assembleDebug/connectedAndroidTest 前自动
-// cargo → 链接 .so → 复制 definitions assets。
-// FIRESKY_SKIP_NATIVE=1（CI 单元测试）跳过该链：无 NDK/交叉库环境跑
-// Kotlin 编译与 Mock 链单元测试，不产出带真引擎的 APK。
-if (System.getenv("FIRESKY_SKIP_NATIVE") != "1") {
-    tasks.named("preBuild") {
-        dependsOn(linkEngineJni, copyEccodesDefinitions)
-    }
 }
 
 tasks.matching { it.name == "assembleRelease" }.configureEach {
@@ -225,6 +76,7 @@ dependencies {
     // Compose BOM（2024.06.00 → compose 1.6.8 / material3 1.2.1，均要求 compileSdk 34，与本工程对齐）
     val composeBom = platform("androidx.compose:compose-bom:2024.06.00")
     implementation(composeBom)
+    androidTestImplementation(composeBom)
 
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-compose:1.9.0")
@@ -240,13 +92,15 @@ dependencies {
     implementation("androidx.compose.material:material-icons-extended")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
 
-    // instrumented 全链测试（RealEngineChainTest，任务书 T1 §5.2/5.4）
+    // instrumented UI 测试（Compose UI Test）
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.test.ext:junit:1.1.5")
     androidTestImplementation("androidx.test:runner:1.5.2")
     androidTestImplementation("androidx.test:rules:1.5.0")
 
-    // JVM 单测：mock 通道回归（org.json 在 unit test 需真实实现替换 android.jar 桩）
+    // JVM 单测：mock 与远程 HTTP/SSE 通道回归（org.json 在 unit test 需真实实现替换 android.jar 桩）
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")

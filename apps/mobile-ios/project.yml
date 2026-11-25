@@ -7,8 +7,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.10.0"
-    CURRENT_PROJECT_VERSION: "23"
+    MARKETING_VERSION: "1.10.1"
+    CURRENT_PROJECT_VERSION: "24"
     CODE_SIGN_STYLE: Automatic
     CODE_SIGNING_ALLOWED: "NO"
 targets:
@@ -17,31 +17,10 @@ targets:
     platform: iOS
     sources:
       - path: FireSkyMobile
-      # engine-mobile C 契约镜像（Native/fsmobile.h）+ Clang module map（FSMobileKit）：
-      # Swift 经 SWIFT_INCLUDE_PATHS 直接 import，无需独立静态库目标（原 fsmobile_stub.c
-      # 占位桩已删除）。实现符号来自 engine-mobile 的 libengine_mobile.a——先运行
-      # scripts/build-engine.sh 构建两个切片（device + simulator），再 xcodegen + 构建。
-      - path: Native
-        buildPhase: none
-      # ecCodes definitions/samples bundle（scripts/build-engine.sh staging 生成，
-      # 已 gitignore）。type: folder = 蓝色文件夹引用，整目录按原样拷入 Bundle 根
-      # → Bundle.main.resourceURL/eccodes/definitions（FSMobileTransport 读取）。
-      - path: Resources/eccodes
-        type: folder
-        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: cn.firesky.mobile
         TARGETED_DEVICE_FAMILY: "1,2"
-        SWIFT_INCLUDE_PATHS: $(SRCROOT)/Native
-        # 显式按 SDK 指到静态库文件，而非 -lengine_mobile：cargo 同目录还产出
-        # libengine_mobile.dylib（crate-type 含 cdylib），ld 的 -l 搜索动态库优先，
-        # 会静默改成动态链接（dylib 未打进 App，运行即崩）。产物由
-        # scripts/build-engine.sh 构建（含 Apple ranlib 重建符号索引的必做步骤）。
-        # -lc++：libeccodes.a 含 C++ 段（MM0 坑 5）。cargo 的 -lc++ rustflags 只作用
-        # 于 rustc 自身链接；App 最终链接走 Xcode ld，必须在此显式补 C++ 运行时。
-        OTHER_LDFLAGS[sdk=iphoneos*]: $(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios/release/libengine_mobile.a -lc++
-        OTHER_LDFLAGS[sdk=iphonesimulator*]: $(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios-sim/release/libengine_mobile.a -lc++
     info:
       path: FireSkyMobile/Info.plist
       properties:
@@ -79,7 +58,6 @@ targets:
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: $(BUILT_PRODUCTS_DIR)/FireSkyMobile.app/FireSkyMobile
         BUNDLE_LOADER: $(TEST_HOST)
-        SWIFT_INCLUDE_PATHS: $(SRCROOT)/Native
   FireSkyMobileUITests:
     type: bundle.ui-testing
     platform: iOS

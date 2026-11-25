@@ -22,7 +22,7 @@ struct SettingsView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: 18) {
                             if store.settingsCategory == "通用" {
-                                generalSection
+                                generalSection(scrollProxy: proxy)
                             } else if store.settingsCategory == "数据" {
                                 dataSection(scrollProxy: proxy)
                             } else {
@@ -91,9 +91,9 @@ struct SettingsView: View {
 
     // MARK: - 通用
 
-    private var generalSection: some View {
+    private func generalSection(scrollProxy: ScrollViewProxy) -> some View {
         VStack(alignment: .leading, spacing: 18) {
-            runtimeSummaryCard
+            runtimeSummaryCard(scrollProxy: scrollProxy)
 
             VStack(alignment: .leading, spacing: 8) {
                 sectionLabel(L10n.text("界面", "Interface"))
@@ -141,10 +141,13 @@ struct SettingsView: View {
                 .padding(.horizontal, 16)
                 .fireSkySurface(role: .content, cornerRadius: 14)
             }
+
+            remoteServerCard
+                .id("anchor-server")
         }
     }
 
-    private var runtimeSummaryCard: some View {
+    private func runtimeSummaryCard(scrollProxy: ScrollViewProxy) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text(L10n.text("运行状态摘要", "Runtime Summary")).font(.subheadline.weight(.semibold))
@@ -162,17 +165,19 @@ struct SettingsView: View {
             }
             LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
                 Button {
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
-                        store.settingsCategory = "高级"
+                    if reduceMotion {
+                        scrollProxy.scrollTo("anchor-server", anchor: .top)
+                    } else {
+                        withAnimation { scrollProxy.scrollTo("anchor-server", anchor: .top) }
                     }
                 } label: {
                     statusBadge(
-                        title: store.isRemoteMode
-                            ? L10n.text("远程 Mac", "Remote Mac")
-                            : L10n.text("本地引擎", "Engine"),
+                        title: L10n.text("服务器连接", "Server"),
                         value: store.online
                             ? L10n.text("已连接", "Connected")
-                            : L10n.text("未连接", "Offline"),
+                            : store.hasSavedRemoteServer
+                                ? L10n.text("未连接", "Offline")
+                                : L10n.text("未配置", "Not configured"),
                         healthy: store.online,
                         showChevron: true
                     )
@@ -558,62 +563,14 @@ struct SettingsView: View {
             remoteServerCard
 
             VStack(alignment: .leading, spacing: 8) {
-                sectionLabel(L10n.text("引擎与目录", "Engine & Workspace"))
+                sectionLabel(L10n.text("连接状态", "Connection Status"))
                 VStack(spacing: 0) {
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(spacing: 12) {
-                            iconBadge("cpu")
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(L10n.text("引擎通道", "Engine Transport")).font(.subheadline.weight(.medium))
-                                Text(L10n.text("FFI 对接进程内 engine-mobile；Mock 仅用于界面联调。",
-                                               "FFI runs engine-mobile in-process; Mock is for UI testing."))
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                        }
-                        Picker(L10n.text("通道", "Transport"), selection: Binding(
-                            get: { store.engineTransport },
-                            set: { store.switchEngineTransport($0) }
-                        )) {
-                            Text(L10n.text("内置模拟（Mock）", "Mock")).tag("mock")
-                            Text("FFI (engine-mobile)").tag("ffi")
-                        }
-                        .pickerStyle(.segmented)
-                        .disabled(store.isRemoteMode)
-                    }
-                    .padding(.vertical, 12)
-                    .opacity(store.isRemoteMode ? 0.55 : 1)
-
-                    Divider().opacity(0.55).padding(.leading, 46)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 12) {
-                            iconBadge("folder.badge.gearshape")
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(L10n.t("数据目录")).font(.subheadline.weight(.medium))
-                                Text(L10n.text("iOS 沙箱目录，可微调子路径。", "iOS sandbox data directory."))
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }
-                            Spacer()
-                        }
-                        TextField(L10n.t("数据目录"), text: $store.workspace)
-                            .workInputField(cornerRadius: 8)
-                            .font(.caption.monospaced())
-                            .disabled(store.isRemoteMode)
-                    }
-                    .padding(.vertical, 12)
-                    .opacity(store.isRemoteMode ? 0.55 : 1)
-
-                    Divider().opacity(0.55).padding(.leading, 46)
-
                     HStack(spacing: 12) {
                         iconBadge("bolt.horizontal.circle")
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.text("引擎连接", "Engine Connection")).font(.subheadline.weight(.medium))
+                            Text(L10n.text("服务端连接", "Server Connection")).font(.subheadline.weight(.medium))
                             Text(store.online
-                                 ? (store.isRemoteMode
-                                    ? L10n.text("已连接到远程 Mac", "Connected to remote Mac")
-                                    : L10n.text("已连接到本地引擎", "Connected to local engine"))
+                                 ? L10n.text("已连接 · SSE 实时流优先（支持轮询自动回退）", "Connected · SSE streaming with polling fallback")
                                  : L10n.text("当前未连接", "Offline"))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
@@ -622,6 +579,23 @@ struct SettingsView: View {
                             .disabled(store.busy || store.probingDownloads || store.remoteTesting)
                     }
                     .padding(.vertical, 12)
+
+                    if !store.remoteWorkspace.isEmpty {
+                        Divider().opacity(0.55).padding(.leading, 46)
+                        HStack(spacing: 12) {
+                            iconBadge("folder")
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(L10n.text("服务端数据目录", "Server Data Directory")).font(.subheadline.weight(.medium))
+                                Text(store.remoteWorkspace)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                                    .textSelection(.enabled)
+                            }
+                            Spacer()
+                        }
+                        .padding(.vertical, 12)
+                    }
                 }
                 .padding(.horizontal, 16)
                 .fireSkySurface(role: .content, cornerRadius: 14)
@@ -647,140 +621,25 @@ struct SettingsView: View {
 
     private var remoteServerCard: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionLabel(L10n.text("远程服务器（Mac / CF Tunnel）", "Remote Server (Mac / CF Tunnel)"))
+            sectionLabel(L10n.text("服务器连接（Mac / CF Tunnel / LAN）", "Server Connection (Mac / CF Tunnel / LAN)"))
             VStack(alignment: .leading, spacing: 12) {
                 HStack(spacing: 12) {
                     iconBadge("server.rack")
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.text("连接模式", "Connection Mode")).font(.subheadline.weight(.medium))
-                        Text(store.isRemoteMode
-                             ? L10n.text("直连 Mac 引擎（共享预测、缓存与任务历史）",
-                                         "Connected directly to Mac engine (forecasts, cache & history)")
-                             : L10n.text("使用设备本地引擎运行", "Running on local device engine"))
-                            .font(.caption).foregroundStyle(.secondary)
+                        Text(L10n.text("FireSky 远程服务器", "FireSky Remote Server")).font(.subheadline.weight(.medium))
+                        Text(L10n.text(
+                            "直连 Mac / Windows / Docker HTTP 服务，共享预测计算、区域热图、卫星实况与任务历史。",
+                            "Connect directly to your Mac, Windows, or Docker server for forecasts, regional maps, nowcasts, and history."
+                        ))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer()
                 }
 
-                Picker(L10n.text("连接模式", "Connection Mode"), selection: Binding(
-                    get: { store.connectionMode },
-                    set: { newMode in
-                        guard newMode != store.connectionMode else { return }
-                        if newMode == "local" {
-                            Task { await store.switchToLocalEngine() }
-                        } else {
-                            store.connectionMode = "remote"
-                        }
-                    }
-                )) {
-                    Text(L10n.text("本机引擎", "Local Engine")).tag("local")
-                    Text(L10n.text("远程服务器", "Remote Server")).tag("remote")
-                }
-                .pickerStyle(.segmented)
-                .disabled(store.busy || store.probingDownloads || store.remoteTesting)
+                Divider().opacity(0.55)
 
-                if store.isRemoteMode {
-                    Divider().opacity(0.55)
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(L10n.text("服务器地址", "Server URL"))
-                            .font(.caption.weight(.medium))
-                            .foregroundStyle(.secondary)
-                        TextField("https://firesky.example.com 或 http://192.168.1.x:8765", text: $store.remoteServerURL)
-                            .keyboardType(.URL)
-                            .textInputAutocapitalization(.never)
-                            .autocorrectionDisabled()
-                            .workInputField(cornerRadius: 8)
-                            .font(.callout.monospaced())
-                    }
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text(L10n.text("访问令牌（Bearer Token）", "Access Token (Bearer)"))
-                                .font(.caption.weight(.medium))
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            if store.remoteTokenSaved {
-                                Button(L10n.text("清除令牌", "Clear token")) {
-                                    store.clearRemoteToken()
-                                }
-                                .font(.caption)
-                                .buttonStyle(.borderless)
-                                .foregroundStyle(.red)
-                                .disabled(store.remoteTesting || store.busy)
-                            }
-                        }
-                        SecureField(
-                            store.remoteTokenSaved
-                                ? L10n.text("已保存令牌（留空保持不变）", "Token saved (leave blank to keep)")
-                                : L10n.text("粘贴 Mac 端生成的访问令牌", "Paste Mac access token"),
-                            text: $store.remoteTokenDraft
-                        )
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .workInputField(cornerRadius: 8)
-                    }
-
-                    Text(L10n.text(
-                        "在 Mac「设置 → 高级 → 局域网与隧道服务」开启服务并复制令牌，通过 Cloudflare Tunnel 或局域网即可直接访问 Mac 的预测、缓存与任务历史。",
-                        "Enable the service and copy the token in Mac Settings → Advanced → LAN & Tunnel to access your Mac's forecasts, cache, and task history over Cloudflare Tunnel or LAN."
-                    ))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                    HStack(spacing: 10) {
-                        Button {
-                            Task { await store.testRemoteServer() }
-                        } label: {
-                            HStack(spacing: 6) {
-                                if store.remoteTesting {
-                                    ProgressView().controlSize(.small)
-                                } else {
-                                    Image(systemName: "antenna.radiowaves.left.and.right")
-                                }
-                                Text(L10n.text("测试连接", "Test Connection"))
-                            }
-                            .frame(maxWidth: .infinity, minHeight: 34)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(store.remoteTesting || store.busy || store.probingDownloads
-                                  || store.remoteServerURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-
-                        Button {
-                            Task { await store.saveAndConnectRemoteServer() }
-                        } label: {
-                            HStack(spacing: 6) {
-                                Image(systemName: "checkmark.circle.fill")
-                                Text(L10n.text("保存并连接", "Save & Connect"))
-                            }
-                            .frame(maxWidth: .infinity, minHeight: 34)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .tint(warm)
-                        .disabled(store.remoteTesting || store.busy || store.probingDownloads
-                                  || store.remoteServerURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    }
-                    .font(.subheadline.weight(.medium))
-
-                    if !store.remoteTestMessage.isEmpty {
-                        HStack(alignment: .top, spacing: 8) {
-                            Image(systemName: store.remoteTestOK ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                                .foregroundStyle(store.remoteTestOK ? Color.green : Color.red)
-                            Text(store.remoteTestMessage)
-                                .font(.caption)
-                                .foregroundStyle(store.remoteTestOK ? Color.green : Color.red)
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(10)
-                        .background(
-                            (store.remoteTestOK ? Color.green : Color.red).opacity(0.09),
-                            in: RoundedRectangle(cornerRadius: 8)
-                        )
-                    }
-                }
+                RemoteServerConnectionForm(showClearConfiguration: true)
             }
             .padding(16)
             .fireSkySurface(role: .content, cornerRadius: 14)

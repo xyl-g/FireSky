@@ -1887,7 +1887,7 @@ mod tests {
     fn spawn_tile_server(root: &Path) -> String {
         let dir = root.join("tile-src");
         fs::create_dir_all(&dir).unwrap();
-        let path = dir.join(format!("{TILE_NAME}.hgt.gz"));
+        let _path = dir.join(format!("{TILE_NAME}.hgt.gz"));
         let row = TILE_ELEVATION.to_be_bytes().repeat(3601);
         let mut tile = Vec::new();
         for _ in 0..3601 {

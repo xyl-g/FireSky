@@ -275,9 +275,13 @@ private struct ForecastResultCard: View {
                     .font(.caption).foregroundStyle(.secondary)
                     .textSelection(.enabled)
             } else if let result = store.taskResult {
-                VStack(alignment: .leading, spacing: 9) {
-                    ForEach(["gfs", "ec"], id: \.self) { model in
-                        modelRow(result, model)
+                if result["nowcast"] is JSONObject {
+                    nowcastSummaryRow(result)
+                } else {
+                    VStack(alignment: .leading, spacing: 9) {
+                        ForEach(["gfs", "ec"], id: \.self) { model in
+                            modelRow(result, model)
+                        }
                     }
                 }
             }
@@ -314,6 +318,24 @@ private struct ForecastResultCard: View {
                 Text(summary).font(.caption2).foregroundStyle(.secondary)
                     .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
             }
+        }
+    }
+
+    private func nowcastSummaryRow(_ result: JSONObject) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(alignment: .firstTextBaseline, spacing: 7) {
+                Text(L10n.text("卫星实况", "Nowcast")).font(.caption.weight(.semibold))
+                    .foregroundStyle(coolAccent)
+                Text("\(format(result["peak_quality_index"] ?? result["quality_index"])) / 2.5")
+                    .font(.caption.weight(.medium)).monospacedDigit()
+                Text(result["peak_quality_level"] as? String ?? result["quality_level"] as? String ?? "")
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 0)
+                Text("\(L10n.text("最佳", "Best")) \(timeLabel(result["best_time_local"] as? String))")
+                    .font(.caption2).monospacedDigit().foregroundStyle(.secondary)
+            }
+            Text(summaryText(result)).font(.caption2).foregroundStyle(.secondary)
+                .textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
         }
     }
 }

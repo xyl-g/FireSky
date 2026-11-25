@@ -7,17 +7,16 @@ native desktop clients**. The physics follows the methodology of the
 
 > 中文文档：[README.md](README.md)
 
-> Current release **v1.10.0** (see [Download & install](#download--install-releases)):
-> macOS DMGs (dual arch) and Windows zip + installer (x64/ARM64) are built and
-> attached to GitHub Releases automatically on `v*` tags; Android APK
-> auto-publishing is wired in (mobile-release job builds on tags); iOS builds
-> from source with Xcode. Highlights of v1.10.0: **Windows, iOS, and Android UI
-> & feature parity with the macOS Liquid Glass baseline**, plus **Mobile Remote
-> Server Mode** (connect iOS/Android directly to a Mac over Cloudflare Tunnel
-> HTTPS or LAN HTTP to share Mac caches, forecasts, and task history), building
-> on v1.9.10's 30 s watchdog fix, 5-minute lightweight background sync monitor,
-> 6-frame multispectral nowcast, and China regional parallel speedup. Design
-> tokens in [DESIGN.md](DESIGN.md).
+> Current release **v1.10.1** (see [Download & install](#download--install-releases)):
+> macOS DMGs (dual arch), Windows zip + installer (x64/ARM64), universal Android
+> APK, and unsigned sideloadable iOS `.ipa` are all built and attached to GitHub
+> Releases automatically on `v*` tags. Highlights of v1.10.1: **iOS & Android
+> rebuilt as pure native thin clients** (connecting to Mac/Windows/Docker
+> servers over real-time SSE, stripping embedded local engine & 131 MB ecCodes),
+> **mobile Regional Forecast (China heatmap + city ranking) and Satellite
+> Nowcast**, negative-elevation nowcast horizon-gap physics upgrade, desktop
+> `ecCodes` bundle slimming (130 MB → 42 MB), and zero-warning / modular cleanup.
+> Design tokens in [DESIGN.md](DESIGN.md).
 > The UI reference is the [macOS product & UI baseline](docs/MACOS_UI_BASELINE.zh-CN.md);
 > mobile blueprint and acceptance status:
 > [mobile native plan](docs/MOBILE_NATIVE_PLAN.md).
@@ -71,17 +70,18 @@ native desktop clients**. The physics follows the methodology of the
   installer attached to Releases. The Linux native UI code is kept but no
   longer a release target (see [Platform strategy](#platform-strategy)). See
   [build instructions and migration status](apps/README.md). The old PySide6 app was retired (2026-11-13); user data (~/.firesky-desktop favorites and current spot) imports automatically into the native app.
-- **Mobile apps**: dual-native iOS SwiftUI + Android Kotlin/Compose with the
-  prediction engine embedded in-process (`engine-mobile`, same source as the
-  desktop runtime); point forecasts / data management / task history mirror
-  the desktop baseline, and the Android APK is published with Releases — see
-  [Mobile apps (v1 scope)](#mobile-apps-v1-scope).
+- **Mobile apps**: pure native iOS SwiftUI + Android Kotlin/Compose thin clients
+  connecting to your Mac / Windows / Docker FireSky server over LAN HTTP or
+  Cloudflare Tunnel HTTPS with real-time SSE streaming; supports Point Forecast,
+  Regional Forecast (China heatmap & city ranking), Satellite Nowcast, Data
+  Management, and Task History, with both Android APK and unsigned iOS `.ipa`
+  published with Releases.
 
 ## Download & install (Releases)
 
 Official builds are published on
 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) (current:
-**v1.10.0**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
+**v1.10.1**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
 file names; run it in the directory holding the assets):
 
 ```bash
@@ -97,12 +97,12 @@ automatically by CI on `v*` tags):
 | `FireSky-<version>-macos-x86_64.dmg` | macOS 14+ (Intel) | CI Intel build + smoke; runs via Rosetta 2 on Apple Silicon |
 | `FireSky-<version>-windows-x64.zip` / `-x64-setup.exe` | Windows 10 19041+ (x64) | portable zip / Inno Setup installer |
 | `FireSky-<version>-windows-arm64.zip` / `-arm64-setup.exe` | Windows (ARM64) | same |
-| `FireSky-<version>-android-arm64.apk` | Android 8.0+ (arm64-v8a) | self-signed release APK (built by the mobile-release job on tags) |
+| `FireSky-<version>-android-arm64.apk` | Android 8.0+ (universal thin client) | pure Kotlin/Compose thin-client APK (no embedded engine) |
+| `FireSky-<version>-ios-arm64.ipa` | iOS 16+ (arm64 thin client) | unsigned `.ipa` for AltStore / SideStore / Sideloadly / TrollStore / developer re-signing |
 | `SHA256SUMS.txt` | — | SHA256 manifest for all assets |
 
-> The Android APK ships with Releases from the first tag where the
-> mobile-release job goes green; the iOS IPA is not distributed via Releases
-> for now (build from source, see [iOS](#ios)); Docker images are built from
+> Both Android APK and unsigned iOS `.ipa` ship automatically with `v*` tag
+> Releases (sideload or re-sign the `.ipa` on iOS); Docker images are built from
 > source (see [Docker (self-hosting)](#docker-self-hosting)).
 
 ### macOS

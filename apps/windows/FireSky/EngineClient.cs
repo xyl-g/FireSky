@@ -71,7 +71,7 @@ public sealed class EngineClient : IDisposable
             string.IsNullOrEmpty(rustTarget) ? null : Path.Combine(
                 workspace, "engine", "target", rustTarget, "release", "firesky_engine.dll"),
         }.Where(path => !string.IsNullOrWhiteSpace(path))
-         .Select(Path.GetFullPath)
+         .Select(path => Path.GetFullPath(path!))
          .Distinct(StringComparer.OrdinalIgnoreCase)
          .ToArray();
 
@@ -116,7 +116,7 @@ public sealed class EngineClient : IDisposable
             string.IsNullOrEmpty(rustTarget) ? null : Path.Combine(
                 workspace, "engine", "target", rustTarget, "release", "firesky-engine.exe"),
         }.Where(path => !string.IsNullOrWhiteSpace(path))
-         .Select(Path.GetFullPath)
+         .Select(path => Path.GetFullPath(path!))
          .ToArray();
         var binary = binaries.FirstOrDefault(File.Exists)
             ?? throw new InvalidOperationException("Rust 引擎不可用，请选择 firesky-engine.exe。");
@@ -295,7 +295,7 @@ public sealed class EngineClient : IDisposable
             {
                 if (runtime != IntPtr.Zero)
                 {
-                    free(runtime);
+                    free?.Invoke(runtime);
                     runtime = IntPtr.Zero;
                 }
                 NativeLibrary.Free(library);

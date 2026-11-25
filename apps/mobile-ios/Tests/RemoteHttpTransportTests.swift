@@ -2,11 +2,23 @@ import XCTest
 @testable import FireSkyMobile
 
 private final class MockURLProtocol: URLProtocol {
+    enum MockReply {
+        case json(Int, JSONObject)
+        case sse(Int, [Data])
+    }
+
     static let lock = NSLock()
-    static var handler: ((URLRequest, Data?) throws -> (Int, JSONObject))?
+    static var handler: ((URLRequest, Data?) throws -> MockReply)?
     static var recordedRequests: [(method: String, url: URL, headers: [String: String], body: Data?)] = []
 
-    static func reset(handler: @escaping (URLRequest, Data?) throws -> (Int, JSONObject)) {
+    static func reset(jsonHandler: @escaping (URLRequest, Data?) throws -> (Int, JSONObject)) {
+        reset { request, bodyData in
+            let (status, json) = try jsonHandler(request, bodyData)
+            return .json(status, json)
+        }
+    }
+
+    static func reset(handler: @escaping (URLRequest, Data?) throws -> MockReply) {
         lock.lock()
         defer { lock.unlock() }
         recordedRequests = []
@@ -46,17 +58,31 @@ private final class MockURLProtocol: URLProtocol {
         }
 
         do {
-            let (statusCode, json) = try currentHandler(request, bodyData)
-            let data = try JSONSerialization.data(withJSONObject: json)
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: statusCode,
-                httpVersion: "HTTP/1.1",
-                headerFields: ["Content-Type": "application/json"]
-            )!
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: data)
-            client?.urlProtocolDidFinishLoading(self)
+            switch try currentHandler(request, bodyData) {
+            case .json(let statusCode, let json):
+                let data = try JSONSerialization.data(withJSONObject: json)
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: statusCode,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "application/json"]
+                )!
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                client?.urlProtocol(self, didLoad: data)
+                client?.urlProtocolDidFinishLoading(self)
+            case .sse(let statusCode, let chunks):
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: statusCode,
+                    httpVersion: "HTTP/1.1",
+                    headerFields: ["Content-Type": "text/event-stream"]
+                )!
+                client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+                for chunk in chunks {
+                    client?.urlProtocol(self, didLoad: chunk)
+                }
+                client?.urlProtocolDidFinishLoading(self)
+            }
         } catch {
             client?.urlProtocol(self, didFailWithError: error)
         }
@@ -139,7 +165,103 @@ final class RemoteHttpTransportTests: XCTestCase {
         XCTAssertEqual(RemoteHttpTransport.pollIntervalMilliseconds(elapsedSeconds: 10.0), 600)
     }
 
-    func testFullRPCFlowWithProgressAndRelease() async throws {
+    func testSSEStreamingDeliversProgressAndDoneWithoutPolling() async throws {
+        let token = "sse-bearer-token-0123456789abcdef"
+
+        func sseLine(_ object: JSONObject) throws -> Data {
+            let data = try JSONSerialization.data(withJSONObject: object)
+            let json = String(data: data, encoding: .utf8)!
+            return Data("data: \(json)\n\n".utf8)
+        }
+
+        MockURLProtocol.reset { request, bodyData in
+            let path = request.url?.path ?? ""
+            if request.httpMethod == "GET" && path == "/api/v1/firesky/desktop/status" {
+                return .json(200, [
+                    "instance_id": "inst-sse",
+                    "running": true,
+                    "workspace": "/Users/test/FireSkyData",
+                    "protocol": 1,
+                    "engine": "firesky-rust",
+                ])
+            }
+            if request.httpMethod == "POST" && path == "/api/v1/firesky/desktop/jobs" {
+                let body = try XCTUnwrap(bodyData.flatMap { try? JSONSerialization.jsonObject(with: $0) as? JSONObject })
+                XCTAssertEqual(body["instance_id"] as? String, "inst-sse")
+                XCTAssertEqual(body["method"] as? String, "forecast")
+                return .json(202, [
+                    "request_id": body["request_id"] as? String ?? "",
+                    "instance_id": "inst-sse",
+                    "status": "running",
+                ])
+            }
+            if request.httpMethod == "GET" && path.hasSuffix("/events") {
+                XCTAssertEqual(request.url?.query, "instance_id=inst-sse")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "text/event-stream")
+                let chunks = try [
+                    sseLine([
+                        "request_id": "id",
+                        "instance_id": "inst-sse",
+                        "status": "running",
+                        "progress_seq": 1,
+                        "progress": ["percent": 25.0, "source": "gfs", "message": "解码 GFS"],
+                    ]),
+                    sseLine([
+                        "request_id": "id",
+                        "instance_id": "inst-sse",
+                        "status": "running",
+                        "progress_seq": 2,
+                        "progress": ["percent": 80.0, "source": "ec", "message": "评估 EC"],
+                    ]),
+                    sseLine([
+                        "request_id": "id",
+                        "instance_id": "inst-sse",
+                        "status": "done",
+                        "progress_seq": 2,
+                        "result": ["kind": "point", "model_results": ["gfs": ["peak_quality_index": 1.85]]],
+                    ]),
+                ]
+                return .sse(200, chunks)
+            }
+            if request.httpMethod == "POST" && path.hasSuffix("/release") {
+                let body = try XCTUnwrap(bodyData.flatMap { try? JSONSerialization.jsonObject(with: $0) as? JSONObject })
+                XCTAssertEqual(body["instance_id"] as? String, "inst-sse")
+                return .json(200, ["released": true])
+            }
+            XCTFail("Unexpected request (polling must not run when SSE succeeds): \(request.httpMethod ?? "") \(path)")
+            return .json(404, [:])
+        }
+
+        let transport = try RemoteHttpTransport(
+            urlString: "https://demo.trycloudflare.com",
+            token: token,
+            session: makeSession()
+        )
+        let client = EngineClient { transport }
+        try client.start(workspace: "/ignored", transport: transport)
+
+        var progressEvents: [JSONObject] = []
+        let result = try await client.call("forecast", ["session": "s-sse"]) { event in
+            progressEvents.append(event)
+        }
+
+        let models = try XCTUnwrap(result["model_results"] as? JSONObject)
+        XCTAssertEqual((models["gfs"] as? JSONObject)?["peak_quality_index"] as? Double, 1.85)
+        XCTAssertEqual(progressEvents.count, 2)
+        XCTAssertEqual(progressEvents[0]["percent"] as? Double, 25.0)
+        XCTAssertEqual(progressEvents[1]["percent"] as? Double, 80.0)
+
+        let paths = MockURLProtocol.recordedRequests.map { "\($0.method) \($0.url.path)" }
+        XCTAssertEqual(paths.count, 4)
+        XCTAssertEqual(paths[0], "GET /api/v1/firesky/desktop/status")
+        XCTAssertEqual(paths[1], "POST /api/v1/firesky/desktop/jobs")
+        XCTAssertTrue(paths[2].hasPrefix("GET /api/v1/firesky/desktop/jobs/") && paths[2].hasSuffix("/events"))
+        XCTAssertTrue(paths[3].hasPrefix("POST /api/v1/firesky/desktop/jobs/") && paths[3].hasSuffix("/release"))
+        XCTAssertEqual(MockURLProtocol.recordedRequests[2].headers["Accept"], "text/event-stream")
+        XCTAssertEqual(MockURLProtocol.recordedRequests[2].headers["Authorization"], "Bearer \(token)")
+    }
+
+    func testSSE404FallsBackCleanlyToAdaptivePolling() async throws {
         let token = "secret-bearer-token-0123456789abcdef"
         var pollCount = 0
 
@@ -163,6 +285,9 @@ final class RemoteHttpTransportTests: XCTestCase {
                     "instance_id": "inst-1",
                     "status": "running",
                 ])
+            }
+            if request.httpMethod == "GET" && path.hasSuffix("/events") {
+                return (404, ["error": ["code": "not_found", "message": "SSE endpoint not available"]])
             }
             if request.httpMethod == "GET" && path.hasPrefix("/api/v1/firesky/desktop/jobs/") {
                 XCTAssertEqual(request.url?.query, "instance_id=inst-1")
@@ -213,16 +338,18 @@ final class RemoteHttpTransportTests: XCTestCase {
         XCTAssertEqual(progressEvents.first?["percent"] as? Double, 42.0)
 
         let paths = MockURLProtocol.recordedRequests.map { "\($0.method) \($0.url.path)" }
-        XCTAssertEqual(paths.count, 5)
+        XCTAssertEqual(paths.count, 6)
         XCTAssertEqual(paths[0], "GET /api/v1/firesky/desktop/status")
         XCTAssertEqual(paths[1], "POST /api/v1/firesky/desktop/jobs")
-        XCTAssertTrue(paths[2].hasPrefix("GET /api/v1/firesky/desktop/jobs/"))
-        XCTAssertTrue(paths[3].hasPrefix("GET /api/v1/firesky/desktop/jobs/"))
-        XCTAssertTrue(paths[4].hasPrefix("POST /api/v1/firesky/desktop/jobs/") && paths[4].hasSuffix("/release"))
+        XCTAssertTrue(paths[2].hasPrefix("GET /api/v1/firesky/desktop/jobs/") && paths[2].hasSuffix("/events"))
+        XCTAssertTrue(paths[3].hasPrefix("GET /api/v1/firesky/desktop/jobs/") && !paths[3].hasSuffix("/events"))
+        XCTAssertTrue(paths[4].hasPrefix("GET /api/v1/firesky/desktop/jobs/") && !paths[4].hasSuffix("/events"))
+        XCTAssertTrue(paths[5].hasPrefix("POST /api/v1/firesky/desktop/jobs/") && paths[5].hasSuffix("/release"))
 
         for recorded in MockURLProtocol.recordedRequests {
             XCTAssertEqual(recorded.headers["Authorization"], "Bearer \(token)")
-            XCTAssertEqual(recorded.headers["Accept"], "application/json")
+            let expectedAccept = recorded.url.path.hasSuffix("/events") ? "text/event-stream" : "application/json"
+            XCTAssertEqual(recorded.headers["Accept"], expectedAccept)
             XCTAssertNil(recorded.headers["Origin"])
         }
     }
@@ -310,6 +437,9 @@ final class RemoteHttpTransportTests: XCTestCase {
                     "instance_id": "inst-new",
                     "status": "running",
                 ])
+            }
+            if request.httpMethod == "GET" && path.hasSuffix("/events") {
+                return (404, [:])
             }
             if request.httpMethod == "GET" && path.hasPrefix("/api/v1/firesky/desktop/jobs/") {
                 XCTAssertEqual(request.url?.query, "instance_id=inst-new")

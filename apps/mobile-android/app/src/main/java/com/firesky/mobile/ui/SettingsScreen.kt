@@ -2,6 +2,7 @@ package com.firesky.mobile.ui
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -26,7 +27,6 @@ import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudQueue
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Memory
@@ -58,6 +58,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -348,17 +349,27 @@ private fun RuntimeSummaryCard(store: WorkbenchStore, state: WorkbenchState) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     StatusSummaryBadge(
-                        title = stringResource(if (state.isRemoteMode) R.string.runtime_remote_mac else R.string.runtime_engine),
-                        value = if (state.online) stringResource(R.string.engine_connected) else stringResource(R.string.engine_offline),
+                        title = stringResource(R.string.runtime_remote_server),
+                        value = when {
+                            state.online -> stringResource(R.string.engine_connected)
+                            state.serverConfigured -> stringResource(R.string.engine_offline)
+                            else -> stringResource(R.string.runtime_not_configured)
+                        },
                         healthy = state.online,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { store.setSettingsCategory("高级") },
                     )
                     StatusSummaryBadge(
                         title = stringResource(R.string.runtime_data_sync),
                         value = if (state.dataSyncConfigured || store.camsConfigured) stringResource(R.string.runtime_configured)
                         else stringResource(R.string.runtime_on_demand),
                         healthy = state.dataSyncConfigured || store.camsConfigured,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { store.setSettingsCategory("数据") },
                     )
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -367,14 +378,45 @@ private fun RuntimeSummaryCard(store: WorkbenchStore, state: WorkbenchState) {
                         value = if (store.camsConfigured) stringResource(R.string.runtime_configured)
                         else stringResource(R.string.runtime_not_configured),
                         healthy = store.camsConfigured,
-                        modifier = Modifier.weight(1f),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { store.setSettingsCategory("数据") },
                     )
                     StatusSummaryBadge(
                         title = stringResource(R.string.runtime_retention),
                         value = if (state.retentionConfigured) stringResource(R.string.runtime_active)
                         else stringResource(R.string.retention_unlimited),
                         healthy = state.retentionConfigured,
+                        modifier = Modifier
+                            .weight(1f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { store.setSettingsCategory("数据") },
+                    )
+                }
+            }
+            if (state.remoteServerUrl.isNotBlank() || state.remoteWorkspace.isNotBlank()) {
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(10.dp))
+                        .clickable { store.setSettingsCategory("高级") }
+                        .padding(vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        state.remoteWorkspace.ifEmpty { state.remoteServerUrl },
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        stringResource(R.string.runtime_configure_server),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary,
                     )
                 }
             }
@@ -463,7 +505,7 @@ private fun CamsSection(store: WorkbenchStore, state: WorkbenchState) {
                 OutlinedTextField(
                     value = state.camsKeyDraft,
                     onValueChange = store::setCAMSKeyDraft,
-                    enabled = !state.isRemoteMode,
+                    enabled = !state.isRemoteTransport,
                     label = { Text(stringResource(R.string.cams_token_label), fontSize = 11.sp) },
                     singleLine = true,
                     shape = SoftInputShape,
@@ -477,7 +519,7 @@ private fun CamsSection(store: WorkbenchStore, state: WorkbenchState) {
                 }
                 Button(
                     onClick = { store.saveCAMSKey() },
-                    enabled = !state.isRemoteMode && state.online && store.canSaveCAMS && !state.savingCAMS &&
+                    enabled = !state.isRemoteTransport && state.online && store.canSaveCAMS && !state.savingCAMS &&
                         state.camsKeyDraft.trim().isNotEmpty(),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = MaterialTheme.colorScheme.primary,
@@ -487,11 +529,11 @@ private fun CamsSection(store: WorkbenchStore, state: WorkbenchState) {
                 ) { Text(stringResource(R.string.save_key), fontSize = 12.sp) }
             }
             Text(
-                stringResource(if (state.isRemoteMode) R.string.cams_remote_readonly_note else R.string.cams_note),
+                stringResource(if (state.isRemoteTransport) R.string.cams_remote_readonly_note else R.string.cams_note),
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
             )
-            if (!state.isRemoteMode && state.camsConfiguration != null && !store.canSaveCAMS) {
+            if (!state.isRemoteTransport && state.camsConfiguration != null && !store.canSaveCAMS) {
                 Text(
                     stringResource(R.string.cams_env_override),
                     fontSize = 11.sp,
@@ -773,14 +815,16 @@ private fun EngineSection(store: WorkbenchStore, state: WorkbenchState) {
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Box(Modifier.size(8.dp).background(onlineColor(state), CircleShape))
                         Text(
-                            if (state.isRemoteMode) "REMOTE" else state.transportMode.uppercase(),
+                            if (state.remoteWorkspace.isNotEmpty()) state.remoteWorkspace else "HTTP + SSE",
                             fontSize = 12.sp,
                             fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.weight(1f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        Spacer(Modifier.weight(1f))
                         OutlinedButton(
                             onClick = { store.connect() },
-                            enabled = !state.busy,
+                            enabled = !state.busy && state.serverConfigured,
                             shape = RoundedCornerShape(12.dp),
                         ) {
                             Icon(Icons.Filled.Refresh, contentDescription = null, modifier = Modifier.size(14.dp))
@@ -788,31 +832,6 @@ private fun EngineSection(store: WorkbenchStore, state: WorkbenchState) {
                             Text(stringResource(R.string.reconnect), fontSize = 11.sp)
                         }
                     }
-                }
-                IndentedDivider()
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(
-                        stringResource(R.string.transport_label),
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Segmented(
-                        options = listOf("ffi", "mock"),
-                        titles = listOf(stringResource(R.string.transport_ffi), stringResource(R.string.transport_mock)),
-                        selection = state.transportMode,
-                        onSelect = { store.setTransportMode(it) },
-                        accent = true,
-                    )
-                    Text(
-                        stringResource(R.string.engine_note),
-                        fontSize = 11.sp,
-                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-                    )
-                }
-                IndentedDivider()
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    IconBadge(Icons.Filled.Folder, tint = coolAccentColor())
-                    Text(stringResource(R.string.data_dir_note), fontSize = 11.sp)
                 }
             }
         }
@@ -828,7 +847,7 @@ private fun RemoteServerSection(store: WorkbenchStore, state: WorkbenchState) {
             icon = Icons.Filled.CloudQueue,
             iconTint = coolAccentColor(),
             trailing = {
-                if (state.isRemoteMode && state.online) {
+                if (state.online) {
                     SoftPillChip(
                         text = stringResource(R.string.remote_connected_badge),
                         tint = Color(0xFF3B9C57),
@@ -837,96 +856,7 @@ private fun RemoteServerSection(store: WorkbenchStore, state: WorkbenchState) {
                 }
             },
         ) {
-            Segmented(
-                options = listOf("local", "remote"),
-                titles = listOf(
-                    stringResource(R.string.remote_mode_local),
-                    stringResource(R.string.remote_mode_remote),
-                ),
-                selection = state.connectionModeDraft,
-                onSelect = { mode ->
-                    if (mode == "local") store.switchToLocalEngine()
-                    else store.setConnectionModeDraft("remote")
-                },
-                accent = true,
-            )
-            OutlinedTextField(
-                value = state.remoteServerUrl,
-                onValueChange = store::setRemoteServerUrl,
-                label = { Text(stringResource(R.string.remote_url_label), fontSize = 11.sp) },
-                placeholder = { Text(stringResource(R.string.remote_url_placeholder), fontSize = 12.sp) },
-                singleLine = true,
-                shape = SoftInputShape,
-                colors = softInputColors(),
-                textStyle = MaterialTheme.typography.bodySmall,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-                modifier = Modifier.fillMaxWidth(),
-            )
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(
-                    value = state.remoteTokenDraft,
-                    onValueChange = store::setRemoteTokenDraft,
-                    label = { Text(stringResource(R.string.remote_token_label), fontSize = 11.sp) },
-                    placeholder = {
-                        Text(
-                            stringResource(
-                                if (state.remoteTokenSaved) R.string.remote_token_saved_hint
-                                else R.string.remote_token_hint,
-                            ),
-                            fontSize = 11.sp,
-                        )
-                    },
-                    singleLine = true,
-                    shape = SoftInputShape,
-                    colors = softInputColors(),
-                    visualTransformation = PasswordVisualTransformation(),
-                    textStyle = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.weight(1f),
-                )
-                if (state.remoteTokenSaved) {
-                    TextButton(onClick = { store.clearRemoteToken() }) {
-                        Text(stringResource(R.string.remote_clear_token), fontSize = 11.sp)
-                    }
-                }
-            }
-            Text(
-                stringResource(R.string.remote_pairing_hint),
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-            )
-            if (state.remoteTestMessage.isNotEmpty()) {
-                Text(
-                    state.remoteTestMessage,
-                    fontSize = 11.sp,
-                    color = if (state.remoteTestOk) Color(0xFF3B9C57) else MaterialTheme.colorScheme.error,
-                )
-            }
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                OutlinedButton(
-                    onClick = { store.testRemoteServer() },
-                    enabled = !state.remoteTesting && state.remoteServerUrl.trim().isNotEmpty(),
-                    modifier = Modifier.weight(1f).heightIn(min = 48.dp),
-                    shape = RoundedCornerShape(14.dp),
-                ) {
-                    if (state.remoteTesting) {
-                        CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
-                        Spacer(Modifier.width(6.dp))
-                    }
-                    Text(stringResource(R.string.remote_test_connection), fontSize = 13.sp, maxLines = 1)
-                }
-                Box(Modifier.weight(1f)) {
-                    AccentButton(
-                        title = stringResource(R.string.remote_save_and_connect),
-                        enabled = !state.remoteTesting && state.remoteServerUrl.trim().isNotEmpty(),
-                    ) {
-                        store.saveAndConnectRemoteServer()
-                    }
-                }
-            }
+            RemoteServerConnectionForm(store, state)
         }
     }
 }

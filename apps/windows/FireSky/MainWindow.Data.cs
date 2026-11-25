@@ -499,7 +499,6 @@ public sealed partial class MainWindow
     private bool terrainMessageFailed;
     private JsonObject terrainProgress = [];
     private int terrainRegionIndex;
-    private bool showTerrainConfirm;
     private int terrainLastFailedCount;
     private (string Label, int South, int North, int West, int East)? terrainLastFailedRegion;
     private List<string> terrainLastFailedTiles = [];

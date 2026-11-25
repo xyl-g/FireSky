@@ -3,7 +3,10 @@ use super::{ApiError, ApiResult, App, JOB_TTL, MAX_JOBS};
 use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
-    response::{IntoResponse, Response},
+    response::{
+        sse::{Event, KeepAlive, Sse},
+        IntoResponse, Response,
+    },
     routing::{get, post},
     Json, Router,
 };
@@ -11,12 +14,14 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{
     collections::BTreeMap,
+    convert::Infallible,
     sync::{
         atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use tokio::sync::broadcast;
 
 static INSTANCES: AtomicU64 = AtomicU64::new(0);
 
@@ -67,10 +72,12 @@ struct Job {
     progress: Option<Value>,
     result: Option<Value>,
     error: Option<Value>,
+    events: broadcast::Sender<Value>,
 }
 
 impl Job {
     fn new(cancel: Arc<AtomicBool>) -> Self {
+        let (events, _) = broadcast::channel(64);
         Self {
             status: "running",
             cancel,
@@ -79,8 +86,28 @@ impl Job {
             progress: None,
             result: None,
             error: None,
+            events,
         }
     }
+}
+
+fn snapshot_value(request_id: &str, instance_id: &str, job: &Job) -> Value {
+    let mut value = json!({
+        "request_id": request_id,
+        "instance_id": instance_id,
+        "status": job.status,
+        "progress_seq": job.progress_seq,
+    });
+    if let Some(progress) = &job.progress {
+        value["progress"] = progress.clone();
+    }
+    if job.status == "done" {
+        value["result"] = job.result.clone().unwrap_or(Value::Null);
+    }
+    if let Some(error) = &job.error {
+        value["error"] = error.clone();
+    }
+    value
 }
 
 impl Registry {
@@ -114,20 +141,7 @@ impl Registry {
         let mut jobs = self.jobs.lock().unwrap();
         prune(&mut jobs);
         let job = jobs.get(request_id).ok_or_else(missing_job)?;
-        let mut value = json!({
-            "request_id":request_id,"instance_id":self.instance_id,
-            "status":job.status,"progress_seq":job.progress_seq,
-        });
-        if let Some(progress) = &job.progress {
-            value["progress"] = progress.clone();
-        }
-        if job.status == "done" {
-            value["result"] = job.result.clone().unwrap_or(Value::Null);
-        }
-        if let Some(error) = &job.error {
-            value["error"] = error.clone();
-        }
-        Ok(Json(value))
+        Ok(Json(snapshot_value(request_id, &self.instance_id, job)))
     }
 
     #[cfg(test)]
@@ -177,6 +191,14 @@ impl Registry {
         if job.completed.is_none() {
             job.progress_seq = job.progress_seq.saturating_add(1);
             job.progress = Some(progress);
+            let _ = job.events.send(json!({
+                "event": "progress",
+                "request_id": request_id,
+                "instance_id": self.instance_id,
+                "status": "running",
+                "progress_seq": job.progress_seq,
+                "progress": job.progress,
+            }));
         }
         Ok(())
     }
@@ -213,6 +235,9 @@ impl Registry {
                 }
             }
             job.completed = Some(Instant::now());
+            let mut payload = snapshot_value(request_id, &self.instance_id, job);
+            payload["event"] = json!(job.status);
+            let _ = job.events.send(payload);
         }
     }
 }
@@ -425,11 +450,185 @@ async fn release(
     app.desktop_jobs.release(&request_id).map_err(Error::from)
 }
 
+enum EventStreamState {
+    TerminalPending(Value),
+    Live {
+        app: App,
+        request_id: String,
+        rx: broadcast::Receiver<Value>,
+        last_sent_seq: u64,
+        pending_initial: Option<Value>,
+    },
+    Closed,
+}
+
+fn terminal_sse_item(mut payload: Value) -> (Result<Event, Infallible>, EventStreamState) {
+    let status = payload["status"].as_str().unwrap_or("failed").to_owned();
+    payload["event"] = json!(status);
+    let event = Event::default().event(status).data(payload.to_string());
+    (Ok(event), EventStreamState::Closed)
+}
+
+async fn events(
+    State(app): State<App>,
+    Path(request_id): Path<String>,
+    Query(instance): Query<Instance>,
+) -> Result<Response, Error> {
+    app.desktop_jobs.check_instance(&instance.instance_id)?;
+    let (rx, snapshot) = {
+        let mut jobs = app.desktop_jobs.jobs.lock().unwrap();
+        prune(&mut jobs);
+        let job = jobs.get(&request_id).ok_or_else(missing_job)?;
+        // Subscribe before reading the snapshot so no event between snapshot and
+        // stream poll can be lost.
+        let rx = job.events.subscribe();
+        let snapshot = snapshot_value(&request_id, &app.desktop_jobs.instance_id, job);
+        (rx, snapshot)
+    };
+    let initial_status = snapshot["status"].as_str().unwrap_or("running").to_owned();
+    let state = if initial_status != "running" {
+        let mut payload = snapshot;
+        payload["event"] = json!(initial_status);
+        EventStreamState::TerminalPending(payload)
+    } else {
+        let initial_seq = snapshot["progress_seq"].as_u64().unwrap_or(0);
+        let pending_initial = if initial_seq > 0 && snapshot.get("progress").is_some() {
+            let mut payload = snapshot;
+            payload["event"] = json!("progress");
+            Some(payload)
+        } else {
+            None
+        };
+        EventStreamState::Live {
+            app,
+            request_id,
+            rx,
+            last_sent_seq: initial_seq,
+            pending_initial,
+        }
+    };
+    let stream = futures_util::stream::unfold(state, |state| async move {
+        match state {
+            EventStreamState::Closed => None,
+            EventStreamState::TerminalPending(payload) => Some(terminal_sse_item(payload)),
+            EventStreamState::Live {
+                app,
+                request_id,
+                mut rx,
+                mut last_sent_seq,
+                mut pending_initial,
+            } => {
+                if let Some(initial) = pending_initial.take() {
+                    let event = Event::default()
+                        .event("progress")
+                        .data(initial.to_string());
+                    return Some((
+                        Ok::<_, Infallible>(event),
+                        EventStreamState::Live {
+                            app,
+                            request_id,
+                            rx,
+                            last_sent_seq,
+                            pending_initial: None,
+                        },
+                    ));
+                }
+                loop {
+                    match rx.recv().await {
+                        Ok(msg) => {
+                            let event_name = msg["event"].as_str().unwrap_or("progress");
+                            if event_name == "progress" {
+                                let seq = msg["progress_seq"].as_u64().unwrap_or(0);
+                                if seq <= last_sent_seq {
+                                    continue;
+                                }
+                                last_sent_seq = seq;
+                                let event =
+                                    Event::default().event("progress").data(msg.to_string());
+                                return Some((
+                                    Ok::<_, Infallible>(event),
+                                    EventStreamState::Live {
+                                        app,
+                                        request_id,
+                                        rx,
+                                        last_sent_seq,
+                                        pending_initial: None,
+                                    },
+                                ));
+                            }
+                            let event = Event::default().event(event_name).data(msg.to_string());
+                            return Some((Ok::<_, Infallible>(event), EventStreamState::Closed));
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => {
+                            match app.desktop_jobs.snapshot(&request_id) {
+                                Ok(Json(snap)) => {
+                                    if snap["status"] != "running" {
+                                        return Some(terminal_sse_item(snap));
+                                    }
+                                    let seq = snap["progress_seq"].as_u64().unwrap_or(0);
+                                    if seq > last_sent_seq && snap.get("progress").is_some() {
+                                        last_sent_seq = seq;
+                                        let mut payload = snap;
+                                        payload["event"] = json!("progress");
+                                        let event = Event::default()
+                                            .event("progress")
+                                            .data(payload.to_string());
+                                        return Some((
+                                            Ok::<_, Infallible>(event),
+                                            EventStreamState::Live {
+                                                app,
+                                                request_id,
+                                                rx,
+                                                last_sent_seq,
+                                                pending_initial: None,
+                                            },
+                                        ));
+                                    }
+                                }
+                                Err(_) => {
+                                    return Some(terminal_sse_item(json!({
+                                        "request_id": request_id,
+                                        "instance_id": app.desktop_jobs.instance_id,
+                                        "status": "failed",
+                                        "error": {
+                                            "code": "operation_failed",
+                                            "message": "desktop job not found or expired"
+                                        }
+                                    })));
+                                }
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            let payload = match app.desktop_jobs.snapshot(&request_id) {
+                                Ok(Json(snap)) => snap,
+                                Err(_) => json!({
+                                    "request_id": request_id,
+                                    "instance_id": app.desktop_jobs.instance_id,
+                                    "status": "failed",
+                                    "error": {
+                                        "code": "operation_failed",
+                                        "message": "desktop job not found or expired"
+                                    }
+                                }),
+                            };
+                            return Some(terminal_sse_item(payload));
+                        }
+                    }
+                }
+            }
+        }
+    });
+    Ok(Sse::new(stream)
+        .keep_alive(KeepAlive::new().interval(Duration::from_secs(15)))
+        .into_response())
+}
+
 pub(super) fn routes() -> Router<App> {
     Router::new()
         .route("/desktop/status", get(status))
         .route("/desktop/jobs", post(start))
         .route("/desktop/jobs/{request_id}", get(detail))
+        .route("/desktop/jobs/{request_id}/events", get(events))
         .route("/desktop/jobs/{request_id}/cancel", post(cancel))
         .route("/desktop/jobs/{request_id}/release", post(release))
 }
@@ -836,5 +1035,177 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.status, StatusCode::TOO_MANY_REQUESTS);
         assert_eq!(registry.jobs.lock().unwrap().len(), MAX_JOBS);
+    }
+
+    fn parse_sse_frames(raw: &str) -> Vec<(String, Value)> {
+        raw.split("\n\n")
+            .filter_map(|frame| {
+                let mut event_name = None;
+                let mut data_lines = Vec::new();
+                for line in frame.lines() {
+                    if let Some(rest) = line.strip_prefix("event:") {
+                        event_name = Some(rest.trim().to_owned());
+                    } else if let Some(rest) = line.strip_prefix("data:") {
+                        data_lines.push(rest.trim_start());
+                    }
+                }
+                if data_lines.is_empty() {
+                    return None;
+                }
+                let payload: Value = serde_json::from_str(&data_lines.join("\n")).ok()?;
+                Some((event_name.unwrap_or_default(), payload))
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn live_sse_stream_delivers_progress_events_followed_by_done() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = Arc::new(Registry::new());
+        let cancel = Arc::new(AtomicBool::new(false));
+        registry
+            .jobs
+            .lock()
+            .unwrap()
+            .insert(ID.into(), Job::new(cancel));
+        let instance_id = registry.instance_id.clone();
+        let state = App {
+            runtime: Arc::new(crate::desktop_runtime::Runtime::new(dir.path()).unwrap()),
+            workspace: Arc::new(dir.path().to_owned()),
+            slots: Arc::new(tokio::sync::Semaphore::new(4)),
+            jobs: Arc::new(Mutex::new(BTreeMap::new())),
+            desktop_jobs: registry.clone(),
+        };
+        let app = Router::new()
+            .nest(super::super::PREFIX, routes())
+            .with_state(state);
+
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "{}/desktop/jobs/{ID}/events?instance_id={instance_id}",
+                        super::super::PREFIX
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let worker_registry = registry.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            worker_registry
+                .progress(ID, json!({"stage": "fetch", "percent": 25}))
+                .unwrap();
+            worker_registry
+                .progress(ID, json!({"stage": "score", "percent": 80}))
+                .unwrap();
+            worker_registry.finish(ID, Ok(json!({"ok": true})), None);
+        });
+
+        let bytes = tokio::time::timeout(
+            Duration::from_secs(5),
+            to_bytes(response.into_body(), 1024 * 1024),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let body = String::from_utf8(bytes.to_vec()).unwrap();
+        let events = parse_sse_frames(&body);
+        assert_eq!(events.len(), 3, "expected 2 progress + 1 done: {body}");
+        assert_eq!(events[0].0, "progress");
+        assert_eq!(events[0].1["event"], "progress");
+        assert_eq!(events[0].1["progress_seq"], 1);
+        assert_eq!(events[0].1["progress"]["percent"], 25);
+        assert_eq!(events[1].0, "progress");
+        assert_eq!(events[1].1["event"], "progress");
+        assert_eq!(events[1].1["progress_seq"], 2);
+        assert_eq!(events[1].1["progress"]["percent"], 80);
+        assert_eq!(events[2].0, "done");
+        assert_eq!(events[2].1["event"], "done");
+        assert_eq!(events[2].1["status"], "done");
+        assert_eq!(events[2].1["progress_seq"], 2);
+        assert_eq!(events[2].1["result"]["ok"], true);
+    }
+
+    #[tokio::test]
+    async fn late_sse_subscriber_to_finished_job_immediately_receives_done_event() {
+        let (_dir, app) = app();
+        let instance_id = instance(&app).await;
+        let (status, _) = request(
+            &app,
+            "POST",
+            "/desktop/jobs",
+            Some(json!({
+                "request_id": ID,
+                "instance_id": instance_id,
+                "method": "hello",
+                "params": {},
+            })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        let finished = terminal(&app, ID, &instance_id).await;
+        assert_eq!(finished["status"], "done");
+
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(format!(
+                        "{}/desktop/jobs/{ID}/events?instance_id={instance_id}",
+                        super::super::PREFIX
+                    ))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = tokio::time::timeout(
+            Duration::from_secs(5),
+            to_bytes(response.into_body(), 1024 * 1024),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let body = String::from_utf8(bytes.to_vec()).unwrap();
+        let events = parse_sse_frames(&body);
+        assert_eq!(events.len(), 1, "expected single terminal event: {body}");
+        assert_eq!(events[0].0, "done");
+        assert_eq!(events[0].1["event"], "done");
+        assert_eq!(events[0].1["status"], "done");
+        assert_eq!(events[0].1["result"]["protocol"], 1);
+    }
+
+    #[tokio::test]
+    async fn sse_endpoint_rejects_mismatched_instance_and_missing_job() {
+        let (_dir, app) = app();
+        let instance_id = instance(&app).await;
+
+        let (status, err) = request(
+            &app,
+            "GET",
+            &format!("/desktop/jobs/{ID}/events?instance_id=old-runtime"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::CONFLICT);
+        assert_eq!(err["error"]["code"], "engine_exited");
+
+        let missing = "ffffffff-ffff-ffff-ffff-ffffffffffff";
+        let (status, _) = request(
+            &app,
+            "GET",
+            &format!("/desktop/jobs/{missing}/events?instance_id={instance_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 }

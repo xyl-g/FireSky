@@ -1,8 +1,7 @@
 import XCTest
 @testable import FireSkyMobile
 
-/// MockTransport / EngineClient 协议语义测试：握手、check→prepare→forecast
-/// 三链、进度帧与取消（与桌面 JSON-lines 验收矩阵同语义）。
+/// MockTransport / EngineClient / Regional / Nowcast 协议与模型测试。
 @MainActor
 final class MockTransportTests: XCTestCase {
     private func makeClient() throws -> (EngineClient, URL) {
@@ -22,30 +21,129 @@ final class MockTransportTests: XCTestCase {
         XCTAssertEqual(hello["protocol"] as? Int, 1)
         XCTAssertEqual(hello["engine"] as? String, "firesky-rust-mock")
         XCTAssertNotNil(hello["cams_credentials"] as? JSONObject)
+        let regions = try XCTUnwrap(hello["regions"] as? [JSONObject])
+        XCTAssertEqual(regions.first?["code"] as? String, "china")
     }
 
     func testCheckPrepareForecastChain() async throws {
         let (client, dir) = try makeClient()
         defer { try? FileManager.default.removeItem(at: dir) }
-        // check：未就绪 + 会话令牌
         let check = try await client.call("check", ["kind": "point", "payload": [:] as JSONObject])
         let session = try XCTUnwrap(check["session"] as? String)
         let report = try XCTUnwrap(check["report"] as? JSONObject)
         XCTAssertEqual(report["ready"] as? Bool, false)
-        // prepare：进度帧非空，最终就绪
+
         var percentages: [Double] = []
         let prepared = try await client.call("prepare", ["session": session]) { event in
             if let percent = event["percent"] as? Double { percentages.append(percent) }
         }
         XCTAssertEqual((prepared["report"] as? JSONObject)?["ready"] as? Bool, true)
         XCTAssertFalse(percentages.isEmpty)
-        // forecast：GFS/EC 双模型
+
         let forecast = try await client.call("forecast", ["session": session, "confirmed": true])
         let models = try XCTUnwrap(forecast["model_results"] as? JSONObject)
         XCTAssertNotNil(models["gfs"] as? JSONObject)
         XCTAssertNotNil(models["ec"] as? JSONObject)
-        // dismiss
+
         _ = try await client.call("dismiss", ["session": "mock-x"])
+    }
+
+    func testRegionalCheckPrepareForecastAndHistoryRestore() async throws {
+        let (client, dir) = try makeClient()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let check = try await client.call("check", [
+            "kind": "regional",
+            "payload": ["regions": ["china"], "model_source": "gfs"] as JSONObject,
+        ])
+        let session = try XCTUnwrap(check["session"] as? String)
+        XCTAssertEqual(check["kind"] as? String, "regional")
+
+        let prepared = try await client.call("prepare", ["session": session])
+        XCTAssertEqual((prepared["report"] as? JSONObject)?["ready"] as? Bool, true)
+
+        let forecast = try await client.call("forecast", ["session": session, "confirmed": true])
+        let regional = RegionalForecast(result: forecast)
+        let gfs = regional.model("gfs")
+        XCTAssertTrue(gfs.available)
+        XCTAssertFalse(gfs.cells.isEmpty)
+        XCTAssertEqual(gfs.cityRankingStatus, "available")
+        XCTAssertEqual(gfs.cityRanking.first?.name, "杭州")
+        XCTAssertNotNil(gfs.hit(lat: 30.0, lon: 121.0, maxDistanceDeg: 2.0))
+
+        // History restore switches Store to regional mode
+        let store = Store()
+        try store.engine.start(workspace: dir.path, transport: MockTransport())
+        store.online = true
+        store.engine.connected = true
+        let item = MobileTaskHistoryItem(
+            taskID: MockTransport.regionalTaskID,
+            method: "forecast",
+            status: "done",
+            createdAt: "2026-11-20T11:15:00.000Z",
+            cancelRequested: false,
+            percent: nil,
+            retryKind: "regional",
+            retryPayload: ["regions": ["china"], "target_date": "2026-11-20",
+                           "phenomenon": "dusk", "model_source": "gfs"],
+            canRestoreResult: true
+        )
+        store.restoreTaskResult(item)
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(store.workbenchMode, "regional")
+        XCTAssertEqual(store.resultKind, .regional)
+        XCTAssertTrue(store.regionalForecast.model("gfs").available)
+        XCTAssertFalse(store.regionalForecast.model("gfs").cityRanking.isEmpty)
+    }
+
+    func testNowcastCheckPrepareForecastAndHistoryRestore() async throws {
+        let (client, dir) = try makeClient()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let check = try await client.call("check", [
+            "kind": "nowcast",
+            "payload": ["name": "杭州", "lat": 30.2741, "lon": 120.1551] as JSONObject,
+        ])
+        let session = try XCTUnwrap(check["session"] as? String)
+        XCTAssertEqual(check["kind"] as? String, "nowcast")
+
+        let prepared = try await client.call("prepare", ["session": session])
+        XCTAssertEqual((prepared["report"] as? JSONObject)?["ready"] as? Bool, true)
+
+        let forecast = try await client.call("forecast", ["session": session, "confirmed": true])
+        let presentation = NowcastPresentation(report: forecast)
+        XCTAssertEqual(presentation.observation["source"] as? String, "himawari-ahi")
+        XCTAssertEqual(presentation.lagrangianTrendKPerHour ?? 0, -2.4, accuracy: 0.01)
+        XCTAssertEqual(presentation.horizonGapScore ?? 0, 0.78, accuracy: 0.01)
+        XCTAssertEqual(presentation.overcastShadowFactor ?? 0, 0.12, accuracy: 0.01)
+        XCTAssertFalse(presentation.profileCells.isEmpty)
+
+        let curve = ForecastComparison.curve(report: forecast, model: "nowcast", timezone: "Asia/Shanghai")
+        XCTAssertFalse(curve.isEmpty)
+
+        // History restore switches Store to nowcast mode
+        let store = Store()
+        try store.engine.start(workspace: dir.path, transport: MockTransport())
+        store.online = true
+        store.engine.connected = true
+        let item = MobileTaskHistoryItem(
+            taskID: MockTransport.nowcastTaskID,
+            method: "forecast",
+            status: "done",
+            createdAt: "2026-11-20T10:05:00.000Z",
+            cancelRequested: false,
+            percent: nil,
+            retryKind: "nowcast",
+            retryPayload: ["name": "杭州", "lat": 30.2741, "lon": 120.1551,
+                           "elevation_m": 8.0, "timezone_name": "Asia/Shanghai",
+                           "target_date": "2026-11-20", "phenomenon": "dusk"],
+            canRestoreResult: true
+        )
+        store.restoreTaskResult(item)
+        try await Task.sleep(for: .milliseconds(250))
+        XCTAssertEqual(store.workbenchMode, "nowcast")
+        XCTAssertEqual(store.resultKind, .nowcast)
+        XCTAssertNotNil(store.nowcastReport)
     }
 
     func testCancelMarksRequest() async throws {
@@ -56,15 +154,13 @@ final class MockTransportTests: XCTestCase {
             _ = try await client.call("check", ["kind": "point", "payload": [:] as JSONObject],
                                       progress: { _ in progressCalls += 1 })
         }
-        try await Task.sleep(for: .milliseconds(200))
+        try await Task.sleep(for: .milliseconds(150))
         task.cancel()
         do {
             _ = try await task.value
             XCTFail("取消后的请求应当抛错")
         } catch is CancellationError {
-            // 预期：任务取消 → CancellationError
         } catch let error as EngineError {
-            // 或引擎侧返回「已取消」错误帧
             XCTAssertTrue(error.message.contains("取消"))
         }
     }
@@ -90,7 +186,7 @@ final class MockTransportTests: XCTestCase {
         XCTAssertEqual(store.errorText(for: .data), "")
 
         XCTAssertFalse(store.resultParametersStale)
-        store.adoptResult(["model_results": [:]], kind: .point, params: store.payload())
+        store.adoptResult(["model_results": [:]], kind: .point, params: store.payload(for: .point))
         XCTAssertFalse(store.resultParametersStale)
         store.phenomenon = "dawn"
         XCTAssertTrue(store.resultParametersStale)

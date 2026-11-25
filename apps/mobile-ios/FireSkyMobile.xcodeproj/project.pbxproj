@@ -7,36 +7,40 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		06F2CF4383E10BFCEE76E992 /* RealEngineChainTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11D285FCB6AEC372191450BD /* RealEngineChainTests.swift */; };
+		00E1E39F26737DBE101F7F77 /* RemoteHttpTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA17F045258BA0753FAB78CF /* RemoteHttpTransportTests.swift */; };
 		0FEF9C69BB160C56A5839D53 /* MapZoom.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4058C36876785CBDCC9A297 /* MapZoom.swift */; };
 		146251A5F7BE8C96EFC89EEE /* WorkbenchKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1CFF6D650BEE78B45DDC04D /* WorkbenchKit.swift */; };
 		1F6B4BDE8156F49B412B9F64 /* EngineTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6847846E81761D5EF31E3F31 /* EngineTransport.swift */; };
-		240366ED59A57F617221011C /* eccodes in Resources */ = {isa = PBXBuildFile; fileRef = 9F9A1BF6DD2C85BF7AC46FA4 /* eccodes */; };
 		2FE8DB5D775590EF59211867 /* ObservationDate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FDCF5F598D054D3E7C573BA /* ObservationDate.swift */; };
+		3426B359836E0F7357D3003B /* RemoteHttpTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5AC060FE880962D3257D9393 /* RemoteHttpTransport.swift */; };
 		46DA434BAB3B62C3F75FF2E4 /* ElevationSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 768189D114CB8A03D959C35E /* ElevationSourceTests.swift */; };
 		4E0E4AB4DC25933B7EFBA939 /* ElevationSourceSetting.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68E4A315BBFDEE0525D2FCF9 /* ElevationSourceSetting.swift */; };
 		50489C543EB8B96832B08868 /* ForecastComparison.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25AB1BD1383B8739239E4CCF /* ForecastComparison.swift */; };
 		53632BD4B02C1CE1EDB3C84A /* MapViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 060010B0B36632D961BDF447 /* MapViews.swift */; };
 		5632280517EBDDEE10F590EE /* DownloadProbeRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = 691AAE099A4E47B63348E095 /* DownloadProbeRow.swift */; };
+		5938E1B06663FF98D32F886A /* RemoteOnboardingCard.swift in Sources */ = {isa = PBXBuildFile; fileRef = 667F6A125296AE639B6C1AB2 /* RemoteOnboardingCard.swift */; };
+		5BA5AF6B2BA1AB21BBFA1101 /* Store+Forecast.swift in Sources */ = {isa = PBXBuildFile; fileRef = 30ED69609B899AD942E5B027 /* Store+Forecast.swift */; };
+		5DF947877F38E65FCD2FCE7B /* RegionalWorkbenchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F87B853B985D90E3FC45AAE8 /* RegionalWorkbenchView.swift */; };
 		614D2F0A6A8B2E10BAD1261F /* Store.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EC84312697E4F89536613DA /* Store.swift */; };
+		75AD57DEDBD2FECB481C5470 /* RegionalForecast.swift in Sources */ = {isa = PBXBuildFile; fileRef = 32BF3A158652108C3452F5C6 /* RegionalForecast.swift */; };
+		7A75A82A5009B052449F4540 /* Store+DataAndSync.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6DC6BF80AACDF6877775240A /* Store+DataAndSync.swift */; };
 		81DF507A50A3E44780F115CE /* PreparationActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8569FDE784C8B73664421187 /* PreparationActions.swift */; };
+		831D9D10E537CAC3885228AC /* NowcastPresentation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 64330730931762020203914E /* NowcastPresentation.swift */; };
+		9A7BF9EB86B51C4204C0A57A /* Store+RemoteServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29C8BAF5770999D66E542703 /* Store+RemoteServer.swift */; };
 		A9A5B3858EDFE7E9DE20BA51 /* BrandMark.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68ACD42AA1AC463A8A8DF147 /* BrandMark.swift */; };
 		BF5F2F72E96C4F3DD947103C /* MockTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 034A534DBF30F40E15147FF3 /* MockTransport.swift */; };
 		C607372C3E64F18478A4D384 /* ObservationDateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F0ED6EC0BDA8AE6F7AFBEA6 /* ObservationDateTests.swift */; };
 		C76EFBF9DB271EC9DD218D96 /* EngineClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B39B751FC7468FDE51B0FB94 /* EngineClient.swift */; };
-		CE1A6299A166D78FE031F039 /* FSMobileTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C2775939457FE147D075B662 /* FSMobileTransportTests.swift */; };
 		CFEF513D8EBBBCF3A332B6BF /* FireSkyMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = D81B4D235B3643D578531E81 /* FireSkyMobileApp.swift */; };
-		D9FEB40CA6213B3F051A7005 /* FSMobileTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C6D85D685587726F1A1C874 /* FSMobileTransport.swift */; };
 		DA6A146F761EB576EACA240C /* FireSkyMobileUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F0FA8A0E9D93CD73EB77F1A /* FireSkyMobileUITests.swift */; };
 		E43C6E97C0514C1D40EA5022 /* PointWorkbenchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A17A2EE3CDBF3501E672DA1 /* PointWorkbenchView.swift */; };
 		EA9341D475843067510602CF /* MockTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F90A3FF247DFD5A1D68F2CC /* MockTransportTests.swift */; };
+		EF0E0CE7FA3B8F44AE16A0C9 /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C94CE53B4D21375F615B468 /* HistoryView.swift */; };
+		F22A32EC57A8D58A4229B916 /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BB5D97D3707ABA4AED4B89F /* DesignSystem.swift */; };
+		F26F585CCA81601662E8787E /* NowcastWorkbenchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 741D40705DBFC6665609512A /* NowcastWorkbenchView.swift */; };
 		F4D7834FA6E11A902B858572 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C60DCA1DB04BDAD77D4618BE /* SettingsView.swift */; };
+		F9D52A2C5746C5F94068A762 /* L10n.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8E7262364B5853CA0BAF04F5 /* L10n.swift */; };
 		FCE5F44B57B5727B22C64500 /* PreflightView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D013C6C5988241B57363FD9A /* PreflightView.swift */; };
-		A1B2C3D4E5F60718293A4B5C /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5D /* HistoryView.swift */; };
-		B1C2D3E4F5A60718293A4B5D /* DesignSystem.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A60718293A4B5E /* DesignSystem.swift */; };
-		B1C2D3E4F5A60718293A4B6D /* L10n.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1C2D3E4F5A60718293A4B6E /* L10n.swift */; };
-		C1A2B3D4E5F60718293A4B71 /* RemoteHttpTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1A2B3D4E5F60718293A4B70 /* RemoteHttpTransport.swift */; };
-		D1A2B3D4E5F60718293A4B81 /* RemoteHttpTransportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1A2B3D4E5F60718293A4B80 /* RemoteHttpTransportTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -59,40 +63,42 @@
 /* Begin PBXFileReference section */
 		034A534DBF30F40E15147FF3 /* MockTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockTransport.swift; sourceTree = "<group>"; };
 		060010B0B36632D961BDF447 /* MapViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapViews.swift; sourceTree = "<group>"; };
-		11D285FCB6AEC372191450BD /* RealEngineChainTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RealEngineChainTests.swift; sourceTree = "<group>"; };
-		223402F56DD1B680AD7CAF38 /* fsmobile.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = fsmobile.h; sourceTree = "<group>"; };
 		25AB1BD1383B8739239E4CCF /* ForecastComparison.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ForecastComparison.swift; sourceTree = "<group>"; };
-		4BFAC022A1535AAFBC1A38BE /* module.modulemap */ = {isa = PBXFileReference; lastKnownFileType = "sourcecode.module-map"; path = module.modulemap; sourceTree = "<group>"; };
+		29C8BAF5770999D66E542703 /* Store+RemoteServer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Store+RemoteServer.swift"; sourceTree = "<group>"; };
+		30ED69609B899AD942E5B027 /* Store+Forecast.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Store+Forecast.swift"; sourceTree = "<group>"; };
+		32BF3A158652108C3452F5C6 /* RegionalForecast.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegionalForecast.swift; sourceTree = "<group>"; };
+		3BB5D97D3707ABA4AED4B89F /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
+		4C94CE53B4D21375F615B468 /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
 		597AB636E7CBFD96926DB099 /* FireSkyMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = FireSkyMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		5AC060FE880962D3257D9393 /* RemoteHttpTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHttpTransport.swift; sourceTree = "<group>"; };
 		5F0FA8A0E9D93CD73EB77F1A /* FireSkyMobileUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FireSkyMobileUITests.swift; sourceTree = "<group>"; };
 		608C20AC38A43FAC00D1A19D /* FireSkyMobileTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FireSkyMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		64330730931762020203914E /* NowcastPresentation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowcastPresentation.swift; sourceTree = "<group>"; };
+		667F6A125296AE639B6C1AB2 /* RemoteOnboardingCard.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteOnboardingCard.swift; sourceTree = "<group>"; };
 		6847846E81761D5EF31E3F31 /* EngineTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineTransport.swift; sourceTree = "<group>"; };
 		68ACD42AA1AC463A8A8DF147 /* BrandMark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BrandMark.swift; sourceTree = "<group>"; };
 		68E4A315BBFDEE0525D2FCF9 /* ElevationSourceSetting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElevationSourceSetting.swift; sourceTree = "<group>"; };
 		691AAE099A4E47B63348E095 /* DownloadProbeRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DownloadProbeRow.swift; sourceTree = "<group>"; };
-		6C6D85D685587726F1A1C874 /* FSMobileTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FSMobileTransport.swift; sourceTree = "<group>"; };
+		6DC6BF80AACDF6877775240A /* Store+DataAndSync.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Store+DataAndSync.swift"; sourceTree = "<group>"; };
+		741D40705DBFC6665609512A /* NowcastWorkbenchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NowcastWorkbenchView.swift; sourceTree = "<group>"; };
 		768189D114CB8A03D959C35E /* ElevationSourceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ElevationSourceTests.swift; sourceTree = "<group>"; };
 		7A0581E99BA2990A41972A34 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		7EC84312697E4F89536613DA /* Store.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Store.swift; sourceTree = "<group>"; };
 		7F90A3FF247DFD5A1D68F2CC /* MockTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MockTransportTests.swift; sourceTree = "<group>"; };
 		8569FDE784C8B73664421187 /* PreparationActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreparationActions.swift; sourceTree = "<group>"; };
+		8E7262364B5853CA0BAF04F5 /* L10n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10n.swift; sourceTree = "<group>"; };
 		8F0ED6EC0BDA8AE6F7AFBEA6 /* ObservationDateTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationDateTests.swift; sourceTree = "<group>"; };
 		8FDCF5F598D054D3E7C573BA /* ObservationDate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ObservationDate.swift; sourceTree = "<group>"; };
 		9A17A2EE3CDBF3501E672DA1 /* PointWorkbenchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PointWorkbenchView.swift; sourceTree = "<group>"; };
-		9F9A1BF6DD2C85BF7AC46FA4 /* eccodes */ = {isa = PBXFileReference; lastKnownFileType = folder; name = eccodes; path = Resources/eccodes; sourceTree = SOURCE_ROOT; };
 		A1CFF6D650BEE78B45DDC04D /* WorkbenchKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkbenchKit.swift; sourceTree = "<group>"; };
 		B39B751FC7468FDE51B0FB94 /* EngineClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EngineClient.swift; sourceTree = "<group>"; };
 		B4058C36876785CBDCC9A297 /* MapZoom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MapZoom.swift; sourceTree = "<group>"; };
-		C2775939457FE147D075B662 /* FSMobileTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FSMobileTransportTests.swift; sourceTree = "<group>"; };
 		C60DCA1DB04BDAD77D4618BE /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		D013C6C5988241B57363FD9A /* PreflightView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PreflightView.swift; sourceTree = "<group>"; };
-		A1B2C3D4E5F60718293A4B5D /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
-		B1C2D3E4F5A60718293A4B5E /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
-		B1C2D3E4F5A60718293A4B6E /* L10n.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = L10n.swift; sourceTree = "<group>"; };
 		D1409135B9272E743DE3E0F6 /* FireSkyMobileUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = FireSkyMobileUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		D81B4D235B3643D578531E81 /* FireSkyMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FireSkyMobileApp.swift; sourceTree = "<group>"; };
-		C1A2B3D4E5F60718293A4B70 /* RemoteHttpTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHttpTransport.swift; sourceTree = "<group>"; };
-		D1A2B3D4E5F60718293A4B80 /* RemoteHttpTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHttpTransportTests.swift; sourceTree = "<group>"; };
+		EA17F045258BA0753FAB78CF /* RemoteHttpTransportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RemoteHttpTransportTests.swift; sourceTree = "<group>"; };
+		F87B853B985D90E3FC45AAE8 /* RegionalWorkbenchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RegionalWorkbenchView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXGroup section */
@@ -103,8 +109,10 @@
 				68E4A315BBFDEE0525D2FCF9 /* ElevationSourceSetting.swift */,
 				25AB1BD1383B8739239E4CCF /* ForecastComparison.swift */,
 				B4058C36876785CBDCC9A297 /* MapZoom.swift */,
+				64330730931762020203914E /* NowcastPresentation.swift */,
 				8FDCF5F598D054D3E7C573BA /* ObservationDate.swift */,
 				8569FDE784C8B73664421187 /* PreparationActions.swift */,
+				32BF3A158652108C3452F5C6 /* RegionalForecast.swift */,
 			);
 			path = Model;
 			sourceTree = "<group>";
@@ -113,6 +121,9 @@
 			isa = PBXGroup;
 			children = (
 				7EC84312697E4F89536613DA /* Store.swift */,
+				6DC6BF80AACDF6877775240A /* Store+DataAndSync.swift */,
+				30ED69609B899AD942E5B027 /* Store+Forecast.swift */,
+				29C8BAF5770999D66E542703 /* Store+RemoteServer.swift */,
 			);
 			path = Store;
 			sourceTree = "<group>";
@@ -143,15 +154,6 @@
 			name = Products;
 			sourceTree = "<group>";
 		};
-		640FC1B3E2428916D76DA2BE /* Native */ = {
-			isa = PBXGroup;
-			children = (
-				223402F56DD1B680AD7CAF38 /* fsmobile.h */,
-				4BFAC022A1535AAFBC1A38BE /* module.modulemap */,
-			);
-			path = Native;
-			sourceTree = "<group>";
-		};
 		654C8812EEF35B7133EB72B7 /* FireSkyMobile */ = {
 			isa = PBXGroup;
 			children = (
@@ -169,11 +171,9 @@
 			isa = PBXGroup;
 			children = (
 				768189D114CB8A03D959C35E /* ElevationSourceTests.swift */,
-				C2775939457FE147D075B662 /* FSMobileTransportTests.swift */,
 				7F90A3FF247DFD5A1D68F2CC /* MockTransportTests.swift */,
 				8F0ED6EC0BDA8AE6F7AFBEA6 /* ObservationDateTests.swift */,
-				11D285FCB6AEC372191450BD /* RealEngineChainTests.swift */,
-				D1A2B3D4E5F60718293A4B80 /* RemoteHttpTransportTests.swift */,
+				EA17F045258BA0753FAB78CF /* RemoteHttpTransportTests.swift */,
 			);
 			path = Tests;
 			sourceTree = "<group>";
@@ -182,32 +182,25 @@
 			isa = PBXGroup;
 			children = (
 				68ACD42AA1AC463A8A8DF147 /* BrandMark.swift */,
+				3BB5D97D3707ABA4AED4B89F /* DesignSystem.swift */,
+				4C94CE53B4D21375F615B468 /* HistoryView.swift */,
+				8E7262364B5853CA0BAF04F5 /* L10n.swift */,
 				060010B0B36632D961BDF447 /* MapViews.swift */,
+				741D40705DBFC6665609512A /* NowcastWorkbenchView.swift */,
 				9A17A2EE3CDBF3501E672DA1 /* PointWorkbenchView.swift */,
 				D013C6C5988241B57363FD9A /* PreflightView.swift */,
-				A1B2C3D4E5F60718293A4B5D /* HistoryView.swift */,
-				B1C2D3E4F5A60718293A4B5E /* DesignSystem.swift */,
-				B1C2D3E4F5A60718293A4B6E /* L10n.swift */,
+				F87B853B985D90E3FC45AAE8 /* RegionalWorkbenchView.swift */,
+				667F6A125296AE639B6C1AB2 /* RemoteOnboardingCard.swift */,
 				C60DCA1DB04BDAD77D4618BE /* SettingsView.swift */,
 				A1CFF6D650BEE78B45DDC04D /* WorkbenchKit.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
 		};
-		7758D6E8B7BA602512F39D37 /* Resources */ = {
-			isa = PBXGroup;
-			children = (
-				9F9A1BF6DD2C85BF7AC46FA4 /* eccodes */,
-			);
-			path = Resources;
-			sourceTree = "<group>";
-		};
 		8EDCFB81808DEA98CDB719B4 = {
 			isa = PBXGroup;
 			children = (
 				654C8812EEF35B7133EB72B7 /* FireSkyMobile */,
-				640FC1B3E2428916D76DA2BE /* Native */,
-				7758D6E8B7BA602512F39D37 /* Resources */,
 				6B06B1E8FF0F0CB74F94E95D /* Tests */,
 				53BB6A9F6AA9ADFC02162497 /* UITests */,
 				57A2AAD799B31045A8D74D9C /* Products */,
@@ -219,9 +212,8 @@
 			children = (
 				B39B751FC7468FDE51B0FB94 /* EngineClient.swift */,
 				6847846E81761D5EF31E3F31 /* EngineTransport.swift */,
-				6C6D85D685587726F1A1C874 /* FSMobileTransport.swift */,
 				034A534DBF30F40E15147FF3 /* MockTransport.swift */,
-				C1A2B3D4E5F60718293A4B70 /* RemoteHttpTransport.swift */,
+				5AC060FE880962D3257D9393 /* RemoteHttpTransport.swift */,
 			);
 			path = Engine;
 			sourceTree = "<group>";
@@ -270,7 +262,6 @@
 			buildConfigurationList = F8C704F7E06479ABAA1EC378 /* Build configuration list for PBXNativeTarget "FireSkyMobile" */;
 			buildPhases = (
 				E88DC2A698FDF4825DCCD67B /* Sources */,
-				543531D1D16897D0920287E5 /* Resources */,
 			);
 			buildRules = (
 			);
@@ -325,17 +316,6 @@
 		};
 /* End PBXProject section */
 
-/* Begin PBXResourcesBuildPhase section */
-		543531D1D16897D0920287E5 /* Resources */ = {
-			isa = PBXResourcesBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-				240366ED59A57F617221011C /* eccodes in Resources */,
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-		};
-/* End PBXResourcesBuildPhase section */
-
 /* Begin PBXSourcesBuildPhase section */
 		21C582B9D9252B20BA672CC6 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -350,11 +330,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				46DA434BAB3B62C3F75FF2E4 /* ElevationSourceTests.swift in Sources */,
-				CE1A6299A166D78FE031F039 /* FSMobileTransportTests.swift in Sources */,
 				EA9341D475843067510602CF /* MockTransportTests.swift in Sources */,
 				C607372C3E64F18478A4D384 /* ObservationDateTests.swift in Sources */,
-				06F2CF4383E10BFCEE76E992 /* RealEngineChainTests.swift in Sources */,
-				D1A2B3D4E5F60718293A4B81 /* RemoteHttpTransportTests.swift in Sources */,
+				00E1E39F26737DBE101F7F77 /* RemoteHttpTransportTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -363,25 +341,32 @@
 			buildActionMask = 2147483647;
 			files = (
 				A9A5B3858EDFE7E9DE20BA51 /* BrandMark.swift in Sources */,
+				F22A32EC57A8D58A4229B916 /* DesignSystem.swift in Sources */,
 				5632280517EBDDEE10F590EE /* DownloadProbeRow.swift in Sources */,
 				4E0E4AB4DC25933B7EFBA939 /* ElevationSourceSetting.swift in Sources */,
 				C76EFBF9DB271EC9DD218D96 /* EngineClient.swift in Sources */,
 				1F6B4BDE8156F49B412B9F64 /* EngineTransport.swift in Sources */,
-				D9FEB40CA6213B3F051A7005 /* FSMobileTransport.swift in Sources */,
 				CFEF513D8EBBBCF3A332B6BF /* FireSkyMobileApp.swift in Sources */,
 				50489C543EB8B96832B08868 /* ForecastComparison.swift in Sources */,
+				EF0E0CE7FA3B8F44AE16A0C9 /* HistoryView.swift in Sources */,
+				F9D52A2C5746C5F94068A762 /* L10n.swift in Sources */,
 				53632BD4B02C1CE1EDB3C84A /* MapViews.swift in Sources */,
 				0FEF9C69BB160C56A5839D53 /* MapZoom.swift in Sources */,
 				BF5F2F72E96C4F3DD947103C /* MockTransport.swift in Sources */,
-				C1A2B3D4E5F60718293A4B71 /* RemoteHttpTransport.swift in Sources */,
+				831D9D10E537CAC3885228AC /* NowcastPresentation.swift in Sources */,
+				F26F585CCA81601662E8787E /* NowcastWorkbenchView.swift in Sources */,
 				2FE8DB5D775590EF59211867 /* ObservationDate.swift in Sources */,
 				E43C6E97C0514C1D40EA5022 /* PointWorkbenchView.swift in Sources */,
 				FCE5F44B57B5727B22C64500 /* PreflightView.swift in Sources */,
-				A1B2C3D4E5F60718293A4B5C /* HistoryView.swift in Sources */,
-				B1C2D3E4F5A60718293A4B5D /* DesignSystem.swift in Sources */,
-				B1C2D3E4F5A60718293A4B6D /* L10n.swift in Sources */,
 				81DF507A50A3E44780F115CE /* PreparationActions.swift in Sources */,
+				75AD57DEDBD2FECB481C5470 /* RegionalForecast.swift in Sources */,
+				5DF947877F38E65FCD2FCE7B /* RegionalWorkbenchView.swift in Sources */,
+				3426B359836E0F7357D3003B /* RemoteHttpTransport.swift in Sources */,
+				5938E1B06663FF98D32F886A /* RemoteOnboardingCard.swift in Sources */,
 				F4D7834FA6E11A902B858572 /* SettingsView.swift in Sources */,
+				7A75A82A5009B052449F4540 /* Store+DataAndSync.swift in Sources */,
+				5BA5AF6B2BA1AB21BBFA1101 /* Store+Forecast.swift in Sources */,
+				9A7BF9EB86B51C4204C0A57A /* Store+RemoteServer.swift in Sources */,
 				614D2F0A6A8B2E10BAD1261F /* Store.swift in Sources */,
 				146251A5F7BE8C96EFC89EEE /* WorkbenchKit.swift in Sources */,
 			);
@@ -473,7 +458,7 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 23;
+				CURRENT_PROJECT_VERSION = 24;
 				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				ENABLE_NS_ASSERTIONS = NO;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
@@ -486,7 +471,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 1.10.0;
+				MARKETING_VERSION = 1.10.1;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				MTL_FAST_MATH = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
@@ -509,7 +494,6 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = cn.firesky.mobile.tests;
 				SDKROOT = iphoneos;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Native";
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FireSkyMobile.app/FireSkyMobile";
 			};
@@ -525,11 +509,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios/release/libengine_mobile.a -lc++";
-				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = "$(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios-sim/release/libengine_mobile.a -lc++";
 				PRODUCT_BUNDLE_IDENTIFIER = cn.firesky.mobile;
 				SDKROOT = iphoneos;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Native";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
@@ -546,7 +527,6 @@
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = cn.firesky.mobile.tests;
 				SDKROOT = iphoneos;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Native";
 				TARGETED_DEVICE_FAMILY = "1,2";
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/FireSkyMobile.app/FireSkyMobile";
 			};
@@ -562,11 +542,8 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				"OTHER_LDFLAGS[sdk=iphoneos*]" = "$(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios/release/libengine_mobile.a -lc++";
-				"OTHER_LDFLAGS[sdk=iphonesimulator*]" = "$(SRCROOT)/../../engine-mobile/target/aarch64-apple-ios-sim/release/libengine_mobile.a -lc++";
 				PRODUCT_BUNDLE_IDENTIFIER = cn.firesky.mobile;
 				SDKROOT = iphoneos;
-				SWIFT_INCLUDE_PATHS = "$(SRCROOT)/Native";
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -607,7 +584,7 @@
 				CODE_SIGNING_ALLOWED = NO;
 				CODE_SIGN_STYLE = Automatic;
 				COPY_PHASE_STRIP = NO;
-				CURRENT_PROJECT_VERSION = 23;
+				CURRENT_PROJECT_VERSION = 24;
 				DEBUG_INFORMATION_FORMAT = dwarf;
 				ENABLE_STRICT_OBJC_MSGSEND = YES;
 				ENABLE_TESTABILITY = YES;
@@ -626,7 +603,7 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 1.10.0;
+				MARKETING_VERSION = 1.10.1;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				MTL_FAST_MATH = YES;
 				ONLY_ACTIVE_ARCH = YES;

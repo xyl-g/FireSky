@@ -20,7 +20,8 @@ struct PreflightView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
                     Text(L10n.t("预测准备")).font(.title2.weight(.semibold))
-                    Text(store.name).font(.callout).foregroundStyle(.secondary)
+                    Text(store.requestKind == .regional ? store.regionalTitle : store.name)
+                        .font(.callout).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button { store.refreshCheck() } label: {

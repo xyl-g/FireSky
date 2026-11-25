@@ -8,6 +8,29 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v1.10.1 (2026-11-25)
+
+iOS / Android 全面转型纯原生瘦客户端（直连 Mac / Windows / Docker 服务端，移除笨重本地内嵌引擎与 131 MB ecCodes）、新增 iOS `.ipa` 随 Release 自动发布、移动端补齐区域预测（中国热力图 + 城市排行）与卫星实况、实时 SSE 进度流、卫星实况负仰角晴空隙物理判据升级，以及桌面包体瘦身与模块化重构。
+Rebuilt iOS & Android as pure native thin clients (connecting to Mac/Windows/Docker servers over real-time SSE, dropping embedded local engine & 131 MB ecCodes), added automated iOS `.ipa` Release builds, shipped mobile Regional Forecast (China heatmap + city ranking) and Satellite Nowcast, upgraded negative-elevation nowcast horizon-gap physics, pruned desktop ecCodes bundles (~130 MB → ~42 MB), eliminated Rust/WinUI compiler warnings, and modularized oversized client/engine files.
+
+**移动端纯瘦客户端 + 区域预测 + 卫星实况 + 实时 SSE / Mobile Thin Clients, Regional & Nowcast, Real-Time SSE**
+
+- **iOS & Android 瘦客户端转型（告别手机本地卡顿与大包体）**：彻底剥离手机端内嵌 `engine-mobile`、JNI / FFI 与 131 MB `ecCodes` 资源；首次打开展示 macOS 风格「连接 FireSky 服务器」引导卡（支持 Cloudflare Tunnel HTTPS 与局域网 HTTP + Bearer Token），Android 通用 APK 瘦身至 ~16 MB（debug）、iOS Release `.app` 仅 ~7.2 MB，CI 同步新增未签名可侧载 **`FireSky-1.10.1-ios-arm64.ipa`** 自动打包随 Release 发布。
+  Converted iOS & Android to pure native remote thin clients by stripping `engine-mobile`, JNI/FFI, and 131 MB `ecCodes` assets; added a first-run server-connection onboarding card (Cloudflare Tunnel HTTPS & LAN HTTP + Bearer token), slashed APK/app sizes, and added automated unsigned sideloadable `FireSky-1.10.1-ios-arm64.ipa` builds to GitHub Releases.
+- **移动端补齐「区域预测」与「卫星实况」**：iOS 与 Android 工作台顶部新增 macOS 同款三模式胶囊切换（单点预测 / 区域预测 / 卫星实况），支持中国及预设区域墨卡托热力图、色标图例、点按检视与一键转单点、可检索城市排行、卫星实况 4 小时窗口指引、5 分钟质量曲线、拉格朗日云顶亮温趋势与地平线晴空隙/阴云遮挡诊断，并支持从任务历史直接恢复区域与实况结果。
+  Added a 3-mode capsule switcher (Point / Regional / Nowcast) on iOS & Android with China/regional Mercator heatmaps, color legends, tap-to-inspect + open-in-point, searchable city rankings, 4-hour nowcast guidance, 5-minute quality curves, Lagrangian trend + horizon-gap/overcast diagnostics, and full history restoration.
+- **远程模式实时 SSE 流式推送**：Rust 服务端 `engine/src/http/desktop.rs` 新增 `GET /api/v1/firesky/desktop/jobs/{request_id}/events`（基于 `broadcast` 即时推送进度与终态，兼容已完结任务立即回报）；iOS 与 Android `RemoteHttpTransport` 优先消费实时 SSE 流并在旧服务端 404 或断流时无感降级回自适应轮询。
+  Added `GET /api/v1/firesky/desktop/jobs/{request_id}/events` SSE streaming to the Rust HTTP server and upgraded iOS/Android `RemoteHttpTransport` to stream progress & terminal events in real time with transparent fallback to adaptive polling.
+
+**卫星实况算法升级与工程瘦身 / Nowcast Physics & P2 Engineering Cleanup**
+
+- **卫星实况负仰角晴空隙 vs 连续厚阴云判据**：`desktop_nowcast_assessment.rs` 与 `nowcast_runtime.rs` 在太阳负仰角下评估远端太阳方向云下遮挡光学厚度，计算 `horizon_gap_score` 与 `overcast_shadow_factor`——厚阴云封死地平线时抑制 `dawn_boost` 虚高，远端存在晴空隙且云底高于受光高度时保留完整底面受光亮度。
+  Upgraded negative-elevation solar ray-tracing in `desktop_nowcast_assessment.rs` & `nowcast_runtime.rs` with `horizon_gap_score` and `overcast_shadow_factor` to suppress false `dawn_boost` inflation under solid horizon overcast while preserving clear-gap high/mid cloud illumination.
+- **桌面安装包 `ecCodes` 裁剪（~130 MB → ~42 MB）**：macOS 与 Windows 打包脚本（`bundle-macos-eccodes.mjs` / `bundle-vcpkg-eccodes.mjs` / `scripts/prune_eccodes_definitions.sh`）移除未使用的 `bufr`/`grib1`/`grib3`/`taf`/`metar` 等 12 个非 GRIB2 目录，节省 ~88 MiB 并通过真 GRIB2 解码回归校验。
+  Pruned 12 unused non-GRIB2 directories (`bufr`, `grib1`, `grib3`, `taf`, `metar`, etc.) from macOS & Windows `ecCodes` bundles (~130 MB → ~42 MB, saving ~88 MiB) verified against real GRIB2 decode tests.
+- **编译警告清零、模块化拆分与 Compose UI 测试**：清零 `engine/` 全量 Rust 编译警告与 Windows WinUI 5 条 C# 警告；拆分 macOS `Workbench.swift`（4,715→1,062 行）、`DialogViews.swift`（2,018→880 行）、`engine/src/desktop_runtime.rs`、iOS `Store.swift` 与 Android `WorkbenchStore.kt`；新增 Android Jetpack Compose UI 测试套件（`WorkbenchComposeUiTest.kt`）。
+  Eliminated all Rust & WinUI compiler warnings, modularized macOS `Workbench.swift`/`DialogViews.swift`, `desktop_runtime.rs`, iOS `Store.swift`, and Android `WorkbenchStore.kt`, and added Android Jetpack Compose UI tests.
+
 ## v1.10.0 (2026-11-24)
 
 全端视觉设计统一对齐 macOS Liquid Glass 基准（Windows / iOS / Android）与手机端远程服务器模式（直连 Mac 局域网 / Cloudflare Tunnel）。

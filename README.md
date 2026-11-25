@@ -7,14 +7,13 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 
 > English documentation: [README.en.md](README.en.md)
 
-> 当前版本 **v1.10.0**（见[下载安装](#下载安装releases)）：macOS DMG（双架构）
-> 与 Windows zip + 安装器（x64/ARM64）随 CI `v*` tag 自动直发 Release，
-> Android APK 自动发布已接入（mobile-release job，随 tag 构建），iOS 从源码
-> 构建（Xcode）。v1.10.0 主线：**Windows / iOS / Android 全端视觉与功能对齐
-> macOS Liquid Glass 基准**，以及**手机端远程服务器模式**（支持通过 Cloudflare
-> Tunnel 或局域网直连 Mac 内置服务，共享 Mac 缓存、预测与任务历史）；继承
-> v1.9.10 的数据检查 30 秒看门狗卡顿根治、同步助手 5 分钟轻量监控、6 帧多波段
-> 卫星实况、中国区域并行解码与中间产物即时清理。UI 设计系统 v2
+> 当前版本 **v1.10.1**（见[下载安装](#下载安装releases)）：macOS DMG（双架构）、
+> Windows zip + 安装器（x64/ARM64）、Android 通用 APK 与 iOS 未签名 IPA
+> 全部随 CI `v*` tag 自动直发 Release。v1.10.1 主线：**iOS / Android 全面转型
+> 纯原生瘦客户端**（直连 Mac / Windows / Docker 服务端，彻底移除手机端内嵌引擎
+> 与 131 MB ecCodes）、**移动端补齐区域预测（中国热力图/城市排行）与卫星实况**、
+> **实时 SSE 进度推送**、卫星实况负仰角晴空隙物理判据升级、桌面端 `ecCodes`
+> 包体裁剪（130 MB → 42 MB）以及全端模块化与零警告收口。UI 设计系统 v2
 > （毛玻璃卡片 / 状态徽标 / 强调渐变 / 夜空蓝暗色）token 见 [DESIGN.md](DESIGN.md)。
 > UI 以 [macOS 产品与 UI 基准](docs/MACOS_UI_BASELINE.zh-CN.md)为参照，移动端蓝图与验收状态见
 > [移动端双原生计划](docs/MOBILE_NATIVE_PLAN.md)。
@@ -62,14 +61,15 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
   Windows 机器完成构建与运行验收，发布形态为自包含 zip + Inno Setup 安装器；
   Linux 原生 UI 代码保留（不再作为发布目标，见[平台策略](#平台策略)）；
   [构建与迁移状态](apps/README.md)。
-- **移动应用**：iOS SwiftUI + Android Kotlin/Compose 双原生，预测引擎内嵌进程内
-  （`engine-mobile`，与桌面同源）；单点预测/数据管理/任务历史对齐桌面基准，
-  Android APK 随 Release 自动发布，见[移动应用（v1 范围）](#移动应用v1-范围)。
+- **移动应用**：iOS SwiftUI + Android Kotlin/Compose 纯原生瘦客户端，通过局域网
+  HTTP 或 Cloudflare Tunnel HTTPS + SSE 实时流直连 Mac / Windows / Docker 服务端，
+  支持单点预测、区域预测（中国热力图与城市排行）、卫星实况、数据管理与任务历史；
+  Android APK 与 iOS IPA 均随 Release 自动发布。
 
 ## 下载安装（Releases）
 
 正式版统一从 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) 下载
-（当前 **v1.10.0**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
+（当前 **v1.10.1**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
 与各资产放在同一目录执行）：
 
 ```bash
@@ -84,11 +84,12 @@ shasum -a 256 -c SHA256SUMS.txt
 | `FireSky-<版本>-macos-x86_64.dmg` | macOS 14+（Intel） | CI Intel 构建 + 冒烟；Apple Silicon 可经 Rosetta 2 运行 |
 | `FireSky-<版本>-windows-x64.zip` / `-x64-setup.exe` | Windows 10 19041+（x64） | 绿色 zip / Inno Setup 安装器 |
 | `FireSky-<版本>-windows-arm64.zip` / `-arm64-setup.exe` | Windows（ARM64） | 同上 |
-| `FireSky-<版本>-android-arm64.apk` | Android 8.0+（arm64-v8a） | 自签 release APK（mobile-release job 随 tag 构建） |
+| `FireSky-<版本>-android-arm64.apk` | Android 8.0+（通用纯瘦客户端） | 纯 Kotlin/Compose 瘦客户端 APK（无本地大引擎） |
+| `FireSky-<版本>-ios-arm64.ipa` | iOS 16+（arm64 纯瘦客户端） | 未签名 `.ipa`，可用 AltStore / SideStore / Sideloadly / TrollStore / 开发者重签安装 |
 | `SHA256SUMS.txt` | — | 全部资产 SHA256 清单 |
 
-> Android APK 自 mobile-release job 首个跑通的 tag 起随 Release 提供；iOS IPA
-> 暂不随 Release 分发（见 [iOS](#ios) 从源码构建）；Docker 镜像请从源码构建
+> Android APK 与 iOS IPA 均随 `v*` tag 自动构建直发 Release（iOS IPA 为未签名包，
+> 需通过侧载工具或自行签名安装）；Docker 镜像请从源码构建
 > （见 [Docker 自托管](#docker-自托管)）。
 
 ### macOS

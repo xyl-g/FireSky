@@ -32,10 +32,13 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
+import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.Place
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SatelliteAlt
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -83,6 +86,7 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -111,7 +115,7 @@ fun WorkbenchApp(store: WorkbenchStore) {
                 topBar = {
                     if (state.page == "workbench") {
                         TopAppBar(
-                            title = { HeaderLine(state) },
+                            title = { HeaderLine(store, state) },
                             colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent),
                             windowInsets = WindowInsets(0.dp),
                         )
@@ -120,7 +124,7 @@ fun WorkbenchApp(store: WorkbenchStore) {
                 bottomBar = {
                     Column(Modifier.background(navBg)) {
                         HorizontalDivider(thickness = 0.5.dp, color = navDivider)
-                        if (state.page == "workbench" && !state.showPreflight) {
+                        if (state.page == "workbench" && !state.showPreflight && (state.serverConfigured || state.online)) {
                             Box(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                                 RunButton(store, state)
                             }
@@ -206,7 +210,7 @@ private fun RowScope.NavigationItem(
 
 // ---------------------------------------------------------------- 工作台主面
 
-/** 单点工作台（Workbench.swift workbench 区域同构）：参数表单 → 运行 → 进度 → 结果卡片。 */
+/** 工作台主面：远程服务器引导 + 三模式（单点预测 / 区域预测 / 卫星实况）切换 + 参数 → 运行 → 结果。 */
 @Composable
 fun WorkbenchScreen(store: WorkbenchStore, state: WorkbenchState) {
     val pageError = state.errorText("workbench")
@@ -218,20 +222,174 @@ fun WorkbenchScreen(store: WorkbenchStore, state: WorkbenchState) {
             .padding(top = 4.dp, bottom = 14.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        if (!state.online) OfflineBanner(state) { store.connect() }
-        if (state.online && pageError.isNotEmpty()) {
-            DismissibleErrorBanner(pageError, onDismiss = { store.clearError() })
+        if (!state.serverConfigured && !state.online) {
+            RemoteServerOnboardingCard(store, state)
+        } else {
+            if (!state.online) {
+                OfflineBanner(state, onOpenSettings = {
+                    store.setSettingsCategory("高级")
+                    store.setPage("settings")
+                }) { store.connect() }
+            }
+            if (state.online && pageError.isNotEmpty()) {
+                DismissibleErrorBanner(pageError, onDismiss = { store.clearError() })
+            }
         }
-        LocationCard(store, state)
-        ParametersCard(store, state)
+
+        CapsuleCategoryBar(
+            options = listOf("point", "regional", "nowcast"),
+            titles = listOf(
+                stringResource(R.string.mode_point),
+                stringResource(R.string.mode_regional),
+                stringResource(R.string.mode_nowcast),
+            ),
+            icons = listOf(Icons.Filled.Place, Icons.Filled.Map, Icons.Filled.SatelliteAlt),
+            selection = state.workbenchMode,
+            onSelect = { store.setWorkbenchMode(it) },
+        )
+
+        if (state.workbenchMode == "nowcast") {
+            NowcastGuidanceBanner()
+        }
+
+        if (state.workbenchMode == "regional") {
+            RegionalControlsCard(store, state)
+        } else {
+            LocationCard(store, state)
+        }
+
+        ParametersCard(store, state, showCoordinatesEditor = state.workbenchMode != "regional")
+
         if (state.busy && !state.showPreflight) ProgressRow(store, state)
-        ResultSection(store, state)
+
+        when (state.workbenchMode) {
+            "regional" -> RegionalResultSection(store, state)
+            "nowcast" -> NowcastResultSection(store, state)
+            else -> ResultSection(store, state)
+        }
     }
 }
 
 @Composable
-private fun HeaderLine(state: WorkbenchState) {
+private fun RemoteServerOnboardingCard(store: WorkbenchStore, state: WorkbenchState) {
+    WorkSurface(Modifier.fillMaxWidth(), emphasized = true) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                IconBadge(Icons.Filled.CloudQueue, tint = MaterialTheme.colorScheme.primary)
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(stringResource(R.string.onboarding_connect_title), fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                    Text(
+                        stringResource(R.string.onboarding_connect_subtitle),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                    )
+                }
+            }
+            RemoteServerConnectionForm(store, state)
+        }
+    }
+}
+
+/** 共享远程服务器表单（首次引导卡与设置页共用）。 */
+@Composable
+fun RemoteServerConnectionForm(store: WorkbenchStore, state: WorkbenchState) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        OutlinedTextField(
+            value = state.remoteServerUrl,
+            onValueChange = store::setRemoteServerUrl,
+            label = { Text(stringResource(R.string.remote_url_label), fontSize = 11.sp) },
+            placeholder = { Text(stringResource(R.string.remote_url_placeholder), fontSize = 12.sp) },
+            singleLine = true,
+            shape = SoftInputShape,
+            colors = softInputColors(),
+            textStyle = MaterialTheme.typography.bodySmall,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            modifier = Modifier.fillMaxWidth(),
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedTextField(
+                value = state.remoteTokenDraft,
+                onValueChange = store::setRemoteTokenDraft,
+                label = { Text(stringResource(R.string.remote_token_label), fontSize = 11.sp) },
+                placeholder = {
+                    Text(
+                        stringResource(
+                            if (state.remoteTokenSaved) R.string.remote_token_saved_hint
+                            else R.string.remote_token_hint,
+                        ),
+                        fontSize = 11.sp,
+                    )
+                },
+                singleLine = true,
+                shape = SoftInputShape,
+                colors = softInputColors(),
+                visualTransformation = PasswordVisualTransformation(),
+                textStyle = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.weight(1f),
+            )
+            if (state.remoteTokenSaved) {
+                TextButton(onClick = { store.clearRemoteToken() }) {
+                    Text(stringResource(R.string.remote_clear_token), fontSize = 11.sp)
+                }
+            }
+        }
+        WorkSurface(Modifier.fillMaxWidth(), grouped = true, cornerRadius = 10.dp) {
+            Text(
+                stringResource(R.string.remote_pairing_hint),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.68f),
+                lineHeight = 15.sp,
+                modifier = Modifier.padding(10.dp),
+            )
+        }
+        if (state.remoteTestMessage.isNotEmpty()) {
+            Text(
+                state.remoteTestMessage,
+                fontSize = 11.sp,
+                color = if (state.remoteTestOk) Color(0xFF3B9C57) else MaterialTheme.colorScheme.error,
+            )
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            OutlinedButton(
+                onClick = { store.testRemoteServer() },
+                enabled = !state.remoteTesting && state.remoteServerUrl.trim().isNotEmpty(),
+                modifier = Modifier.weight(1f).heightIn(min = 48.dp),
+                shape = RoundedCornerShape(14.dp),
+            ) {
+                if (state.remoteTesting) {
+                    CircularProgressIndicator(Modifier.size(14.dp), strokeWidth = 1.5.dp)
+                    Spacer(Modifier.width(6.dp))
+                }
+                Text(stringResource(R.string.remote_test_connection), fontSize = 13.sp, maxLines = 1)
+            }
+            Box(Modifier.weight(1f)) {
+                AccentButton(
+                    title = stringResource(R.string.remote_save_and_connect),
+                    enabled = !state.remoteTesting && state.remoteServerUrl.trim().isNotEmpty(),
+                ) {
+                    store.saveAndConnectRemoteServer()
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeaderLine(store: WorkbenchStore, state: WorkbenchState) {
     val loc = state.location
+    val titleRes = when (state.workbenchMode) {
+        "regional" -> R.string.mode_regional
+        "nowcast" -> R.string.mode_nowcast
+        else -> R.string.point_title
+    }
+    val subtitle = when (state.workbenchMode) {
+        "regional" -> "${state.selectedRegionPreset.label} · ${state.regionalModel.uppercase()} · ${state.targetDate}"
+        else -> "%s · %.4f° N, %.4f° E".format(loc.name, loc.lat, loc.lon)
+    }
     Row(
         modifier = Modifier.fillMaxWidth().padding(end = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -240,23 +398,36 @@ private fun HeaderLine(state: WorkbenchState) {
         FireSkyMark(Modifier.size(34.dp))
         Column(Modifier.weight(1f)) {
             Text(
-                stringResource(R.string.point_title),
+                stringResource(titleRes),
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onBackground,
             )
             Text(
-                "%s · %.4f° N, %.4f° E".format(loc.name, loc.lat, loc.lon),
+                subtitle,
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f),
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        if (state.isRemoteMode) {
-            val statusColor = if (state.online) Color(0xFF3B9C57) else Color(0xFFC98B2C)
+        val statusColor = when {
+            state.online -> Color(0xFF3B9C57)
+            state.serverConfigured -> Color(0xFFC98B2C)
+            else -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)
+        }
+        Box(
+            Modifier.clip(CircleShape).clickable {
+                store.setSettingsCategory("高级")
+                store.setPage("settings")
+            },
+        ) {
             SoftPillChip(
-                text = stringResource(R.string.remote_mac_badge),
+                text = stringResource(
+                    if (state.online) R.string.remote_connected_badge
+                    else if (state.serverConfigured) R.string.remote_mac_badge
+                    else R.string.remote_unconfigured_badge,
+                ),
                 tint = statusColor,
                 leadingDotColor = statusColor,
             )
@@ -265,7 +436,11 @@ private fun HeaderLine(state: WorkbenchState) {
 }
 
 @Composable
-private fun OfflineBanner(state: WorkbenchState, onReconnect: () -> Unit) {
+private fun OfflineBanner(
+    state: WorkbenchState,
+    onOpenSettings: () -> Unit,
+    onReconnect: () -> Unit,
+) {
     val errorColor = MaterialTheme.colorScheme.error
     Surface(
         modifier = Modifier.fillMaxWidth(),
@@ -293,6 +468,9 @@ private fun OfflineBanner(state: WorkbenchState, onReconnect: () -> Unit) {
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
                     )
                 }
+            }
+            TextButton(onClick = onOpenSettings) {
+                Text(stringResource(R.string.nav_settings), fontSize = 12.sp)
             }
             TextButton(onClick = onReconnect) {
                 Text(stringResource(R.string.reconnect), fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
@@ -433,7 +611,11 @@ private fun LocationCard(store: WorkbenchStore, state: WorkbenchState) {
 /** 观测参数卡（WorkParametersView 同构）。 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ParametersCard(store: WorkbenchStore, state: WorkbenchState) {
+private fun ParametersCard(
+    store: WorkbenchStore,
+    state: WorkbenchState,
+    showCoordinatesEditor: Boolean = true,
+) {
     var showDatePicker by remember { mutableStateOf(false) }
     val pickerState = androidx.compose.material3.rememberDatePickerState(
         initialSelectedDateMillis = state.targetDate.atStartOfDay(ZoneOffset.UTC).toInstant().toEpochMilli(),
@@ -504,17 +686,18 @@ private fun ParametersCard(store: WorkbenchStore, state: WorkbenchState) {
                 onSelect = { store.setPhenomenon(it) },
                 accent = true,
             )
-            TextButton(
-                onClick = { store.setEditingCoordinates(!state.editingCoordinates) },
-                modifier = Modifier.fillMaxWidth(),
-            ) {
-                Text(
-                    if (state.editingCoordinates) stringResource(R.string.collapse_coordinates)
-                    else stringResource(R.string.edit_coordinates),
-                    fontSize = 11.sp,
-                )
-            }
-            AnimatedVisibility(visible = state.editingCoordinates) {
+            if (showCoordinatesEditor) {
+                TextButton(
+                    onClick = { store.setEditingCoordinates(!state.editingCoordinates) },
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        if (state.editingCoordinates) stringResource(R.string.collapse_coordinates)
+                        else stringResource(R.string.edit_coordinates),
+                        fontSize = 11.sp,
+                    )
+                }
+                AnimatedVisibility(visible = state.editingCoordinates) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     OutlinedTextField(
                         value = state.location.name,
@@ -554,6 +737,7 @@ private fun ParametersCard(store: WorkbenchStore, state: WorkbenchState) {
                         Text(stringResource(R.string.location_confirmed), fontSize = 11.sp)
                     }
                 }
+            }
             }
         }
     }
@@ -595,8 +779,13 @@ private fun NumberField(label: String, value: Double, onChange: (Double) -> Unit
 
 @Composable
 private fun RunButton(store: WorkbenchStore, state: WorkbenchState) {
+    val labelRes = when (state.workbenchMode) {
+        "regional" -> R.string.start_regional_forecast
+        "nowcast" -> R.string.start_nowcast_analysis
+        else -> R.string.start_forecast
+    }
     AccentButton(
-        title = stringResource(R.string.start_forecast),
+        title = stringResource(labelRes),
         enabled = !state.busy && state.online,
         icon = Icons.Filled.AutoAwesome,
     ) { store.beginCheck() }

@@ -256,8 +256,8 @@ jobs:
         run: docker volume rm -f firesky-smoke-state
 
   mobile-release:
-    timeout-minutes: 60
-    name: Android APK（真引擎）
+    timeout-minutes: 20
+    name: Android APK（thin-client）
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     steps:
@@ -270,79 +270,7 @@ jobs:
       # （2026-11-21 v1.9.8 首次发布即因 jsr305.pom 429 失败）。
       - name: Setup Gradle cache
         uses: gradle/actions/setup-gradle@v4
-      # ubuntu-latest runner 预装 Android SDK（ANDROID_HOME 已设、licenses 已接受）。
-      - name: Install NDK
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: r26d
-          add-to-path: true
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: aarch64-linux-android
-      - name: Download ecCodes + libaec sources
-        run: |
-          set -euo pipefail
-          ROOT="$PWD/.cache/mm0-cross"
-          mkdir -p "$ROOT"
-          curl -fL -sS --retry 5 --retry-all-errors --connect-timeout 15 -o "$ROOT/eccodes.tar.gz" \
-            "https://codeload.github.com/ECMWF/eccodes/tar.gz/refs/tags/2.50.0"
-          tar xzf "$ROOT/eccodes.tar.gz" -C "$ROOT"
-          mv "$(find "$ROOT" -maxdepth 1 -type d -name 'eccodes-*' | head -n 1)" "$ROOT/eccodes-src"
-          curl -fL -sS --retry 5 --retry-all-errors --connect-timeout 15 -o "$ROOT/libaec.tar.gz" \
-            "https://github.com/Deutsches-Klimarechenzentrum/libaec/releases/download/v1.1.8/libaec-1.1.8.tar.gz"
-          tar xzf "$ROOT/libaec.tar.gz" -C "$ROOT"
-          mv "$(find "$ROOT" -maxdepth 1 -type d -name 'libaec-*' | head -n 1)" "$ROOT/libaec-src"
-      - name: Build ecCodes + libaec for Android arm64
-        run: |
-          set -euo pipefail
-          ROOT="$PWD/.cache/mm0-cross"
-          NDK="${ANDROID_NDK_HOME:-${{ steps.setup-ndk.outputs.ndk-path }}}"
-          mkdir -p "$ROOT/build-android/lib"
-          # libaec（Android arm64，NDK toolchain）
-          cmake -S .cache/mm0-cross/libaec-src -B "$ROOT/build-libaec-android" \
-            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DBUILD_SHARED_LIBS=OFF -DBUILD_STATIC_LIBS=ON -DBUILD_TESTING=OFF \
-            -DCMAKE_INSTALL_PREFIX="$ROOT/build-android/aec"
-          cmake --build "$ROOT/build-libaec-android" -j "$(nproc)"
-          cmake --install "$ROOT/build-libaec-android"
-          mkdir -p "$ROOT/build-android/lib"
-          cp "$ROOT/build-android/aec/lib/libaec.a" "$ROOT/build-android/lib/libaec.a"
-          # ecCodes（Android arm64，ENABLE_AEC=ON + libaec_DIR）。
-          # DISABLE_OS_CHECK：eccodes 2.50 仍为 ecbuild 工程，其 OS 白名单不含
-          # Android（NDK toolchain 设 CMAKE_SYSTEM_NAME=Android 会拒配）。
-          # IEEE_LE/IEEE_BE：端序探测走 check_c_source_runs，交叉编译无法执行
-          # 目标机程序（try_run in cross-compiling mode 直接 fatal），预置
-          # arm64 小端跳过，传值与 ci.yml iOS job 一致。
-          # ENABLE_BUILD_TOOLS：与 iOS 对齐关掉交叉 CLI 工具；原有 ENABLE_TOOLS
-          # 对 ecbuild 的 BUILD_TOOLS feature 不生效。
-          cmake -S .cache/mm0-cross/eccodes-src -B "$ROOT/build-android" \
-            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
-            -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-26 \
-            -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
-            -DDISABLE_OS_CHECK=ON -DIEEE_LE=1 -DIEEE_BE=0 \
-            -DENABLE_BUILD_TOOLS=OFF \
-            -DENABLE_AEC=ON -DENABLE_USE_SHARED_LIB_AEC=OFF \
-            -DCMAKE_PREFIX_PATH="$ROOT/build-android/aec" \
-            -Dlibaec_DIR="$ROOT/build-android/aec/lib/cmake/libaec" \
-            -DENABLE_FORTRAN=OFF -DENABLE_PYTHON=OFF -DENABLE_TESTS=OFF \
-            -DENABLE_EXAMPLES=OFF -DENABLE_TOOLS=OFF -DENABLE_NETCDF=OFF \
-            -DENABLE_OPENMP=OFF -DENABLE_PNG=OFF -DENABLE_JPEG=OFF \
-            -DCMAKE_INSTALL_PREFIX="$ROOT/build-android"
-          cmake --build "$ROOT/build-android" -j "$(nproc)"
-          test -f "$ROOT/build-android/lib/libeccodes.a"
-          echo "MM0_ECCODES_ANDROID_LIB=$ROOT/build-android/lib" >> "$GITHUB_ENV"
-      - name: Build release APK（真引擎 JNI）
-        env:
-          MM0_ECCODES_ANDROID_LIB: ${{ github.workspace }}/.cache/mm0-cross/build-android/lib
-          # 宿主 definitions 树供 copyEccodesDefinitions（ubuntu 无
-          # /opt/homebrew 路径；源码 tar 自带完整 definitions）。
-          FIRESKY_ECCODES_DEFINITIONS: ${{ github.workspace }}/.cache/mm0-cross/eccodes-src/definitions
-          # v1.9.7 走查：gradle 的 cargoAndroidEngine 按本机 NDK 派生
-          # CC/AR/linker（仓库 .cargo/config.toml 不再携带 darwin 绝对路径）。
-          ANDROID_NDK_ROOT: ${{ steps.setup-ndk.outputs.ndk-path }}
+      - name: Build thin-client APK
         run: |
           cd apps/mobile-android
           ./gradlew :app:assembleDebug --no-daemon
@@ -353,18 +281,50 @@ jobs:
           path: apps/mobile-android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
+  ios-release:
+    timeout-minutes: 30
+    name: iOS IPA（unsigned thin-client）
+    runs-on: macos-15
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build unsigned iOS Release .app
+        run: |
+          set -euo pipefail
+          xcodebuild -project apps/mobile-ios/FireSkyMobile.xcodeproj \
+            -scheme FireSkyMobile \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath "$RUNNER_TEMP/ios-build" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+      - name: Package unsigned .ipa
+        run: |
+          set -euo pipefail
+          APP_PATH="$RUNNER_TEMP/ios-build/Build/Products/Release-iphoneos/FireSkyMobile.app"
+          test -d "$APP_PATH"
+          mkdir -p "$RUNNER_TEMP/ipa-stage/Payload"
+          cp -R "$APP_PATH" "$RUNNER_TEMP/ipa-stage/Payload/"
+          (cd "$RUNNER_TEMP/ipa-stage" && zip -qry "$RUNNER_TEMP/FireSky-ios-arm64.ipa" Payload)
+          test -s "$RUNNER_TEMP/FireSky-ios-arm64.ipa"
+      - name: Upload iOS IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FireSky-ios
+          path: ${{ runner.temp }}/FireSky-ios-arm64.ipa
+          if-no-files-found: error
+
   release:
     timeout-minutes: 15
     name: Publish GitHub Release
-    # 打 v* tag 时自动发布：macOS 双架构 DMG 与 Windows 双架构 zip 取自本
-    # run 的矩阵产物，不再需要本地下载/上传。移动端/Docker 资产仍按 README
-    # 口径另行补齐。
+    # 打 v* tag 时自动发布：macOS 双架构 DMG、Windows 双架构 zip/setup 与
+    # Android/iOS thin-client 资产均取自本 run 的构建产物。
     if: >-
       always() &&
       startsWith(github.ref, 'refs/tags/v') &&
       needs['macos-native'].result == 'success' &&
       needs['windows-native'].result == 'success'
-    needs: [macos-native, windows-native, mobile-release]
+    needs: [macos-native, windows-native, mobile-release, ios-release]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -396,20 +356,31 @@ jobs:
         with:
           name: FireSky-android
           path: artifacts/android
+      - name: Download iOS IPA artifact
+        if: needs['ios-release'].result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: FireSky-ios
+          path: artifacts/ios
       - name: Stage DMGs, zips, installers and SHA256SUMS
         env:
           NEEDS_MOBILE_RELEASE: ${{ needs['mobile-release'].result }}
+          NEEDS_IOS_RELEASE: ${{ needs['ios-release'].result }}
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
           mkdir -p release-assets
           find artifacts -name '*.dmg' -exec cp {} release-assets/ \;
           find artifacts \( -name '*.zip' -o -name '*-setup.exe' \) -exec cp {} release-assets/ \;
-          # Android APK 重命名为版本化文件名；mobile-release 成功后缺失
+          # Android APK / iOS IPA 重命名为版本化文件名；对应 job 成功后缺失
           # 视为硬错误（防 artifact 路径变更导致无声少资产）。
           if [ "${NEEDS_MOBILE_RELEASE}" = "success" ]; then
             test -f artifacts/android/app-debug.apk
             cp artifacts/android/app-debug.apk "release-assets/FireSky-${VERSION}-android-arm64.apk"
+          fi
+          if [ "${NEEDS_IOS_RELEASE}" = "success" ]; then
+            test -f artifacts/ios/FireSky-ios-arm64.ipa
+            cp artifacts/ios/FireSky-ios-arm64.ipa "release-assets/FireSky-${VERSION}-ios-arm64.ipa"
           fi
           # 资产文件名必须带 tag 版本，防止旧版本产物混入。
           for arch in arm64 x86_64; do
@@ -419,10 +390,13 @@ jobs:
             test -f "release-assets/FireSky-${VERSION}-windows-${arch}.zip"
             test -f "release-assets/FireSky-${VERSION}-windows-${arch}-setup.exe"
           done
-          # APK 可能缺席（mobile-release 软依赖），哈希分段生成。
+          # APK / IPA 可能缺席（软依赖），哈希分段生成。
           (cd release-assets && sha256sum FireSky-*.dmg FireSky-*.zip FireSky-*-setup.exe > SHA256SUMS.txt)
           if [ "${NEEDS_MOBILE_RELEASE}" = "success" ]; then
             (cd release-assets && sha256sum "FireSky-${VERSION}-android-arm64.apk" >> SHA256SUMS.txt)
+          fi
+          if [ "${NEEDS_IOS_RELEASE}" = "success" ]; then
+            (cd release-assets && sha256sum "FireSky-${VERSION}-ios-arm64.ipa" >> SHA256SUMS.txt)
           fi
           (cd release-assets && sha256sum -c SHA256SUMS.txt)
       - name: Extract changelog section for this version
