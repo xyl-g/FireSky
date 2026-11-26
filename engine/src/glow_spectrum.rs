@@ -4,7 +4,14 @@
 //! grazing optical path, producing sRGB hex colors and sky gradients directly from the
 //! forecast step's solar elevation, aerosol optical depth, and cloud-base height.
 
+use chrono::DateTime;
 use serde_json::{json, Value};
+
+fn step_local_time(step: &Value) -> Option<&str> {
+    step["valid_time_local"]
+        .as_str()
+        .or_else(|| step["valid"].as_str())
+}
 
 const R_EARTH_KM: f64 = 6371.0088;
 const RAYLEIGH_TAU_550: f64 = 0.098;
@@ -211,7 +218,7 @@ pub(crate) fn enrich_point_report(result: &mut Value) {
         let q = step["instant_quality_index"].as_f64().unwrap_or(0.0);
         let time_match = best_time
             .as_deref()
-            .is_some_and(|bt| step["valid"].as_str() == Some(bt));
+            .is_some_and(|bt| step_local_time(step) == Some(bt));
         if time_match || (best_time.is_none() && q > best_q) || (best_time.is_some() && q > best_q && best_idx == 0 && idx > 0 && !time_match) {
             if time_match || q > best_q {
                 best_q = q;
@@ -222,12 +229,14 @@ pub(crate) fn enrich_point_report(result: &mut Value) {
     }
 
     if let Some(bt) = best_time.as_deref() {
-        if let Some(found) = steps.iter().position(|s| s["valid"].as_str() == Some(bt)) {
+        if let Some(found) = steps.iter().position(|s| step_local_time(s) == Some(bt)) {
             best_idx = found;
         }
     }
 
     let (peak_sample, peak_step) = step_colors[best_idx];
+    let peak_time_local = step_local_time(peak_step);
+    let peak_dt = peak_time_local.and_then(|s| DateTime::parse_from_rfc3339(s).ok());
     let peak_elev = peak_step["solar_elevation_deg"].as_f64().unwrap_or(0.0);
     let peak_az = peak_step["solar_azimuth_deg"].as_f64().unwrap_or(270.0);
     let peak_aod = peak_step["quality_aod550"]
@@ -237,13 +246,25 @@ pub(crate) fn enrich_point_report(result: &mut Value) {
 
     let step_rows: Vec<Value> = step_colors
         .iter()
-        .map(|(sample, step)| {
+        .enumerate()
+        .map(|(idx, (sample, step))| {
+            let valid_local = step_local_time(step);
+            let explicit_offset = step["offset_minutes"]
+                .as_i64()
+                .or_else(|| step["offset_minutes"].as_f64().map(|v| v.round() as i64));
+            let offset_minutes = explicit_offset.or_else(|| {
+                let dt = valid_local.and_then(|s| DateTime::parse_from_rfc3339(s).ok())?;
+                let peak = peak_dt?;
+                Some((dt - peak).num_minutes())
+            });
             json!({
-                "offset_minutes": step["offset_minutes"],
+                "valid_time_local": valid_local,
+                "offset_minutes": offset_minutes,
                 "hex": sample.hex(),
                 "label_zh": sample.label_zh,
                 "label_en": sample.label_en,
                 "luminance": sample.luminance,
+                "is_peak": idx == best_idx,
             })
         })
         .collect();
@@ -253,6 +274,7 @@ pub(crate) fn enrich_point_report(result: &mut Value) {
         "peak_hex": peak_sample.hex(),
         "peak_label_zh": peak_sample.label_zh,
         "peak_label_en": peak_sample.label_en,
+        "peak_time_local": peak_time_local,
         "sky_gradient_hex": sky_gradient(peak_sample, peak_elev),
         "solar_elevation_deg": (peak_elev * 100.0).round() / 100.0,
         "solar_azimuth_deg": (peak_az * 100.0).round() / 100.0,
@@ -309,5 +331,46 @@ mod tests {
         assert_eq!(spectral["sky_gradient_hex"].as_array().unwrap().len(), 4);
         assert_eq!(spectral["steps"].as_array().unwrap().len(), 2);
         assert_eq!(spectral["solar_azimuth_deg"], 247.2);
+    }
+
+    #[test]
+    fn enrich_point_report_aligns_valid_time_local_and_derives_offsets() {
+        let mut payload = json!({
+            "best_time_local": "2026-11-26T17:15:00+08:00",
+            "dominant_burnable_cloud_base_agl_mean_m": 5400.0,
+            "aerosol": { "aod550": 0.28 },
+            "steps": [
+                {
+                    "valid_time_local": "2026-11-26T17:05:00+08:00",
+                    "solar_elevation_deg": 1.2,
+                    "solar_azimuth_deg": 244.0,
+                    "instant_quality_index": 0.9
+                },
+                {
+                    "valid_time_local": "2026-11-26T17:15:00+08:00",
+                    "solar_elevation_deg": -1.3,
+                    "solar_azimuth_deg": 246.5,
+                    "instant_quality_index": 1.6
+                },
+                {
+                    "valid_time_local": "2026-11-26T17:25:00+08:00",
+                    "solar_elevation_deg": -3.1,
+                    "solar_azimuth_deg": 248.0,
+                    "instant_quality_index": 1.4
+                }
+            ]
+        });
+        enrich_point_report(&mut payload);
+        let spectral = &payload["spectral_color"];
+        assert_eq!(spectral["peak_time_local"], "2026-11-26T17:15:00+08:00");
+        assert_eq!(spectral["solar_azimuth_deg"], 246.5);
+        let steps = spectral["steps"].as_array().unwrap();
+        assert_eq!(steps[0]["offset_minutes"], -10);
+        assert_eq!(steps[0]["valid_time_local"], "2026-11-26T17:05:00+08:00");
+        assert_eq!(steps[0]["is_peak"], false);
+        assert_eq!(steps[1]["offset_minutes"], 0);
+        assert_eq!(steps[1]["is_peak"], true);
+        assert_eq!(steps[2]["offset_minutes"], 10);
+        assert_eq!(steps[2]["is_peak"], false);
     }
 }

@@ -8,6 +8,18 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v2.0.2 (2026-11-26)
+
+macOS 光谱预测云色与 16 方位观测雷达双栏视觉重构、雷达比例尺 (`0..1`) 修复、`glow_spectrum.rs` 时间对齐修复与 AltStore v2 元数据补齐。
+macOS dual-column redesign for Spectral Glow Palette & 16-Direction Azimuth Radar, `0..1` radar scale fix, `glow_spectrum.rs` `valid_time_local` alignment fix, and AltStore Source v2 metadata fix.
+
+- **光谱时刻与 `0..1` 雷达比例尺修复**：[glow_spectrum.rs](engine/src/glow_spectrum.rs) 改用 `valid_time_local` 匹配 `best_time_local` 并自动推算 `offset_minutes`，消除多步进全显示 `0m` 及峰值错位问题；[WorkbenchResultsViews.swift](apps/macos/Sources/FireSkyNative/WorkbenchResultsViews.swift) 将雷达比例尺与徽标从误用的 `/ 2.5` 修正为后端真实的 `0.0–1.0`（百分比显示）。
+  Fixed [glow_spectrum.rs](engine/src/glow_spectrum.rs) to match `best_time_local` via `valid_time_local` and derive `offset_minutes`, and fixed the macOS [WorkbenchResultsViews.swift](apps/macos/Sources/FireSkyNative/WorkbenchResultsViews.swift) azimuth radar radius scaling and score readout from `/ 2.5` to the true `0.0–1.0` backend range.
+- **macOS 光谱云色与 16 方位雷达双栏排版重构**：[WorkbenchResultsViews.swift](apps/macos/Sources/FireSkyNative/WorkbenchResultsViews.swift) 在宽屏下并排展示两张卡片并加入行内 `GFS | EC` 切换；光谱卡改为竖向天顶→地平线渐变预览与等宽连续色彩时间带（`HH:mm` 起/峰/止刻度，不再硬截断滚动胶囊），雷达卡新增 8 方位刻度、虚线太阳射线、高对比太阳标记与 Top-3 方位云幕/低云遮挡明细条。
+  Redesigned `SpectralColorBannerView` (vertical Zenith-to-Horizon sky swatch + full-width continuous color timeline with `HH:mm` ticks) and `AzimuthRadarView` (8-spoke compass, dashed solar ray, high-contrast sun marker, and Top-3 bearing breakdown) in a responsive dual-column layout with inline `GFS | EC` switching.
+- **AltStore Source v2 源兼容修复**：[update_altstore_source.py](scripts/update_altstore_source.py) 与 [altstore-source.json](altstore-source.json) 补齐 `apps[0].localizedDescription`、`subtitle` 与 `appPermissions` 等 AltStore v2 必需字段。
+  Added required `apps[0].localizedDescription`, `subtitle`, `appPermissions`, and source metadata fields in [update_altstore_source.py](scripts/update_altstore_source.py) and [altstore-source.json](altstore-source.json).
+
 ## v2.0.1 (2026-11-26)
 
 CAMS ADS 同指纹队列保留期延长至 24 小时（孤儿仍 4 小时清理），以及 macOS 应用升级后后台同步助手自动热更新重载。
