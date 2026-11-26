@@ -174,6 +174,30 @@ final class ReminderCenter: ObservableObject {
         center.add(request) { _ in }
     }
 
+    /// 后台同步助手完成/失败通知：由主应用以自身 bundle 身份投递系统横幅，点击可打开 FireSky。
+    func deliverSyncNotification(id: String, title: String, body: String) {
+        guard let center else { return }
+        let safeID = String(id.map { (":| \t\n".contains($0)) ? "_" : $0 })
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        content.userInfo = ["kind": "sync"]
+        let request = UNNotificationRequest(
+            identifier: "firesky.sync.\(safeID)",
+            content: content,
+            trigger: nil
+        )
+        if permission == .authorized {
+            center.add(request) { _ in }
+        } else if permission == .notDetermined {
+            requestAuthorization { granted in
+                guard granted else { return }
+                center.add(request) { _ in }
+            }
+        }
+    }
+
     private func persist(_ item: Scheduled) {
         guard let data = try? JSONEncoder().encode(item) else { return }
         defaults.set(data, forKey: storageKey)

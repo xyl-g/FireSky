@@ -8,6 +8,18 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v2.0.1 (2026-11-26)
+
+CAMS ADS 同指纹队列保留期延长至 24 小时（孤儿仍 4 小时清理），以及 macOS 应用升级后后台同步助手自动热更新重载。
+CAMS ADS 24-hour matching-fingerprint queue retention (keeping 4-hour orphan cleanup) and automatic macOS background sync helper reload after app upgrades.
+
+- **CAMS ADS 双策略队列保留**：[ads.rs](engine/src/ads.rs) 将 `Config::default().job_max_age_seconds` 恢复为 24 小时（`86400s`），新增 `orphan_job_max_age_seconds`（4 小时 / `14400s`）并在 `cleanup_stale_ledger` 按请求指纹区分：与当前周期指纹一致的排队任务保留 24 小时继续接回，避免 ADS 高峰排队超 4 小时被删除重排；已被新周期取代的不同指纹孤儿仍在 4 小时后 `DELETE` 清理。
+  Separated ADS job ledger retention in [ads.rs](engine/src/ads.rs) into 24h (`job_max_age_seconds = 86400s`) for matching active fingerprints and 4h (`orphan_job_max_age_seconds = 14400s`) for superseded different-fingerprint orphans, preserving queue position across busy ADS windows without leaving stale concurrent slots behind.
+- **macOS 升级后自动重载后台同步助手**：[SyncHelperInstaller.swift](apps/macos/Sources/FireSkyNative/SyncHelperInstaller.swift) 与 [Store.swift](apps/macos/Sources/FireSkyNative/Store.swift) 在 `launchd` plist 写入 `FIRESKY_HELPER_VERSION`，应用覆盖更新或路径变化后启动时自动按原间隔重载后台助手并切换至新版引擎进程。
+  Added `FIRESKY_HELPER_VERSION` tracking and automatic launchd reload on startup in [SyncHelperInstaller.swift](apps/macos/Sources/FireSkyNative/SyncHelperInstaller.swift) and [Store.swift](apps/macos/Sources/FireSkyNative/Store.swift) so upgraded `.app` installs immediately transition the background sync helper to the new engine binary.
+- **修复后台同步通知点击打开“脚本编辑器”**：移除 [FireSkySyncHelper](apps/macos/Sources/FireSkySyncHelper/main.swift) 的 `osascript display notification` 调用，改为经 `DistributedNotificationCenter` 由主应用 [FireSkyApp.swift](apps/macos/Sources/FireSkyNative/FireSkyApp.swift) 与 [ReminderCenter.swift](apps/macos/Sources/FireSkyNative/ReminderCenter.swift) 以原生 `UNUserNotificationCenter` 投递横幅通知，点击直接唤起 FireSky 设置页。
+  Removed `osascript display notification` from [FireSkySyncHelper](apps/macos/Sources/FireSkySyncHelper/main.swift) (which macOS attributed to Script Editor) and routed sync-completion notifications via `DistributedNotificationCenter` to native `UNUserNotificationCenter` banners in [FireSkyApp.swift](apps/macos/Sources/FireSkyNative/FireSkyApp.swift) and [ReminderCenter.swift](apps/macos/Sources/FireSkyNative/ReminderCenter.swift) so clicking opens FireSky directly.
+
 ## v2.0.0 (2026-11-26)
 
 物理光谱火烧云色彩预测、16 方位观测雷达、高分预警通知、移动端扫码配对、追霞海报卡与 AltStore 自动订阅源。

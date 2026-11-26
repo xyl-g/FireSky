@@ -456,6 +456,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             let expectedWorkspace = root
             Task.detached(priority: .utility) {
                 SyncHelperInstaller.terminateStaleHelpers(expectedWorkspace: expectedWorkspace)
+                SyncHelperInstaller.upgradeInstalledHelperIfNeeded(expectedWorkspace: expectedWorkspace)
             }
         }
         engineBinary = env["FIRESKY_RUST_ENGINE_BIN"] ?? defaults.string(forKey: "engineBinary") ?? ""
@@ -2028,7 +2029,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     }
 
     /// 仅刷新每源状态与保留配置提示；不回填设置字段，避免覆盖正在编辑的内容。
-    private func refreshDataSyncState() async {
+    func refreshDataSyncState() async {
         guard online, let response = try? await engine.call("data_sync_settings") else { return }
         dataSyncRetentionConfigured = response["retention_configured"] as? Bool ?? dataSyncRetentionConfigured
         dataSyncState = (response["state"] as? JSONObject)?["sources"] as? JSONObject ?? dataSyncState

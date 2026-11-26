@@ -20,6 +20,7 @@ struct FireSkyApp: App {
                 .onAppear {
                     delegate.store = store
                     delegate.localServer = localServer
+                    delegate.reminders = reminders
                     delegate.openMainWindow = { [openWindow] in
                         openWindow(id: "main")
                     }
@@ -62,9 +63,11 @@ struct FireSkyApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCenterDelegate, NSMenuDelegate {
     weak var store: Store?
     weak var localServer: LocalServerController?
+    weak var reminders: ReminderCenter?
     weak var mainWindow: NSWindow?
     var openMainWindow: (() -> Void)?
     private var statusItem: NSStatusItem?
+    private var syncNotificationObserver: NSObjectProtocol?
     private var scheduled = false
     /// v1.9.7 退出守卫防循环：用户本轮已确认过「继续运行」的时间戳——
     /// 系统注销/关机会反复发起 terminate，不再每次都弹确认框（5s 内
@@ -84,6 +87,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         // 兜底，避免与截图流程竞争窗口状态。
         if ProcessInfo.processInfo.environment["FIRESKY_NATIVE_SNAPSHOT"] == nil {
             setupStatusItem()
+            syncNotificationObserver = DistributedNotificationCenter.default().addObserver(
+                forName: Notification.Name("com.firesky.sync.completed"),
+                object: nil,
+                queue: .main
+            ) { [weak self] notification in
+                let userInfo = notification.userInfo
+                let workspace = userInfo?["workspace"] as? String ?? ""
+                let id = userInfo?["id"] as? String ?? UUID().uuidString
+                let title = userInfo?["title"] as? String ?? ""
+                let body = userInfo?["body"] as? String ?? ""
+                Task { @MainActor [weak self] in
+                    guard let self, workspace == self.store?.workspace else { return }
+                    self.store?.refreshHelperStatus()
+                    Task { await self.store?.refreshDataSyncState() }
+                    if !title.isEmpty, !body.isEmpty {
+                        self.reminders?.deliverSyncNotification(id: id, title: title, body: body)
+                    }
+                }
+            }
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
                 guard let self,
                       NSApp.windows.first(where: { self.isMainWorkbenchWindow($0) && $0.isVisible }) == nil
@@ -302,7 +324,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             completionHandler([.alert, .sound])
         }
     }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter,
+                                            didReceive response: UNNotificationResponse,
+                                            withCompletionHandler completionHandler: @escaping () -> Void) {
+        let isSync = (response.notification.request.content.userInfo["kind"] as? String) == "sync"
+            || response.notification.request.identifier.hasPrefix("firesky.sync.")
+        Task { @MainActor [weak self] in
+            if isSync { self?.store?.page = .settings }
+            self?.showMainWindow()
+            completionHandler()
+        }
+    }
     func applicationWillTerminate(_ notification: Notification) {
+        if let observer = syncNotificationObserver {
+            DistributedNotificationCenter.default().removeObserver(observer)
+            syncNotificationObserver = nil
+        }
         if let statusItem {
             NSStatusBar.system.removeStatusItem(statusItem)
             self.statusItem = nil

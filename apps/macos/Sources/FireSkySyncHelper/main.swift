@@ -37,20 +37,21 @@ func writeStatus(_ workspace: String, _ status: [String: Any]) {
     try? data.write(to: path, options: .atomic)
 }
 
-func notify(_ title: String, _ body: String) {
-    // UNUserNotificationCenter is unreliable from a launchd GUI agent context;
-    // osascript `display notification` routes through the user's notification
-    // center without requiring a bundled app identifier or entitlement.
-    let escapedTitle = title.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-    let escapedBody = body.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-    let script = "display notification \"\(escapedBody)\" with title \"\(escapedTitle)\""
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-    process.arguments = ["-e", script]
-    process.standardOutput = FileHandle.nullDevice
-    process.standardError = FileHandle.nullDevice
-    try? process.run()
-    process.waitUntilExit()
+func notify(_ title: String, _ body: String, workspace: String, stamp: String, outcome: String) {
+    // Route sync notifications via DistributedNotificationCenter so FireSky.app posts
+    // a native UNUserNotificationCenter banner instead of external AppleScript attribution.
+    DistributedNotificationCenter.default().postNotificationName(
+        Notification.Name("com.firesky.sync.completed"),
+        object: nil,
+        userInfo: [
+            "id": stamp,
+            "title": title,
+            "body": body,
+            "outcome": outcome,
+            "workspace": workspace,
+        ],
+        deliverImmediately: true
+    )
 }
 
 // Resolve the bundle Resources directory. The helper lives at
@@ -207,7 +208,7 @@ func run() -> Int32 {
             "contract": helperVersion, "last_run_utc": stamp,
             "outcome": "failed", "summary": "同步失败", "error": errText,
         ])
-        notify("FireSky 数据同步", "后台同步失败：\(errText)")
+        notify("FireSky 数据同步", "后台同步失败：\(errText)", workspace: workspace, stamp: stamp, outcome: "failed")
         return 1
     }
 
@@ -236,7 +237,7 @@ func run() -> Int32 {
         "summary": summary.summary, "sources": summary.sources, "error": "",
     ])
     if summary.downloaded || summary.failed {
-        notify("FireSky 数据同步", summary.summary)
+        notify("FireSky 数据同步", summary.summary, workspace: workspace, stamp: stamp, outcome: summary.failed ? "failed" : "synced")
     }
     return 0
 }

@@ -48,6 +48,7 @@ pub struct Config {
     pub lock_timeout_seconds: f64,
     pub job_ledger_path: Option<PathBuf>,
     pub job_max_age_seconds: f64,
+    pub orphan_job_max_age_seconds: f64,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -61,7 +62,8 @@ impl Default for Config {
             request_attempts: 3,
             lock_timeout_seconds: 300.0,
             job_ledger_path: None,
-            job_max_age_seconds: 14400.0,
+            job_max_age_seconds: 86400.0,
+            orphan_job_max_age_seconds: 14400.0,
         }
     }
 }
@@ -74,6 +76,7 @@ impl Config {
             (self.poll_max_seconds, 0.0, 120.0),
             (self.lock_timeout_seconds, 0.0, 3600.0),
             (self.job_max_age_seconds, 1.0, 7.0 * 86400.0),
+            (self.orphan_job_max_age_seconds, 1.0, 7.0 * 86400.0),
         ] {
             if !value.is_finite() || value < low || value > high {
                 return Err("invalid ADS timeout/poll configuration".into());
@@ -593,16 +596,29 @@ impl<'a> Ads<'a> {
         self.retrieval_ms += started.elapsed().as_secs_f64() * 1000.0;
         result
     }
-    fn cleanup_stale_ledger(&self, ledger_path: &Path) {
-        let max_age = ChronoDuration::milliseconds((self.config.job_max_age_seconds * 1000.0) as i64);
+    fn cleanup_stale_ledger(&self, ledger_path: &Path, active_fingerprint: &str) {
+        let active_max_age =
+            ChronoDuration::milliseconds((self.config.job_max_age_seconds * 1000.0) as i64);
+        let orphan_max_age = ChronoDuration::milliseconds(
+            (self
+                .config
+                .orphan_job_max_age_seconds
+                .min(self.config.job_max_age_seconds)
+                * 1000.0) as i64,
+        );
         let now = DateTime::<Utc>::from(SystemTime::now());
         let Ok(stale_urls) = update_ledger(ledger_path, self.config.lock_timeout_seconds, |ledger| {
             let stale_keys: Vec<String> = ledger
                 .jobs
                 .iter()
                 .filter_map(|(key, entry)| {
+                    let threshold = if key == active_fingerprint {
+                        active_max_age
+                    } else {
+                        orphan_max_age
+                    };
                     let stale = time_contract::parse_utc(&entry.submitted_at_utc)
-                        .map(|submitted| now.signed_duration_since(submitted) > max_age)
+                        .map(|submitted| now.signed_duration_since(submitted) > threshold)
                         .unwrap_or(true);
                     stale.then(|| key.clone())
                 })
@@ -635,7 +651,7 @@ impl<'a> Ads<'a> {
         let lock_timeout = self.config.lock_timeout_seconds;
         let fingerprint = job_fingerprint(DATASET, inputs);
         if let Some(path) = ledger_path.as_deref() {
-            self.cleanup_stale_ledger(path);
+            self.cleanup_stale_ledger(path, &fingerprint);
         }
 
         let mut monitor: Option<Url> = None;
@@ -1148,6 +1164,7 @@ mod tests {
             lock_timeout_seconds: 2.0,
             job_ledger_path: Some(ledger_path),
             job_max_age_seconds: 3600.0,
+            orphan_job_max_age_seconds: 3600.0,
         };
         (rc, config)
     }
@@ -1606,7 +1623,8 @@ mod tests {
 
     #[test]
     fn default_job_max_age_cleans_up_five_hour_old_orphan() {
-        assert_eq!(Config::default().job_max_age_seconds, 14400.0);
+        assert_eq!(Config::default().job_max_age_seconds, 86400.0);
+        assert_eq!(Config::default().orphan_job_max_age_seconds, 14400.0);
         let dir = tempfile::tempdir().unwrap();
         let ledger = dir.path().join("ads-jobs.json");
         let server = MockAds::start(move |method, path, _| {
@@ -1677,5 +1695,75 @@ mod tests {
         assert!(reqs
             .iter()
             .any(|(m, p)| m == "DELETE" && p == "/retrieve/v1/jobs/job-5h-old"));
+    }
+
+    #[test]
+    fn default_job_max_age_reattaches_five_hour_old_matching_job() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dir.path().join("ads-jobs.json");
+        let inputs = json!({"date": ["2026-11-26"]});
+        let fingerprint = job_fingerprint(DATASET, &inputs);
+        let server = MockAds::start(move |method, path, _| {
+            if method == "GET" && path == format!("/retrieve/v1/processes/{DATASET}") {
+                return (200, "application/json", br#"{"id":"cams"}"#.to_vec());
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-5h-same" {
+                return (
+                    200,
+                    "application/json",
+                    br#"{"status":"successful","links":[{"rel":"results","href":"/retrieve/v1/jobs/job-5h-same/results"}]}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-5h-same/results" {
+                return (
+                    200,
+                    "application/json",
+                    br#"{"asset":{"value":{"href":"/retrieve/v1/assets/same5h.grib","file:size":16}}}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/assets/same5h.grib" {
+                return (200, "application/x-grib", b"same5h1234567890".to_vec());
+            }
+            (404, "application/json", br#"{}"#.to_vec())
+        });
+
+        let mut rc = tempfile::NamedTempFile::new().unwrap();
+        writeln!(rc, "url: {}\nkey: test-ads-key", server.base_url).unwrap();
+        let cfg = Config {
+            api_url: Some(server.base_url.clone()),
+            credentials_file: Some(rc.path().to_path_buf()),
+            timeout_seconds: 5.0,
+            wait_timeout_seconds: 15.0,
+            poll_initial_seconds: 0.02,
+            poll_max_seconds: 0.05,
+            request_attempts: 1,
+            lock_timeout_seconds: 2.0,
+            job_ledger_path: Some(ledger.clone()),
+            ..Config::default()
+        };
+        let old_time = DateTime::<Utc>::from(SystemTime::now()) - ChronoDuration::hours(5);
+        update_ledger(&ledger, 2.0, |l| {
+            l.jobs.insert(
+                fingerprint.clone(),
+                JobLedgerEntry {
+                    monitor_url: "/retrieve/v1/jobs/job-5h-same".into(),
+                    process_id: DATASET.into(),
+                    submitted_at_utc: time_contract::iso(old_time),
+                },
+            );
+        })
+        .unwrap();
+
+        let mut ads = Ads::new(cfg).unwrap();
+        let mut out = tempfile::NamedTempFile::new().unwrap();
+        ads.retrieve(&inputs, &mut out).unwrap();
+        assert_eq!(ads.submissions, 0);
+        assert_eq!(ads.downloads, 1);
+        assert_eq!(std::fs::read(out.path()).unwrap(), b"same5h1234567890");
+        let reqs = server.requests.lock().unwrap();
+        assert!(!reqs.iter().any(|(m, _)| m == "DELETE"));
+        assert!(!reqs
+            .iter()
+            .any(|(m, p)| m == "POST" && p.ends_with("/execution")));
     }
 }

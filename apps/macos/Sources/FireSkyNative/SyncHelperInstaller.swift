@@ -66,6 +66,64 @@ enum SyncHelperInstaller {
         return result.status == 0
     }
 
+    static var currentAppVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+    }
+
+    static func installedVersion(from plist: [String: Any]) -> String? {
+        guard let env = plist["EnvironmentVariables"] as? [String: Any],
+              let version = env["FIRESKY_HELPER_VERSION"] as? String,
+              !version.isEmpty else {
+            return nil
+        }
+        return version
+    }
+
+    static func installedHelperPath(from plist: [String: Any]) -> String? {
+        guard let arguments = plist["ProgramArguments"] as? [String],
+              let path = arguments.first, !path.isEmpty else {
+            return nil
+        }
+        return path
+    }
+
+    static func installedIntervalMinutes(from plist: [String: Any]) -> Int {
+        guard let seconds = (plist["StartInterval"] as? NSNumber)?.intValue, seconds > 0 else {
+            return 30
+        }
+        return max(1, seconds / 60)
+    }
+
+    static func needsUpgradeReload(
+        plist: [String: Any],
+        expectedWorkspace: String,
+        expectedHelperPath: String,
+        expectedVersion: String
+    ) -> Bool {
+        guard workspaceFromPlist(plist) == expectedWorkspace else { return false }
+        if installedHelperPath(from: plist) != expectedHelperPath { return true }
+        if !expectedVersion.isEmpty && installedVersion(from: plist) != expectedVersion { return true }
+        return false
+    }
+
+    static func upgradeInstalledHelperIfNeeded(expectedWorkspace: String) {
+        guard isAvailable, let helper = helperURL, isInstalled(),
+              let data = try? Data(contentsOf: plistURL),
+              let plist = try? PropertyListSerialization.propertyList(
+                  from: data, options: [], format: nil
+              ) as? [String: Any],
+              needsUpgradeReload(
+                  plist: plist,
+                  expectedWorkspace: expectedWorkspace,
+                  expectedHelperPath: helper.path,
+                  expectedVersion: currentAppVersion
+              ) else {
+            return
+        }
+        let interval = installedIntervalMinutes(from: plist)
+        try? install(workspace: expectedWorkspace, intervalMinutes: interval)
+    }
+
     static func install(workspace: String, intervalMinutes: Int) throws {
         guard let helper = helperURL else {
             throw EngineError(message: "未找到后台同步助手，请重新安装 FireSky。")
@@ -78,10 +136,15 @@ enum SyncHelperInstaller {
             .appendingPathComponent(".firesky/state", isDirectory: true)
         try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
         let launchdLog = stateDir.appendingPathComponent("helper-launchd.log").path
+        var envVars: [String: String] = ["FIRESKY_WORKSPACE": workspace]
+        let version = currentAppVersion
+        if !version.isEmpty {
+            envVars["FIRESKY_HELPER_VERSION"] = version
+        }
         let plist: [String: Any] = [
             "Label": label,
             "ProgramArguments": [helper.path, "--sync-helper"],
-            "EnvironmentVariables": ["FIRESKY_WORKSPACE": workspace],
+            "EnvironmentVariables": envVars,
             "StartInterval": interval,
             "RunAtLoad": true,
             "ProcessType": "Background",

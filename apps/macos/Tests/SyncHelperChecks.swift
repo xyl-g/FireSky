@@ -32,6 +32,36 @@ enum SyncHelperChecks {
         ]
         precondition(SyncHelperInstaller.workspaceFromPlist(legacyPlist) == ws)
         precondition(SyncHelperInstaller.workspaceFromPlist([:]) == nil)
+        let helperPath = "/Applications/FireSky.app/Contents/MacOS/FireSkySyncHelper"
+        precondition(SyncHelperInstaller.installedIntervalMinutes(from: ["StartInterval": 300]) == 5)
+        precondition(SyncHelperInstaller.installedIntervalMinutes(from: [:]) == 30)
+        let matchingPlist: [String: Any] = [
+            "EnvironmentVariables": ["FIRESKY_WORKSPACE": ws, "FIRESKY_HELPER_VERSION": "2.0.1"],
+            "ProgramArguments": [helperPath, "--sync-helper"],
+            "StartInterval": 300,
+        ]
+        precondition(!SyncHelperInstaller.needsUpgradeReload(
+            plist: matchingPlist, expectedWorkspace: ws, expectedHelperPath: helperPath, expectedVersion: "2.0.1"))
+        precondition(SyncHelperInstaller.needsUpgradeReload(
+            plist: envPlist, expectedWorkspace: ws, expectedHelperPath: helperPath, expectedVersion: "2.0.1"))
+        precondition(SyncHelperInstaller.needsUpgradeReload(
+            plist: [
+                "EnvironmentVariables": ["FIRESKY_WORKSPACE": ws, "FIRESKY_HELPER_VERSION": "2.0.0"],
+                "ProgramArguments": [helperPath, "--sync-helper"],
+            ],
+            expectedWorkspace: ws, expectedHelperPath: helperPath, expectedVersion: "2.0.1"))
+        precondition(SyncHelperInstaller.needsUpgradeReload(
+            plist: [
+                "EnvironmentVariables": ["FIRESKY_WORKSPACE": ws, "FIRESKY_HELPER_VERSION": "2.0.1"],
+                "ProgramArguments": ["/Users/old/FireSky.app/Contents/MacOS/FireSkySyncHelper", "--sync-helper"],
+            ],
+            expectedWorkspace: ws, expectedHelperPath: helperPath, expectedVersion: "2.0.1"))
+        precondition(!SyncHelperInstaller.needsUpgradeReload(
+            plist: [
+                "EnvironmentVariables": ["FIRESKY_WORKSPACE": "/tmp/other", "FIRESKY_HELPER_VERSION": "2.0.0"],
+                "ProgramArguments": [helperPath, "--sync-helper"],
+            ],
+            expectedWorkspace: ws, expectedHelperPath: helperPath, expectedVersion: "2.0.1"))
         print("sync-helper checks: ok")
     }
 }
