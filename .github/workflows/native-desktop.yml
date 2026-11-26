@@ -280,15 +280,63 @@ jobs:
       # （2026-11-21 v1.9.8 首次发布即因 jsr305.pom 429 失败）。
       - name: Setup Gradle cache
         uses: gradle/actions/setup-gradle@v4
+      - name: Configure Android release signing
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set +x
+          set -euo pipefail
+          if [ -n "${ANDROID_KEYSTORE_BASE64}" ] && [ -n "${ANDROID_KEYSTORE_PASSWORD}" ] && [ -n "${ANDROID_KEY_ALIAS}" ] && [ -n "${ANDROID_KEY_PASSWORD}" ]; then
+            mkdir -p "$HOME/.firesky-release"
+            chmod 700 "$HOME/.firesky-release"
+            printf '%s' "${ANDROID_KEYSTORE_BASE64}" | base64 --decode > "$HOME/.firesky-release/firesky-release.keystore"
+            chmod 600 "$HOME/.firesky-release/firesky-release.keystore"
+            cat > "$HOME/.firesky-release/keystore.properties" <<EOF
+          storeFile=$HOME/.firesky-release/firesky-release.keystore
+          storePassword=${ANDROID_KEYSTORE_PASSWORD}
+          keyAlias=${ANDROID_KEY_ALIAS}
+          keyPassword=${ANDROID_KEY_PASSWORD}
+          EOF
+            chmod 600 "$HOME/.firesky-release/keystore.properties"
+            echo "ANDROID_RELEASE_SIGNING=true" >> "$GITHUB_ENV"
+          elif [ "${GITHUB_EVENT_NAME}" = "push" ] && [[ "${GITHUB_REF}" == refs/tags/v* || "${GITHUB_REF}" == refs/tags/mobile-v* ]]; then
+            echo "Missing ANDROID_KEYSTORE_* secrets for tagged release; refusing to publish ephemeral debug-signed APK." >&2
+            exit 1
+          else
+            echo "ANDROID_RELEASE_SIGNING=false" >> "$GITHUB_ENV"
+          fi
       - name: Build thin-client APK
         run: |
+          set -euo pipefail
           cd apps/mobile-android
-          ./gradlew :app:assembleDebug --no-daemon
+          if [ "${ANDROID_RELEASE_SIGNING:-false}" = "true" ]; then
+            ./gradlew :app:assembleRelease --no-daemon
+            APK_PATH="app/build/outputs/apk/release/app-release.apk"
+            test -f "$APK_PATH"
+            APKSIGNER="$(ls -d "${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}/build-tools/"*/apksigner | sort -V | tail -n 1)"
+            CERT_INFO="$("$APKSIGNER" verify --print-certs "$APK_PATH")"
+            printf '%s\n' "$CERT_INFO"
+            if printf '%s\n' "$CERT_INFO" | grep -q "Android Debug"; then
+              echo "Release APK unexpectedly signed with Android Debug key!" >&2
+              exit 1
+            fi
+          else
+            ./gradlew :app:assembleDebug --no-daemon
+            APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
+            test -f "$APK_PATH"
+          fi
+          cp "$APK_PATH" "$RUNNER_TEMP/FireSky-android.apk"
+      - name: Remove temporary release keystore
+        if: always()
+        run: rm -rf "$HOME/.firesky-release"
       - name: Upload Android APK artifact
         uses: actions/upload-artifact@v7
         with:
           name: FireSky-android
-          path: apps/mobile-android/app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ runner.temp }}/FireSky-android.apk
           if-no-files-found: error
 
   ios-release:
@@ -389,8 +437,8 @@ jobs:
           # Android APK / iOS IPA 重命名为版本化文件名；对应 job 成功后缺失
           # 视为硬错误（防 artifact 路径变更导致无声少资产）。
           if [ "${NEEDS_MOBILE_RELEASE}" = "success" ]; then
-            test -f artifacts/android/app-debug.apk
-            cp artifacts/android/app-debug.apk "release-assets/FireSky-${VERSION}-android-arm64.apk"
+            test -f artifacts/android/FireSky-android.apk
+            cp artifacts/android/FireSky-android.apk "release-assets/FireSky-${VERSION}-android-arm64.apk"
           fi
           if [ "${NEEDS_IOS_RELEASE}" = "success" ]; then
             test -f artifacts/ios/FireSky-ios-arm64.ipa
@@ -479,9 +527,9 @@ jobs:
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#mobile-v}"
           mkdir -p release-assets
-          test -f artifacts/android/app-debug.apk
+          test -f artifacts/android/FireSky-android.apk
           test -f artifacts/ios/FireSky-ios-arm64.ipa
-          cp artifacts/android/app-debug.apk "release-assets/FireSky-${VERSION}-android-arm64.apk"
+          cp artifacts/android/FireSky-android.apk "release-assets/FireSky-${VERSION}-android-arm64.apk"
           cp artifacts/ios/FireSky-ios-arm64.ipa "release-assets/FireSky-${VERSION}-ios-arm64.ipa"
           python3 scripts/update_altstore_source.py \
             --version "${VERSION}" \
@@ -619,8 +667,8 @@ jobs:
             find artifacts \( -name '*.zip' -o -name '*-setup.exe' \) -exec cp {} release-assets/ \;
           fi
           if [ "${NEEDS_ANDROID}" = "success" ]; then
-            test -f artifacts/android/app-debug.apk
-            cp artifacts/android/app-debug.apk "release-assets/FireSky-${VERSION}-android-arm64.apk"
+            test -f artifacts/android/FireSky-android.apk
+            cp artifacts/android/FireSky-android.apk "release-assets/FireSky-${VERSION}-android-arm64.apk"
           fi
           if [ "${NEEDS_IOS}" = "success" ]; then
             test -f artifacts/ios/FireSky-ios-arm64.ipa

@@ -548,6 +548,7 @@ enum L10n {
         case "需下载": return "Download needed"
         case "可更新": return "Update available"
         case "已下载": return "Downloaded"
+        case "待核验": return "Unverified"
         case "运行中": return "Running"
         case "取消中": return "Cancelling"
         case "已取消": return "Cancelled"

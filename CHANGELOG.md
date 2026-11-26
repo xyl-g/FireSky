@@ -8,6 +8,18 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v2.1.1 (2026-11-27)
+
+修复区域预测（GEOS-FP）预检与准备时间窗不一致、准备阶段旧周期未升级/丢失发布核验问题，并配置 **GitHub Actions Android 正式发布固定签名**（消除后续升级签名冲突）。
+Fixed regional forecast (`check` vs `prepare`) terrain/window mismatch for GEOS-FP, cycle upgrades & post-prepare publication verification retention, unverified status display on macOS/iOS, and configured deterministic **Android Release APK signing in GitHub Actions**.
+
+- **区域预测 `check` / `prepare` 地形与时间窗对齐**：[desktop_context.rs](engine/src/desktop_context.rs) 去掉 `!input.fast` 限制，使首次只读预检同样复用本地缓存地形（冷缓存毫秒回退），消除区域 GEOS-FP 前后多扩 `±2h` 虚报缺失时次的问题。
+  Removed the `!input.fast` gate in [desktop_context.rs](engine/src/desktop_context.rs) so `check` also samples locally cached terrain read-only, preventing spurious `±2h` GEOS-FP missing-valid-time reports in regional forecasts.
+- **更新周期升级、核验保留与 GEOS-FP 边界修复**：[desktop_runtime.rs](engine/src/desktop_runtime.rs) 在 `prepare` 前注入最新已核验周期提示（`_cams_refresh_cycle` / `_gfs_cycle_override`）、将 `publications` 超时从 `2.0s` 放宽至 `6.0s` 并在准备完成后保留核验结果；[geos_fp.rs](engine/src/geos_fp.rs) 放宽跨刷新周期边界筛选，[desktop_sync.rs](engine/src/desktop_sync.rs) 将后台同步 GEOS-FP 外扩边距对齐至 `0.6°`。
+  Added pre-prepare cycle refresh promotion (`_cams_refresh_cycle` and `_gfs_cycle_override`), increased `publications` probe timeout to `6.0s` while preserving verified status after `prepare` in [desktop_runtime.rs](engine/src/desktop_runtime.rs), fixed cross-boundary `refresh_before` target selection in [geos_fp.rs](engine/src/geos_fp.rs), and aligned `geos_fp_sync_areas` `0.6°` padding in [desktop_sync.rs](engine/src/desktop_sync.rs).
+- **macOS / iOS「待核验」状态修正与 Android CI 固定正式签名**：修正 macOS 与 iOS 预检卡片在未核验时误标「可更新」为「待核验 / Unverified」；[.github/workflows/native-desktop.yml](.github/workflows/native-desktop.yml) 改为基于仓库 Secrets 构建固定正式签名 `assembleRelease`（含 `apksigner` 校验），后续版本内更新不再签名冲突（先前装过随机 debug 签名旧包的用户首次需先卸载重装一次）。
+  Fixed unverified dataset status labels (`Unverified` / `待核验`) across macOS & iOS UIs, and updated [.github/workflows/native-desktop.yml](.github/workflows/native-desktop.yml) to build signed release APKs (`assembleRelease` + `apksigner` verification) with the persistent release keystore so future updates never hit signing conflicts.
+
 ## v2.1.0 (2026-11-26)
 
 新增 **NASA GEOS-FP OPeNDAP 免密钥气溶胶数据源**、全平台 **「AOD 数据来源」** 切换与 **Android 应用内版本更新检查与安装器**。

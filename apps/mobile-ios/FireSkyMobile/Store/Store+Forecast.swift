@@ -147,7 +147,7 @@ extension Store {
             return DataRow(
                 source: $0["source"] as? String ?? "",
                 ready: $0["ready"] as? Bool ?? false,
-                old: !latest,
+                old: verified && !latest,
                 verified: verified,
                 latest: latest,
                 missing: $0["missing_count"] as? Int ?? 0,

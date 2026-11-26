@@ -53,7 +53,7 @@ enum PreparationActionsChecks {
             let missing = DataRow(source: "gfs", ready: false, old: false, verified: false, latest: false, missing: 4)
             precondition(missing.title == "GFS" && missing.detail == "本次预测数据不完整")
             let unchecked = DataRow(source: "ecmwf", ready: true, old: false, verified: false, latest: true, missing: 0)
-            precondition(unchecked.title == "EC" && unchecked.detail == "更新待核验")
+            precondition(unchecked.title == "EC" && unchecked.status == "待核验" && unchecked.detail == "更新待核验")
             let old = DataRow(source: "cams", ready: true, old: true, verified: true, latest: false, missing: 0)
             precondition(old.status == "可更新")
             let verified = DataRow(source: "cams", ready: true, old: false, verified: true, latest: true, missing: 0)

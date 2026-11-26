@@ -1103,11 +1103,12 @@ fn gfs_sync_bbox(anchor: &str) -> Result<[f64; 4], String> {
 /// Footprint for GEOS-FP sync: padded GFS point-domain envelope split across dateline if needed.
 fn geos_fp_sync_areas(anchor: &str) -> Result<Vec<[f64; 4]>, String> {
     let [west, east, north, south] = gfs_sync_bbox(anchor)?;
+    let round = |v: f64| -> f64 { format!("{v:.3}").parse().unwrap() };
     cams_data::split_areas([
-        (north + 0.5).min(90.0),
-        west - 0.5,
-        (south - 0.5).max(-90.0),
-        east + 0.5,
+        round((north + 0.6).min(90.0)),
+        round(west - 0.6),
+        round((south - 0.6).max(-90.0)),
+        round(east + 0.6),
     ])
 }
 
@@ -2838,6 +2839,23 @@ mod tests {
         assert_eq!(
             due_for_source(&state, 15, None, past, false),
             (true, "retry_after_cooldown".into())
+        );
+    }
+
+    #[test]
+    fn geos_fp_sync_area_padding_matches_context_zero_six_deg_contract() {
+        let areas = geos_fp_sync_areas("china").unwrap();
+        assert_eq!(areas.len(), 1);
+        let [west, east, north, south] = gfs_sync_bbox("china").unwrap();
+        let round = |v: f64| -> f64 { format!("{v:.3}").parse().unwrap() };
+        assert_eq!(
+            areas[0],
+            [
+                round((north + 0.6).min(90.0)),
+                round(west - 0.6),
+                round((south - 0.6).max(-90.0)),
+                round(east + 0.6),
+            ]
         );
     }
 }

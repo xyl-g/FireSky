@@ -26,10 +26,10 @@
       },
       "versions": [
         {
-          "version": "2.1.0",
-          "date": "2026-11-26T14:50:00Z",
-          "localizedDescription": "FireSky 2.1.0 iOS release",
-          "downloadURL": "https://github.com/xyl-g/FireSky/releases/download/v2.1.0/FireSky-2.1.0-ios-arm64.ipa",
+          "version": "2.1.1",
+          "date": "2026-11-26T16:15:00Z",
+          "localizedDescription": "FireSky 2.1.1 iOS release",
+          "downloadURL": "https://github.com/xyl-g/FireSky/releases/download/v2.1.1/FireSky-2.1.1-ios-arm64.ipa",
           "size": 0,
           "minOSVersion": "16.0"
         }

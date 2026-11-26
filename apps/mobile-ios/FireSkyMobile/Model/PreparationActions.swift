@@ -37,7 +37,7 @@ struct DataRow: Identifiable {
         if source == "cams" && aerosolSource == "geos-fp" { return "GEOS-FP" }
         return source == "ecmwf" ? "EC" : source == "hsd" ? "卫星帧" : source.uppercased()
     }
-    var status: String { !ready ? "需下载" : old ? "可更新" : "已下载" }
+    var status: String { !ready ? "需下载" : old ? "可更新" : verified ? "已下载" : "待核验" }
     var detail: String {
         let base = !ready
             ? (missing > 0 ? "本次预测数据不完整" : "尚未下载本次预测数据")

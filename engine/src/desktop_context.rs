@@ -1293,7 +1293,7 @@ fn resolve(mut input: Input) -> Result<Value, String> {
         &evaluation,
     )?;
     let mut terrain_pending = points.iter().any(|p| p.source == "model-grid");
-    if terrain_pending && !input.fast {
+    if terrain_pending {
         // The preparation prepass downloads the first hour of the reported
         // envelope, so the sampler must search that same ±2 h envelope rather
         // than only the core evaluation hours, or the prepass file never hits.
@@ -2036,5 +2036,57 @@ mod tests {
         let (lats, lons) = crate::cams_cache::model_axes(prepared);
         assert!(lats.len() >= 2, "coverage needs >=2 latitude rows: {lats:?}");
         assert!(lons.len() >= 2, "coverage needs >=2 longitude columns: {lons:?}");
+    }
+
+    #[test]
+    fn regional_fast_check_matches_prepare_terrain_and_times() {
+        let dir = tempfile::tempdir().unwrap();
+        let payload = json!({
+            "name": "China",
+            "target_date": "2026-11-27",
+            "phenomenon": "dusk",
+            "model_source": "gfs",
+            "forecast_mode": "model",
+            "satellite_source": "off",
+            "regions": ["china"],
+            "spacing_deg": 0.25,
+            "aerosol_source": "geos-fp",
+            "_gfs_cycle_override": "2026-11-26T06:00:00Z",
+        });
+        let config = Config {
+            gfs_cache_dir: dir.path().join("gfs"),
+            ecmwf_cache_dir: dir.path().join("ecmwf"),
+            cams_cache_dir: Some(dir.path().join("cams")),
+            timezone_manifest: Some(
+                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                    .join("../resources/app-data/timezones/manifest.json"),
+            ),
+            city_catalog_path: city_catalog(),
+        };
+        let fast_ctx = resolve(Input {
+            payload: payload.clone(),
+            regional: true,
+            fast: true,
+            config: Config {
+                gfs_cache_dir: config.gfs_cache_dir.clone(),
+                ecmwf_cache_dir: config.ecmwf_cache_dir.clone(),
+                cams_cache_dir: config.cams_cache_dir.clone(),
+                timezone_manifest: config.timezone_manifest.clone(),
+                city_catalog_path: config.city_catalog_path.clone(),
+            },
+            now_utc: Some("2026-11-26T15:00:00Z".into()),
+        })
+        .expect("fast regional context");
+        let full_ctx = resolve(Input {
+            payload,
+            regional: true,
+            fast: false,
+            config,
+            now_utc: Some("2026-11-26T15:00:00Z".into()),
+        })
+        .expect("full regional context");
+        assert_eq!(fast_ctx["terrain_pending"], full_ctx["terrain_pending"]);
+        assert_eq!(fast_ctx["times"], full_ctx["times"]);
+        assert_eq!(fast_ctx["hours"], full_ctx["hours"]);
     }
 }

@@ -617,3 +617,75 @@ fn watchdog_exits_immediately_without_thirty_second_stall() {
         started.elapsed()
     );
 }
+
+#[test]
+fn apply_prepare_refresh_targets_upgrades_stale_cycles_and_preserves_explicit_override() {
+    let report = json!({
+        "event_start": "2026-11-27T09:00:00+00:00",
+        "model_cycle": "2026-11-26T00:00:00+00:00",
+        "cams_update_cycle": "2026-11-26T12:00:00+00:00",
+        "datasets": [
+            {
+                "source": "gfs",
+                "verified": true,
+                "is_latest": false,
+                "latest_available_cycle_utc": "2026-11-26T06:00:00+00:00"
+            },
+            {
+                "source": "cams",
+                "verified": true,
+                "is_latest": false,
+                "latest_available_cycle_utc": "2026-11-26T12:00:00+00:00"
+            }
+        ]
+    });
+
+    let mut payload = json!({
+        "model_source": "gfs",
+        "_gfs_cycle_override": "2026-11-26T00:00:00+00:00"
+    });
+    apply_prepare_refresh_targets(&mut payload, &report);
+    assert_eq!(
+        payload["_cams_refresh_cycle"],
+        json!("2026-11-26T12:00:00+00:00")
+    );
+    assert_eq!(
+        payload["_gfs_cycle_override"],
+        json!("2026-11-26T06:00:00+00:00")
+    );
+
+    // Explicit user override must not be overwritten.
+    let mut manual = json!({
+        "model_source": "gfs",
+        "gfs_cycle_override": "2026-11-25T18:00:00+00:00",
+        "_gfs_cycle_override": "2026-11-25T18:00:00+00:00"
+    });
+    apply_prepare_refresh_targets(&mut manual, &report);
+    assert_eq!(
+        manual["_gfs_cycle_override"],
+        json!("2026-11-25T18:00:00+00:00")
+    );
+
+    // Published cycle later than event_start must not be promoted for GFS.
+    let future_report = json!({
+        "event_start": "2026-11-26T03:00:00+00:00",
+        "model_cycle": "2026-11-25T18:00:00+00:00",
+        "datasets": [
+            {
+                "source": "gfs",
+                "verified": true,
+                "is_latest": false,
+                "latest_available_cycle_utc": "2026-11-26T06:00:00+00:00"
+            }
+        ]
+    });
+    let mut past_event = json!({
+        "model_source": "gfs",
+        "_gfs_cycle_override": "2026-11-25T18:00:00+00:00"
+    });
+    apply_prepare_refresh_targets(&mut past_event, &future_report);
+    assert_eq!(
+        past_event["_gfs_cycle_override"],
+        json!("2026-11-25T18:00:00+00:00")
+    );
+}

@@ -931,7 +931,7 @@ impl Runtime {
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
                 let value = desktop_publications::execute(decode(json!({
-                    "sources":["gfs","ecmwf","cams"],"now_utc":null,"timeout_seconds":2.0,
+                    "sources":["gfs","ecmwf","cams"],"now_utc":null,"timeout_seconds":6.0,
                     "force_refresh":force_refresh,
                     "aerosol_source":snapshot["payload"].get("aerosol_source").and_then(Value::as_str).unwrap_or("cams"),
                 }))?)?;
@@ -966,6 +966,7 @@ impl Runtime {
                 let nowcast = snapshot["kind"] == "nowcast";
                 let mut payload = snapshot["payload"].clone();
                 if method == "prepare" {
+                    apply_prepare_refresh_targets(&mut payload, &snapshot["report"]);
                     self.session(
                         "update",
                         token,
@@ -989,11 +990,36 @@ impl Runtime {
                             self.prepare_one(&request, regional, &cancel, Some(&progress))?;
                         }
                     }
-                    let report = if nowcast {
-                        self.nowcast_preflight(&payload, false, &cancel)?
+                    if let Some(object) = payload.as_object_mut() {
+                        object.remove("_cams_refresh_cycle");
+                    }
+                    let aerosol_src = payload
+                        .get("aerosol_source")
+                        .and_then(Value::as_str)
+                        .unwrap_or("cams");
+                    let pubs = decode(json!({
+                        "sources": ["gfs", "ecmwf", "cams"],
+                        "now_utc": null,
+                        "timeout_seconds": 6.0,
+                        "force_refresh": false,
+                        "aerosol_source": aerosol_src,
+                    }))
+                    .ok()
+                    .and_then(|params| desktop_publications::execute(params).ok())
+                    .map(|value| value["publications"].clone())
+                    .unwrap_or_else(|| json!({}));
+                    let mut report = if nowcast {
+                        let mut r = self.nowcast_preflight(&payload, false, &cancel)?;
+                        if pubs.is_object() && !pubs.as_object().is_some_and(|m| m.is_empty()) {
+                            apply_publications(&mut r, &pubs);
+                        }
+                        r
                     } else {
-                        self.preflight(&payload, regional, false, &json!({}), &cancel)?
+                        self.preflight(&payload, regional, false, &pubs, &cancel)?
                     };
+                    if pubs.is_object() && !pubs.as_object().is_some_and(|m| m.is_empty()) {
+                        report["publication_pending"] = json!(false);
+                    }
                     Self::pin(&mut payload, &report);
                     self.session("update", token, json!({"payload":payload,"report":report}))?;
                     return Ok(json!({"session":token,"report":report}));
@@ -2103,6 +2129,68 @@ fn artifact(root: &Path, entry: &Value, expected: &str) -> Result<Value, String>
         return Err("native artifact changed while reading".into());
     }
     Ok(document)
+}
+
+/// Populate internal refresh hints before `prepare` runs so clicking "Update"
+/// upgrades older cached CAMS/GEOS-FP and GFS cycles to the latest verified
+/// publication covering the event window, while preserving explicit overrides.
+fn apply_prepare_refresh_targets(payload: &mut Value, report: &Value) {
+    let datasets = report["datasets"].as_array();
+    let cams_row = datasets.and_then(|rows| {
+        rows.iter()
+            .find(|row| row["source"].as_str() == Some("cams"))
+    });
+    let cams_refresh = report["cams_update_cycle"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            cams_row
+                .filter(|row| row["verified"] == true && row["is_latest"] == false)
+                .and_then(|row| row["latest_available_cycle_utc"].as_str())
+                .filter(|s| !s.is_empty())
+        });
+    if let Some(cycle) = cams_refresh {
+        payload["_cams_refresh_cycle"] = json!(cycle);
+    }
+
+    if !payload.get("gfs_cycle_override").is_none_or(Value::is_null) {
+        return;
+    }
+    let Some(gfs_row) = datasets.and_then(|rows| {
+        rows.iter()
+            .find(|row| row["source"].as_str() == Some("gfs"))
+    }) else {
+        return;
+    };
+    if gfs_row["verified"] != true || gfs_row["is_latest"] != false {
+        return;
+    }
+    let Some(latest_str) = gfs_row["latest_available_cycle_utc"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+    else {
+        return;
+    };
+    let Ok(latest_cycle) = time_contract::parse_utc(latest_str) else {
+        return;
+    };
+    let event_start_str = report["model_windows"]["gfs"]
+        .as_str()
+        .or_else(|| report["event_start"].as_str());
+    let Some(event_start) = event_start_str.and_then(|s| time_contract::parse_utc(s).ok()) else {
+        return;
+    };
+    if latest_cycle > event_start {
+        return;
+    }
+    let current_cycle = payload["_gfs_cycle_override"]
+        .as_str()
+        .or_else(|| report["model_cycles"]["gfs"].as_str())
+        .or_else(|| report["model_cycle"].as_str())
+        .and_then(|s| time_contract::parse_utc(s).ok());
+    if current_cycle.is_none_or(|cur| latest_cycle > cur) {
+        payload["_gfs_cycle_override"] = json!(latest_str);
+    }
 }
 
 fn apply_publications(report: &mut Value, publications: &Value) {

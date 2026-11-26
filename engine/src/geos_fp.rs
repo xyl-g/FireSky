@@ -944,7 +944,7 @@ fn choose_runs_for_targets(
     refresh_before: Option<DateTime<Utc>>,
     cancel: &AtomicBool,
 ) -> Result<Vec<ChosenStep>, String> {
-    let Some(&max_target) = targets.iter().max() else {
+    let (Some(&min_target), Some(&max_target)) = (targets.iter().min(), targets.iter().max()) else {
         return Err("GEOS-FP requires at least one target time".into());
     };
     let now = DateTime::<Utc>::from(SystemTime::now());
@@ -956,7 +956,7 @@ fn choose_runs_for_targets(
         if cancel.load(Ordering::Acquire) {
             return Err("desktop operation cancelled".into());
         }
-        if refresh_before.is_some_and(|r| cycle < r) {
+        if refresh_before.is_some_and(|r| r <= min_target && cycle < r) {
             continue;
         }
         if cycle > max_target {
@@ -1816,6 +1816,77 @@ mod tests {
         assert_eq!(second[&target], *path);
         // Check DAS + cached skip (no .dods fetched)
         let _ = count_before;
+
+        stop.store(true, Ordering::Release);
+        let _ = server.join();
+    }
+
+    #[test]
+    fn choose_runs_allows_preceding_cycle_when_targets_span_refresh_boundary() {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let base = format!("http://{addr}/opendap/GEOS-FP/grid_tavg_3hr_aer_slv/GEOS-FP");
+
+        let das_c00_2d = "Attributes {\n    time {\n        String grads_size \"243\";\n        String grads_min \"22z25nov2026\";\n        String grads_step \"60mn\";\n    }\n}\n";
+        let das_c00_3d = "Attributes {\n    time {\n        String grads_size \"81\";\n        String grads_min \"00z26nov2026\";\n        String grads_step \"180mn\";\n    }\n}\n";
+        let das_c12_2d = "Attributes {\n    time {\n        String grads_size \"243\";\n        String grads_min \"10z26nov2026\";\n        String grads_step \"60mn\";\n    }\n}\n";
+        let das_c12_3d = "Attributes {\n    time {\n        String grads_size \"81\";\n        String grads_min \"12z26nov2026\";\n        String grads_step \"180mn\";\n    }\n}\n";
+        let dods_missing = b"Error {\n    code = 0;\n    message = \"/x is not an available dataset\";\n};\n";
+
+        let stop = std::sync::Arc::new(AtomicBool::new(false));
+        let stop_clone = stop.clone();
+        let server = std::thread::spawn(move || {
+            listener.set_nonblocking(true).unwrap();
+            while !stop_clone.load(Ordering::Acquire) {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    std::thread::sleep(StdDuration::from_millis(10));
+                    continue;
+                };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let mut req_line = String::new();
+                if reader.read_line(&mut req_line).is_err() {
+                    continue;
+                }
+                loop {
+                    let mut h = String::new();
+                    if reader.read_line(&mut h).unwrap_or(0) == 0 || h == "\r\n" || h == "\n" {
+                        break;
+                    }
+                }
+                let path = req_line.split_whitespace().nth(1).unwrap_or("");
+                let (extra_hdr, body): (&str, Vec<u8>) = if path.ends_with(".20261126_00.das") && path.contains(COL_2D_AOD) {
+                    ("", das_c00_2d.as_bytes().to_vec())
+                } else if path.ends_with(".20261126_00.das") && path.contains(COL_3D_EXT) {
+                    ("", das_c00_3d.as_bytes().to_vec())
+                } else if path.ends_with(".20261126_12.das") && path.contains(COL_2D_AOD) {
+                    ("", das_c12_2d.as_bytes().to_vec())
+                } else if path.ends_with(".20261126_12.das") && path.contains(COL_3D_EXT) {
+                    ("", das_c12_3d.as_bytes().to_vec())
+                } else {
+                    ("Content-Description: dods_error\r\n", dods_missing.to_vec())
+                };
+                let hdr = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n{extra_hdr}Connection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(hdr.as_bytes());
+                let _ = stream.write_all(&body);
+            }
+        });
+
+        let client = http_client(StdDuration::from_secs(5)).unwrap();
+        let t_early = Utc.with_ymd_and_hms(2026, 11, 26, 9, 0, 0).unwrap();
+        let t_late = Utc.with_ymd_and_hms(2026, 11, 26, 15, 0, 0).unwrap();
+        let refresh = Utc.with_ymd_and_hms(2026, 11, 26, 12, 0, 0).unwrap();
+        let cancel = AtomicBool::new(false);
+        let steps = choose_runs_for_targets(&client, &base, &[t_early, t_late], Some(refresh), &cancel).unwrap();
+        assert_eq!(steps.len(), 2);
+        assert_eq!(
+            steps[0].axes.cycle,
+            Utc.with_ymd_and_hms(2026, 11, 26, 0, 0, 0).unwrap()
+        );
+        assert_eq!(steps[1].axes.cycle, refresh);
 
         stop.store(true, Ordering::Release);
         let _ = server.join();
