@@ -7,11 +7,12 @@ native desktop clients**. The physics follows the methodology of the
 
 > 中文文档：[README.md](README.md)
 
-> Current release **v2.0.2** (see [Download & install](#download--install-releases)):
+> Current release **v2.0.3** (see [Download & install](#download--install-releases)):
 > macOS DMGs (dual arch), Windows zip + installer (x64/ARM64), universal Android
 > APK, and unsigned sideloadable iOS `.ipa` are all built and attached to GitHub
 > Releases automatically on `v*` tags (with independent `mobile-v*` mobile releases).
-> v2.0.2 redesigns the macOS Spectral Glow & Azimuth Radar dual-column cards (fixing
+> v2.0.3 fixes port 8765 persistence across macOS in-app updates/quits and polishes
+> Top-3 azimuth radar bars; v2.0.2 redesigns the macOS Spectral Glow & Azimuth Radar dual-column cards (fixing
 > the `0..1` radar scale and step timestamps) and AltStore v2 metadata; v2.0.1 extends CAMS ADS matching-fingerprint queue retention back to 24 hours
 > (keeping 4-hour orphan cleanup) and auto-reloads the macOS background sync helper
 > after app upgrades; v2.0.0 brings **CIE 1931 spectral glow color prediction**, **16-direction azimuth
@@ -97,7 +98,7 @@ native desktop clients**. The physics follows the methodology of the
 
 Official builds are published on
 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) (current:
-**v2.0.2**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
+**v2.0.3**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
 file names; run it in the directory holding the assets):
 
 ```bash

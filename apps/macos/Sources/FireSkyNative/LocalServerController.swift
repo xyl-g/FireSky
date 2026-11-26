@@ -120,8 +120,54 @@ final class LocalServerController: ObservableObject {
 
     // MARK: - 生命周期控制
 
+    nonisolated static func staleHTTPServerPIDs(
+        psOutput: String,
+        workspace: String,
+        port: Int,
+        excludingPID: pid_t = getpid()
+    ) -> [pid_t] {
+        guard !workspace.isEmpty, port > 0 else { return [] }
+        let wsNeedle = "--workspace \(workspace)"
+        let portNeedle = "--port \(port)"
+        var pids: [pid_t] = []
+        for line in psOutput.split(separator: "\n") {
+            let text = String(line)
+            guard text.contains("firesky-engine"),
+                  text.contains(" http "),
+                  text.contains(wsNeedle),
+                  text.hasSuffix(portNeedle) || text.contains("\(portNeedle) ") else { continue }
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            guard let token = trimmed.split(separator: " ").first,
+                  let pid = pid_t(token), pid > 1, pid != excludingPID else { continue }
+            pids.append(pid)
+        }
+        return pids
+    }
+
+    nonisolated static func terminateStaleHTTPServers(workspace: String, port: Int) {
+        let listing = Process()
+        listing.executableURL = URL(fileURLWithPath: "/bin/ps")
+        listing.arguments = ["-axo", "pid=,command="]
+        let pipe = Pipe()
+        listing.standardOutput = pipe
+        listing.standardError = FileHandle.nullDevice
+        guard (try? listing.run()) != nil else { return }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        listing.waitUntilExit()
+        guard listing.terminationStatus == 0 else { return }
+        let output = String(data: data, encoding: .utf8) ?? ""
+        let pids = staleHTTPServerPIDs(psOutput: output, workspace: workspace, port: port)
+        guard !pids.isEmpty else { return }
+        for pid in pids { kill(pid, SIGTERM) }
+        for _ in 0..<15 {
+            if !pids.contains(where: { kill($0, 0) == 0 }) { return }
+            usleep(100_000)
+        }
+        for pid in pids where kill(pid, 0) == 0 { kill(pid, SIGKILL) }
+    }
+
     func start(workspace: String, customEngineBinary: String = "") {
-        stop()
+        stopAndWait()
         errorMessage = ""
 
         let trimmedWorkspace = workspace.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -167,50 +213,55 @@ final class LocalServerController: ObservableObject {
                                            needsToken: needsToken,
                                            tokenPath: tokenPath)
 
-        let child = Process()
-        child.executableURL = URL(fileURLWithPath: enginePath)
-        child.arguments = [
-            "http",
-            "--workspace", trimmedWorkspace,
-            "--host", host,
-            "--port", String(targetPort),
-        ]
-        child.currentDirectoryURL = URL(fileURLWithPath: trimmedWorkspace)
-        child.environment = environment
-        child.standardInput = FileHandle.nullDevice
-
-        let logHandle = openLogFileHandle(environment: environment)
-        child.standardOutput = logHandle
-        child.standardError = logHandle
-
         stopping = false
-        child.terminationHandler = { [weak self] terminated in
-            Task { @MainActor in
-                guard let self, self.process === terminated else { return }
-                let intentional = self.stopping
-                self.process = nil
-                self.running = false
-                self.starting = false
-                if !intentional {
-                    self.statusMessage = ""
-                    self.errorMessage = "本地 HTTP 服务已退出（退出码 \(terminated.terminationStatus)）。"
-                }
-            }
-        }
-
-        do {
-            try child.run()
-        } catch {
-            starting = false
-            running = false
-            statusMessage = ""
-            errorMessage = "启动本地 HTTP 服务失败：\(error.localizedDescription)"
-            return
-        }
-
-        self.process = child
         startTask = Task { [weak self] in
             guard let self else { return }
+            await Task.detached(priority: .utility) {
+                LocalServerController.terminateStaleHTTPServers(workspace: trimmedWorkspace, port: targetPort)
+            }.value
+            guard !Task.isCancelled else { return }
+
+            let child = Process()
+            child.executableURL = URL(fileURLWithPath: enginePath)
+            child.arguments = [
+                "http",
+                "--workspace", trimmedWorkspace,
+                "--host", host,
+                "--port", String(targetPort),
+            ]
+            child.currentDirectoryURL = URL(fileURLWithPath: trimmedWorkspace)
+            child.environment = environment
+            child.standardInput = FileHandle.nullDevice
+
+            let logHandle = self.openLogFileHandle(environment: environment)
+            child.standardOutput = logHandle
+            child.standardError = logHandle
+
+            child.terminationHandler = { [weak self] terminated in
+                Task { @MainActor in
+                    guard let self, self.process === terminated else { return }
+                    let intentional = self.stopping
+                    self.process = nil
+                    self.running = false
+                    self.starting = false
+                    if !intentional {
+                        self.statusMessage = ""
+                        self.errorMessage = "本地 HTTP 服务已退出（退出码 \(terminated.terminationStatus)）。"
+                    }
+                }
+            }
+
+            do {
+                try child.run()
+            } catch {
+                self.starting = false
+                self.running = false
+                self.statusMessage = ""
+                self.errorMessage = "启动本地 HTTP 服务失败：\(error.localizedDescription)"
+                return
+            }
+
+            self.process = child
             let ready = await self.waitForHealth(port: targetPort, process: child)
             guard !Task.isCancelled, self.process === child else { return }
             self.startTask = nil
@@ -238,13 +289,29 @@ final class LocalServerController: ObservableObject {
     }
 
     func stop() {
+        stopAndWait()
+    }
+
+    func stopAndWait() {
         startTask?.cancel()
         startTask = nil
         stopping = true
         if let child = process {
             process = nil
             if child.isRunning {
+                let pid = child.processIdentifier
                 child.terminate()
+                for _ in 0..<15 {
+                    if !child.isRunning { break }
+                    usleep(100_000)
+                }
+                if child.isRunning, pid > 1 {
+                    kill(pid, SIGKILL)
+                    for _ in 0..<5 {
+                        if !child.isRunning { break }
+                        usleep(50_000)
+                    }
+                }
             }
         }
         running = false

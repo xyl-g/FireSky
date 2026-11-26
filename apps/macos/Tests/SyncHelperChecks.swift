@@ -62,6 +62,16 @@ enum SyncHelperChecks {
                 "ProgramArguments": [helperPath, "--sync-helper"],
             ],
             expectedWorkspace: ws, expectedHelperPath: helperPath, expectedVersion: "2.0.1"))
+        let httpPS = [
+            "60900 /Applications/FireSky.app/Contents/Resources/firesky-engine http --workspace \(ws) --host 127.0.0.1 --port 8765",
+            "60901 /Applications/FireSky.app/Contents/Resources/firesky-engine http --workspace \(ws) --host 127.0.0.1 --port 87650",
+            "60902 /Applications/FireSky.app/Contents/Resources/firesky-engine http --workspace /tmp/other --host 127.0.0.1 --port 8765",
+            "60903 /Applications/FireSky.app/Contents/Resources/firesky-engine desktop-call --workspace \(ws) data_sync_tick",
+            "60904 /bin/sleep 10",
+        ].joined(separator: "\n")
+        precondition(LocalServerController.staleHTTPServerPIDs(psOutput: httpPS, workspace: ws, port: 8765, excludingPID: 99999) == [60900])
+        precondition(LocalServerController.staleHTTPServerPIDs(psOutput: httpPS, workspace: ws, port: 8765, excludingPID: 60900).isEmpty)
+        precondition(LocalServerController.staleHTTPServerPIDs(psOutput: httpPS, workspace: "", port: 8765).isEmpty)
         print("sync-helper checks: ok")
     }
 }

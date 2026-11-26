@@ -21,6 +21,9 @@ struct FireSkyApp: App {
                     delegate.store = store
                     delegate.localServer = localServer
                     delegate.reminders = reminders
+                    updater.prepareForRelaunch = { [weak delegate] in
+                        delegate?.beginUpdaterRelaunch()
+                    }
                     delegate.openMainWindow = { [openWindow] in
                         openWindow(id: "main")
                     }
@@ -335,6 +338,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             completionHandler()
         }
     }
+    func beginUpdaterRelaunch() {
+        forceTerminate = true
+        localServer?.stopAndWait()
+        store?.shutdown()
+    }
     func applicationWillTerminate(_ notification: Notification) {
         if let observer = syncNotificationObserver {
             DistributedNotificationCenter.default().removeObserver(observer)
@@ -344,7 +352,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
             NSStatusBar.system.removeStatusItem(statusItem)
             self.statusItem = nil
         }
-        localServer?.stop()
+        localServer?.stopAndWait()
         store?.shutdown()
     }
     func scheduleSnapshot() {

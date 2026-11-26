@@ -34,6 +34,8 @@ final class Updater: ObservableObject {
         didSet { UserDefaults.standard.set(autoCheck, forKey: "autoUpdateCheck") }
     }
 
+    var prepareForRelaunch: (() -> Void)?
+
     private var checkTask: Task<Void, Never>?
     private var downloadTask: Task<Void, Never>?
 
@@ -293,7 +295,11 @@ final class Updater: ObservableObject {
                 bytesPerSecond = 0
                 phase = .installing
                 let installed = try await installArchive(archive, version: info.version)
-                try await NSWorkspace.shared.openApplication(at: installed, configuration: .init())
+                prepareForRelaunch?()
+                let relay = Process()
+                relay.executableURL = URL(fileURLWithPath: "/bin/sh")
+                relay.arguments = ["-c", "sleep 1; /usr/bin/open \"$1\"", "_", installed.path]
+                try relay.run()
                 NSApp.terminate(nil)
             } catch is CancellationError {
                 bytesPerSecond = 0

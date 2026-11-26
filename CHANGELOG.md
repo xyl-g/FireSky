@@ -8,6 +8,16 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v2.0.3 (2026-11-26)
+
+macOS 应用更新/退出时 8765 端口同步停服与孤儿回收、雷达 Top-3 排版精修及设置页与工作台全套 UI Test 视觉复验。
+macOS port 8765 synchronous stop and orphan reclamation across app updates/quits, Top-3 radar label alignment polish, and full UI snapshot visual verification across Workbench & Settings.
+
+- **修复更新或退出时 8765 本地服务未停掉的问题**：[LocalServerController.swift](apps/macos/Sources/FireSkyNative/LocalServerController.swift) 新增 `stopAndWait()` 同步等待子进程释放端口，并在 `start()` 绑定前自动回收同工作区同端口残留的旧 `firesky-engine http` 孤儿进程；[Updater.swift](apps/macos/Sources/FireSkyNative/Updater.swift) 与 [FireSkyApp.swift](apps/macos/Sources/FireSkyNative/FireSkyApp.swift) 改为在安装新包后先 `beginUpdaterRelaunch()` 停服停机、再通过短接力拉起新版 `.app`。
+  Added synchronous `stopAndWait()` and `terminateStaleHTTPServers(workspace:port:)` pre-bind reclamation in [LocalServerController.swift](apps/macos/Sources/FireSkyNative/LocalServerController.swift), and updated [Updater.swift](apps/macos/Sources/FireSkyNative/Updater.swift) + [FireSkyApp.swift](apps/macos/Sources/FireSkyNative/FireSkyApp.swift) (`beginUpdaterRelaunch()`) to stop port 8765 cleanly before relaying into the newly installed `.app`.
+- **macOS 雷达 Top-3 方位标签不换行与 UI 夹具扩展**：[WorkbenchResultsViews.swift](apps/macos/Sources/FireSkyNative/WorkbenchResultsViews.swift) 加宽 4 字方位标签并收紧评分条比例，[WorkbenchSnapshot.swift](apps/macos/Tests/WorkbenchSnapshot.swift) 补齐 `spectral_color` / `azimuth_radar` 与滚动截屏验证。
+  Polished Top-3 direction labels (`width: 54`, single-line) and capped score bars in [WorkbenchResultsViews.swift](apps/macos/Sources/FireSkyNative/WorkbenchResultsViews.swift), and verified workbench/settings rendering via [WorkbenchSnapshot.swift](apps/macos/Tests/WorkbenchSnapshot.swift).
+
 ## v2.0.2 (2026-11-26)
 
 macOS 光谱预测云色与 16 方位观测雷达双栏视觉重构、雷达比例尺 (`0..1`) 修复、`glow_spectrum.rs` 时间对齐修复与 AltStore v2 元数据补齐。

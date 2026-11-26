@@ -53,6 +53,7 @@ swiftc -parse-as-library -swift-version 5 -target "$TARGET" \
     "$ROOT/apps/macos/Sources/FireSkyNative/EngineClient.swift" \
     "$ROOT/apps/macos/Sources/FireSkyNative/FFIEngineClient.swift" \
     "$ROOT/apps/macos/Sources/FireSkyNative/SyncHelperInstaller.swift" \
+    "$ROOT/apps/macos/Sources/FireSkyNative/LocalServerController.swift" \
     "$ROOT/apps/macos/Tests/SyncHelperChecks.swift" \
     -o "$FIXTURE_DIR/sync-helper-checks"
 "$FIXTURE_DIR/sync-helper-checks" >/dev/null
