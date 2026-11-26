@@ -402,6 +402,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     private(set) var requestKind: Page = .point
     private var requestPayload: JSONObject = [:]
     private var didCheckStartupCredentials = false
+    var didScheduleAutoUpdateCheck = false
     /// UX #7：会话持久化（上次地点/日期/模式）。快照/截图夹具运行不写用户默认值。
     private var sessionSaveTask: Task<Void, Never>?
     private var restoringSession = false
@@ -486,7 +487,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     }
 
     func connect() async {
-        guard !busy, !probingDownloads else { return }
+        guard !online, !busy, !probingDownloads else { return }
         online = false
         downloadProbeRows = DownloadProbeRow.initial
         downloadProbeDate = nil

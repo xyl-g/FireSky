@@ -110,8 +110,9 @@ struct WorkbenchRootView: View {
         }
         .task { await store.connect() }
         .task {
-            // 启动静默检查更新（默认开，可在设置 → 通用关闭）；失败不打扰。
-            if updater.autoCheck {
+            // 启动静默检查更新（默认开，可在设置 → 通用关闭）；仅首次启动检查，关窗重开不重复触发。
+            if updater.autoCheck && !store.didScheduleAutoUpdateCheck {
+                store.didScheduleAutoUpdateCheck = true
                 try? await Task.sleep(for: .seconds(8))
                 if !Task.isCancelled, updater.autoCheck {
                     updater.checkForUpdates(interactive: false)

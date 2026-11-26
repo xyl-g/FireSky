@@ -16,19 +16,29 @@ enum SyncHelperInstaller {
     /// 与当前数据目录比对——数据目录是系统默认但 FIRESKY_WORKSPACE 覆盖
     /// / 旧版 plist（历史 bug：陈旧路径在测试工作区全源同步）会不一致。
     /// 不一致时后台轮把数据同步到错误目录，必须提示重装。
+    static func workspaceFromPlist(_ plist: [String: Any]) -> String? {
+        if let env = plist["EnvironmentVariables"] as? [String: Any],
+           let workspace = env["FIRESKY_WORKSPACE"] as? String,
+           !workspace.isEmpty {
+            return workspace
+        }
+        if let arguments = plist["ProgramArguments"] as? [String],
+           let index = arguments.firstIndex(of: "--workspace"),
+           index + 1 < arguments.count,
+           !arguments[index + 1].isEmpty {
+            return arguments[index + 1]
+        }
+        return nil
+    }
+
     static func installedWorkspace(expected: String) -> Bool {
         guard let data = try? Data(contentsOf: plistURL),
               let plist = try? PropertyListSerialization.propertyList(
                   from: data, options: [], format: nil
-              ) as? [String: Any],
-              let arguments = plist["ProgramArguments"] as? [String] else {
+              ) as? [String: Any] else {
             return true
         }
-        guard let index = arguments.firstIndex(of: "--workspace"),
-              index + 1 < arguments.count else {
-            return true
-        }
-        return arguments[index + 1] == expected
+        return workspaceFromPlist(plist).map { $0 == expected } ?? true
     }
 
     static var plistURL: URL {

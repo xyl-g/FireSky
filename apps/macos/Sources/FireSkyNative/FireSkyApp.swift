@@ -23,9 +23,7 @@ struct FireSkyApp: App {
                     delegate.openMainWindow = { [openWindow] in
                         openWindow(id: "main")
                     }
-                    if delegate.mainWindow == nil {
-                        delegate.mainWindow = NSApp.windows.first(where: { $0.canBecomeMain && !$0.isSheet })
-                    }
+                    delegate.mainWindow = NSApp.windows.first(where: { $0.canBecomeMain && !$0.isSheet && $0.styleMask.contains(.titled) })
                     delegate.scheduleSnapshot()
                     localServer.refreshTokenPreview(workspace: store.workspace)
                     if !store.isSnapshotRun && localServer.autoStart && !localServer.running && !localServer.starting {
@@ -87,13 +85,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         if ProcessInfo.processInfo.environment["FIRESKY_NATIVE_SNAPSHOT"] == nil {
             setupStatusItem()
             DispatchQueue.main.asyncAfter(deadline: .now() + 8) { [weak self] in
-                guard self != nil,
-                      NSApp.windows.first(where: { $0.isVisible && !$0.isSheet }) == nil
+                guard let self,
+                      NSApp.windows.first(where: { self.isMainWorkbenchWindow($0) && $0.isVisible }) == nil
                 else { return }
-                NSApp.activate(ignoringOtherApps: true)
-                NSApp.windows
-                    .first(where: { !$0.isSheet && ($0 is NSPanel || $0.isKeyWindow || $0.isMainWindow || !($0 is NSPanel)) })?
-                    .makeKeyAndOrderFront(nil)
+                self.showMainWindow()
             }
         }
         // 从挂载的磁盘映像（DMG）启动时提供安装到「应用程序」的引导；
@@ -172,14 +167,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
         menu.addItem(quitItem)
     }
 
+    private func isMainWorkbenchWindow(_ window: NSWindow) -> Bool {
+        window.canBecomeMain && !window.isSheet && window.styleMask.contains(.titled)
+    }
+
     func showMainWindow() {
         NSApp.activate(ignoringOtherApps: true)
-        if let window = NSApp.windows.first(where: { !$0.isSheet && ($0.isVisible || $0.isMiniaturized) }) {
-            window.deminiaturize(nil)
-            window.makeKeyAndOrderFront(nil)
-        } else {
-            openMainWindow?()
+        if let miniaturized = NSApp.windows.first(where: { isMainWorkbenchWindow($0) && $0.isMiniaturized }) {
+            miniaturized.deminiaturize(nil)
+            miniaturized.makeKeyAndOrderFront(nil)
+            mainWindow = miniaturized
+            return
+        }
+        if let visible = NSApp.windows.first(where: { isMainWorkbenchWindow($0) && $0.isVisible }) {
+            visible.makeKeyAndOrderFront(nil)
+            mainWindow = visible
+            return
+        }
+        openMainWindow?()
+        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
             NSApp.activate(ignoringOtherApps: true)
+            if let window = NSApp.windows.first(where: { self.isMainWorkbenchWindow($0) }) {
+                window.deminiaturize(nil)
+                window.makeKeyAndOrderFront(nil)
+                self.mainWindow = window
+            }
         }
     }
 
@@ -196,9 +210,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, UNUserNotificationCent
     }
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        if !flag {
-            showMainWindow()
-        }
+        showMainWindow()
         return false
     }
 

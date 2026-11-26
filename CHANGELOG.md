@@ -8,6 +8,20 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v1.10.5 (2026-11-26)
+
+macOS 最小化/关窗重开修复、后台助手工作区校验修复、CAMS ADS 孤儿任务 4 小时自动清理与 CI Node 24 升级。
+macOS minimize/close reopen fix, background helper workspace verification fix, 4-hour CAMS ADS orphan cleanup, and GitHub Actions Node 24 upgrade.
+
+- **macOS 最小化/关闭后正常重开主窗口**：[FireSkyApp.swift](apps/macos/Sources/FireSkyNative/FireSkyApp.swift) 严格过滤 `canBecomeMain && !isSheet && styleMask.contains(.titled)`，排除 `NSStatusItem` 内部创建的 `NSStatusBarWindow`，并在点击 Dock 图标时无条件还原最小化窗口或重新呼出主窗口；[Store.swift](apps/macos/Sources/FireSkyNative/Store.swift) 与 [Workbench.swift](apps/macos/Sources/FireSkyNative/Workbench.swift) 为重开窗口增加 `connect()` 在线幂等保护与启动更新检查去重，关窗再开秒出且不闪断本地服务。
+  Fixed macOS window restoration after minimize or close in [FireSkyApp.swift](apps/macos/Sources/FireSkyNative/FireSkyApp.swift) by strictly filtering out `NSStatusBarWindow` (`canBecomeMain && !isSheet && styleMask.contains(.titled)`) and handling Dock reopen unconditionally; added `connect()` online idempotency and auto-update check deduplication in [Store.swift](apps/macos/Sources/FireSkyNative/Store.swift) & [Workbench.swift](apps/macos/Sources/FireSkyNative/Workbench.swift).
+- **macOS 后台助手工作区校验修复**：[SyncHelperInstaller.swift](apps/macos/Sources/FireSkyNative/SyncHelperInstaller.swift) 新增 `workspaceFromPlist(_:)`，优先从 `EnvironmentVariables["FIRESKY_WORKSPACE"]` 读取已安装助手的数据目录（同时兼容旧版 `--workspace` 参数），使更改数据目录后的不一致提示真正生效。
+  Fixed [SyncHelperInstaller.swift](apps/macos/Sources/FireSkyNative/SyncHelperInstaller.swift) `installedWorkspace(expected:)` to inspect `EnvironmentVariables["FIRESKY_WORKSPACE"]` (with legacy `--workspace` fallback) so workspace mismatch detection works accurately.
+- **CAMS ADS 陈旧孤儿任务 4 小时清理**：[engine/src/ads.rs](engine/src/ads.rs) 将 `Config::default().job_max_age_seconds` 从 24 小时缩紧至 4 小时（`14400s`），及时向 Copernicus ADS 发送 best-effort `DELETE` 清理被新周期取代或超时的旧排队任务，释放账号并发配额。
+  Reduced default `job_max_age_seconds` in [engine/src/ads.rs](engine/src/ads.rs) from 24h to 4h (`14400s`) so superseded/abandoned ADS queue entries are cleaned up via best-effort `DELETE` sooner.
+- **CI 动作升级至 Node 24**：将 [ci.yml](.github/workflows/ci.yml) 与 [native-desktop.yml](.github/workflows/native-desktop.yml) 的官方 actions（`checkout@v7`、`setup-node@v7`、`setup-java@v6`、`setup-python@v7`、`setup-dotnet@v6`、`upload-artifact@v7`、`download-artifact@v8`）升级为原生 Node 24 版本，消除 Runner 弃用警告。
+  Upgraded official GitHub Actions across [ci.yml](.github/workflows/ci.yml) and [native-desktop.yml](.github/workflows/native-desktop.yml) to Node 24 major releases.
+
 ## v1.10.4 (2026-11-25)
 
 macOS 菜单栏常驻与后台助手协同、CAMS ADS 排队轮询抗抖动、iOS 侧载 IPA 图标与 Ad-Hoc 签名修复，以及按路径精准触发的 CI / 独立移动端发版流水线。

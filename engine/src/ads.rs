@@ -61,7 +61,7 @@ impl Default for Config {
             request_attempts: 3,
             lock_timeout_seconds: 300.0,
             job_ledger_path: None,
-            job_max_age_seconds: 86400.0,
+            job_max_age_seconds: 14400.0,
         }
     }
 }
@@ -1602,5 +1602,80 @@ mod tests {
             .filter(|(m, p)| m == "POST" && p.ends_with("/execution"))
             .count();
         assert_eq!(post_count, 0);
+    }
+
+    #[test]
+    fn default_job_max_age_cleans_up_five_hour_old_orphan() {
+        assert_eq!(Config::default().job_max_age_seconds, 14400.0);
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dir.path().join("ads-jobs.json");
+        let server = MockAds::start(move |method, path, _| {
+            if method == "GET" && path == format!("/retrieve/v1/processes/{DATASET}") {
+                return (200, "application/json", br#"{"id":"cams"}"#.to_vec());
+            }
+            if method == "DELETE" && path == "/retrieve/v1/jobs/job-5h-old" {
+                return (200, "application/json", br#"{}"#.to_vec());
+            }
+            if method == "POST" && path == format!("/retrieve/v1/processes/{DATASET}/execution") {
+                return (
+                    202,
+                    "application/json",
+                    br#"{"links":[{"rel":"monitor","href":"/retrieve/v1/jobs/job-fresh-5h"}]}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-fresh-5h" {
+                return (
+                    200,
+                    "application/json",
+                    br#"{"status":"successful","links":[{"rel":"results","href":"/retrieve/v1/jobs/job-fresh-5h/results"}]}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/jobs/job-fresh-5h/results" {
+                return (
+                    200,
+                    "application/json",
+                    br#"{"asset":{"value":{"href":"/retrieve/v1/assets/fresh5h.grib","file:size":16}}}"#.to_vec(),
+                );
+            }
+            if method == "GET" && path == "/retrieve/v1/assets/fresh5h.grib" {
+                return (200, "application/x-grib", b"fresh5h123456789".to_vec());
+            }
+            (404, "application/json", br#"{}"#.to_vec())
+        });
+
+        let mut rc = tempfile::NamedTempFile::new().unwrap();
+        writeln!(rc, "url: {}\nkey: test-ads-key", server.base_url).unwrap();
+        let cfg = Config {
+            api_url: Some(server.base_url.clone()),
+            credentials_file: Some(rc.path().to_path_buf()),
+            timeout_seconds: 5.0,
+            wait_timeout_seconds: 15.0,
+            poll_initial_seconds: 0.02,
+            poll_max_seconds: 0.05,
+            request_attempts: 1,
+            lock_timeout_seconds: 2.0,
+            job_ledger_path: Some(ledger.clone()),
+            ..Config::default()
+        };
+        let old_time = DateTime::<Utc>::from(SystemTime::now()) - ChronoDuration::hours(5);
+        update_ledger(&ledger, 2.0, |l| {
+            l.jobs.insert(
+                "five-hour-orphan".into(),
+                JobLedgerEntry {
+                    monitor_url: "/retrieve/v1/jobs/job-5h-old".into(),
+                    process_id: DATASET.into(),
+                    submitted_at_utc: time_contract::iso(old_time),
+                },
+            );
+        })
+        .unwrap();
+
+        let mut ads = Ads::new(cfg).unwrap();
+        let mut out = tempfile::NamedTempFile::new().unwrap();
+        ads.retrieve(&json!({"date":["2026-11-26"]}), &mut out).unwrap();
+        let reqs = server.requests.lock().unwrap();
+        assert!(reqs
+            .iter()
+            .any(|(m, p)| m == "DELETE" && p == "/retrieve/v1/jobs/job-5h-old"));
     }
 }

@@ -21,6 +21,17 @@ enum SyncHelperChecks {
         precondition(SyncHelperInstaller.roundProcessIDs(psOutput: badPid, workspace: ws).isEmpty)
         let rootPid = "1 /Applications/firesky-engine desktop-call --workspace \(ws) data_sync_tick"
         precondition(SyncHelperInstaller.roundProcessIDs(psOutput: rootPid, workspace: ws).isEmpty)
+        let envPlist: [String: Any] = [
+            "EnvironmentVariables": ["FIRESKY_WORKSPACE": ws],
+            "ProgramArguments": ["/Applications/FireSky.app/Contents/MacOS/FireSkySyncHelper", "--sync-helper"],
+        ]
+        precondition(SyncHelperInstaller.workspaceFromPlist(envPlist) == ws)
+        precondition(SyncHelperInstaller.workspaceFromPlist(["EnvironmentVariables": ["FIRESKY_WORKSPACE": "/tmp/other"]]) == "/tmp/other")
+        let legacyPlist: [String: Any] = [
+            "ProgramArguments": ["/Applications/FireSky.app/Contents/MacOS/FireSkySyncHelper", "--workspace", ws],
+        ]
+        precondition(SyncHelperInstaller.workspaceFromPlist(legacyPlist) == ws)
+        precondition(SyncHelperInstaller.workspaceFromPlist([:]) == nil)
         print("sync-helper checks: ok")
     }
 }
