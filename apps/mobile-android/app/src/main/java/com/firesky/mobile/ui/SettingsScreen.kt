@@ -647,27 +647,51 @@ private fun SyncSourceStatusRow(label: String, sourceState: JSONObject) {
         status == "cancelled" -> stringResource(R.string.sync_status_cancelled) to MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
         else -> stringResource(R.string.sync_status_never) to MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
     }
+    // 后台同步中时压制旧连续失败 / 退避冷却等过期告警信息，避免界面杂乱
     val notes = buildList {
         if (cycle.isNotEmpty()) add(stringResource(R.string.sync_last_cycle_fmt, cycle))
-        if (failures > 0) add(stringResource(R.string.sync_failures_fmt, failures))
-        if (suspended) {
-            if (nextRetry.isNotEmpty()) {
-                val formatted = runCatching {
-                    val instant = java.time.Instant.parse(nextRetry)
-                    java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm")
-                        .withZone(java.time.ZoneId.systemDefault())
-                        .format(instant)
-                }.getOrDefault(nextRetry)
-                add(stringResource(R.string.sync_cooldown_retry_fmt, formatted))
-            } else {
-                add(stringResource(R.string.sync_cooldown_manual_hint))
+        if (!inProgress) {
+            if (failures > 0) add(stringResource(R.string.sync_failures_fmt, failures))
+            if (suspended) {
+                if (nextRetry.isNotEmpty()) {
+                    val formatted = runCatching {
+                        val instant = java.time.Instant.parse(nextRetry)
+                        java.time.format.DateTimeFormatter.ofPattern("MM-dd HH:mm")
+                            .withZone(java.time.ZoneId.systemDefault())
+                            .format(instant)
+                    }.getOrDefault(nextRetry)
+                    add(stringResource(R.string.sync_cooldown_retry_fmt, formatted))
+                } else {
+                    add(stringResource(R.string.sync_cooldown_manual_hint))
+                }
             }
         }
     }
-    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.width(44.dp))
-            Text(badge, fontSize = 12.sp, color = badgeColor, fontWeight = FontWeight.Medium)
+            if (inProgress) {
+                Surface(
+                    shape = CircleShape,
+                    color = badgeColor.copy(alpha = 0.14f),
+                    border = BorderStroke(0.75.dp, badgeColor.copy(alpha = 0.35f)),
+                ) {
+                    Row(
+                        Modifier.padding(horizontal = 9.dp, vertical = 3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(11.dp),
+                            strokeWidth = 1.6.dp,
+                            color = badgeColor,
+                        )
+                        Text(badge, fontSize = 11.sp, color = badgeColor, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+            } else {
+                Text(badge, fontSize = 12.sp, color = badgeColor, fontWeight = FontWeight.Medium)
+            }
         }
         if (notes.isNotEmpty()) {
             Text(

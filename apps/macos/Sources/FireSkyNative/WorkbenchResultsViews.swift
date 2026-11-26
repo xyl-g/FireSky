@@ -176,6 +176,15 @@ private struct WorkActionSummaryView: View {
                                   model.uppercased(),
                                   comparison.error(model) ?? L10n.t("未知原因")))
         }
+        if snapshots.count == 2,
+           let gfsPeak = comparison.peak("gfs"),
+           let ecPeak = comparison.peak("ec"),
+           abs(gfsPeak - ecPeak) >= 0.45 {
+            result.append(L10n.text(
+                String(format: "模式分歧提示：GFS (%.2f) 与 EC (%.2f) 差值较大，临近时建议切「卫星实况」核对云区动向。", gfsPeak, ecPeak),
+                String(format: "Model divergence: GFS (%.2f) and EC (%.2f) diverge noticeably; check Satellite Nowcast close to the event.", gfsPeak, ecPeak)
+            ))
+        }
         for snapshot in snapshots {
             if let limit = snapshot.limit {
                 result.append(L10n.tf("%@ 主要限制：%@",
@@ -187,6 +196,15 @@ private struct WorkActionSummaryView: View {
             result.append(L10n.t("当前结果对应旧参数，可点「按新参数重算」更新。"))
         }
         return result
+    }
+
+    private var withinNowcastWindow: Bool {
+        guard let raw = reminderBest?.time else { return false }
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let date = iso.date(from: raw) ?? ISO8601DateFormatter().date(from: raw)
+        guard let date else { return false }
+        return abs(date.timeIntervalSinceNow) <= 4 * 3600
     }
 
     private var exportFilename: String { SummaryExport.suggestedFilename(store) }
@@ -214,6 +232,13 @@ private struct WorkActionSummaryView: View {
                         Spacer(minLength: 8)
                         if !snapshots.isEmpty {
                             Menu {
+                                Button(L10n.text("保存为追霞海报 (PNG)…", "Save Glow Poster (PNG)…")) {
+                                    SummaryExport.savePoster(store: store, comparison: comparison)
+                                }
+                                Button(L10n.text("复制追霞海报图片", "Copy Glow Poster Image")) {
+                                    SummaryExport.copyPoster(store: store, comparison: comparison)
+                                }
+                                Divider()
                                 Button(L10n.text("保存为文本文件", "Save as text")) {
                                     SummaryExport.save(exportText, suggestedFilename: exportFilename)
                                 }
@@ -221,12 +246,12 @@ private struct WorkActionSummaryView: View {
                                     SummaryExport.copy(exportText)
                                 }
                             } label: {
-                                Label(L10n.text("导出摘要", "Export summary"), systemImage: "square.and.arrow.up")
+                                Label(L10n.text("导出/分享", "Export"), systemImage: "square.and.arrow.up")
                             }
                             .buttonStyle(.borderless)
                             .font(.system(size: 11))
-                            .help(L10n.text("导出地点、日期、模型状态、来源时效与缺测说明；不重算科学结论。",
-                                            "Export location, date, model status, source timeliness and missing-data notes without recomputing results."))
+                            .help(L10n.text("导出追霞 PNG 海报卡或观测摘要文本。",
+                                            "Export a shareable PNG glow poster or text summary."))
                             Button {
                                 store.starLocation()
                             } label: {
@@ -251,6 +276,21 @@ private struct WorkActionSummaryView: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityLabel(L10n.tf("时间与窗口：%@", timingText))
+                    }
+                    if withinNowcastWindow {
+                        Button {
+                            store.page = .nowcast
+                        } label: {
+                            Label(
+                                L10n.text("已进入 4 小时临近窗口 · 切向日葵卫星实况纠偏",
+                                          "Within 4h window · Switch to Satellite Nowcast"),
+                                systemImage: "antenna.radiowaves.left.and.right"
+                            )
+                            .font(.system(size: 11, weight: .medium))
+                        }
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                        .tint(coolAccent)
                     }
                     if let reminderBest {
                         WorkReminderControl(bestTime: reminderBest.time,
@@ -707,8 +747,10 @@ struct WorkResultsView: View {
                                     }
                                 }
                             }
+                            SpectralColorBannerView(comparison: comparison, selectedModel: store.selectedModel)
                             WorkQualityBreakdownView(comparison: comparison)
                             WorkComparisonCurveView(comparison: comparison, timezone: store.timezone)
+                            AzimuthRadarView(comparison: comparison, selectedModel: store.selectedModel)
                         } else if let message = comparison.error(store.selectedModel) {
                             Text(L10n.tf("%@ 未完成：%@", store.selectedModel.uppercased(), message))
                                 .fireSkyFont(size: 12).foregroundStyle(.red)
@@ -792,6 +834,265 @@ struct WorkResultsView: View {
         .overlay {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(Color.secondary.opacity(0.14), lineWidth: 1)
+        }
+    }
+}
+
+private func parseSpectralHexColor(_ raw: String) -> Color? {
+    let cleaned = raw.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+    guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else { return nil }
+    let r = Double((value >> 16) & 0xFF) / 255.0
+    let g = Double((value >> 8) & 0xFF) / 255.0
+    let b = Double(value & 0xFF) / 255.0
+    return Color(red: r, green: g, blue: b)
+}
+
+/// Physical CIE 1931 spectral glow strip and sky gradient read strictly from backend `spectral_color`.
+private struct SpectralColorBannerView: View {
+    let comparison: ForecastComparison
+    let selectedModel: String
+
+    private var activeModel: String {
+        if comparison.report(selectedModel) != nil { return selectedModel }
+        return ForecastComparison.models.first(where: { comparison.report($0) != nil }) ?? selectedModel
+    }
+
+    private var spectral: JSONObject? {
+        comparison.report(activeModel)?["spectral_color"] as? JSONObject
+    }
+
+    var body: some View {
+        if let spectral {
+            let peakHex = spectral["peak_hex"] as? String ?? "#E25822"
+            let peakColor = parseSpectralHexColor(peakHex) ?? Color(red: 0.89, green: 0.35, blue: 0.13)
+            let peakLabel = L10n.text(
+                spectral["peak_label_zh"] as? String ?? "",
+                spectral["peak_label_en"] as? String ?? ""
+            )
+            let gradientColors = (spectral["sky_gradient_hex"] as? [String] ?? [])
+                .compactMap(parseSpectralHexColor)
+            let steps = spectral["steps"] as? [JSONObject] ?? []
+            let solarElev = (spectral["solar_elevation_deg"] as? NSNumber)?.doubleValue
+            let solarAz = (spectral["solar_azimuth_deg"] as? NSNumber)?.doubleValue
+            let cloudBase = (spectral["cloud_base_km"] as? NSNumber)?.doubleValue
+            let aod = (spectral["aod550"] as? NSNumber)?.doubleValue
+
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(alignment: .center, spacing: 8) {
+                    Text(L10n.text("光谱预测云色 · CIE 1931", "Spectral Glow Palette · CIE 1931"))
+                        .fireSkyFont(size: 13, weight: .semibold)
+                    Text(activeModel.uppercased())
+                        .fireSkyFont(size: 10, weight: .semibold, relativeTo: .caption)
+                        .foregroundStyle(modelColor(activeModel))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(modelColor(activeModel).opacity(0.14), in: Capsule())
+                    Spacer()
+                    HStack(spacing: 6) {
+                        RoundedRectangle(cornerRadius: 4)
+                            .fill(peakColor)
+                            .frame(width: 14, height: 14)
+                            .overlay { RoundedRectangle(cornerRadius: 4).strokeBorder(.white.opacity(0.4), lineWidth: 0.8) }
+                        Text(peakLabel.isEmpty ? peakHex : "\(peakLabel) · \(peakHex)")
+                            .fireSkyFont(size: 11, weight: .medium, relativeTo: .caption)
+                            .monospacedDigit()
+                    }
+                }
+
+                if gradientColors.count >= 2 {
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(LinearGradient(colors: gradientColors, startPoint: .leading, endPoint: .trailing))
+                        .frame(height: 18)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(Color.white.opacity(0.22), lineWidth: 0.8)
+                        }
+                }
+
+                if !steps.isEmpty {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
+                                let offsetMin = (step["offset_minutes"] as? NSNumber)?.intValue ?? 0
+                                let hex = step["hex"] as? String ?? "#E25822"
+                                let dotColor = parseSpectralHexColor(hex) ?? peakColor
+                                let label = L10n.text(step["label_zh"] as? String ?? "", step["label_en"] as? String ?? "")
+                                HStack(spacing: 5) {
+                                    Circle().fill(dotColor).frame(width: 9, height: 9)
+                                    Text(offsetMin == 0 ? "0m" : (offsetMin > 0 ? "+\(offsetMin)m" : "\(offsetMin)m"))
+                                        .fireSkyFont(size: 10, weight: .semibold, relativeTo: .caption)
+                                        .monospacedDigit()
+                                    if !label.isEmpty {
+                                        Text(label)
+                                            .fireSkyFont(size: 10, relativeTo: .caption)
+                                            .foregroundStyle(.secondary)
+                                    }
+                                }
+                                .padding(.horizontal, 8).padding(.vertical, 4)
+                                .background(Color.primary.opacity(0.05), in: Capsule())
+                            }
+                        }
+                    }
+                }
+
+                HStack(spacing: 12) {
+                    if let solarElev {
+                        Text(String(format: L10n.text("太阳仰角 %.1f°", "Solar Elev %.1f°"), solarElev))
+                    }
+                    if let solarAz {
+                        Text(String(format: L10n.text("太阳方位 %.0f°", "Solar Az %.0f°"), solarAz))
+                    }
+                    if let cloudBase {
+                        Text(String(format: L10n.text("云底高度 %.1f km", "Cloud Base %.1f km"), cloudBase))
+                    }
+                    if let aod {
+                        Text(String(format: "AOD %.2f", aod))
+                    }
+                }
+                .fireSkyFont(size: 10, relativeTo: .caption)
+                .foregroundStyle(.secondary)
+                .monospacedDigit()
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .workSurface()
+        }
+    }
+}
+
+/// 16-direction polar azimuth glow radar rendered from backend `azimuth_radar`.
+private struct AzimuthRadarView: View {
+    let comparison: ForecastComparison
+    let selectedModel: String
+
+    private var activeModel: String {
+        if comparison.report(selectedModel) != nil { return selectedModel }
+        return ForecastComparison.models.first(where: { comparison.report($0) != nil }) ?? selectedModel
+    }
+
+    private var radar: JSONObject? {
+        comparison.report(activeModel)?["azimuth_radar"] as? JSONObject
+    }
+
+    var body: some View {
+        if let radar {
+            let bearings = radar["bearings"] as? [JSONObject] ?? []
+            let solarAz = (radar["solar_azimuth_deg"] as? NSNumber)?.doubleValue ?? 270
+            let bestAz = (radar["best_azimuth_deg"] as? NSNumber)?.doubleValue ?? 270
+            let bestDir = L10n.text(radar["best_direction_zh"] as? String ?? "", radar["best_direction_en"] as? String ?? "")
+            let bestScore = (radar["best_score"] as? NSNumber)?.doubleValue ?? 0
+            let recommendation = L10n.text(radar["recommendation_zh"] as? String ?? "", radar["recommendation_en"] as? String ?? "")
+
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(L10n.text("16 方位火烧云观测雷达", "16-Direction Azimuth Glow Radar"))
+                        .fireSkyFont(size: 13, weight: .semibold)
+                    Text(activeModel.uppercased())
+                        .fireSkyFont(size: 10, weight: .semibold, relativeTo: .caption)
+                        .foregroundStyle(modelColor(activeModel))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(modelColor(activeModel).opacity(0.14), in: Capsule())
+                    Spacer()
+                    Text(L10n.text("仅基于 100–300 km 云幕与近场低云遮挡", "Cloud canvas vs. near-field low-cloud block"))
+                        .fireSkyFont(size: 9, relativeTo: .caption).foregroundStyle(.secondary)
+                }
+
+                HStack(alignment: .center, spacing: 18) {
+                    ZStack {
+                        Canvas { ctx, size in
+                            let center = CGPoint(x: size.width / 2, y: size.height / 2)
+                            let radius = min(size.width, size.height) * 0.40
+
+                            for frac in [0.33, 0.66, 1.0] {
+                                let r = radius * frac
+                                let rect = CGRect(x: center.x - r, y: center.y - r, width: r * 2, height: r * 2)
+                                ctx.stroke(Path(ellipseIn: rect), with: .color(.secondary.opacity(0.22)), lineWidth: 0.8)
+                            }
+                            var axes = Path()
+                            axes.move(to: CGPoint(x: center.x, y: center.y - radius))
+                            axes.addLine(to: CGPoint(x: center.x, y: center.y + radius))
+                            axes.move(to: CGPoint(x: center.x - radius, y: center.y))
+                            axes.addLine(to: CGPoint(x: center.x + radius, y: center.y))
+                            ctx.stroke(axes, with: .color(.secondary.opacity(0.22)), lineWidth: 0.8)
+
+                            let points: [CGPoint] = bearings.compactMap { entry in
+                                guard let deg = (entry["deg"] as? NSNumber)?.doubleValue,
+                                      let score = (entry["score"] as? NSNumber)?.doubleValue else { return nil }
+                                let rad = (deg - 90.0) * .pi / 180.0
+                                let r = radius * min(1.0, max(0.08, score / 2.5))
+                                return CGPoint(x: center.x + cos(rad) * r, y: center.y + sin(rad) * r)
+                            }
+                            if points.count >= 3 {
+                                var poly = Path()
+                                poly.addLines(points)
+                                poly.closeSubpath()
+                                ctx.fill(poly, with: .color(Color.orange.opacity(0.26)))
+                                ctx.stroke(poly, with: .color(Color.orange), lineWidth: 1.8)
+                            }
+
+                            let bestRad = (bestAz - 90.0) * .pi / 180.0
+                            let bestPt = CGPoint(
+                                x: center.x + cos(bestRad) * radius * min(1.0, max(0.14, bestScore / 2.5)),
+                                y: center.y + sin(bestRad) * radius * min(1.0, max(0.14, bestScore / 2.5))
+                            )
+                            var bestRay = Path()
+                            bestRay.move(to: center)
+                            bestRay.addLine(to: bestPt)
+                            ctx.stroke(bestRay, with: .color(.red.opacity(0.8)), lineWidth: 1.5)
+                            ctx.fill(Path(ellipseIn: CGRect(x: bestPt.x - 4, y: bestPt.y - 4, width: 8, height: 8)),
+                                     with: .color(.red))
+
+                            let sunRad = (solarAz - 90.0) * .pi / 180.0
+                            let sunPt = CGPoint(x: center.x + cos(sunRad) * radius, y: center.y + sin(sunRad) * radius)
+                            ctx.fill(Path(ellipseIn: CGRect(x: sunPt.x - 4.5, y: sunPt.y - 4.5, width: 9, height: 9)),
+                                     with: .color(.yellow))
+                        }
+                        .frame(width: 156, height: 156)
+
+                        VStack {
+                            Text("N").fireSkyFont(size: 9, weight: .semibold).foregroundStyle(.secondary)
+                            Spacer()
+                            Text("S").fireSkyFont(size: 9, weight: .semibold).foregroundStyle(.secondary)
+                        }
+                        HStack {
+                            Text("W").fireSkyFont(size: 9, weight: .semibold).foregroundStyle(.secondary)
+                            Spacer()
+                            Text("E").fireSkyFont(size: 9, weight: .semibold).foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(width: 164, height: 164)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 10) {
+                            Label {
+                                Text(String(format: L10n.text("最佳朝向 %@ (%.0f°)", "Best %@ (%.0f°)"), bestDir, bestAz))
+                                    .fireSkyFont(size: 13, weight: .semibold).monospacedDigit()
+                            } icon: {
+                                Circle().fill(Color.red).frame(width: 8, height: 8)
+                            }
+                            Text(String(format: "%.2f / 2.5", bestScore))
+                                .fireSkyFont(size: 11, weight: .semibold, relativeTo: .caption).monospacedDigit()
+                                .foregroundStyle(.orange)
+                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .background(Color.orange.opacity(0.14), in: Capsule())
+                        }
+                        Label {
+                            Text(String(format: L10n.text("太阳方位角 %.0f°", "Solar azimuth %.0f°"), solarAz))
+                                .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary).monospacedDigit()
+                        } icon: {
+                            Circle().fill(Color.yellow).frame(width: 8, height: 8)
+                        }
+                        if !recommendation.isEmpty {
+                            Text(recommendation)
+                                .fireSkyFont(size: 12)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .workSurface()
         }
     }
 }

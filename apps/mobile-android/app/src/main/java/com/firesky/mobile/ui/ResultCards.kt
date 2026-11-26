@@ -28,6 +28,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.SatelliteAlt
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -64,6 +65,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.TextMeasurer
@@ -80,10 +82,18 @@ import com.firesky.mobile.store.WorkbenchState
 import com.firesky.mobile.store.WorkbenchStore
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.LocalDateTime
+import java.time.OffsetDateTime
+import java.time.ZoneId
+import java.time.ZonedDateTime
+import java.time.format.DateTimeFormatter
+import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
+import kotlin.math.sin
 
 /**
  * 结果卡片 —— WorkHeroView / WorkResultsView（point 作用域）同构：
@@ -96,6 +106,15 @@ fun ResultSection(store: WorkbenchStore, state: WorkbenchState) {
         FirstRunEmptyCanvas()
         return
     }
+    val preferred = modelReport(activeResult, state.selectedModel)
+        ?: modelReport(activeResult, MODEL_GFS)
+        ?: modelReport(activeResult, MODEL_EC)
+    val resultTz = state.resultParams?.optString("timezone_name")?.ifEmpty { null }
+        ?: state.location.timezone
+    val bestTimeForWindow = preferred?.optString("best_time_local")?.ifEmpty { null }
+        ?: modelReport(activeResult, MODEL_GFS)?.optString("best_time_local")?.ifEmpty { null }
+        ?: modelReport(activeResult, MODEL_EC)?.optString("best_time_local")?.ifEmpty { null }
+    val showNowcastSwitchChip = isBestTimeWithinFourHours(bestTimeForWindow, resultTz)
 
     WorkSurface(Modifier.fillMaxWidth(), emphasized = true) {
         Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -111,7 +130,40 @@ fun ResultSection(store: WorkbenchStore, state: WorkbenchState) {
                         ),
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
+                if (showNowcastSwitchChip) {
+                    Spacer(Modifier.width(8.dp))
+                    val cool = coolAccentColor()
+                    Surface(
+                        onClick = { store.setWorkbenchMode("nowcast") },
+                        shape = CircleShape,
+                        color = cool.copy(alpha = 0.14f),
+                        border = BorderStroke(0.75.dp, cool.copy(alpha = 0.36f)),
+                    ) {
+                        Row(
+                            Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            Icon(
+                                Icons.Filled.SatelliteAlt,
+                                contentDescription = null,
+                                modifier = Modifier.size(12.dp),
+                                tint = cool,
+                            )
+                            Text(
+                                stringResource(R.string.nowcast_quick_switch_chip),
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = cool,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                }
             }
             if (state.resultParametersStale) {
                 StaleResultBanner(store, state)
@@ -150,7 +202,7 @@ fun ResultSection(store: WorkbenchStore, state: WorkbenchState) {
                 }
             }
             when (state.resultTab) {
-                "概览" -> OverviewContent(activeResult)
+                "概览" -> OverviewContent(activeResult, state.selectedModel)
                 "大气剖面" -> ProfileSection(activeResult, state.selectedModel)
                 "逐时台账" -> LedgerContent(activeResult, state.selectedModel)
                 else -> DiagnosticContent(activeResult, state.selectedModel)
@@ -411,10 +463,14 @@ private fun AnalysisTabs(store: WorkbenchStore, state: WorkbenchState) {
     }
 }
 
-/** 概览：三组指标卡（2 列自适应网格）+ AOD + 云层云属代理 + 质量曲线。 */
+/** 概览：光谱色彩预览 + 16 方位雷达 + 三组指标卡（2 列自适应网格）+ 质量曲线。 */
 @Composable
-private fun OverviewContent(result: JSONObject) {
+private fun OverviewContent(result: JSONObject, selectedModel: String = MODEL_GFS) {
+    val spectral = findReportObject(result, selectedModel, "spectral_color")
+    val radar = findReportObject(result, selectedModel, "azimuth_radar")
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        spectral?.let { SpectralColorCard(it) }
+        radar?.let { AzimuthRadarCard(it) }
         for ((groupTitleRes, specs) in METRIC_GROUPS) {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
@@ -439,6 +495,299 @@ private fun OverviewContent(result: JSONObject) {
             }
         }
         CurveCard(result)
+    }
+}
+
+private fun findReportObject(result: JSONObject, selectedModel: String, key: String): JSONObject? {
+    val candidates = listOfNotNull(
+        modelReport(result, selectedModel),
+        modelReport(result, MODEL_GFS),
+        modelReport(result, MODEL_EC),
+        result,
+    )
+    return candidates.firstNotNullOfOrNull { it.optJSONObject(key) }
+}
+
+private fun parseHexColor(hex: String?): Color? {
+    val trimmed = hex?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val normalized = if (trimmed.startsWith("#")) trimmed else "#$trimmed"
+    return runCatching { Color(android.graphics.Color.parseColor(normalized)) }.getOrNull()
+}
+
+/** 判断 `best_time_local` 是否处于当前时刻 ±4 小时以内（用于展示一键切卫星实况提示）。 */
+fun isBestTimeWithinFourHours(
+    bestTimeLocal: String?,
+    timezoneName: String? = null,
+    nowMillis: Long = System.currentTimeMillis(),
+): Boolean {
+    val raw = bestTimeLocal?.trim()?.takeIf { it.isNotEmpty() } ?: return false
+    val instant = runCatching { OffsetDateTime.parse(raw).toInstant() }.getOrNull()
+        ?: runCatching { ZonedDateTime.parse(raw).toInstant() }.getOrNull()
+        ?: runCatching {
+            val ldt = LocalDateTime.parse(raw, DateTimeFormatter.ISO_LOCAL_DATE_TIME)
+            val zone = timezoneName?.takeIf { it.isNotBlank() }?.let {
+                runCatching { ZoneId.of(it) }.getOrNull()
+            } ?: ZoneId.systemDefault()
+            ldt.atZone(zone).toInstant()
+        }.getOrNull()
+        ?: return false
+    return abs(instant.toEpochMilli() - nowMillis) <= 4L * 3600L * 1000L
+}
+
+@Composable
+internal fun SpectralColorCard(spectral: JSONObject) {
+    val hexArr = spectral.optJSONArray("sky_gradient_hex")
+    val gradientColors = buildList {
+        if (hexArr != null) {
+            for (i in 0 until hexArr.length()) {
+                parseHexColor(hexArr.optString(i))?.let { add(it) }
+            }
+        }
+    }
+    val peakHex = spectral.optString("peak_hex", "")
+    val peakColor = parseHexColor(peakHex)
+        ?: gradientColors.getOrNull(gradientColors.size / 2)
+        ?: MaterialTheme.colorScheme.primary
+    val stripColors = when {
+        gradientColors.size >= 2 -> gradientColors
+        gradientColors.size == 1 -> listOf(gradientColors[0].copy(alpha = 0.7f), gradientColors[0])
+        else -> listOf(peakColor.copy(alpha = 0.45f), peakColor)
+    }
+    val isEnglish = LocalConfiguration.current.locales[0]?.language == "en"
+    val labelZh = spectral.optString("peak_label_zh", "").trim()
+    val labelEn = spectral.optString("peak_label_en", "").trim()
+    val primaryLabel = if (isEnglish) labelEn.ifEmpty { labelZh } else labelZh.ifEmpty { labelEn }
+    val secondaryLabel = if (isEnglish) {
+        labelZh.takeIf { it.isNotEmpty() && it != primaryLabel }
+    } else {
+        labelEn.takeIf { it.isNotEmpty() && it != primaryLabel }
+    }
+    val azim = spectral.optNum("solar_azimuth_deg")
+    val elev = spectral.optNum("solar_elevation_deg")
+
+    WorkSurface(Modifier.fillMaxWidth(), grouped = true, cornerRadius = 14.dp) {
+        Row(
+            Modifier.fillMaxWidth().padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Box(
+                Modifier
+                    .width(36.dp)
+                    .height(68.dp)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(Brush.verticalGradient(stripColors))
+                    .border(0.75.dp, Color.White.copy(alpha = 0.28f), RoundedCornerShape(10.dp)),
+            )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    stringResource(R.string.spectral_color_title),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(7.dp),
+                ) {
+                    Box(
+                        Modifier
+                            .size(11.dp)
+                            .background(peakColor, CircleShape)
+                            .border(0.75.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f), CircleShape),
+                    )
+                    Text(
+                        primaryLabel.ifEmpty { peakHex.ifEmpty { "—" } },
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (!secondaryLabel.isNullOrEmpty()) {
+                        Text(
+                            secondaryLabel,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.58f),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                val caption = if (azim != null && elev != null) {
+                    stringResource(R.string.spectral_solar_caption_fmt, azim, elev)
+                } else {
+                    peakHex
+                }
+                if (caption.isNotEmpty()) {
+                    Text(
+                        caption,
+                        fontSize = 11.sp,
+                        style = TextStyle(fontFeatureSettings = "tnum"),
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f),
+                    )
+                }
+            }
+            if (peakHex.isNotEmpty()) {
+                Text(
+                    peakHex.uppercase(),
+                    fontSize = 10.sp,
+                    fontFamily = FontFamily.Monospace,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+internal fun AzimuthRadarCard(radar: JSONObject) {
+    val bearingsArr = radar.optJSONArray("bearings") ?: return
+    val bearings = (0 until bearingsArr.length()).mapNotNull { i ->
+        val obj = bearingsArr.optJSONObject(i) ?: return@mapNotNull null
+        val deg = obj.optNum("deg") ?: return@mapNotNull null
+        val score = obj.optNum("score") ?: 0.0
+        deg to score.coerceIn(0.0, 1.0)
+    }.sortedBy { it.first }
+    if (bearings.isEmpty()) return
+
+    val solarAzim = radar.optNum("solar_azimuth_deg")
+    val bestAzim = radar.optNum("best_azimuth_deg")
+    val isEnglish = LocalConfiguration.current.locales[0]?.language == "en"
+    val recZh = radar.optString("recommendation_zh", "").trim()
+    val recEn = radar.optString("recommendation_en", "").trim()
+    val recommendation = if (isEnglish) recEn.ifEmpty { recZh } else recZh.ifEmpty { recEn }
+    val bestDir = if (isEnglish) {
+        radar.optString("best_direction_en", "").ifEmpty { radar.optString("best_direction_zh", "") }
+    } else {
+        radar.optString("best_direction_zh", "").ifEmpty { radar.optString("best_direction_en", "") }
+    }
+
+    val dark = LocalFireSkyDark.current
+    val warm = MaterialTheme.colorScheme.primary
+    val cool = coolAccentColor()
+    val ringColor = MaterialTheme.colorScheme.onBackground.copy(alpha = if (dark) 0.16f else 0.14f)
+    val labelColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.72f)
+    val sunColor = Color(0xFFFFB74D)
+    val textMeasurer = rememberTextMeasurer()
+
+    WorkSurface(Modifier.fillMaxWidth(), grouped = true, cornerRadius = 14.dp) {
+        Column(Modifier.fillMaxWidth().padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    stringResource(R.string.azimuth_radar_title),
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                if (bestDir.isNotEmpty() && bestAzim != null) {
+                    SoftPillChip(
+                        text = stringResource(R.string.azimuth_radar_best_fmt, bestDir, bestAzim),
+                        tint = warm,
+                    )
+                }
+                if (solarAzim != null) {
+                    SoftPillChip(
+                        text = stringResource(R.string.azimuth_radar_solar_fmt, solarAzim),
+                        tint = sunColor,
+                        leadingDotColor = sunColor,
+                    )
+                }
+            }
+
+            Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Canvas(Modifier.size(204.dp)) {
+                    val cx = size.width / 2f
+                    val cy = size.height / 2f
+                    val labelPad = 18.dp.toPx()
+                    val maxR = (min(size.width, size.height) / 2f - labelPad).coerceAtLeast(24f)
+
+                    for (frac in listOf(0.25f, 0.50f, 0.75f, 1.0f)) {
+                        drawCircle(
+                            color = ringColor,
+                            radius = maxR * frac,
+                            center = Offset(cx, cy),
+                            style = Stroke(width = if (frac == 1.0f) 1.2.dp.toPx() else 0.75.dp.toPx()),
+                        )
+                    }
+
+                    for (i in 0 until 16) {
+                        val deg = i * 22.5
+                        val rad = Math.toRadians(deg - 90.0)
+                        val end = Offset(cx + (cos(rad) * maxR).toFloat(), cy + (sin(rad) * maxR).toFloat())
+                        drawLine(
+                            color = ringColor.copy(alpha = if (i % 4 == 0) 0.24f else 0.10f),
+                            start = Offset(cx, cy),
+                            end = end,
+                            strokeWidth = if (i % 4 == 0) 1.dp.toPx() else 0.6.dp.toPx(),
+                        )
+                    }
+
+                    val path = Path()
+                    val pts = bearings.map { (deg, score) ->
+                        val rad = Math.toRadians(deg - 90.0)
+                        val r = maxR * score.toFloat()
+                        Offset(cx + (cos(rad) * r).toFloat(), cy + (sin(rad) * r).toFloat())
+                    }
+                    pts.forEachIndexed { idx, pt ->
+                        if (idx == 0) path.moveTo(pt.x, pt.y) else path.lineTo(pt.x, pt.y)
+                    }
+                    path.close()
+                    drawPath(path, warm.copy(alpha = if (dark) 0.28f else 0.22f))
+                    drawPath(path, warm, style = Stroke(width = 1.8.dp.toPx()))
+                    pts.forEachIndexed { idx, pt ->
+                        val isBest = bestAzim != null &&
+                            abs(((bearings[idx].first - bestAzim + 540.0) % 360.0) - 180.0) < 1.0
+                        drawCircle(
+                            color = if (isBest) cool else warm,
+                            radius = if (isBest) 4.2.dp.toPx() else 2.5.dp.toPx(),
+                            center = pt,
+                        )
+                    }
+
+                    if (solarAzim != null && solarAzim.isFinite()) {
+                        val sunRad = Math.toRadians(solarAzim - 90.0)
+                        val sunEdge = Offset(cx + (cos(sunRad) * maxR).toFloat(), cy + (sin(sunRad) * maxR).toFloat())
+                        drawLine(
+                            color = sunColor,
+                            start = Offset(cx, cy),
+                            end = sunEdge,
+                            strokeWidth = 1.6.dp.toPx(),
+                            pathEffect = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 4.dp.toPx())),
+                        )
+                        drawCircle(color = sunColor, radius = 4.8.dp.toPx(), center = sunEdge)
+                        drawCircle(
+                            color = Color.White.copy(alpha = 0.85f),
+                            radius = 4.8.dp.toPx(),
+                            center = sunEdge,
+                            style = Stroke(width = 1.dp.toPx()),
+                        )
+                    }
+
+                    val cardinalStyle = TextStyle(fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = labelColor)
+                    for ((label, deg) in listOf("N" to 0.0, "E" to 90.0, "S" to 180.0, "W" to 270.0)) {
+                        val rad = Math.toRadians(deg - 90.0)
+                        val measured = textMeasurer.measure(label, cardinalStyle)
+                        val anchorR = maxR + 10.dp.toPx()
+                        val lx = cx + (cos(rad) * anchorR).toFloat() - measured.size.width / 2f
+                        val ly = cy + (sin(rad) * anchorR).toFloat() - measured.size.height / 2f
+                        drawText(measured, topLeft = Offset(lx, ly))
+                    }
+                }
+            }
+
+            if (recommendation.isNotEmpty()) {
+                Text(
+                    recommendation,
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.78f),
+                    lineHeight = 15.sp,
+                )
+            }
+        }
     }
 }
 

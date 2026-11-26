@@ -162,3 +162,136 @@ export function reportPaths(result: RecordValue | null, browser = false): Array<
     return [{ label: name, path }];
   });
 }
+
+export interface SpectralColorSummary {
+  peakHex: string;
+  peakLabelZh: string;
+  peakLabelEn: string;
+  gradientHex: string[];
+  gradientCss: string;
+  solarAzimuthDeg: number | null;
+  solarElevationDeg: number | null;
+}
+
+const HEX_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
+
+export function spectralColor(report: RecordValue | null): SpectralColorSummary | null {
+  const raw = record(report?.spectral_color);
+  if (!Object.keys(raw).length) return null;
+  const peakHex = typeof raw.peak_hex === "string" && HEX_COLOR_PATTERN.test(raw.peak_hex.trim())
+    ? raw.peak_hex.trim().toUpperCase()
+    : "";
+  const peakLabelZh = typeof raw.peak_label_zh === "string" ? raw.peak_label_zh.trim() : "";
+  const peakLabelEn = typeof raw.peak_label_en === "string" ? raw.peak_label_en.trim() : "";
+  const rawStops = Array.isArray(raw.sky_gradient_hex) ? raw.sky_gradient_hex : [];
+  const gradientHex = rawStops
+    .filter((item): item is string => typeof item === "string" && HEX_COLOR_PATTERN.test(item.trim()))
+    .map((item) => item.trim().toUpperCase());
+  if (!peakHex && !peakLabelZh && !peakLabelEn && gradientHex.length === 0) return null;
+  const stops = gradientHex.length >= 2 ? gradientHex : (peakHex ? [peakHex, peakHex] : []);
+  const gradientCss = stops.length >= 2 ? `linear-gradient(90deg, ${stops.join(", ")})` : "";
+  return {
+    peakHex,
+    peakLabelZh,
+    peakLabelEn,
+    gradientHex,
+    gradientCss,
+    solarAzimuthDeg: numeric(raw.solar_azimuth_deg),
+    solarElevationDeg: numeric(raw.solar_elevation_deg),
+  };
+}
+
+export interface AzimuthRadarBearing {
+  deg: number;
+  labelZh: string;
+  labelEn: string;
+  score: number;
+  canvas: number | null;
+  lowBlock: number | null;
+}
+
+export interface AzimuthRadarSummary {
+  solarAzimuthDeg: number | null;
+  bestAzimuthDeg: number | null;
+  bestDirectionZh: string;
+  bestDirectionEn: string;
+  bestScore: number | null;
+  recommendationZh: string;
+  recommendationEn: string;
+  bearings: AzimuthRadarBearing[];
+  polygonPoints: string;
+  bestPoint: { x: number; y: number } | null;
+  solarPoint: { x: number; y: number } | null;
+}
+
+export function polarPoint(
+  deg: number,
+  normalizedRadius: number,
+  cx = 80,
+  cy = 80,
+  maxR = 54,
+): { x: number; y: number } {
+  const r = Math.max(0, Math.min(1, normalizedRadius)) * maxR;
+  const rad = (deg * Math.PI) / 180;
+  return {
+    x: Number((cx + r * Math.sin(rad)).toFixed(2)),
+    y: Number((cy - r * Math.cos(rad)).toFixed(2)),
+  };
+}
+
+export function azimuthRadar(report: RecordValue | null): AzimuthRadarSummary | null {
+  const raw = record(report?.azimuth_radar);
+  if (!Object.keys(raw).length) return null;
+  const solarAzimuthDeg = numeric(raw.solar_azimuth_deg);
+  const bestAzimuthDeg = numeric(raw.best_azimuth_deg);
+  const bestDirectionZh = typeof raw.best_direction_zh === "string" ? raw.best_direction_zh.trim() : "";
+  const bestDirectionEn = typeof raw.best_direction_en === "string" ? raw.best_direction_en.trim() : "";
+  const bestScore = numeric(raw.best_score);
+  const recommendationZh = typeof raw.recommendation_zh === "string" ? raw.recommendation_zh.trim() : "";
+  const recommendationEn = typeof raw.recommendation_en === "string" ? raw.recommendation_en.trim() : "";
+  const rawBearings = Array.isArray(raw.bearings) ? raw.bearings : [];
+  const bearings: AzimuthRadarBearing[] = [];
+  for (const item of rawBearings) {
+    const row = record(item);
+    const deg = numeric(row.deg);
+    const score = numeric(row.score);
+    if (deg === null || score === null) continue;
+    bearings.push({
+      deg,
+      labelZh: typeof row.label_zh === "string" ? row.label_zh : "",
+      labelEn: typeof row.label_en === "string" ? row.label_en : "",
+      score: Math.max(0, Math.min(1, score)),
+      canvas: numeric(row.canvas),
+      lowBlock: numeric(row.low_block),
+    });
+  }
+  if (
+    bestAzimuthDeg === null
+    && !bestDirectionZh
+    && !bestDirectionEn
+    && !recommendationZh
+    && !recommendationEn
+    && bearings.length === 0
+  ) {
+    return null;
+  }
+  const polygonPoints = bearings.length >= 3
+    ? bearings.map((b) => {
+      const p = polarPoint(b.deg, b.score);
+      return `${p.x},${p.y}`;
+    }).join(" ")
+    : "";
+  return {
+    solarAzimuthDeg,
+    bestAzimuthDeg,
+    bestDirectionZh,
+    bestDirectionEn,
+    bestScore,
+    recommendationZh,
+    recommendationEn,
+    bearings,
+    polygonPoints,
+    bestPoint: bestAzimuthDeg !== null ? polarPoint(bestAzimuthDeg, 1) : null,
+    solarPoint: solarAzimuthDeg !== null ? polarPoint(solarAzimuthDeg, 1) : null,
+  };
+}

@@ -1,0 +1,26 @@
+{
+  "name": "FireSky",
+  "identifier": "cn.firesky.source",
+  "subtitle": "火烧云物理预测（GFS / ECMWF / CAMS + 向日葵实况）",
+  "sourceURL": "https://github.com/xyl-g/FireSky/releases/latest/download/altstore-source.json",
+  "apps": [
+    {
+      "name": "FireSky",
+      "bundleIdentifier": "cn.firesky.mobile",
+      "developerName": "xyl-g",
+      "iconURL": "https://raw.githubusercontent.com/xyl-g/FireSky/main/apps/mobile-ios/FireSkyMobile/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+      "tintColor": "E06D3A",
+      "category": "weather",
+      "versions": [
+        {
+          "version": "2.0.0",
+          "date": "2026-11-26T07:57:38Z",
+          "localizedDescription": "FireSky 2.0.0 iOS release",
+          "downloadURL": "https://github.com/xyl-g/FireSky/releases/download/v2.0.0/FireSky-2.0.0-ios-arm64.ipa",
+          "size": 0,
+          "minOSVersion": "16.0"
+        }
+      ]
+    }
+  ]
+}

@@ -147,6 +147,12 @@
     <string name="remote_pairing_hint">Enable HTTP / LAN access on your Mac, Windows, or Docker server, then enter your Cloudflare Tunnel domain (https://...) or LAN URL (http://192.168.x.x:8765).</string>
     <string name="remote_test_connection">Test</string>
     <string name="remote_save_and_connect">Save &amp; Connect</string>
+    <string name="remote_scan_qr">Scan QR</string>
+    <string name="remote_paste_pairing">Paste pairing link</string>
+    <string name="remote_qr_prompt">Point camera at the FireSky desktop pairing QR code</string>
+    <string name="remote_camera_denied">Camera permission denied; use \"Paste pairing link\" instead.</string>
+    <string name="remote_clipboard_empty">Clipboard is empty; copy a firesky://connect link first.</string>
+    <string name="remote_pairing_invalid">Invalid FireSky pairing link (expected firesky://connect?url=...).</string>
     <string name="remote_mac_badge">Remote</string>
     <string name="remote_connected_badge">Connected</string>
     <string name="remote_unconfigured_badge">Setup</string>
@@ -278,6 +284,12 @@
     <string name="cycle_age_continue_cache">Continue with Cache</string>
     <string name="stale_result_banner">Parameters changed · showing previous result</string>
     <string name="rerun_with_new_params">Re-run</string>
+    <string name="nowcast_quick_switch_chip">Within 4h · Switch to Nowcast</string>
+    <string name="spectral_color_title">Spectral Glow Preview</string>
+    <string name="spectral_solar_caption_fmt">Solar azimuth %1$.1f° · elevation %2$.1f°</string>
+    <string name="azimuth_radar_title">16-Direction Azimuth Radar</string>
+    <string name="azimuth_radar_solar_fmt">Solar %1$.0f°</string>
+    <string name="azimuth_radar_best_fmt">Best %1$s (%2$.0f°)</string>
 
     <!-- Result cards -->
     <string name="result_wait_hint">Awaiting forecast — fill in parameters and tap \"Start Forecast\".</string>

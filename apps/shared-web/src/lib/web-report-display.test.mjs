@@ -80,3 +80,64 @@ test("browser report actions only use content-addressed same-service report URLs
   assert.deepEqual(plain(api.reportPaths(result, true)), [{ label: "完整诊断报告", path: url }]);
   assert.deepEqual(plain(api.reportPaths({ html_report_path: "/server/private/report.html" }, true)), []);
 });
+
+test("spectralColor extracts peak swatch, 4-stop sky gradient, and solar angles while rejecting invalid hex", () => {
+  assert.equal(api.spectralColor(null), null);
+  assert.equal(api.spectralColor({ spectral_color: {} }), null);
+  const parsed = plain(api.spectralColor({
+    spectral_color: {
+      peak_hex: "#e85d3b",
+      peak_label_zh: "橙红霞",
+      peak_label_en: "Orange-Red Glow",
+      sky_gradient_hex: ["#1f355e", "#7b4a68", "#e85d3b", "#ffc978"],
+      solar_azimuth_deg: 247.2,
+      solar_elevation_deg: -1.4,
+    },
+  }));
+  assert.equal(parsed.peakHex, "#E85D3B");
+  assert.equal(parsed.peakLabelZh, "橙红霞");
+  assert.deepEqual(parsed.gradientHex, ["#1F355E", "#7B4A68", "#E85D3B", "#FFC978"]);
+  assert.equal(parsed.gradientCss, "linear-gradient(90deg, #1F355E, #7B4A68, #E85D3B, #FFC978)");
+  assert.equal(parsed.solarAzimuthDeg, 247.2);
+  assert.equal(parsed.solarElevationDeg, -1.4);
+
+  const sanitized = plain(api.spectralColor({
+    spectral_color: {
+      peak_hex: "red;background:url(evil)",
+      peak_label_zh: "晚霞",
+      sky_gradient_hex: ["bad", "#112233"],
+    },
+  }));
+  assert.equal(sanitized.peakHex, "");
+  assert.equal(sanitized.gradientCss, "");
+});
+
+test("azimuthRadar builds 16-direction polar polygon and preserves direction & recommendation", () => {
+  assert.equal(api.azimuthRadar(null), null);
+  const north = plain(api.polarPoint(0, 1, 80, 80, 50));
+  assert.deepEqual(north, { x: 80, y: 30 });
+  const east = plain(api.polarPoint(90, 1, 80, 80, 50));
+  assert.deepEqual(east, { x: 130, y: 80 });
+
+  const bearings = Array.from({ length: 16 }, (_, idx) => ({
+    deg: idx * 22.5,
+    label_zh: `D${idx}`,
+    score: idx === 11 ? 1 : 0.25,
+  }));
+  const radar = plain(api.azimuthRadar({
+    azimuth_radar: {
+      solar_azimuth_deg: 245.5,
+      best_azimuth_deg: 247.5,
+      best_direction_zh: "西西南",
+      best_score: 0.912,
+      recommendation_zh: "建议面向西西南（248°）拍摄",
+      bearings,
+    },
+  }));
+  assert.equal(radar.bestDirectionZh, "西西南");
+  assert.equal(radar.bestAzimuthDeg, 247.5);
+  assert.equal(radar.recommendationZh, "建议面向西西南（248°）拍摄");
+  assert.equal(radar.bearings.length, 16);
+  assert.equal(radar.polygonPoints.split(" ").length, 16);
+  assert.ok(radar.bestPoint && radar.bestPoint.x < 80);
+});

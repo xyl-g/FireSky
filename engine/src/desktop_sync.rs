@@ -1694,7 +1694,7 @@ pub fn run(
                 let base_percent = index * 100 / total;
                 let span_percent = 100 / total.max(1);
                 let source_key: &str = name;
-                let round_started = started;
+                let source_started = Instant::now();
                 let yield_workspace = context.workspace.to_path_buf();
                 let file_progress = move |done: u64, total_files: u64, bytes: u64| {
                     // 手动优先：文件粒度让路（秒级生效），错误会置取消位。
@@ -1706,27 +1706,45 @@ pub fn run(
                     } else {
                         done.min(total_files) * span_percent as u64 / total_files
                     };
-                    // v1.9.7：吞吐随事件计算（MB/s），网络问题一眼可辨；
-                    // bytes/elapsed_ms 字段同时机读供 UI 自行渲染。
-                    let elapsed_ms = round_started.elapsed().as_secs_f64() * 1000.0;
-                    let mibs = if elapsed_ms > 0.0 {
-                        bytes as f64 / 1024.0 / 1024.0 / (elapsed_ms / 1000.0)
+                    let source_percent = if total_files == 0 {
+                        0
+                    } else {
+                        (done.min(total_files) * 100 / total_files).min(99) as usize
+                    };
+                    // v1.9.7：吞吐随事件计算（MB/s）；v2.0.0：全缓存命中时明确标注
+                    // 「校验缓存」而非「正在下载 0.0 MB/s」，并输出单源独立百分比 source_percent。
+                    let source_elapsed_ms = source_started.elapsed().as_secs_f64() * 1000.0;
+                    let mibs = if source_elapsed_ms > 0.0 {
+                        bytes as f64 / 1024.0 / 1024.0 / (source_elapsed_ms / 1000.0)
                     } else {
                         0.0
                     };
-                    progress(json!({
-                        "stage": "sync",
-                        "percent": (base_percent + within as usize).min(99),
-                        "source": source_key,
-                        "message": format!(
+                    let message = if bytes == 0 {
+                        format!(
+                            "{} 校验缓存 {} / {}",
+                            source_label(source_key),
+                            done,
+                            total_files
+                        )
+                    } else {
+                        format!(
                             "{} 正在下载 {} / {} · {:.1} MB/s",
                             source_label(source_key),
                             done,
                             total_files,
                             mibs
-                        ),
+                        )
+                    };
+                    progress(json!({
+                        "stage": "sync",
+                        "percent": (base_percent + within as usize).min(99),
+                        "source_percent": source_percent,
+                        "source": source_key,
+                        "message": message,
+                        "done_files": done,
+                        "total_files": total_files,
                         "bytes": bytes,
-                        "elapsed_ms": elapsed_ms,
+                        "elapsed_ms": source_elapsed_ms,
                     }))
                 };
                 match *name {
@@ -1786,7 +1804,7 @@ pub fn run(
         if !stop {
             let message = format!("{} 同步{}", source_label(name), sync_status_label(status));
             if progress(
-                json!({"stage":"sync","percent":(index + 1) * 100 / total,"source":name,"message":message}),
+                json!({"stage":"sync","percent":(index + 1) * 100 / total,"source_percent":100,"source":name,"message":message}),
             )
             .is_err()
             {
@@ -1804,6 +1822,22 @@ pub fn run(
     // state; retention cleanup only runs afterwards, and a cleanup failure is
     // surfaced on the round result instead of discarding the committed state.
     commit_round_outcomes(&state_file, &outcomes, task_id)?;
+    if !stop
+        && outcomes
+            .iter()
+            .any(|o| matches!(o.name.as_str(), "gfs" | "ec") && o.status == "synced")
+    {
+        if let Ok(alert_report) = crate::alert_rules::evaluate_after_sync(context.workspace) {
+            if alert_report["triggered"].as_u64().unwrap_or(0) > 0 {
+                let _ = progress(json!({
+                    "stage": "sync",
+                    "percent": 99,
+                    "source": "alerts",
+                    "message": format!("高分火烧云预警已触发 {} 条", alert_report["triggered"]),
+                }));
+            }
+        }
+    }
     let mut round = json!({
         "contract": "rust-data-sync-v1",
         "runtime_python_used": false,

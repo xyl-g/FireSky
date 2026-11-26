@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 可复用的远程服务器连接表单（同时用于首次引导卡与设置页，避免重复代码）。
 struct RemoteServerConnectionForm: View {
@@ -6,6 +7,7 @@ struct RemoteServerConnectionForm: View {
     @Environment(\.colorScheme) private var scheme
 
     var showClearConfiguration: Bool = false
+    @State private var showQRScanner = false
 
     private var urlIsEmpty: Bool {
         store.remoteServerURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -13,6 +15,40 @@ struct RemoteServerConnectionForm: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 10) {
+                Button {
+                    showQRScanner = true
+                } label: {
+                    Label(L10n.text("扫码配对", "Scan QR"), systemImage: "qrcode.viewfinder")
+                        .frame(maxWidth: .infinity, minHeight: 34)
+                }
+                .buttonStyle(.bordered)
+                .tint(warm)
+                .disabled(store.remoteTesting || store.busy || store.probingDownloads)
+
+                Button {
+                    let pasted = UIPasteboard.general.string?
+                        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                    guard !pasted.isEmpty else {
+                        store.remoteTestOK = false
+                        store.remoteTestMessage = L10n.text(
+                            "剪贴板为空，请先复制 firesky://connect 配对链接。",
+                            "Clipboard is empty; copy a firesky://connect pairing link first."
+                        )
+                        return
+                    }
+                    if store.parsePairingURI(pasted) {
+                        Task { await store.testRemoteServer() }
+                    }
+                } label: {
+                    Label(L10n.text("粘贴配对链接", "Paste Link"), systemImage: "link.badge.plus")
+                        .frame(maxWidth: .infinity, minHeight: 34)
+                }
+                .buttonStyle(.bordered)
+                .disabled(store.remoteTesting || store.busy || store.probingDownloads)
+            }
+            .font(.caption.weight(.medium))
+
             VStack(alignment: .leading, spacing: 6) {
                 Text(L10n.text("服务器地址", "Server URL"))
                     .font(.caption.weight(.medium))
@@ -112,6 +148,14 @@ struct RemoteServerConnectionForm: View {
                 .buttonStyle(.borderless)
                 .disabled(store.busy || store.remoteTesting || store.probingDownloads)
             }
+        }
+        .sheet(isPresented: $showQRScanner) {
+            QRScannerSheet { scanned in
+                if store.parsePairingURI(scanned) {
+                    Task { await store.testRemoteServer() }
+                }
+            }
+            .tint(warm)
         }
     }
 }

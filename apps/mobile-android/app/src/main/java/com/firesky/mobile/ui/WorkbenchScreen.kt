@@ -1,5 +1,9 @@
 package com.firesky.mobile.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -37,11 +41,13 @@ import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudQueue
+import androidx.compose.material.icons.filled.ContentPaste
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Map
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material.icons.filled.Place
+import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.SatelliteAlt
 import androidx.compose.material.icons.filled.Schedule
@@ -86,8 +92,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.core.content.ContextCompat
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -386,7 +397,74 @@ private fun RemoteServerOnboardingCard(store: WorkbenchStore, state: WorkbenchSt
 @Composable
 fun RemoteServerConnectionForm(store: WorkbenchStore, state: WorkbenchState) {
     val labelColor = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.72f)
+    val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
+    val qrPrompt = stringResource(R.string.remote_qr_prompt)
+    val cameraDeniedMsg = stringResource(R.string.remote_camera_denied)
+    val clipboardEmptyMsg = stringResource(R.string.remote_clipboard_empty)
+    val pairingInvalidMsg = stringResource(R.string.remote_pairing_invalid)
+
+    val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
+        val contents = result.contents?.trim().orEmpty()
+        if (contents.isNotEmpty()) {
+            store.applyPairingUri(contents, invalidMessage = pairingInvalidMsg)
+        }
+    }
+
+    fun startQrScan() {
+        val options = ScanOptions().apply {
+            setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+            setPrompt(qrPrompt)
+            setBeepEnabled(false)
+            setOrientationLocked(false)
+        }
+        scanLauncher.launch(options)
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { granted ->
+        if (granted) {
+            startQrScan()
+        } else {
+            store.reportRemotePairingError(cameraDeniedMsg)
+        }
+    }
+
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            SecondaryButton(
+                title = stringResource(R.string.remote_scan_qr),
+                icon = Icons.Filled.QrCodeScanner,
+                enabled = !state.remoteTesting,
+                modifier = Modifier.weight(1f),
+            ) {
+                if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
+                    PackageManager.PERMISSION_GRANTED
+                ) {
+                    startQrScan()
+                } else {
+                    cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                }
+            }
+            SecondaryButton(
+                title = stringResource(R.string.remote_paste_pairing),
+                icon = Icons.Filled.ContentPaste,
+                enabled = !state.remoteTesting,
+                modifier = Modifier.weight(1f),
+            ) {
+                val clip = clipboardManager.getText()?.text?.trim().orEmpty()
+                if (clip.isEmpty()) {
+                    store.reportRemotePairingError(clipboardEmptyMsg)
+                } else {
+                    store.applyPairingUri(clip, invalidMessage = pairingInvalidMsg)
+                }
+            }
+        }
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(stringResource(R.string.remote_url_label), fontSize = 12.sp, fontWeight = FontWeight.Medium, color = labelColor)
             OutlinedTextField(
@@ -1046,6 +1124,7 @@ private fun RunButton(store: WorkbenchStore, state: WorkbenchState) {
         title = stringResource(labelRes),
         enabled = !state.busy && state.online,
         icon = Icons.Filled.AutoAwesome,
+        indicatorDot = state.resultParametersStale,
     ) { store.beginCheck() }
 }
 

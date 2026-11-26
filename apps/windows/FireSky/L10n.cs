@@ -358,5 +358,10 @@ internal static class L10n
         ["退避冷却中（立即同步或重新保存设置可马上重试）"] =
             "Cooling down (run Sync Now or re-save settings to retry immediately)",
         ["浏览器下载"] = "Download in Browser",
+        // v2.0.0 光谱色彩 & 方位雷达
+        ["光谱色彩预测"] = "Spectral Color Prediction",
+        ["天顶 → 地平线 4 段天空光谱渐变"] = "Zenith → Horizon 4-stop sky spectrum gradient",
+        ["推荐拍摄方位"] = "Best Shooting Direction",
+        ["色彩预测"] = "Color Prediction",
     };
 }

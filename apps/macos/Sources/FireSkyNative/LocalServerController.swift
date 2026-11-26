@@ -1,4 +1,6 @@
+import AppKit
 import Combine
+import CoreImage
 import Darwin
 import Foundation
 import Security
@@ -12,6 +14,7 @@ final class LocalServerController: ObservableObject {
         static let bindLAN = "lanServerBindLAN"
         static let autoStart = "lanServerAutoStart"
         static let requireToken = "lanServerRequireToken"
+        static let tunnelURL = "lanServerTunnelURL"
     }
 
     @Published private(set) var running: Bool = false
@@ -35,6 +38,9 @@ final class LocalServerController: ObservableObject {
     @Published var requireToken: Bool {
         didSet { UserDefaults.standard.set(requireToken, forKey: DefaultsKey.requireToken) }
     }
+    @Published var tunnelURL: String {
+        didSet { UserDefaults.standard.set(tunnelURL, forKey: DefaultsKey.tunnelURL) }
+    }
     @Published private(set) var token: String = ""
     @Published private(set) var lanAddress: String = ""
     @Published private(set) var statusMessage: String = ""
@@ -54,6 +60,7 @@ final class LocalServerController: ObservableObject {
         requireToken = defaults.object(forKey: DefaultsKey.requireToken) == nil
             ? true
             : defaults.bool(forKey: DefaultsKey.requireToken)
+        tunnelURL = defaults.string(forKey: DefaultsKey.tunnelURL) ?? ""
         lanAddress = Self.detectLANAddress()
     }
 
@@ -65,6 +72,42 @@ final class LocalServerController: ObservableObject {
 
     var lanURL: String? {
         lanAddress.isEmpty ? nil : "http://\(lanAddress):\(port)"
+    }
+
+    var pairingServerURL: String {
+        let custom = tunnelURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !custom.isEmpty {
+            return custom.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+        return lanURL ?? localURL
+    }
+
+    var pairingURI: String {
+        var allowed = CharacterSet.alphanumerics
+        allowed.insert(charactersIn: "-._~")
+        let encodedURL = pairingServerURL.addingPercentEncoding(withAllowedCharacters: allowed) ?? pairingServerURL
+        let trimmedToken = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if (bindLAN || requireToken), !trimmedToken.isEmpty {
+            let encodedToken = trimmedToken.addingPercentEncoding(withAllowedCharacters: allowed) ?? trimmedToken
+            return "firesky://connect?url=\(encodedURL)&token=\(encodedToken)"
+        }
+        return "firesky://connect?url=\(encodedURL)"
+    }
+
+    func pairingQRImage(size: CGFloat = 156) -> NSImage? {
+        guard let data = pairingURI.data(using: .utf8),
+              let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        filter.setValue(data, forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let output = filter.outputImage else { return nil }
+        let extent = output.extent.integral
+        guard extent.width > 0, extent.height > 0 else { return nil }
+        let scale = max(1.0, (size * 2.0) / max(extent.width, extent.height))
+        let transformed = output.transformed(by: CGAffineTransform(scaleX: scale, y: scale))
+        let rep = NSCIImageRep(ciImage: transformed)
+        let image = NSImage(size: NSSize(width: size, height: size))
+        image.addRepresentation(rep)
+        return image
     }
 
     var cloudflaredCommand: String {

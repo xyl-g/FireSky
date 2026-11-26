@@ -542,17 +542,22 @@ public sealed partial class MainWindow
                 progress: e => DispatcherQueue.TryEnqueue(() =>
                 {
                     var source = Text(e, "source");
-                    var percent = Math.Clamp(Number(e, "percent"), 0, 100);
+                    var overallPercent = DoubleValue(e["percent"]) is { } op ? Math.Clamp(op, 0, 100) : 0;
+                    var sourcePercent = DoubleValue(e["source_percent"]) is { } sp
+                        ? Math.Clamp(sp, 0, 100)
+                        : overallPercent;
                     if (source.Length > 0)
                     {
                         dataSyncActiveSource = source;
                         dataSyncProgress[source] = new JsonObject
                         {
-                            ["percent"] = percent, ["message"] = Text(e, "message"),
+                            ["percent"] = overallPercent,
+                            ["source_percent"] = sourcePercent,
+                            ["message"] = Text(e, "message"),
                         };
                     }
                     if (!busy) Status.Text = Text(e, "message") is { Length: > 0 } message
-                        ? message : $"正在同步 {source} · {percent:0}%";
+                        ? message : $"正在同步 {source} · {sourcePercent:0}%";
                     RenderSyncStatusRows();
                 }), cancellation: syncOperation.Token);
         }
@@ -625,8 +630,9 @@ public sealed partial class MainWindow
             var cycle = Text(state, "last_cycle");
             var failures = (long?)DoubleValue(state["consecutive_failures"]) ?? 0;
             var suspended = BoolValue(state, "suspended") == true;
-            var inProgress = BoolValue(state, "in_progress") == true;
+            var inProgress = BoolValue(state, "in_progress") == true || status == "in_progress";
             var nextRetry = Text(state, "next_retry_at_utc");
+            var live = running && dataSyncActiveSource == source ? dataSyncProgress.GetValueOrDefault(source) : null;
             var badge = inProgress
                 ? L10n.T("后台同步中")
                 : status switch
@@ -639,17 +645,20 @@ public sealed partial class MainWindow
             if (files > 0) details.Add($"{files} 个文件");
             if (Text(state, "last_attempt_utc") is { Length: > 0 } attempt)
                 details.Add($"上次同步 {HistoryTime.Text(attempt)}");
-            if ((result["errors"] as JsonArray)?.OfType<JsonValue>().FirstOrDefault() is { } firstError)
+            if (!inProgress && live == null)
             {
-                var message = firstError.TryGetValue<string>(out var text) ? text : "";
-                if (message.Length > 0) details.Add($"最近错误：{message}");
-            }
-            if (failures > 0) details.Add($"连续失败 {failures} 次");
-            if (suspended)
-            {
-                details.Add(nextRetry.Length > 0
-                    ? $"退避冷却中 · 预计 {HistoryTime.Text(nextRetry)} 自动重试（立即同步可马上重试）"
-                    : L10n.T("退避冷却中（立即同步或重新保存设置可马上重试）"));
+                if ((result["errors"] as JsonArray)?.OfType<JsonValue>().FirstOrDefault() is { } firstError)
+                {
+                    var message = firstError.TryGetValue<string>(out var text) ? text : "";
+                    if (message.Length > 0) details.Add($"最近错误：{message}");
+                }
+                if (failures > 0) details.Add($"连续失败 {failures} 次");
+                if (suspended)
+                {
+                    details.Add(nextRetry.Length > 0
+                        ? $"退避冷却中 · 预计 {HistoryTime.Text(nextRetry)} 自动重试（立即同步可马上重试）"
+                        : L10n.T("退避冷却中（立即同步或重新保存设置可马上重试）"));
+                }
             }
             var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 10 };
             row.Children.Add(new TextBlock
@@ -658,15 +667,15 @@ public sealed partial class MainWindow
                 MinWidth = 44,
             });
             var body = new StackPanel { Spacing = 3 };
-            var live = running && dataSyncActiveSource == source ? dataSyncProgress.GetValueOrDefault(source) : null;
             if (live != null)
             {
+                var livePercent = Math.Clamp(DoubleValue(live["source_percent"] ?? live["percent"]) ?? 0, 0, 100);
                 var progressLine = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
-                var bar = new ProgressBar { Width = 90, Minimum = 0, Maximum = 100, Value = DoubleValue(live["percent"]) ?? 0 };
+                var bar = new ProgressBar { Width = 90, Minimum = 0, Maximum = 100, Value = livePercent };
                 progressLine.Children.Add(bar);
                 progressLine.Children.Add(new TextBlock
                 {
-                    Text = $"{DoubleValue(live["percent"]) ?? 0:0}%", FontSize = 11, Opacity = .7,
+                    Text = $"{livePercent:0}%", FontSize = 11, Opacity = .7,
                 });
                 body.Children.Add(progressLine);
                 if (Text(live, "message") is { Length: > 0 } message)

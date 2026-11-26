@@ -328,6 +328,21 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var helperMessage = ""
     @Published var helperMessageFailed = false
     @Published var helperStatus: JSONObject = [:]
+    /// 收藏地点备注与高分预警规则（engine alert_rules 模块）。
+    @Published var spotNote = ""
+    @Published var alertEnabled = false
+    @Published var alertThreshold: Double = 1.5
+    @Published var alertSpots: [JSONObject] = []
+    @Published var alertWebhookURL = ""
+    @Published var alertWebhookType = "auto"
+    @Published var alertNotifyDesktop = true
+    @Published var alertRecentAlerts: [JSONObject] = []
+    @Published var alertLoaded = false
+    @Published var savingAlertRules = false
+    @Published var testingAlertWebhook = false
+    @Published var alertMessage = ""
+    @Published var alertMessageFailed = false
+    var onRecentAlertsReceived: (([JSONObject]) -> Void)?
     @Published var taskHistory: [NativeTaskHistoryItem] = []
     /// 数据布局迁移（方案 §8 阶段 B）：Legacy(.cache) → 可见目录。
     @Published var layout: JSONObject?
@@ -519,6 +534,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             }
             await loadRetentionSettings()
             await loadDataSyncSettings()
+            await loadAlertSettings()
             refreshHelperStatus()
             startSyncTick()
             status = "引擎已连接"
@@ -594,6 +610,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         timezone = point["timezone_name"] as? String ?? timezone
         elevation = (point["elevation_m"] as? NSNumber)?.doubleValue ?? elevation
         elevationSourceActual = point["source"] as? String ?? elevationSourceActual
+        spotNote = point["note"] as? String ?? ""
         metadataReady = true
         if !busy { status = "位置已就绪" }
     }
@@ -851,11 +868,12 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
 
     func updateProgress(_ event: JSONObject) {
         percent = min(100, max(0, (event["percent"] as? NSNumber)?.doubleValue ?? 0))
+        let sourcePercent = min(100, max(0, (event["source_percent"] as? NSNumber)?.doubleValue ?? percent))
         let source = event["source"] as? String ?? ""
         let message = event["message"] as? String ?? ""
         if dataSyncRunning, !source.isEmpty {
             dataSyncActiveSource = source
-            dataSyncProgress[source] = ["percent": percent, "message": message]
+            dataSyncProgress[source] = ["percent": sourcePercent, "message": message]
         }
         status = message.isEmpty
             ? (checking ? "正在准备 \(source) 数据" : "正在计算 \(source)")
@@ -2014,6 +2032,122 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         guard online, let response = try? await engine.call("data_sync_settings") else { return }
         dataSyncRetentionConfigured = response["retention_configured"] as? Bool ?? dataSyncRetentionConfigured
         dataSyncState = (response["state"] as? JSONObject)?["sources"] as? JSONObject ?? dataSyncState
+        if let alerts = try? await engine.call("alert_settings") {
+            applyAlertStatus(alerts, overwriteDraft: !alertLoaded)
+        }
+    }
+
+    // MARK: 高分火烧云预警（engine alert_rules）
+
+    func loadAlertSettings() async {
+        guard online else { return }
+        do {
+            let response = try await engine.call("alert_settings")
+            applyAlertStatus(response, overwriteDraft: true)
+        } catch {
+            alertMessage = error.localizedDescription
+            alertMessageFailed = true
+        }
+    }
+
+    private func applyAlertStatus(_ response: JSONObject, overwriteDraft: Bool) {
+        if overwriteDraft {
+            alertEnabled = response["enabled"] as? Bool ?? false
+            alertThreshold = (response["threshold"] as? NSNumber)?.doubleValue ?? 1.5
+            alertSpots = response["spots"] as? [JSONObject] ?? []
+            alertWebhookURL = response["webhook_url"] as? String ?? ""
+            alertWebhookType = response["webhook_type"] as? String ?? "auto"
+            alertNotifyDesktop = response["notify_desktop"] as? Bool ?? true
+            alertLoaded = true
+        }
+        let recent = response["recent_alerts"] as? [JSONObject] ?? []
+        alertRecentAlerts = recent
+        if !recent.isEmpty {
+            onRecentAlertsReceived?(recent)
+        }
+    }
+
+    func toggleAlertSpot(_ spot: JSONObject) {
+        let spotLat = (spot["lat"] as? NSNumber)?.doubleValue ?? lat
+        let spotLon = (spot["lon"] as? NSNumber)?.doubleValue ?? lon
+        if let idx = alertSpots.firstIndex(where: {
+            abs((($0["lat"] as? NSNumber)?.doubleValue ?? 999) - spotLat) < 0.001
+                && abs((($0["lon"] as? NSNumber)?.doubleValue ?? 999) - spotLon) < 0.001
+        }) {
+            alertSpots.remove(at: idx)
+        } else {
+            var entry: JSONObject = [
+                "name": spot["name"] as? String ?? name,
+                "lat": spotLat,
+                "lon": spotLon,
+                "elevation_m": (spot["elevation_m"] as? NSNumber)?.doubleValue ?? elevation,
+            ]
+            if let note = spot["note"] as? String, !note.isEmpty {
+                entry["note"] = note
+            }
+            alertSpots.append(entry)
+        }
+    }
+
+    func isSpotWatched(_ spot: JSONObject) -> Bool {
+        let spotLat = (spot["lat"] as? NSNumber)?.doubleValue ?? lat
+        let spotLon = (spot["lon"] as? NSNumber)?.doubleValue ?? lon
+        return alertSpots.contains {
+            abs((($0["lat"] as? NSNumber)?.doubleValue ?? 999) - spotLat) < 0.001
+                && abs((($0["lon"] as? NSNumber)?.doubleValue ?? 999) - spotLon) < 0.001
+        }
+    }
+
+    func saveAlertSettings() {
+        guard online, !savingAlertRules else { return }
+        savingAlertRules = true
+        alertMessage = ""
+        alertMessageFailed = false
+        let params: JSONObject = [
+            "enabled": alertEnabled,
+            "threshold": alertThreshold,
+            "spots": alertSpots,
+            "webhook_url": alertWebhookURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            "webhook_type": alertWebhookType,
+            "notify_desktop": alertNotifyDesktop,
+        ]
+        Task {
+            defer { savingAlertRules = false }
+            do {
+                let response = try await engine.call("save_alert_settings", params)
+                applyAlertStatus(response, overwriteDraft: true)
+                alertMessage = alertEnabled
+                    ? L10n.text("预警规则已保存；后台同步新周期后将自动评估并推送。", "Alert rules saved; evaluated automatically after background sync.")
+                    : L10n.text("预警规则已保存（当前未启用）。", "Alert rules saved (disabled).")
+                alertMessageFailed = false
+            } catch {
+                alertMessage = friendlyEngineMessage(error.localizedDescription)
+                alertMessageFailed = true
+            }
+        }
+    }
+
+    func testAlertWebhook() {
+        guard online, !testingAlertWebhook else { return }
+        testingAlertWebhook = true
+        alertMessage = ""
+        alertMessageFailed = false
+        let params: JSONObject = [
+            "webhook_url": alertWebhookURL.trimmingCharacters(in: .whitespacesAndNewlines),
+            "webhook_type": alertWebhookType,
+        ]
+        Task {
+            defer { testingAlertWebhook = false }
+            do {
+                let res = try await engine.call("test_alert_webhook", params)
+                let kind = res["webhook_type"] as? String ?? "webhook"
+                alertMessage = L10n.tf("测试推送已发送（%@）", kind)
+                alertMessageFailed = false
+            } catch {
+                alertMessage = friendlyEngineMessage(error.localizedDescription)
+                alertMessageFailed = true
+            }
+        }
     }
 
     /// 一轮同步（tick 触发或手动）。引擎侧自带锁矩阵与熔断状态提交；
@@ -2266,8 +2400,11 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     func starLocation() {
         guard metadataReady else { error = "请先确认海拔与时区。"; return }
         favorites.removeAll { ($0["lat"] as? Double) == lat && ($0["lon"] as? Double) == lon }
-        favorites.append(["name": name, "lat": lat, "lon": lon,
-                          "elevation_m": elevation, "timezone_name": timezone])
+        var item: [String: Any] = ["name": name, "lat": lat, "lon": lon,
+                                   "elevation_m": elevation, "timezone_name": timezone]
+        let trimmedNote = spotNote.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedNote.isEmpty { item["note"] = trimmedNote }
+        favorites.append(item)
         UserDefaults.standard.set(favorites, forKey: "favorites")
     }
 

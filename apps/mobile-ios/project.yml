@@ -7,8 +7,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "1.10.5"
-    CURRENT_PROJECT_VERSION: "27"
+    MARKETING_VERSION: "2.0.0"
+    CURRENT_PROJECT_VERSION: "28"
     CODE_SIGN_STYLE: Automatic
     CODE_SIGNING_ALLOWED: "NO"
 targets:
@@ -22,6 +22,7 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: cn.firesky.mobile
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        INFOPLIST_KEY_NSCameraUsageDescription: 用于扫描 FireSky 桌面端或 Docker 生成的配对二维码以连接服务器。
     info:
       path: FireSkyMobile/Info.plist
       properties:
@@ -32,6 +33,7 @@ targets:
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSLocationWhenInUseUsageDescription: 用于获取当前位置作为观测点，以便预测朝霞与晚霞。
+        NSCameraUsageDescription: 用于扫描 FireSky 桌面端或 Docker 生成的配对二维码以连接服务器。
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft

@@ -217,6 +217,7 @@
                                     <PivotItem Header="概览">
                                         <ScrollViewer>
                                             <StackPanel Spacing="12">
+                                                <StackPanel x:Name="PointVisualHost" Spacing="10" Visibility="Collapsed"/>
                                                 <StackPanel x:Name="MetricHost" Spacing="10"/>
                                                 <Border Padding="18" CornerRadius="14"
                                                         Background="{ThemeResource FireSkyCardBrush}"

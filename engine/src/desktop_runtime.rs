@@ -667,6 +667,10 @@ impl Runtime {
                 .history
                 .forget(params["task_id"].as_str().ok_or("task_id is required")?),
             "save_cams_key" => desktop_credentials::save(params),
+            "alert_settings" => crate::alert_rules::load_status(&self.workspace),
+            "save_alert_settings" => crate::alert_rules::save(&self.workspace, params),
+            "test_alert_webhook" => crate::alert_rules::send_test_webhook(&self.workspace, params),
+            "alert_evaluate" => crate::alert_rules::evaluate_after_sync(&self.workspace),
             "data_sync_settings" => crate::desktop_sync::status(&self.workspace),
             "save_data_sync_settings" => crate::desktop_sync::save(&self.workspace, params),
             "data_sync_due" => {
@@ -1056,6 +1060,16 @@ impl Runtime {
         }
         let payload = Self::normalized(payload)?;
         self.forecast_models(&payload, regional, &cancel, &|_| Ok(()))
+    }
+
+    pub(crate) fn compute_cached_point_for_alert(&self, payload: Value) -> Result<Value, String> {
+        let _guard = self
+            .operation
+            .try_lock()
+            .map_err(|_| "another prepare/forecast is active")?;
+        let cancel = AtomicBool::new(false);
+        let payload = Self::normalized(payload)?;
+        self.forecast_models(&payload, false, &cancel, &|_| Ok(()))
     }
 
     fn forecast_models(
@@ -1506,15 +1520,36 @@ impl Runtime {
                 },
                 offset,
             )?;
+            let radar_point = crate::frames::Point {
+                name: String::new(),
+                lat: point["lat"].as_f64().ok_or("point lat missing")?,
+                lon: point["lon"].as_f64().ok_or("point lon missing")?,
+                timezone_name: point["timezone_name"]
+                    .as_str()
+                    .ok_or("point timezone missing")?
+                    .to_owned(),
+                elevation_m: point["elevation_m"]
+                    .as_f64()
+                    .ok_or("point elevation missing")?,
+            };
             result["cross_section"] = cross_section::execute(decode(json!({
                 "source_path":output.join("cross_section_source.json"),"source_identity":cross["identity"],
                 "point":{"lat":point["lat"],"lon":point["lon"],"elevation_m":point["elevation_m"],
                     "timezone_name":point["timezone_name"]},
                 "offset_minutes":offset,
             }))?)?;
+            result["azimuth_radar"] = cross_section::azimuth_radar(
+                &output.join("cross_section_source.json"),
+                &decode(cross["identity"].clone())?,
+                &radar_point,
+                offset,
+            )
+            .unwrap_or(Value::Null);
         } else {
             result["cross_section"] = Value::Null;
+            result["azimuth_radar"] = Value::Null;
         }
+        crate::glow_spectrum::enrich_point_report(&mut result);
         result["profile_source"] = if cross.is_object() {
             crate::desktop_profiles::retain_model(
                 &self.workspace,

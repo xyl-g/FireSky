@@ -4,6 +4,7 @@ import com.firesky.mobile.ui.cloudGenusRawBrief
 import com.firesky.mobile.ui.cloudLayerMetricValue
 import com.firesky.mobile.ui.cycleLabel
 import com.firesky.mobile.ui.friendlyEngineMessage
+import com.firesky.mobile.ui.isBestTimeWithinFourHours
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
@@ -11,7 +12,10 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.time.Instant
 import java.time.LocalDate
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 
 /**
  * macOS v1.9.10 parity logic unit tests:
@@ -264,5 +268,37 @@ class WorkbenchParityTest {
         assertEquals("nowcast", nowcastPayload.optString("forecast_mode"))
         assertEquals("satellite", nowcastPayload.optString("model_source"))
         assertEquals("auto", nowcastPayload.optString("satellite_source"))
+    }
+
+    @Test
+    fun parsesPairingUriWithAndWithoutToken() {
+        val withToken = parsePairingUri(
+            "firesky://connect?url=https%3A%2F%2Fsky.example.com%2F&token=abc%2B123%3D",
+        )
+        assertEquals("https://sky.example.com" to "abc+123=", withToken)
+
+        val lanNoToken = parsePairingUri("firesky://connect?url=http://192.168.1.42:8765/api/v1/firesky")
+        assertEquals("http://192.168.1.42:8765" to null, lanNoToken)
+
+        val blankToken = parsePairingUri("firesky://connect?url=http://10.0.0.5:8765&token=%20%20")
+        assertEquals("http://10.0.0.5:8765" to null, blankToken)
+
+        assertNull(parsePairingUri(""))
+        assertNull(parsePairingUri("https://sky.example.com"))
+        assertNull(parsePairingUri("firesky://other?url=https://sky.example.com"))
+        assertNull(parsePairingUri("firesky://connect?token=onlytoken"))
+        assertNull(parsePairingUri("firesky://connect?url=ftp://invalid.host"))
+    }
+
+    @Test
+    fun detectsBestTimeWithinFourHoursOfNow() {
+        val anchor = Instant.parse("2026-11-26T10:00:00Z").toEpochMilli()
+        assertTrue(isBestTimeWithinFourHours("2026-11-26T12:30:00Z", nowMillis = anchor))
+        assertTrue(isBestTimeWithinFourHours("2026-11-26T06:00:00Z", nowMillis = anchor))
+        assertTrue(isBestTimeWithinFourHours("2026-11-26T18:30:00", timezoneName = "Asia/Shanghai", nowMillis = anchor))
+        assertFalse(isBestTimeWithinFourHours("2026-11-26T14:01:00Z", nowMillis = anchor))
+        assertFalse(isBestTimeWithinFourHours("2026-11-26T05:59:00Z", nowMillis = anchor))
+        assertFalse(isBestTimeWithinFourHours(null, nowMillis = anchor))
+        assertFalse(isBestTimeWithinFourHours("not-a-timestamp", nowMillis = anchor))
     }
 }

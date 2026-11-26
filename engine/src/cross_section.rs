@@ -693,4 +693,258 @@ mod tests {
         );
         assert_eq!(nearest_evaluation_index(&[], anchor, 0.0), None);
     }
+
+    #[test]
+    fn azimuth_radar_prefers_solar_side_with_mid_high_canvas_and_low_blocking() {
+        let mut samples = [None; 16 * 4];
+        // Bearing index 10 (225 deg, SW) aligned with solar azimuth 230 deg: rich mid/high cloud, no low cloud.
+        for ring in 0..4 {
+            samples[10 * 4 + ring] = Some((0.75_f32, 0.05_f32));
+            // Opposite bearing 2 (45 deg, NE): heavy low block.
+            samples[2 * 4 + ring] = Some((0.50_f32, 0.85_f32));
+        }
+        let radar = super::compute_radar_payload(230.0, &samples);
+        assert_eq!(radar["contract"], "firesky-azimuth-radar-v1");
+        assert_eq!(radar["bearings"].as_array().unwrap().len(), 16);
+        assert_eq!(radar["best_azimuth_deg"], 225.0);
+        assert_eq!(radar["best_direction_zh"], "西南");
+        assert_eq!(radar["best_direction_en"], "SW");
+    }
+}
+
+const RADAR_RINGS_KM: [f64; 4] = [60.0, 140.0, 240.0, 380.0];
+const RADAR_CANVAS_WEIGHTS: [f64; 4] = [0.55, 0.90, 1.00, 0.70];
+const RADAR_BLOCK_WEIGHTS: [f64; 4] = [0.65, 0.35, 0.0, 0.0];
+const RADAR_DIRS: [(&str, &str); 16] = [
+    ("北", "N"),
+    ("北东北", "NNE"),
+    ("东北", "NE"),
+    ("东东北", "ENE"),
+    ("东", "E"),
+    ("东东南", "ESE"),
+    ("东南", "SE"),
+    ("南东南", "SSE"),
+    ("南", "S"),
+    ("南西南", "SSW"),
+    ("西南", "SW"),
+    ("西西南", "WSW"),
+    ("西", "W"),
+    ("西西北", "WNW"),
+    ("西北", "NW"),
+    ("北西北", "NNW"),
+];
+
+pub(crate) fn azimuth_radar(
+    source_path: &Path,
+    source_identity: &SourceIdentity,
+    point: &crate::frames::Point,
+    offset_minutes: f64,
+) -> Result<Value, String> {
+    if !offset_minutes.is_finite() || !(-240.0..=240.0).contains(&offset_minutes) {
+        return Err("azimuth radar requires finite offset_minutes within -240..240".into());
+    }
+    let (source, identity): (Source, _) = crate::request_file::read(source_path, 256 * 1024)?;
+    if &identity != source_identity {
+        return Err("azimuth radar source checksum mismatch".into());
+    }
+    let geometry = &source.geometry;
+    let levels = &source.pressure_levels;
+    let cells = geometry
+        .rows
+        .checked_mul(geometry.cols)
+        .ok_or("grid overflow")?;
+    if source.contract != CONTRACT
+        || !matches!(source.model_source.as_str(), "ec" | "gfs")
+        || source.hours.is_empty()
+        || source.hours.len() != source.profile_bundles.len()
+        || levels.is_empty()
+    {
+        return Err("invalid cross-section source contract for azimuth radar".into());
+    }
+    let zone: chrono_tz::Tz = point
+        .timezone_name
+        .parse()
+        .map_err(|_| "unknown observer timezone")?;
+    let cycle = parse_utc(&source.cycle_utc)?;
+    let prepared = timeline::prepare(
+        &[Point {
+            lat: point.lat,
+            lon: point.lon,
+            elevation_m: point.elevation_m,
+            timezone: zone,
+        }],
+        parse_date(&source.target_date)?,
+        matches!(source.phenomenon, Phenomenon::Dawn),
+        Some(ModelTimes {
+            cycle_epoch: cycle.timestamp() as f64
+                + f64::from(cycle.timestamp_subsec_micros()) / 1e6,
+            hours: &source.hours,
+        }),
+    )
+    .map_err(|e| e.to_string())?;
+    let row = &prepared.rows[0];
+    let index = row
+        .evaluation
+        .iter()
+        .position(|&t| ((t - row.anchor) / 60.0 - offset_minutes).abs() <= 1e-7)
+        .or_else(|| nearest_evaluation_index(&row.evaluation, row.anchor, offset_minutes))
+        .ok_or("azimuth radar event has no evaluation grid")?;
+    let samples = prepared
+        .samples
+        .as_ref()
+        .ok_or("missing profile time samples")?;
+    let sample = &samples[0][index * 9..index * 9 + 9];
+    let solar_azimuth_deg = f64::from(sample[1]);
+    let left = sample[2] as usize;
+    let right = sample[3] as usize;
+    let weight = sample[4];
+    if right < left || right > left + 1 || right >= source.hours.len() {
+        return Err("invalid azimuth radar time interpolation".into());
+    }
+
+    let mut valid_stencils: Vec<(usize, usize, Stencil)> = Vec::with_capacity(64);
+    for bearing_idx in 0..16usize {
+        let deg = bearing_idx as f64 * 22.5;
+        for (ring_idx, &dist_km) in RADAR_RINGS_KM.iter().enumerate() {
+            let (lat, lon) = crate::native::destination_point(point.lat, point.lon, deg, dist_km);
+            if let Ok(stencil) = Stencil::new(
+                [lat as f32, lon as f32],
+                [geometry.lat0, geometry.lon0],
+                geometry.spacing,
+                geometry.rows,
+                geometry.cols,
+            ) {
+                valid_stencils.push((bearing_idx, ring_idx, stencil));
+            }
+        }
+    }
+
+    let mut ring_metrics: [Option<(f32, f32)>; 16 * 4] = [None; 16 * 4];
+    if !valid_stencils.is_empty() {
+        let root = source_path
+            .parent()
+            .ok_or("azimuth radar source has no parent")?;
+        let open = |idx: usize| -> Result<ProfileTensor, String> {
+            let frame = &source.profile_bundles[idx];
+            let tensor = ProfileTensor::open(
+                &child(root, &frame.manifest)?,
+                frame.identity.clone(),
+                cells,
+                levels.len(),
+            )?;
+            tensor.validate_axis(idx, source.hours[idx], levels)?;
+            Ok(tensor)
+        };
+        let mut selected: Vec<_> = valid_stencils
+            .iter()
+            .flat_map(|(_, _, s)| Stencil::cells(s))
+            .collect();
+        selected.sort_unstable();
+        selected.dedup();
+        let first = open(left)?;
+        let first_values = first.load_cells(&selected)?;
+        let second = if right == left { None } else { Some(open(right)?) };
+        let second_values = second.as_ref().map(|s| s.load_cells(&selected)).transpose()?;
+        let frames = [
+            &first_values[..],
+            second_values.as_deref().unwrap_or(&first_values),
+        ];
+        for (bearing_idx, ring_idx, stencil) in valid_stencils {
+            let remapped = stencil.remapped(|cell| selected.binary_search(&cell).unwrap());
+            let mut profile = vec![[0.0; 24]; levels.len()];
+            remapped.sample_with(weight, profile.as_flattened_mut(), |second, cell, field| {
+                frames[usize::from(second)][cell * levels.len() * 24 + field]
+            })?;
+            let mut mid_high = 0.0_f32;
+            let mut low = 0.0_f32;
+            for (lvl, p) in levels.iter().zip(&profile) {
+                let amount = crate::native::cloud::effective_profile(p)[0];
+                if !amount.is_finite() {
+                    continue;
+                }
+                if *lvl <= 700.0 {
+                    mid_high = mid_high.max(amount);
+                } else {
+                    low = low.max(amount);
+                }
+            }
+            ring_metrics[bearing_idx * 4 + ring_idx] = Some((mid_high.clamp(0.0, 1.0), low.clamp(0.0, 1.0)));
+        }
+    }
+
+    Ok(compute_radar_payload(solar_azimuth_deg, &ring_metrics))
+}
+
+fn compute_radar_payload(solar_azimuth_deg: f64, samples: &[Option<(f32, f32)>; 64]) -> Value {
+    let mut bearings = Vec::with_capacity(16);
+    let mut best_idx = 0usize;
+    let mut best_score = -1.0_f64;
+
+    for idx in 0..16usize {
+        let deg = idx as f64 * 22.5;
+        let (label_zh, label_en) = RADAR_DIRS[idx];
+        let mut c_sum = 0.0_f64;
+        let mut c_wt = 0.0_f64;
+        let mut b_sum = 0.0_f64;
+        let mut b_wt = 0.0_f64;
+        for ring in 0..4usize {
+            if let Some((mid_high, low)) = samples[idx * 4 + ring] {
+                c_sum += f64::from(mid_high) * RADAR_CANVAS_WEIGHTS[ring];
+                c_wt += RADAR_CANVAS_WEIGHTS[ring];
+                if RADAR_BLOCK_WEIGHTS[ring] > 0.0 {
+                    b_sum += f64::from(low) * RADAR_BLOCK_WEIGHTS[ring];
+                    b_wt += RADAR_BLOCK_WEIGHTS[ring];
+                }
+            }
+        }
+        let canvas = if c_wt > 0.0 { (c_sum / c_wt).clamp(0.0, 1.0) } else { 0.0 };
+        let low_block = if b_wt > 0.0 { (b_sum / b_wt).clamp(0.0, 1.0) } else { 0.0 };
+        let diff = (deg - solar_azimuth_deg).rem_euclid(360.0);
+        let ang_diff = diff.min(360.0 - diff);
+        let sector =
+            0.20 + 0.80 * (0.5 * (1.0 + (std::f64::consts::PI * (ang_diff / 135.0).min(1.0)).cos()));
+        let score = (canvas * (1.0 - 0.65 * low_block) * sector).clamp(0.0, 1.0);
+        if score > best_score {
+            best_score = score;
+            best_idx = idx;
+        }
+        bearings.push(json!({
+            "deg": deg,
+            "label_zh": label_zh,
+            "label_en": label_en,
+            "score": (score * 1000.0).round() / 1000.0,
+            "canvas": (canvas * 1000.0).round() / 1000.0,
+            "low_block": (low_block * 1000.0).round() / 1000.0,
+        }));
+    }
+
+    let best_deg = best_idx as f64 * 22.5;
+    let (best_zh, best_en) = RADAR_DIRS[best_idx];
+    let best_block = bearings[best_idx]["low_block"].as_f64().unwrap_or(0.0);
+    let block_hint_zh = if best_block < 0.25 {
+        "近处低云遮挡少"
+    } else if best_block < 0.55 {
+        "近处有中等低云"
+    } else {
+        "近处低云偏多需碰运气"
+    };
+    let block_hint_en = if best_block < 0.25 {
+        "low near-field blocking"
+    } else if best_block < 0.55 {
+        "moderate near-field clouds"
+    } else {
+        "elevated near-field low clouds"
+    };
+
+    json!({
+        "contract": "firesky-azimuth-radar-v1",
+        "solar_azimuth_deg": (solar_azimuth_deg * 10.0).round() / 10.0,
+        "best_azimuth_deg": best_deg,
+        "best_direction_zh": best_zh,
+        "best_direction_en": best_en,
+        "best_score": (best_score.max(0.0) * 1000.0).round() / 1000.0,
+        "recommendation_zh": format!("建议面向{best_zh}（{best_deg:.0}°）拍摄，中高云画布条件最佳，{block_hint_zh}"),
+        "recommendation_en": format!("Best view toward {best_en} ({best_deg:.0}°): optimal mid/high canvas with {block_hint_en}"),
+        "bearings": bearings,
+    })
 }

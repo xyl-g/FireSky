@@ -8,6 +8,24 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v2.0.0 (2026-11-26)
+
+物理光谱火烧云色彩预测、16 方位观测雷达、高分预警通知、移动端扫码配对、追霞海报卡与 AltStore 自动订阅源。
+CIE 1931 physical spectral glow color prediction, 16-direction azimuth glow radar, high-score glow alerts, mobile QR code pairing, PNG glow poster cards, sync UX clarity, and an auto-updating AltStore source.
+
+- **CIE 1931 物理光谱云色预报**：[glow_spectrum.rs](engine/src/glow_spectrum.rs) 结合 5778K 黑体光谱与 Rayleigh / Mie 云底散射计算单点峰值色相、天空四色渐变与时间轴颜色条，macOS、iOS、Android、Windows 与 Web 全端原生渲染。
+  Added CIE 1931 spectral glow calculation in [glow_spectrum.rs](engine/src/glow_spectrum.rs) (5778K Planck + Rayleigh/Mie cloud-base scattering emitting peak hex, sky gradient, and timeline steps) rendered across macOS, iOS, Android, Windows, and Shared Web.
+- **16 方位火烧云观测雷达**：[cross_section.rs](engine/src/cross_section.rs) 基于 100–300 km 云幕与近场低云遮挡输出 16 方位 `azimuth_radar` 极坐标载荷（含最佳拍摄方位与太阳方位提示），全端可视化展示推荐拍摄朝向。
+  Added 16-direction `azimuth_radar` payload in [cross_section.rs](engine/src/cross_section.rs) balancing 100–300 km cloud canvas against near-field low-cloud blockage, with native radar canvases across macOS, iOS, Android, Windows, and SVG radar in Shared Web.
+- **高分火烧云推送预警**：[alert_rules.rs](engine/src/alert_rules.rs) 在 GFS / EC 后台同步完成后仅读取本地缓存评估关注点位（含 7 天去重账本），支持 Bark、Server酱 与通用 JSON Webhook，macOS 端配套设置面板、测发校验与 `UNUserNotificationCenter` 系统横幅提醒。
+  Added cache-only post-sync evaluator in [alert_rules.rs](engine/src/alert_rules.rs) supporting Bark, ServerChan, and JSON webhooks with 7-day deduplication, plus macOS alert settings UI and immediate `UNUserNotificationCenter` notification banners.
+- **移动端扫码配对与追霞海报卡**：macOS 服务端控制块新增公网隧道 URL（Cloudflare Tunnel 等）设置与 CoreImage 二维码生成（`firesky://connect?url=...&token=...`），iOS (`QRScannerSheet.swift`) 与 Android (`zxing-android-embedded`) 支持相机扫码与剪贴板粘贴一键配对；macOS 结果页支持一键复制/保存 PNG 追霞海报卡、模型分歧提示、`±4h` 临近实况直达、参数变更 `●` 提醒及收藏点位备注。
+  Added `firesky://connect?url=...&token=...` QR code generation on macOS and camera QR scanning + clipboard URI pairing on iOS and Android, plus macOS PNG glow poster export/copy, GFS/EC divergence callout, 1-tap `±4h` Satellite Nowcast jump, dirty-parameter `●` indicator, and favorite spot notes.
+- **同步进度与后台状态消歧**：[desktop_sync.rs](engine/src/desktop_sync.rs) 新增按数据源独立百分比 `source_percent`；`bytes == 0` 缓存校验阶段显示“校验缓存”而非 `0.0 MB/s` 下载假象；后台助手（`FireSkySyncHelper`）持有锁期间各端显示动态“后台同步中”并屏蔽上一轮陈旧错误。
+  Added per-source `source_percent` and `"校验缓存"` cache-check status when `bytes == 0` in [desktop_sync.rs](engine/src/desktop_sync.rs), and updated desktop/mobile settings to show live background sync status while suppressing stale errors from previous rounds.
+- **AltStore 自动订阅源**：新增 [altstore-source.json](altstore-source.json) 与 [update_altstore_source.py](scripts/update_altstore_source.py)，CI 每次发布 iOS IPA 时自动更新并上传 `altstore-source.json`。
+  Added [altstore-source.json](altstore-source.json) and [update_altstore_source.py](scripts/update_altstore_source.py) wired into CI release workflows so AltStore/SideStore users receive automatic IPA updates.
+
 ## v1.10.5 (2026-11-26)
 
 macOS 最小化/关窗重开修复、后台助手工作区校验修复、CAMS ADS 孤儿任务 4 小时自动清理与 CI Node 24 升级。

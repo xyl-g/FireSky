@@ -109,6 +109,23 @@ struct WorkbenchRootView: View {
             Text("\(store.camsConfigurationDescription)\n已有本地数据仍可使用。")
         }
         .task { await store.connect() }
+        .onAppear {
+            store.onRecentAlertsReceived = { alerts in
+                guard store.alertNotifyDesktop else { return }
+                let key = "firesky.lastDeliveredAlertID"
+                let lastSeen = UserDefaults.standard.string(forKey: key) ?? ""
+                for alert in alerts {
+                    guard let id = alert["id"] as? String, !id.isEmpty else { continue }
+                    if id == lastSeen { break }
+                    let title = alert["title"] as? String ?? "FireSky 火烧云预警"
+                    let body = alert["body"] as? String ?? ""
+                    reminders.deliverImmediate(id: id, title: title, body: body)
+                }
+                if let newest = alerts.first?["id"] as? String, !newest.isEmpty {
+                    UserDefaults.standard.set(newest, forKey: key)
+                }
+            }
+        }
         .task {
             // 启动静默检查更新（默认开，可在设置 → 通用关闭）；仅首次启动检查，关窗重开不重复触发。
             if updater.autoCheck && !store.didScheduleAutoUpdateCheck {
@@ -393,15 +410,32 @@ struct WorkbenchRootView: View {
     }
 
     private var workbenchActions: some View {
-        VStack(spacing: 10) {
+        let staleHighlight = store.resultParametersStale && !store.busy && store.online
+        return VStack(spacing: 10) {
             Button { store.beginCheck() } label: {
-                Text(L10n.text(store.page == .nowcast ? "开始实况分析" : "开始预测",
-                               store.page == .nowcast ? "Start Nowcast" : "Start Forecast"))
-                    .fireSkyFont(size: 12, weight: .semibold)
-                    .foregroundStyle(scheme == .dark ? Color(0x14, 0x14, 0x14) : Color.white)
-                    .frame(maxWidth: .infinity).padding(.vertical, 11)
-                    .background(FSDesign.accentGradient(dark: scheme == .dark),
-                                in: RoundedRectangle(cornerRadius: 8))
+                HStack(spacing: 6) {
+                    if staleHighlight {
+                        Circle()
+                            .fill(scheme == .dark ? Color(0x14, 0x14, 0x14) : Color.white)
+                            .frame(width: 6, height: 6)
+                    }
+                    Text(staleHighlight
+                         ? L10n.text(store.page == .nowcast ? "按新参数开始实况 ●" : "按新参数预测 ●",
+                                     store.page == .nowcast ? "Start Nowcast ●" : "Re-run Forecast ●")
+                         : L10n.text(store.page == .nowcast ? "开始实况分析" : "开始预测",
+                                     store.page == .nowcast ? "Start Nowcast" : "Start Forecast"))
+                }
+                .fireSkyFont(size: 12, weight: .semibold)
+                .foregroundStyle(scheme == .dark ? Color(0x14, 0x14, 0x14) : Color.white)
+                .frame(maxWidth: .infinity).padding(.vertical, 11)
+                .background(FSDesign.accentGradient(dark: scheme == .dark),
+                            in: RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    if staleHighlight {
+                        RoundedRectangle(cornerRadius: 8)
+                            .strokeBorder(warm, lineWidth: 1.5)
+                    }
+                }
             }
             .buttonStyle(.plain)
             .opacity(store.busy || !store.online ? 0.45 : 1)
@@ -535,12 +569,28 @@ struct WorkLocationView: View {
                     } else {
                         VStack(spacing: 6) {
                             ForEach(Array(store.favorites.enumerated()), id: \.offset) { _, item in
-                                Button(item["name"] as? String ?? "收藏位置") { store.applyLocation(item) }
-                                    .buttonStyle(.borderless).frame(maxWidth: .infinity, alignment: .leading)
-                                    .contextMenu {
-                                        Button(L10n.t("删除收藏"), role: .destructive) { store.removeFavorite(item) }
+                                let favName = item["name"] as? String ?? "收藏位置"
+                                let favNote = (item["note"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+                                Button {
+                                    store.applyLocation(item)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 2) {
+                                        Text(favName)
+                                            .fireSkyFont(size: 12, weight: .medium)
+                                        if !favNote.isEmpty {
+                                            Text(favNote)
+                                                .fireSkyFont(size: 10, relativeTo: .caption)
+                                                .foregroundStyle(.secondary)
+                                                .lineLimit(1)
+                                        }
                                     }
-                                    .help(L10n.t("点击切换到此位置；右键可删除收藏"))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                                .buttonStyle(.borderless)
+                                .contextMenu {
+                                    Button(L10n.t("删除收藏"), role: .destructive) { store.removeFavorite(item) }
+                                }
+                                .help(L10n.t("点击切换到此位置；右键可删除收藏"))
                             }
                         }.padding(8)
                     }
@@ -554,6 +604,9 @@ struct WorkLocationView: View {
                         .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
                 }
             }
+            TextField(L10n.text("机位备注（可选，如：屋顶西南视角）", "Spot note (optional, e.g. rooftop SW view)"), text: $store.spotNote)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11))
             Text(store.metadataReady
                  ? L10n.tf("位置已确认 · 海拔 %d m · %@", Int(store.elevation), store.timezone)
                  : L10n.t("位置待确认 · 展开「编辑坐标」获取海拔与时区"))

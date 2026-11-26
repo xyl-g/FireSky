@@ -266,6 +266,7 @@ extension View {
 struct AccentButton: View {
     let title: String
     var systemImage: String? = nil
+    var staleIndicator = false
     var disabled = false
     let action: () -> Void
     @Environment(\.colorScheme) private var scheme
@@ -275,6 +276,16 @@ struct AccentButton: View {
             HStack(spacing: 8) {
                 if let systemImage { Image(systemName: systemImage) }
                 Text(title).multilineTextAlignment(.center)
+                if staleIndicator {
+                    Text("●")
+                        .font(.caption2)
+                        .foregroundStyle(
+                            disabled
+                                ? Color.secondary
+                                : (scheme == .dark ? Color(0x24, 0x18, 0x10) : Color(red: 1.0, green: 0.93, blue: 0.62))
+                        )
+                        .accessibilityLabel(L10n.text("参数已变更", "Parameters changed"))
+                }
             }
             .font(.body.weight(.semibold))
             .padding(.horizontal, 14).padding(.vertical, 12)
@@ -283,6 +294,12 @@ struct AccentButton: View {
             .background(disabled ? AnyShapeStyle(Color.secondary.opacity(0.14))
                         : AnyShapeStyle(FSDesign.accentGradient(dark: scheme == .dark)),
                         in: RoundedRectangle(cornerRadius: 10))
+            .overlay {
+                if staleIndicator && !disabled {
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(Color.orange.opacity(0.9), lineWidth: 1.5)
+                }
+            }
         }
         .buttonStyle(.plain)
         .disabled(disabled)

@@ -1,5 +1,7 @@
 import AppKit
 import Foundation
+import SwiftUI
+import UniformTypeIdentifiers
 
 /// 原生文本导出：使用 NSSavePanel / NSPasteboard，不引入外部服务。
 /// 导出内容全部来自已发布的 Rust 报告与 Store 参数，不在 SwiftUI 重算科学结论。
@@ -159,5 +161,192 @@ enum SummaryExport {
               let start = timing["start_time_local"] as? String,
               let end = timing["end_time_local"] as? String else { return "—" }
         return "\(timeText(start)) – \(timeText(end))"
+    }
+
+    @MainActor
+    static func posterImage(store: Store, comparison: ForecastComparison) -> NSImage? {
+        let view = GlowPosterCardView(store: store, comparison: comparison)
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = 2.0
+        return renderer.nsImage
+    }
+
+    @MainActor
+    static func copyPoster(store: Store, comparison: ForecastComparison) {
+        guard let image = posterImage(store: store, comparison: comparison) else { return }
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.writeObjects([image])
+    }
+
+    @MainActor
+    static func savePoster(store: Store, comparison: ForecastComparison) {
+        guard let image = posterImage(store: store, comparison: comparison),
+              let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:]) else { return }
+        let panel = NSSavePanel()
+        let invalid = CharacterSet(charactersIn: "/\\:").union(.whitespacesAndNewlines)
+        let base = store.resultTitle.components(separatedBy: invalid).joined(separator: "_")
+        panel.nameFieldStringValue = "FireSky_\(base)_追霞卡.png"
+        panel.allowedContentTypes = [.png]
+        panel.canCreateDirectories = true
+        panel.message = L10n.text("选择保存追霞海报卡片 PNG 的位置", "Choose where to save the FireSky glow poster PNG")
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            try? png.write(to: url, options: .atomic)
+        }
+    }
+}
+
+private struct GlowPosterCardView: View {
+    let store: Store
+    let comparison: ForecastComparison
+
+    private var primaryReport: JSONObject? {
+        comparison.report(store.selectedModel)
+            ?? comparison.report("ec")
+            ?? comparison.report("gfs")
+    }
+
+    private var peakScore: Double? {
+        ForecastComparison.models.compactMap { comparison.peak($0) }.max()
+    }
+
+    private var spectral: JSONObject? {
+        primaryReport?["spectral_color"] as? JSONObject
+    }
+
+    private var radar: JSONObject? {
+        primaryReport?["azimuth_radar"] as? JSONObject
+    }
+
+    private var skyColors: [Color] {
+        if let hexes = spectral?["sky_gradient_hex"] as? [String], !hexes.isEmpty {
+            return hexes.compactMap { Color(hexString: $0) }
+        }
+        return [Color(red: 0.08, green: 0.14, blue: 0.30), Color(red: 0.88, green: 0.42, blue: 0.22)]
+    }
+
+    private var stepScores: [Double] {
+        let steps = primaryReport?["steps"] as? [JSONObject] ?? []
+        return steps.map { ($0["instant_quality_index"] as? NSNumber)?.doubleValue ?? 0.0 }
+    }
+
+    var body: some View {
+        let grade = primaryReport?["peak_quality_level"] as? String
+            ?? primaryReport?["quality_level"] as? String
+            ?? L10n.text("火烧云预报", "Glow Forecast")
+        let bestTime = (primaryReport?["best_time_local"] as? String).map {
+            String($0.replacingOccurrences(of: "T", with: " ").prefix(16))
+        } ?? "—"
+        let colorHex = spectral?["peak_hex"] as? String ?? "#E8703A"
+        let colorLabel = L10n.text(
+            spectral?["peak_label_zh"] as? String ?? "",
+            spectral?["peak_label_en"] as? String ?? ""
+        )
+        let note = store.spotNote.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("FIRESKY · 追霞预报卡")
+                    .font(.system(size: 11, weight: .bold))
+                    .tracking(1.2)
+                    .foregroundStyle(.white.opacity(0.85))
+                Spacer()
+                Text(store.resultPhenomenonLabel)
+                    .font(.system(size: 11, weight: .semibold))
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(.white.opacity(0.18), in: Capsule())
+                    .foregroundStyle(.white)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(store.name)
+                    .font(.system(size: 24, weight: .bold))
+                    .foregroundStyle(.white)
+                Text(String(format: "%@ · %.3f° N, %.3f° E%@", store.resultTitle, store.lat, store.lon,
+                            note.isEmpty ? "" : " · \(note)"))
+                    .font(.system(size: 12))
+                    .foregroundStyle(.white.opacity(0.82))
+            }
+
+            HStack(alignment: .lastTextBaseline, spacing: 14) {
+                Text(peakScore.map { String(format: "%.2f", $0) } ?? "—")
+                    .font(.system(size: 46, weight: .heavy).monospacedDigit())
+                    .foregroundStyle(.white)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("/ 2.5 · \(L10n.qualityLevel(grade))")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                    Text("最佳时刻 \(bestTime)")
+                        .font(.system(size: 12).monospacedDigit())
+                        .foregroundStyle(.white.opacity(0.85))
+                }
+                Spacer()
+            }
+
+            posterBarsSection
+
+            HStack(spacing: 12) {
+                if let swatch = Color(hexString: colorHex) {
+                    HStack(spacing: 6) {
+                        Circle().fill(swatch).frame(width: 12, height: 12)
+                            .overlay(Circle().stroke(.white.opacity(0.8), lineWidth: 1))
+                        Text(colorLabel.isEmpty ? colorHex : "\(colorLabel) \(colorHex)")
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(.white)
+                    }
+                }
+                Spacer()
+                if let dir = radar?["best_direction_zh"] as? String,
+                   let deg = (radar?["best_azimuth_deg"] as? NSNumber)?.doubleValue {
+                    Text(String(format: "推荐朝向 %@（%.0f°）", dir, deg))
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.92))
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
+        .background(
+            LinearGradient(colors: skyColors, startPoint: .top, endPoint: .bottom)
+                .overlay(Color.black.opacity(0.18))
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+    }
+
+    @ViewBuilder
+    private var posterBarsSection: some View {
+        if !stepScores.isEmpty {
+            HStack(alignment: .bottom, spacing: 3) {
+                ForEach(Array(stepScores.enumerated()), id: \.offset) { _, val in
+                    posterBar(val)
+                }
+            }
+            .frame(height: 36, alignment: .bottom)
+            .padding(8)
+            .background(.black.opacity(0.18), in: RoundedRectangle(cornerRadius: 8))
+        }
+    }
+
+    private func posterBar(_ val: Double) -> some View {
+        let opacity: Double = min(1.0, max(0.28, val / 2.2))
+        let ratio: Double = min(val, 2.5) / 2.5
+        let barHeight: CGFloat = max(4.0, CGFloat(ratio) * 34.0)
+        return RoundedRectangle(cornerRadius: 2)
+            .fill(Color.white.opacity(opacity))
+            .frame(maxWidth: .infinity, minHeight: barHeight, maxHeight: barHeight)
+    }
+}
+
+private extension Color {
+    init?(hexString: String) {
+        let cleaned = hexString.trimmingCharacters(in: CharacterSet.alphanumerics.inverted)
+        guard cleaned.count == 6, let val = UInt64(cleaned, radix: 16) else { return nil }
+        let r = Double((val >> 16) & 0xFF) / 255.0
+        let g = Double((val >> 8) & 0xFF) / 255.0
+        let b = Double(val & 0xFF) / 255.0
+        self.init(red: r, green: g, blue: b)
     }
 }

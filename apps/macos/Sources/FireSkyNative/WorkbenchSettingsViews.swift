@@ -335,6 +335,45 @@ struct SettingsView: View {
                                    "Note: Bundled Web UI assets were not found; HTTP API remains available."))
                         .font(.caption2).foregroundStyle(.secondary)
                 }
+                Divider().opacity(0.45).padding(.vertical, 4)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(L10n.text("手机端扫码一键配对（iOS / Android）", "Mobile QR Pairing (iOS / Android)"))
+                        .font(.caption.weight(.semibold))
+                    HStack(spacing: 8) {
+                        Text(L10n.text("公网地址", "Tunnel URL"))
+                            .font(.caption).foregroundStyle(.secondary).frame(width: 72, alignment: .leading)
+                        TextField(L10n.text("选填 Cloudflare Tunnel HTTPS 地址（留空用局域网地址）",
+                                            "Optional Cloudflare Tunnel HTTPS URL (defaults to LAN URL)"),
+                                  text: $localServer.tunnelURL)
+                            .textFieldStyle(.roundedBorder)
+                            .font(.caption.monospaced())
+                    }
+                    HStack(alignment: .center, spacing: 14) {
+                        if let qrImage = localServer.pairingQRImage(size: 120) {
+                            Image(nsImage: qrImage)
+                                .interpolation(.none)
+                                .resizable()
+                                .frame(width: 112, height: 112)
+                                .padding(6)
+                                .background(Color.white, in: RoundedRectangle(cornerRadius: 8))
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(L10n.tf("配对目标：%@", localServer.pairingServerURL))
+                                .font(.caption.monospaced())
+                                .lineLimit(2).truncationMode(.middle)
+                                .textSelection(.enabled)
+                            Text(L10n.text("包含地址与访问令牌；在 iOS / Android 客户端设置或引导页点「扫码配对」即可 1 秒连上。",
+                                           "Encodes URL + Bearer token; scan from FireSky iOS/Android to connect in one tap."))
+                                .font(.caption2).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button(L10n.text("复制配对链接", "Copy Pairing URI")) {
+                                NSPasteboard.general.clearContents()
+                                NSPasteboard.general.setString(localServer.pairingURI, forType: .string)
+                            }
+                            .controlSize(.small)
+                        }
+                    }
+                }
             }
             .padding(.vertical, 12)
             .padding(.leading, 48)
@@ -752,6 +791,142 @@ struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            Divider()
+            alertRulesBlock
+        }
+    }
+
+    private var alertRulesBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            settingsBlockTitle(L10n.text("高分火烧云预警（桌面通知 / Bark / Webhook）",
+                                         "High-Score Glow Alerts (Notifications / Bark / Webhook)"))
+            Text(L10n.text("后台同步拉齐最新 GFS / EC 周期后，仅使用本地缓存自动评估关注地点；达标时弹系统通知或推送到手机。",
+                           "Evaluates watched spots from local cache after background sync and delivers macOS notifications or mobile webhooks."))
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 16) {
+                Toggle(L10n.text("启用自动预警", "Enable alerts"), isOn: $store.alertEnabled)
+                Toggle(L10n.text("系统横幅通知", "macOS banner"), isOn: $store.alertNotifyDesktop)
+                    .disabled(!store.alertEnabled)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text(L10n.text("触发阈值", "Trigger threshold"))
+                    .font(.caption).foregroundStyle(.secondary)
+                Picker("", selection: $store.alertThreshold) {
+                    Text("1.2 (较佳)").tag(1.2)
+                    Text("1.5 (大烧)").tag(1.5)
+                    Text("1.8 (罕见)").tag(1.8)
+                    Text("2.0 (世纪)").tag(2.0)
+                }
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 340)
+                .disabled(!store.alertEnabled)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(L10n.text("关注地点（来自收藏与当前点）", "Watched spots"))
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    let currentCandidate: JSONObject = [
+                        "name": store.name,
+                        "lat": store.lat,
+                        "lon": store.lon,
+                        "elevation_m": store.elevation,
+                        "note": store.spotNote,
+                    ]
+                    if store.metadataReady && !store.isSpotWatched(currentCandidate) {
+                        Button(L10n.text("+ 加入当前位置", "+ Add Current")) {
+                            store.toggleAlertSpot(currentCandidate)
+                        }
+                        .controlSize(.mini)
+                    }
+                }
+                if store.favorites.isEmpty && store.alertSpots.isEmpty {
+                    Text(L10n.text("先在工作台收藏地点，或点击右上角「+ 加入当前位置」。",
+                                   "Star a spot in the workbench or click + Add Current."))
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    let combinedSpots: [JSONObject] = {
+                        var list = store.alertSpots
+                        for fav in store.favorites {
+                            let fLat = (fav["lat"] as? NSNumber)?.doubleValue ?? 999
+                            let fLon = (fav["lon"] as? NSNumber)?.doubleValue ?? 999
+                            if !list.contains(where: {
+                                abs((($0["lat"] as? NSNumber)?.doubleValue ?? 999) - fLat) < 0.001
+                                    && abs((($0["lon"] as? NSNumber)?.doubleValue ?? 999) - fLon) < 0.001
+                            }) {
+                                list.append(fav)
+                            }
+                        }
+                        return list
+                    }()
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 6) {
+                            ForEach(Array(combinedSpots.enumerated()), id: \.offset) { _, spot in
+                                let active = store.isSpotWatched(spot)
+                                Button {
+                                    store.toggleAlertSpot(spot)
+                                } label: {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: active ? "checkmark.circle.fill" : "circle")
+                                        Text(spot["name"] as? String ?? "位置")
+                                    }
+                                    .font(.caption)
+                                    .padding(.horizontal, 9).padding(.vertical, 4)
+                                    .background(active ? warm.opacity(0.16) : Color.primary.opacity(0.06), in: Capsule())
+                                    .foregroundStyle(active ? warm : .secondary)
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                TextField(L10n.text("选填 Bark / Server酱 / HTTPS Webhook URL（如 https://api.day.app/<Key>）",
+                                    "Optional Bark / ServerChan / HTTPS Webhook URL"),
+                          text: $store.alertWebhookURL)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.caption.monospaced())
+                Picker("", selection: $store.alertWebhookType) {
+                    Text(L10n.text("自动识别", "Auto")).tag("auto")
+                    Text("Bark").tag("bark")
+                    Text("Server酱").tag("serverchan")
+                    Text("JSON").tag("generic")
+                }
+                .frame(width: 96)
+            }
+
+            HStack {
+                if store.savingAlertRules || store.testingAlertWebhook {
+                    ProgressView().controlSize(.small)
+                }
+                if !store.alertMessage.isEmpty {
+                    Text(store.alertMessage).font(.caption)
+                        .foregroundStyle(store.alertMessageFailed ? Color.red : Color.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer()
+                Button(L10n.text("测试推送", "Test Push")) {
+                    store.testAlertWebhook()
+                }
+                .disabled(!store.online || store.testingAlertWebhook || store.alertWebhookURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button(L10n.text("保存预警", "Save Alerts")) {
+                    store.saveAlertSettings()
+                }
+                .disabled(!store.online || store.savingAlertRules)
+            }
+
+            if let newest = store.alertRecentAlerts.first,
+               let title = newest["title"] as? String {
+                Text(L10n.tf("最近触发：%@ · %@", title, newest["body"] as? String ?? ""))
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -1093,15 +1268,15 @@ struct SettingsView: View {
                             String(format: "Took %.0f min %.0f s", seconds / 60, seconds.truncatingRemainder(dividingBy: 60)))
                 : L10n.text(String(format: "耗时 %.0f 秒", seconds), String(format: "Took %.0f s", seconds)))
         }
-        if let errors = result["errors"] as? [String], let first = errors.first, !first.isEmpty {
+        if let errors = result["errors"] as? [String], let first = errors.first, !first.isEmpty, !inProgress {
             details.append(L10n.tf("最近错误：%@", first))
         }
         // v1.9.7 欠账可视化：CAMS 缺哪些周期一眼可见，补齐进展随轮次更新。
         if let missing = result["missing_cycles"] as? [String], !missing.isEmpty {
             details.append(L10n.tf("缺 %d 个周期：%@", missing.count, missing.joined(separator: "、")))
         }
-        if failures > 0 { details.append(L10n.tf("连续失败 %d 次", failures)) }
-        if suspended {
+        if failures > 0, !inProgress { details.append(L10n.tf("连续失败 %d 次", failures)) }
+        if suspended, !inProgress {
             if !nextRetry.isEmpty {
                 details.append(L10n.tf("退避冷却中 · 预计 %@ 自动重试（立即同步可马上重试）", dataSyncTimeText(nextRetry)))
             } else {
@@ -1124,6 +1299,11 @@ struct SettingsView: View {
                     if !liveMessage.isEmpty {
                         Text(liveMessage).font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
+                    }
+                } else if inProgress {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text(L10n.t("后台同步中")).font(.callout).foregroundStyle(color)
                     }
                 } else {
                     Text(badge).font(.callout).foregroundStyle(color)

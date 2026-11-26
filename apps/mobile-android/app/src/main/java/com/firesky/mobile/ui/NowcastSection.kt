@@ -289,6 +289,8 @@ private fun NowcastOverviewContent(report: JSONObject, nowcast: JSONObject) {
         }
 
         NowcastCurveCard(report)
+        report.optJSONObject("spectral_color")?.let { SpectralColorCard(it) }
+        report.optJSONObject("azimuth_radar")?.let { AzimuthRadarCard(it) }
     }
 }
 

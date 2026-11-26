@@ -14,6 +14,45 @@ extension Store {
         return host
     }
 
+    @discardableResult
+    func parsePairingURI(_ raw: String) -> Bool {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let components = URLComponents(string: trimmed),
+              components.scheme?.lowercased() == "firesky",
+              (components.host?.lowercased() == "connect"
+               || (components.host == nil && components.path.lowercased() == "connect")) else {
+            remoteTestOK = false
+            remoteTestMessage = L10n.text(
+                "配对链接格式无效，应为 firesky://connect?url=...&token=...",
+                "Invalid pairing URI; expected firesky://connect?url=...&token=..."
+            )
+            return false
+        }
+
+        let items = components.queryItems ?? []
+        let urlValue = items.first(where: { $0.name == "url" })?.value?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let tokenValue = items.first(where: { $0.name == "token" })?.value?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        do {
+            let normalized = try RemoteHttpTransport.normalizeBaseURL(urlValue)
+            remoteServerURL = normalized.absoluteString
+            remoteTokenDraft = tokenValue
+            remoteTestOK = true
+            remoteTestMessage = L10n.text(
+                "已识别配对信息，正在测试连接…",
+                "Pairing link parsed; testing connection…"
+            )
+            return true
+        } catch {
+            remoteTestOK = false
+            remoteTestMessage = friendlyEngineMessage(error.localizedDescription)
+            return false
+        }
+    }
+
     func testRemoteServer() async {
         guard !remoteTesting else { return }
         remoteTesting = true

@@ -1221,9 +1221,13 @@ public sealed partial class MainWindow : Window
             if (cycleAgeConfirmed) parameters["cycle_age_confirmed"] = true;
             var response = await engine.Call("forecast", parameters,
                 progress: e => DispatcherQueue.TryEnqueue(() =>
+                {
+                    var progressPercent = DoubleValue(e["percent"]) is { } p
+                        ? Math.Clamp(p, 0, 100) : 0;
                     Status.Text = e["message"]?.GetValue<string>() is { Length: > 0 } message
                         ? message
-                        : $"正在计算 {Text(e, "source")} · {Number(e, "percent"):0}%"),
+                        : $"正在计算 {Text(e, "source")} · {progressPercent:0}%";
+                }),
                 cancellation: operation.Token);
             operation.Token.ThrowIfCancellationRequested();
             AdoptResult(response, kind, payload);

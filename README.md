@@ -7,9 +7,12 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 
 > English documentation: [README.en.md](README.en.md)
 
-> 当前版本 **v1.10.5**（见[下载安装](#下载安装releases)）：macOS DMG（双架构）、
+> 当前版本 **v2.0.0**（见[下载安装](#下载安装releases)）：macOS DMG（双架构）、
 > Windows zip + 安装器（x64/ARM64）、Android 通用 APK 与 iOS 未签名 IPA
-> 全部随 CI `v*` tag 自动直发 Release（移动端亦支持 `mobile-v*` 独立热修）。v1.10.5 修复了
+> 全部随 CI `v*` tag 自动直发 Release（移动端亦支持 `mobile-v*` 独立热修）。v2.0.0 新增
+> **CIE 1931 物理光谱云色预测**、**16 方位火烧云观测雷达**、**高分预警推送（Bark / Server酱 / Webhook / macOS 横幅）**、
+> **移动端二维码一键配对（支持局域网与 Cloudflare Tunnel）**、**macOS 追霞 PNG 海报卡导出**、
+> 同步进度消歧与 **AltStore 自动更新订阅源**；v1.10.5 修复了
 > macOS 最小化/关窗后无法重开主窗口、窗口重开秒出不闪断连接及后台助手工作区校验，
 > 并将 CAMS ADS 孤儿任务清理周期缩紧至 4 小时（升级 CI 至 Node 24）；
 > v1.10.4 为 macOS 新增**关窗驻留菜单栏后台**（`NSStatusItem` 与 `launchd` 助手调度协同，不再阻塞退出），
@@ -76,7 +79,7 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 ## 下载安装（Releases）
 
 正式版统一从 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) 下载
-（当前 **v1.10.5**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
+（当前 **v2.0.0**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
 与各资产放在同一目录执行）：
 
 ```bash
@@ -151,6 +154,9 @@ Gatekeeper 默认拦截首次打开：
 
 - 免费账号签名 **7 天有效**，到期需重签（AltStore 在同一 Wi-Fi 下可自动刷新）；
   免费账号同时最多 3 个自签 App。
+- **AltStore / SideStore 自动更新订阅源**：在 AltStore 中添加软件源
+  `https://github.com/xyl-g/FireSky/releases/latest/download/altstore-source.json`
+  即可在新版本发布后直接检测并侧载更新；也可在 FireSky 桌面端设置中扫描配对二维码一键连接。
 - 首次启动前：设置 → 通用 → VPN 与设备管理 → 信任对应开发者证书。
 - 质量验收以模拟器 `xcodebuild test` 全链为准，IPA 只是分发载体。
 

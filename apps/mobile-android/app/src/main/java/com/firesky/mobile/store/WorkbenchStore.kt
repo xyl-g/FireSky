@@ -21,9 +21,41 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.net.URI
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
+
+/**
+ * 解析二维码或剪贴板中的 FireSky 配对链接（`firesky://connect?url=...&token=...`）。
+ * 返回规范化后的 `(serverUrl, optionalToken)`；非配对链接或 URL 无效时返回 null。
+ */
+fun parsePairingUri(raw: String): Pair<String, String?>? {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return null
+    val uri = runCatching { URI(trimmed) }.getOrNull() ?: return null
+    if (!uri.scheme.equals("firesky", ignoreCase = true)) return null
+    val hostMatch = uri.host.equals("connect", ignoreCase = true)
+    val pathMatch = uri.host.isNullOrEmpty() && uri.path.equals("/connect", ignoreCase = true)
+    if (!hostMatch && !pathMatch) return null
+    val rawQuery = uri.rawQuery ?: return null
+    val params = linkedMapOf<String, String>()
+    for (pair in rawQuery.split('&')) {
+        if (pair.isEmpty()) continue
+        val eqIdx = pair.indexOf('=')
+        val rawKey = if (eqIdx >= 0) pair.substring(0, eqIdx) else pair
+        val rawVal = if (eqIdx >= 0) pair.substring(eqIdx + 1) else ""
+        val key = runCatching { URLDecoder.decode(rawKey, StandardCharsets.UTF_8.name()) }.getOrNull() ?: continue
+        val value = runCatching { URLDecoder.decode(rawVal, StandardCharsets.UTF_8.name()) }.getOrNull() ?: continue
+        params[key] = value
+    }
+    val rawUrl = params["url"]?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val normalizedUrl = runCatching { RemoteHttpTransport.normalizeBaseUrl(rawUrl) }.getOrNull() ?: return null
+    val token = params["token"]?.trim()?.takeIf { it.isNotEmpty() }
+    return normalizedUrl to token
+}
 
 /**
  * FireSky 远程薄客户端 ViewModel —— 负责远程服务器连接/配对、单点/区域/卫星实况
@@ -866,6 +898,42 @@ class WorkbenchStore private constructor(
 
     fun setRemoteTokenDraft(token: String) {
         _state.update { it.copy(remoteTokenDraft = token, remoteTestMessage = "", remoteTestOk = false) }
+    }
+
+    fun reportRemotePairingError(message: String) {
+        _state.update { it.copy(remoteTestOk = false, remoteTestMessage = message) }
+    }
+
+    fun applyPairingUri(raw: String, invalidMessage: String = "未识别到有效的 FireSky 配对链接（需 firesky://connect?url=...）。"): Boolean {
+        val parsed = parsePairingUri(raw)
+        if (parsed == null) {
+            _state.update { it.copy(remoteTestOk = false, remoteTestMessage = invalidMessage) }
+            return false
+        }
+        val (url, token) = parsed
+        if (token == null) {
+            prefs.edit().remove(PREF_REMOTE_TOKEN).apply()
+            _state.update {
+                it.copy(
+                    remoteServerUrl = url,
+                    remoteTokenDraft = "",
+                    remoteTokenSaved = false,
+                    remoteTestMessage = "",
+                    remoteTestOk = false,
+                )
+            }
+        } else {
+            _state.update {
+                it.copy(
+                    remoteServerUrl = url,
+                    remoteTokenDraft = token,
+                    remoteTestMessage = "",
+                    remoteTestOk = false,
+                )
+            }
+        }
+        saveAndConnectRemoteServer()
+        return true
     }
 
     fun clearRemoteToken() {

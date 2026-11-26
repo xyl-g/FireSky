@@ -269,6 +269,7 @@ fn allowed_method(method: &str) -> bool {
             | "cams_credentials"
             | "retention_settings"
             | "data_sync_settings"
+            | "alert_settings"
             | "terrain_inventory"
             | "profile_query"
             | "task_history"
@@ -375,13 +376,21 @@ async fn start(
     tokio::task::spawn_blocking(move || {
         let _permit = permit;
         run_tracked_job(&app.desktop_jobs, &request_id, task, |progress| {
-            app.runtime.dispatch_cancellable(
+            let mut outcome = app.runtime.dispatch_cancellable(
                 &request.method,
                 request.params,
                 cancel,
                 progress,
                 job_task_id.as_deref(),
-            )
+            );
+            if request.method == "alert_settings" {
+                if let Ok(ref mut value) = outcome {
+                    if let Some(obj) = value.as_object_mut() {
+                        obj.insert("webhook_url".into(), json!(""));
+                    }
+                }
+            }
+            outcome
         });
     });
     Ok((StatusCode::ACCEPTED, Json(response)))
@@ -839,6 +848,9 @@ mod tests {
             ("method", json!("data_delete_execute"), StatusCode::NOT_FOUND),
             ("method", json!("terrain_download"), StatusCode::NOT_FOUND),
             ("method", json!("task_forget"), StatusCode::NOT_FOUND),
+            ("method", json!("save_alert_settings"), StatusCode::NOT_FOUND),
+            ("method", json!("test_alert_webhook"), StatusCode::NOT_FOUND),
+            ("method", json!("alert_evaluate"), StatusCode::NOT_FOUND),
             ("method", json!("arbitrary_method"), StatusCode::NOT_FOUND),
         ] {
             let mut body = base.clone();

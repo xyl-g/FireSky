@@ -337,6 +337,8 @@ public sealed partial class MainWindow
             ClearRegionalProfile();
             ResetHeroCards();
             ResetMetricCards();
+            PointVisualHost.Children.Clear();
+            PointVisualHost.Visibility = Visibility.Collapsed;
             BreakdownCard.Visibility = Visibility.Collapsed;
             BreakdownHost.Children.Clear();
             chartPoints = null;
@@ -392,12 +394,15 @@ public sealed partial class MainWindow
         MetricHost.Visibility = Visibility.Visible;
         if (resultKind == "nowcast")
         {
+            PointVisualHost.Children.Clear();
+            PointVisualHost.Visibility = Visibility.Collapsed;
             RenderNowcastResult();
             return;
         }
         heroCards["ec"].Panel.Visibility = Visibility.Visible;
         BuildMetrics();
         RenderHero();
+        RenderPointVisuals();
         RenderMetrics();
         RenderBreakdown();
         RenderChart();
@@ -475,6 +480,394 @@ public sealed partial class MainWindow
             card.Error.Text = error ?? "";
             card.Error.Visibility = error != null ? Visibility.Visible : Visibility.Collapsed;
         }
+    }
+
+    // ---------- 点预测光谱色彩 & 拍摄方位雷达（v2.0.0） ----------
+
+    private void RenderPointVisuals()
+    {
+        if (PointVisualHost == null) return;
+        PointVisualHost.Children.Clear();
+        var report = SelectedReport();
+        if (report == null)
+        {
+            PointVisualHost.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var modelLabel = (TagOf(ResultModel?.SelectedItem) is { Length: > 0 } tag ? tag : "gfs").ToUpperInvariant();
+        if (report["spectral_color"] is JsonObject spectral
+            && BuildSpectralColorCard(modelLabel, spectral) is { } spectralCard)
+        {
+            PointVisualHost.Children.Add(spectralCard);
+        }
+        if (report["azimuth_radar"] is JsonObject radar
+            && BuildAzimuthRadarCard(modelLabel, radar) is { } radarCard)
+        {
+            PointVisualHost.Children.Add(radarCard);
+        }
+        PointVisualHost.Visibility = PointVisualHost.Children.Count > 0
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+    }
+
+    private static bool TryParseHexColor(string? hex, out Windows.UI.Color color)
+    {
+        color = default;
+        if (string.IsNullOrWhiteSpace(hex)) return false;
+        var span = hex.Trim().AsSpan();
+        if (span.StartsWith("#")) span = span[1..];
+        if (span.Length == 6
+            && byte.TryParse(span[0..2], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var r)
+            && byte.TryParse(span[2..4], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var g)
+            && byte.TryParse(span[4..6], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var b))
+        {
+            color = ColorFrom(r, g, b);
+            return true;
+        }
+        if (span.Length == 8
+            && byte.TryParse(span[0..2], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var a)
+            && byte.TryParse(span[2..4], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var r8)
+            && byte.TryParse(span[4..6], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var g8)
+            && byte.TryParse(span[6..8], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var b8))
+        {
+            color = Windows.UI.Color.FromArgb(a, r8, g8, b8);
+            return true;
+        }
+        return false;
+    }
+
+    private FrameworkElement? BuildSpectralColorCard(string modelLabel, JsonObject spectral)
+    {
+        var peakHex = Text(spectral, "peak_hex");
+        var hasPeakColor = TryParseHexColor(peakHex, out var peakColor);
+        var labelZh = Text(spectral, "peak_label_zh");
+        var labelEn = Text(spectral, "peak_label_en");
+        var colorLabel = L10n.IsEnglish
+            ? (labelEn.Length > 0 ? labelEn : labelZh)
+            : (labelZh.Length > 0 ? labelZh : labelEn);
+        var gradientColors = new List<Windows.UI.Color>();
+        foreach (var node in spectral["sky_gradient_hex"] as JsonArray ?? [])
+        {
+            if (TryParseHexColor(StringOrNull(node), out var stopColor))
+                gradientColors.Add(stopColor);
+        }
+        if (!hasPeakColor && gradientColors.Count == 0 && colorLabel.Length == 0)
+            return null;
+
+        var solarAz = DoubleValue(spectral["solar_azimuth_deg"]);
+        var solarEl = DoubleValue(spectral["solar_elevation_deg"]);
+
+        var panel = new StackPanel { Spacing = 10 };
+        var header = new Grid();
+        header.Children.Add(new TextBlock
+        {
+            Text = L10n.T("光谱色彩预测"),
+            FontSize = 13,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        });
+        header.Children.Add(new TextBlock
+        {
+            Text = modelLabel,
+            FontSize = 10,
+            Opacity = .65,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        panel.Children.Add(header);
+
+        var summaryRow = new Grid { ColumnSpacing = 12 };
+        summaryRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        summaryRow.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var swatchColor = hasPeakColor ? peakColor
+            : (gradientColors.Count > 0 ? gradientColors[gradientColors.Count / 2] : ColorFrom(0xE3, 0x66, 0x4A));
+        var swatch = new Border
+        {
+            Width = 36,
+            Height = 36,
+            CornerRadius = new CornerRadius(10),
+            Background = new SolidColorBrush(swatchColor),
+            BorderBrush = ThemeBrush("FireSkyCardBorderBrush"),
+            BorderThickness = new Thickness(1),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        if (hasPeakColor) ToolTipService.SetToolTip(swatch, peakHex.ToUpperInvariant());
+        Grid.SetColumn(swatch, 0);
+        summaryRow.Children.Add(swatch);
+
+        var metaStack = new StackPanel { Spacing = 3, VerticalAlignment = VerticalAlignment.Center };
+        var headlineParts = new List<string>();
+        if (colorLabel.Length > 0) headlineParts.Add(colorLabel);
+        if (hasPeakColor) headlineParts.Add(peakHex.ToUpperInvariant());
+        metaStack.Children.Add(new TextBlock
+        {
+            Text = headlineParts.Count > 0 ? string.Join(" · ", headlineParts) : L10n.T("色彩预测"),
+            FontSize = 13,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            IsTextSelectionEnabled = true,
+        });
+
+        var solarParts = new List<string>();
+        if (solarAz is { } az)
+            solarParts.Add(L10n.IsEnglish ? $"Solar azimuth {az:0.0}°" : $"太阳方位 {az:0.0}°");
+        if (solarEl is { } el)
+            solarParts.Add(L10n.IsEnglish ? $"Solar elevation {el:0.0}°" : $"太阳仰角 {el:0.0}°");
+        if (solarParts.Count > 0)
+        {
+            metaStack.Children.Add(new TextBlock
+            {
+                Text = string.Join(" · ", solarParts),
+                FontSize = 11,
+                Opacity = .72,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+        Grid.SetColumn(metaStack, 1);
+        summaryRow.Children.Add(metaStack);
+        panel.Children.Add(summaryRow);
+
+        var stops = gradientColors.Count >= 2
+            ? gradientColors
+            : [swatchColor, swatchColor];
+        var gradientBrush = new LinearGradientBrush
+        {
+            StartPoint = new Windows.Foundation.Point(0, 0.5),
+            EndPoint = new Windows.Foundation.Point(1, 0.5),
+        };
+        for (var i = 0; i < stops.Count; i++)
+        {
+            gradientBrush.GradientStops.Add(new GradientStop
+            {
+                Color = stops[i],
+                Offset = stops.Count == 1 ? 0 : i / (double)(stops.Count - 1),
+            });
+        }
+        panel.Children.Add(new Border
+        {
+            Height = 14,
+            CornerRadius = new CornerRadius(7),
+            Background = gradientBrush,
+            BorderBrush = ThemeBrush("FireSkyCardBorderBrush"),
+            BorderThickness = new Thickness(1),
+        });
+        panel.Children.Add(new TextBlock
+        {
+            Text = L10n.T("天顶 → 地平线 4 段天空光谱渐变"),
+            FontSize = 9,
+            Opacity = .6,
+        });
+
+        return new Border
+        {
+            Child = panel,
+            Padding = new Thickness(16),
+            CornerRadius = new CornerRadius(14),
+            Background = ThemeBrush("FireSkyCardBrush"),
+            BorderBrush = ThemeBrush("FireSkyCardBorderBrush"),
+            BorderThickness = new Thickness(1),
+        };
+    }
+
+    private FrameworkElement? BuildAzimuthRadarCard(string modelLabel, JsonObject radar)
+    {
+        var bestDeg = DoubleValue(radar["best_azimuth_deg"]);
+        var dirZh = Text(radar, "best_direction_zh");
+        var dirEn = Text(radar, "best_direction_en");
+        var direction = L10n.IsEnglish
+            ? (dirEn.Length > 0 ? dirEn : dirZh)
+            : (dirZh.Length > 0 ? dirZh : dirEn);
+        var recZh = Text(radar, "recommendation_zh");
+        var recEn = Text(radar, "recommendation_en");
+        var recommendation = L10n.IsEnglish
+            ? (recEn.Length > 0 ? recEn : recZh)
+            : (recZh.Length > 0 ? recZh : recEn);
+        var bestScore = DoubleValue(radar["best_score"]);
+        var solarAz = DoubleValue(radar["solar_azimuth_deg"]);
+        var bearings = (radar["bearings"] as JsonArray ?? [])
+            .OfType<JsonObject>()
+            .Select(item => (Deg: DoubleValue(item["deg"]), Score: DoubleValue(item["score"])))
+            .Where(item => item.Deg != null && item.Score != null)
+            .Select(item => (Deg: item.Deg!.Value, Score: Math.Clamp(item.Score!.Value, 0, 1)))
+            .ToList();
+
+        if (bestDeg == null && direction.Length == 0 && recommendation.Length == 0 && bearings.Count == 0)
+            return null;
+
+        var panel = new StackPanel { Spacing = 10 };
+        var header = new Grid();
+        header.Children.Add(new TextBlock
+        {
+            Text = L10n.T("推荐拍摄方位"),
+            FontSize = 13,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        });
+        header.Children.Add(new TextBlock
+        {
+            Text = modelLabel,
+            FontSize = 10,
+            Opacity = .65,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
+        panel.Children.Add(header);
+
+        var body = new Grid { ColumnSpacing = 16 };
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        body.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        const double size = 136;
+        const double cx = size / 2;
+        const double cy = size / 2;
+        const double maxR = 46;
+        Windows.Foundation.Point Polar(double deg, double normRadius)
+        {
+            var r = Math.Clamp(normRadius, 0, 1) * maxR;
+            var rad = deg * Math.PI / 180.0;
+            return new Windows.Foundation.Point(cx + r * Math.Sin(rad), cy - r * Math.Cos(rad));
+        }
+
+        var compass = new Canvas { Width = size, Height = size };
+        foreach (var fraction in new[] { 0.5, 1.0 })
+        {
+            var r = maxR * fraction;
+            compass.Children.Add(new Ellipse
+            {
+                Width = r * 2,
+                Height = r * 2,
+                Stroke = new SolidColorBrush(Colors.Gray),
+                StrokeThickness = 1,
+                Opacity = .25,
+                RenderTransform = new TranslateTransform { X = cx - r, Y = cy - r },
+            });
+        }
+        compass.Children.Add(new Line
+        {
+            X1 = cx, Y1 = cy - maxR, X2 = cx, Y2 = cy + maxR,
+            Stroke = new SolidColorBrush(Colors.Gray), StrokeThickness = 1, Opacity = .2,
+        });
+        compass.Children.Add(new Line
+        {
+            X1 = cx - maxR, Y1 = cy, X2 = cx + maxR, Y2 = cy,
+            Stroke = new SolidColorBrush(Colors.Gray), StrokeThickness = 1, Opacity = .2,
+        });
+
+        void Cardinal(string text, double x, double y) => compass.Children.Add(new TextBlock
+        {
+            Text = text,
+            FontSize = 9,
+            Opacity = .65,
+            RenderTransform = new TranslateTransform { X = x, Y = y },
+        });
+        Cardinal("N", cx - 4, cy - maxR - 15);
+        Cardinal("E", cx + maxR + 5, cy - 6);
+        Cardinal("S", cx - 3, cy + maxR + 2);
+        Cardinal("W", cx - maxR - 14, cy - 6);
+
+        if (bearings.Count >= 3)
+        {
+            var polygon = new Polygon
+            {
+                Fill = ThemeBrush("FireSkyAccentTintBrush"),
+                Stroke = ThemeBrush("FireSkyAccentBrush"),
+                StrokeThickness = 1.6,
+            };
+            foreach (var (deg, score) in bearings)
+                polygon.Points.Add(Polar(deg, score));
+            compass.Children.Add(polygon);
+        }
+
+        if (solarAz is { } sDeg)
+        {
+            var sunTip = Polar(sDeg, 1.0);
+            compass.Children.Add(new Line
+            {
+                X1 = cx, Y1 = cy, X2 = sunTip.X, Y2 = sunTip.Y,
+                Stroke = ThemeBrush("FireSkyWarningBrush"),
+                StrokeThickness = 1.2,
+                StrokeDashArray = [3, 2],
+            });
+            compass.Children.Add(new Ellipse
+            {
+                Width = 6, Height = 6,
+                Fill = ThemeBrush("FireSkyWarningBrush"),
+                RenderTransform = new TranslateTransform { X = sunTip.X - 3, Y = sunTip.Y - 3 },
+            });
+        }
+
+        if (bestDeg is { } bDeg)
+        {
+            var bestTip = Polar(bDeg, 1.0);
+            compass.Children.Add(new Line
+            {
+                X1 = cx, Y1 = cy, X2 = bestTip.X, Y2 = bestTip.Y,
+                Stroke = ThemeBrush("FireSkyCoolAccentBrush"),
+                StrokeThickness = 2,
+            });
+            compass.Children.Add(new Ellipse
+            {
+                Width = 8, Height = 8,
+                Fill = ThemeBrush("FireSkyCoolAccentBrush"),
+                RenderTransform = new TranslateTransform { X = bestTip.X - 4, Y = bestTip.Y - 4 },
+            });
+        }
+
+        Grid.SetColumn(compass, 0);
+        body.Children.Add(compass);
+
+        var infoStack = new StackPanel { Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+        var dirText = direction.Length > 0 && bestDeg is { } bd1
+            ? $"{direction}（{bd1:0}°）"
+            : direction.Length > 0 ? direction
+            : bestDeg is { } bd2 ? $"{bd2:0}°" : "--";
+        infoStack.Children.Add(new TextBlock
+        {
+            Text = L10n.IsEnglish ? $"Best Azimuth: {dirText}" : $"最佳拍摄朝向：{dirText}",
+            FontSize = 14,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            TextWrapping = TextWrapping.Wrap,
+        });
+
+        var stats = new List<string>();
+        if (bestScore is { } bs)
+            stats.Add(L10n.IsEnglish ? $"Direction score {bs * 100:0}%" : $"方位评分 {bs * 100:0}%");
+        if (solarAz is { } sa)
+            stats.Add(L10n.IsEnglish ? $"Solar azimuth {sa:0.0}°" : $"太阳方位 {sa:0.0}°");
+        if (stats.Count > 0)
+        {
+            infoStack.Children.Add(new TextBlock
+            {
+                Text = string.Join(" · ", stats),
+                FontSize = 11,
+                Opacity = .72,
+                TextWrapping = TextWrapping.Wrap,
+            });
+        }
+
+        if (recommendation.Length > 0)
+        {
+            infoStack.Children.Add(new TextBlock
+            {
+                Text = recommendation,
+                FontSize = 12,
+                Opacity = .9,
+                TextWrapping = TextWrapping.Wrap,
+                IsTextSelectionEnabled = true,
+            });
+        }
+
+        Grid.SetColumn(infoStack, 1);
+        body.Children.Add(infoStack);
+        panel.Children.Add(body);
+
+        return new Border
+        {
+            Child = panel,
+            Padding = new Thickness(16),
+            CornerRadius = new CornerRadius(14),
+            Background = ThemeBrush("FireSkyCardBrush"),
+            BorderBrush = ThemeBrush("FireSkyCardBorderBrush"),
+            BorderThickness = new Thickness(1),
+        };
     }
 
     // ---------- 分组指标卡 ----------

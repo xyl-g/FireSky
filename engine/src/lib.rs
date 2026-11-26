@@ -1,6 +1,7 @@
 #![recursion_limit = "256"]
 
 pub mod ads;
+pub mod alert_rules;
 pub mod app_resources;
 pub mod assessment;
 pub mod astronomy;
@@ -47,6 +48,7 @@ pub mod ecmwf_service;
 pub mod ffi;
 pub mod frames;
 pub mod gfs_data;
+pub mod glow_spectrum;
 /// Shared HTTP client posture: ambient proxy by default, direct egress when
 /// FIRESKY_NO_PROXY=1 (stalled system proxies must not block data downloads).
 pub mod http_client {

@@ -147,6 +147,12 @@
     <string name="remote_pairing_hint">Mac / Windows / Docker 端开启 HTTP 服务（Mac「设置 → 高级 → 局域网与隧道服务」）后，填写 Cloudflare Tunnel 域名（https://...）或局域网地址（http://192.168.x.x:8765）即可直连。</string>
     <string name="remote_test_connection">测试连接</string>
     <string name="remote_save_and_connect">保存并连接</string>
+    <string name="remote_scan_qr">扫码配对</string>
+    <string name="remote_paste_pairing">粘贴配对链接</string>
+    <string name="remote_qr_prompt">将相机对准 FireSky 桌面端配对二维码</string>
+    <string name="remote_camera_denied">未授予相机权限，可改用「粘贴配对链接」完成配对。</string>
+    <string name="remote_clipboard_empty">剪贴板为空，请先复制 firesky://connect 配对链接。</string>
+    <string name="remote_pairing_invalid">未识别到有效的 FireSky 配对链接（需 firesky://connect?url=...）。</string>
     <string name="remote_mac_badge">远程服务器</string>
     <string name="remote_connected_badge">已连接</string>
     <string name="remote_unconfigured_badge">未配置</string>
@@ -278,6 +284,12 @@
     <string name="cycle_age_continue_cache">使用当前缓存继续</string>
     <string name="stale_result_banner">参数已变更 · 当前结果对应旧参数</string>
     <string name="rerun_with_new_params">按新参数重算</string>
+    <string name="nowcast_quick_switch_chip">临近 4 小时 · 切卫星实况</string>
+    <string name="spectral_color_title">霞光光谱预览</string>
+    <string name="spectral_solar_caption_fmt">太阳方位 %1$.1f° · 太阳高度 %2$.1f°</string>
+    <string name="azimuth_radar_title">16 方位朝向雷达</string>
+    <string name="azimuth_radar_solar_fmt">太阳方位 %1$.0f°</string>
+    <string name="azimuth_radar_best_fmt">最佳 %1$s（%2$.0f°）</string>
 
     <!-- 结果卡片 -->
     <string name="result_wait_hint">等待预测——填写参数并点「开始预测」。</string>

@@ -372,7 +372,9 @@ struct SettingsView: View {
         let cycle = state["last_cycle"] as? String ?? ""
         let failures = (state["consecutive_failures"] as? NSNumber)?.intValue ?? 0
         let suspended = state["suspended"] as? Bool ?? false
-        let inProgress = state["in_progress"] as? Bool ?? false
+        let inProgress = (state["in_progress"] as? Bool ?? false)
+            || status == "in_progress"
+            || (store.dataSyncRunning && store.dataSyncActiveSource == name)
         let nextRetry = state["next_retry_at_utc"] as? String ?? ""
         let badge: String
         let color: Color
@@ -390,23 +392,36 @@ struct SettingsView: View {
         }
         var notes: [String] = []
         if !cycle.isEmpty { notes.append(L10n.tf("最近周期 %@", cycle)) }
-        if failures > 0 { notes.append(L10n.tf("连续失败 %d 次", failures)) }
-        if suspended {
-            if !nextRetry.isEmpty {
-                let shortTime = ObservationDate.timestamp(nextRetry).map {
-                    let f = DateFormatter()
-                    f.dateFormat = "MM-dd HH:mm"
-                    return f.string(from: $0)
-                } ?? nextRetry
-                notes.append(L10n.text("退避冷却中 · 预计 \(shortTime) 自动重试", "Cooling down · auto retry at \(shortTime)"))
-            } else {
-                notes.append(L10n.text("退避冷却中", "Cooling down"))
+        if !inProgress {
+            if failures > 0 { notes.append(L10n.tf("连续失败 %d 次", failures)) }
+            if suspended {
+                if !nextRetry.isEmpty {
+                    let shortTime = ObservationDate.timestamp(nextRetry).map {
+                        let f = DateFormatter()
+                        f.dateFormat = "MM-dd HH:mm"
+                        return f.string(from: $0)
+                    } ?? nextRetry
+                    notes.append(L10n.text("退避冷却中 · 预计 \(shortTime) 自动重试", "Cooling down · auto retry at \(shortTime)"))
+                } else {
+                    notes.append(L10n.text("退避冷却中", "Cooling down"))
+                }
             }
         }
         return VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 10) {
                 Text(label).font(.caption.weight(.semibold)).frame(width: 44, alignment: .leading)
-                Text(badge).font(.caption).foregroundStyle(color)
+                HStack(spacing: 5) {
+                    if inProgress {
+                        ProgressView()
+                            .controlSize(.mini)
+                    }
+                    Text(badge)
+                        .font(.caption2.weight(.medium))
+                }
+                .foregroundStyle(color)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3)
+                .background(color.opacity(scheme == .dark ? 0.16 : 0.12), in: Capsule())
                 Spacer()
             }
             if !notes.isEmpty {

@@ -27,6 +27,8 @@
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+	<key>NSCameraUsageDescription</key>
+	<string>用于扫描 FireSky 桌面端或 Docker 生成的配对二维码以连接服务器。</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>用于获取当前位置作为观测点，以便预测朝霞与晚霞。</string>
 	<key>UILaunchScreen</key>

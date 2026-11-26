@@ -7,11 +7,14 @@ native desktop clients**. The physics follows the methodology of the
 
 > 中文文档：[README.md](README.md)
 
-> Current release **v1.10.5** (see [Download & install](#download--install-releases)):
+> Current release **v2.0.0** (see [Download & install](#download--install-releases)):
 > macOS DMGs (dual arch), Windows zip + installer (x64/ARM64), universal Android
 > APK, and unsigned sideloadable iOS `.ipa` are all built and attached to GitHub
 > Releases automatically on `v*` tags (with independent `mobile-v*` mobile releases).
-> v1.10.5 fixes macOS window restoration after minimize/close, makes window reopen
+> v2.0.0 brings **CIE 1931 spectral glow color prediction**, **16-direction azimuth
+> glow radar**, **high-score glow alerts (Bark / ServerChan / JSON Webhook / macOS banners)**,
+> **mobile QR code pairing**, **PNG glow poster export on macOS**, per-source sync
+> progress clarity, and an **auto-updating AltStore source**; v1.10.5 fixes macOS window restoration after minimize/close, makes window reopen
 > connection-idempotent, fixes background helper workspace checks, tightens CAMS ADS
 > orphan cleanup to 4 hours, and upgrades GitHub Actions to Node 24;
 > v1.10.4 adds **macOS close-to-menu-bar background mode** (yielding scheduled syncs
@@ -91,7 +94,7 @@ native desktop clients**. The physics follows the methodology of the
 
 Official builds are published on
 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) (current:
-**v1.10.5**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
+**v2.0.0**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
 file names; run it in the directory holding the assets):
 
 ```bash
@@ -176,6 +179,10 @@ Re-sign it with a free Apple ID via [AltStore](https://altstore.io) or
 - Free-account signatures are **valid for 7 days** and must be refreshed
   (AltStore auto-refreshes on the same Wi-Fi); free accounts allow at most
   3 sideloaded apps at a time.
+- **AltStore / SideStore auto-update feed**: add source URL
+  `https://github.com/xyl-g/FireSky/releases/latest/download/altstore-source.json`
+  in AltStore/SideStore for one-tap updates, and scan the desktop QR pairing code
+  to connect instantly.
 - Before first launch: Settings → General → VPN & Device Management → trust
   the developer certificate.
 - Quality acceptance is the simulator `xcodebuild test` chain; the IPA is

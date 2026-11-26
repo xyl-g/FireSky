@@ -121,6 +121,7 @@ fun AccentButton(
     title: String,
     enabled: Boolean = true,
     icon: ImageVector? = null,
+    indicatorDot: Boolean = false,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
@@ -176,6 +177,15 @@ fun AccentButton(
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+        if (indicatorDot && enabled) {
+            Spacer(Modifier.width(8.dp))
+            Box(
+                Modifier
+                    .size(8.dp)
+                    .background(Color(0xFFFFE082), CircleShape)
+                    .border(1.dp, actionForeground().copy(alpha = 0.65f), CircleShape),
+            )
+        }
     }
 }
 

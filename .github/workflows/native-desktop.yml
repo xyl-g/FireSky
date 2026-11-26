@@ -409,8 +409,13 @@ jobs:
           if [ "${NEEDS_MOBILE_RELEASE}" = "success" ]; then
             (cd release-assets && sha256sum "FireSky-${VERSION}-android-arm64.apk" >> SHA256SUMS.txt)
           fi
-          if [ "${NEEDS_IOS_RELEASE}" = "success" ]; then
-            (cd release-assets && sha256sum "FireSky-${VERSION}-ios-arm64.ipa" >> SHA256SUMS.txt)
+          if [ "${NEEDS_IOS_RELEASE}" = "success" ] && [ -f "release-assets/FireSky-${VERSION}-ios-arm64.ipa" ]; then
+            python3 scripts/update_altstore_source.py \
+              --version "${VERSION}" \
+              --ipa "release-assets/FireSky-${VERSION}-ios-arm64.ipa" \
+              --download-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/FireSky-${VERSION}-ios-arm64.ipa" \
+              --out "release-assets/altstore-source.json"
+            (cd release-assets && sha256sum "FireSky-${VERSION}-ios-arm64.ipa" "altstore-source.json" >> SHA256SUMS.txt)
           fi
           (cd release-assets && sha256sum -c SHA256SUMS.txt)
       - name: Extract changelog section for this version
@@ -478,7 +483,12 @@ jobs:
           test -f artifacts/ios/FireSky-ios-arm64.ipa
           cp artifacts/android/app-debug.apk "release-assets/FireSky-${VERSION}-android-arm64.apk"
           cp artifacts/ios/FireSky-ios-arm64.ipa "release-assets/FireSky-${VERSION}-ios-arm64.ipa"
-          (cd release-assets && sha256sum "FireSky-${VERSION}-android-arm64.apk" "FireSky-${VERSION}-ios-arm64.ipa" > SHA256SUMS.txt)
+          python3 scripts/update_altstore_source.py \
+            --version "${VERSION}" \
+            --ipa "release-assets/FireSky-${VERSION}-ios-arm64.ipa" \
+            --download-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/FireSky-${VERSION}-ios-arm64.ipa" \
+            --out "release-assets/altstore-source.json"
+          (cd release-assets && sha256sum "FireSky-${VERSION}-android-arm64.apk" "FireSky-${VERSION}-ios-arm64.ipa" "altstore-source.json" > SHA256SUMS.txt)
           (cd release-assets && sha256sum -c SHA256SUMS.txt)
       - name: Publish mobile-only GitHub Release (--latest=false)
         env:
@@ -537,6 +547,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
       - name: Validate target release tag
         env:
           GH_TOKEN: ${{ github.token }}
@@ -614,6 +625,13 @@ jobs:
           if [ "${NEEDS_IOS}" = "success" ]; then
             test -f artifacts/ios/FireSky-ios-arm64.ipa
             cp artifacts/ios/FireSky-ios-arm64.ipa "release-assets/FireSky-${VERSION}-ios-arm64.ipa"
+            if [ -f "release-assets/FireSky-${VERSION}-ios-arm64.ipa" ]; then
+              python3 scripts/update_altstore_source.py \
+                --version "${VERSION}" \
+                --ipa "release-assets/FireSky-${VERSION}-ios-arm64.ipa" \
+                --download-url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${RELEASE_TAG}/FireSky-${VERSION}-ios-arm64.ipa" \
+                --out "release-assets/altstore-source.json"
+            fi
           fi
 
           shopt -s nullglob

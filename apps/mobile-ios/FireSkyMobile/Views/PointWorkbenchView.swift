@@ -175,7 +175,12 @@ struct PointWorkbenchView: View {
 
     private var runControls: some View {
         VStack(spacing: 8) {
-            AccentButton(title: L10n.start, systemImage: "sparkles", disabled: store.busy || !store.online) {
+            AccentButton(
+                title: L10n.start,
+                systemImage: "sparkles",
+                staleIndicator: store.resultParametersStale,
+                disabled: store.busy || !store.online
+            ) {
                 store.beginCheck()
             }
             if store.busy {
@@ -539,6 +544,7 @@ private struct WorkCalendarView: View {
 private struct WorkActionSummaryView: View {
     @EnvironmentObject private var store: Store
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let comparison: ForecastComparison
 
     private struct ModelSnapshot {
@@ -569,6 +575,20 @@ private struct WorkActionSummaryView: View {
 
     private var levelsAgree: Bool {
         snapshots.count == 2 && Set(snapshots.map(\.level)).count == 1
+    }
+
+    private var nearbyNowcastTime: String? {
+        let preferred = [store.selectedModel] + ForecastComparison.models.filter { $0 != store.selectedModel }
+        let now = Date()
+        for model in preferred {
+            guard let raw = comparison.report(model)?["best_time_local"] as? String,
+                  let parsed = parseLocalTimestamp(raw, timezone: store.timezone),
+                  abs(parsed.timeIntervalSince(now)) <= 4 * 3600 else {
+                continue
+            }
+            return ObservationDate.timeLabel(parsed, timezone: store.timezone)
+        }
+        return nil
     }
 
     private var headline: String {
@@ -611,6 +631,31 @@ private struct WorkActionSummaryView: View {
                 if !timingText.isEmpty {
                     Text(timingText).font(.caption).monospacedDigit().foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
+                }
+                if let nearbyTime = nearbyNowcastTime {
+                    Button {
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+                            store.switchWorkbenchMode(.nowcast)
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "antenna.radiowaves.left.and.right")
+                            Text(L10n.text(
+                                "最佳时刻临近（\(nearbyTime)）· 切换卫星实况",
+                                "Near window (\(nearbyTime)) · Open Satellite Nowcast"
+                            ))
+                        }
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(coolAccent)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(coolAccent.opacity(scheme == .dark ? 0.16 : 0.12), in: Capsule())
+                        .overlay {
+                            Capsule().strokeBorder(coolAccent.opacity(0.35), lineWidth: 1)
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(store.busy)
                 }
                 ForEach(failedModels, id: \.self) { model in
                     Text(L10n.tf("%@ 未完成：%@", model.uppercased(), comparison.error(model) ?? L10n.t("未知原因")))
@@ -820,6 +865,9 @@ struct WorkHeroView: View {
                 }
             }
             SkyTimeline(report: report, timezone: store.timezone)
+            if let spectral = report?["spectral_color"] as? JSONObject {
+                SpectralColorStripView(spectral: spectral)
+            }
             VStack(alignment: .leading, spacing: 4) {
                 if let cycle = cycleLabel(model, report) {
                     Text(L10n.tf("起报 %@", cycle)).lineLimit(1).workChip()
@@ -873,6 +921,22 @@ struct WorkResultsView: View {
     private var report: JSONObject? { comparison.report(store.selectedModel) }
     private let groupKeys = [("cloud", 0..<4), ("optics", 4..<7), ("reliability", 7..<10)]
 
+    private var availableRadarModels: [String] {
+        ForecastComparison.models.filter { comparison.report($0)?["azimuth_radar"] is JSONObject }
+    }
+
+    private var overviewRadarReport: (model: String, radar: JSONObject)? {
+        if let radar = comparison.report(store.selectedModel)?["azimuth_radar"] as? JSONObject {
+            return (store.selectedModel, radar)
+        }
+        for model in ForecastComparison.models {
+            if let radar = comparison.report(model)?["azimuth_radar"] as? JSONObject {
+                return (model, radar)
+            }
+        }
+        return nil
+    }
+
     var body: some View {
         if comparison.result == nil {
             firstRunEmptyCanvas
@@ -911,6 +975,14 @@ struct WorkResultsView: View {
                     }
                 }
                 WorkComparisonCurveView(comparison: comparison, timezone: store.timezone)
+                if let radarEntry = overviewRadarReport {
+                    AzimuthRadarCard(
+                        radar: radarEntry.radar,
+                        modelLabel: radarEntry.model.uppercased(),
+                        availableModels: availableRadarModels,
+                        selectedModel: $store.selectedModel
+                    )
+                }
             } else if let message = comparison.error(store.selectedModel) {
                 Text(L10n.tf("%@ 未完成：%@", store.selectedModel.uppercased(), message))
                     .font(.callout).foregroundStyle(.red).textSelection(.enabled)
@@ -1470,6 +1542,9 @@ struct WorkDiagnosticView: View {
                         section: report["cross_section"] as? JSONObject,
                         genusProxy: report["cloud_genus_proxy"] as? JSONObject
                     )
+                    if let radar = report["azimuth_radar"] as? JSONObject {
+                        AzimuthRadarCard(radar: radar)
+                    }
                 }
                 WorkDiagnosticGroup(title: L10n.text("运行与时间", "Runtime & Timing")) {
                     diagnosticRow(L10n.text("预测周期", "Cycle"), report["cycle_time_utc"])
@@ -1510,5 +1585,389 @@ struct WorkDiagnosticView: View {
                 Text(waiting).foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 120)
             }
         }.padding(16).frame(maxWidth: .infinity, alignment: .leading).workSurface()
+    }
+}
+
+// MARK: - v2.0.0 色谱条、16 方位霞光雷达与时间解析助手
+
+private func parseLocalTimestamp(_ raw: String, timezone: String) -> Date? {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else { return nil }
+    if let date = ObservationDate.timestamp(trimmed) {
+        return date
+    }
+    let tz = TimeZone(identifier: timezone) ?? .current
+    for pattern in ["yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm", "yyyy-MM-dd HH:mm"] {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = tz
+        formatter.dateFormat = pattern
+        if let date = formatter.date(from: trimmed) {
+            return date
+        }
+    }
+    return nil
+}
+
+private func parseHexColor(_ hex: String?) -> Color? {
+    guard let hex else { return nil }
+    let cleaned = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        .replacingOccurrences(of: "#", with: "")
+    guard cleaned.count == 6, let value = UInt64(cleaned, radix: 16) else { return nil }
+    let r = Double((value >> 16) & 0xFF) / 255.0
+    let g = Double((value >> 8) & 0xFF) / 255.0
+    let b = Double(value & 0xFF) / 255.0
+    return Color(red: r, green: g, blue: b)
+}
+
+/// 霞光光谱色条与峰值色点（`report["spectral_color"]`）。
+private struct SpectralColorStripView: View {
+    let spectral: JSONObject
+    @Environment(\.colorScheme) private var scheme
+
+    private var gradientColors: [Color] {
+        let parsed = (spectral["sky_gradient_hex"] as? [String] ?? []).compactMap(parseHexColor)
+        if parsed.count >= 2 { return parsed }
+        if let single = parsed.first { return [single.opacity(0.65), single] }
+        let fallback = peakColor
+        return [fallback.opacity(0.45), fallback]
+    }
+
+    private var peakColor: Color {
+        parseHexColor(spectral["peak_hex"] as? String) ?? warm
+    }
+
+    private var peakLabel: String {
+        let zh = (spectral["peak_label_zh"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let en = (spectral["peak_label_en"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if L10n.effective == .english {
+            return en.isEmpty ? (zh.isEmpty ? "—" : zh) : en
+        }
+        return zh.isEmpty ? (en.isEmpty ? "—" : en) : zh
+    }
+
+    private var solarText: String? {
+        let az = number(spectral["solar_azimuth_deg"])
+        let el = number(spectral["solar_elevation_deg"])
+        switch (az, el) {
+        case let (a?, e?):
+            return L10n.text(
+                String(format: "太阳方位 %.0f° · 仰角 %.1f°", a, e),
+                String(format: "Az %.0f° · El %.1f°", a, e)
+            )
+        case let (a?, nil):
+            return L10n.text(String(format: "太阳方位 %.0f°", a), String(format: "Az %.0f°", a))
+        case let (nil, e?):
+            return L10n.text(String(format: "太阳仰角 %.1f°", e), String(format: "El %.1f°", e))
+        case (nil, nil):
+            return nil
+        }
+    }
+
+    var body: some View {
+        let dark = scheme == .dark
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 5)
+                .fill(
+                    LinearGradient(
+                        colors: gradientColors,
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(width: 22, height: 34)
+                .overlay {
+                    RoundedRectangle(cornerRadius: 5)
+                        .strokeBorder(Color.primary.opacity(dark ? 0.22 : 0.14), lineWidth: 0.8)
+                }
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(peakColor)
+                        .frame(width: 9, height: 9)
+                        .overlay {
+                            Circle().strokeBorder(Color.white.opacity(0.85), lineWidth: 0.8)
+                        }
+                    Text(peakLabel)
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                    if let hex = spectral["peak_hex"] as? String, !hex.isEmpty {
+                        Text(hex.uppercased())
+                            .font(.caption2.monospaced())
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let solarText {
+                    Text(solarText)
+                        .font(.caption2)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(FSDesign.surfaceFill(role: .grouped, dark: dark), in: RoundedRectangle(cornerRadius: 9))
+        .overlay {
+            RoundedRectangle(cornerRadius: 9)
+                .strokeBorder(FSDesign.surfaceBorder(role: .grouped, dark: dark, emphasized: false), lineWidth: 1)
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// 16 方位极坐标霞光雷达（`report["azimuth_radar"]`）。
+private struct AzimuthRadarCard: View {
+    let radar: JSONObject
+    var modelLabel: String? = nil
+    var availableModels: [String] = []
+    var selectedModel: Binding<String>? = nil
+
+    @Environment(\.colorScheme) private var scheme
+
+    private struct BearingSample {
+        let deg: Double
+        let labelZh: String
+        let labelEn: String
+        let score: Double
+        let canvas: Double
+        let lowBlock: Double
+    }
+
+    private var bearings: [BearingSample] {
+        let raw = radar["bearings"] as? [JSONObject] ?? []
+        return raw.compactMap { item -> BearingSample? in
+            guard let deg = number(item["deg"]),
+                  let score = number(item["score"]) else { return nil }
+            return BearingSample(
+                deg: deg,
+                labelZh: item["label_zh"] as? String ?? "",
+                labelEn: item["label_en"] as? String ?? "",
+                score: min(max(score, 0), 1),
+                canvas: min(max(number(item["canvas"]) ?? 0, 0), 1),
+                lowBlock: min(max(number(item["low_block"]) ?? 0, 0), 1)
+            )
+        }
+        .sorted { $0.deg < $1.deg }
+    }
+
+    private var recommendationText: String {
+        let zh = (radar["recommendation_zh"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let en = (radar["recommendation_en"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if L10n.effective == .english {
+            return en.isEmpty ? zh : en
+        }
+        return zh.isEmpty ? en : zh
+    }
+
+    private var bestDirectionLabel: String? {
+        let zh = (radar["best_direction_zh"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let en = (radar["best_direction_en"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let dir = L10n.effective == .english ? (en.isEmpty ? zh : en) : (zh.isEmpty ? en : zh)
+        guard !dir.isEmpty else { return nil }
+        if let deg = number(radar["best_azimuth_deg"]) {
+            return String(format: "%@ (%.0f°)", dir, deg)
+        }
+        return dir
+    }
+
+    var body: some View {
+        let samples = bearings
+        let solarAzimuth = number(radar["solar_azimuth_deg"])
+        let bestAzimuth = number(radar["best_azimuth_deg"])
+        let bestScore = number(radar["best_score"])
+        let dark = scheme == .dark
+
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Text(L10n.text("16 方位霞光雷达", "16-Bearing Glow Radar"))
+                    .font(.subheadline.weight(.semibold))
+                if let modelLabel, !modelLabel.isEmpty, availableModels.count <= 1 {
+                    Text(modelLabel)
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(modelColor(modelLabel.lowercased()))
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(modelColor(modelLabel.lowercased()).opacity(0.14), in: Capsule())
+                }
+                Spacer(minLength: 4)
+                if availableModels.count > 1, let selectedModel {
+                    WorkSegments(
+                        options: availableModels,
+                        titles: availableModels.map { $0.uppercased() },
+                        selection: selectedModel
+                    )
+                    .frame(width: 120)
+                } else if let bestDirectionLabel {
+                    Text(bestDirectionLabel)
+                        .font(.caption2.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(warm)
+                        .workChip()
+                }
+            }
+
+            if !samples.isEmpty {
+                Canvas { context, size in
+                    let center = CGPoint(x: size.width / 2, y: size.height / 2)
+                    let radius = max(24, min(size.width, size.height) / 2 - 22)
+
+                    func point(deg: Double, ratio: Double) -> CGPoint {
+                        let rad = (deg - 90.0) * Double.pi / 180.0
+                        let r = radius * ratio
+                        return CGPoint(
+                            x: center.x + CGFloat(cos(rad) * r),
+                            y: center.y + CGFloat(sin(rad) * r)
+                        )
+                    }
+
+                    // Concentric rings at 0.5 and 1.0
+                    let innerRect = CGRect(
+                        x: center.x - radius * 0.5,
+                        y: center.y - radius * 0.5,
+                        width: radius,
+                        height: radius
+                    )
+                    context.stroke(
+                        Path(ellipseIn: innerRect),
+                        with: .color(Color.secondary.opacity(dark ? 0.34 : 0.26)),
+                        style: StrokeStyle(lineWidth: 0.9, dash: [3, 3])
+                    )
+
+                    let outerRect = CGRect(
+                        x: center.x - radius,
+                        y: center.y - radius,
+                        width: radius * 2,
+                        height: radius * 2
+                    )
+                    context.stroke(
+                        Path(ellipseIn: outerRect),
+                        with: .color(Color.secondary.opacity(dark ? 0.44 : 0.34)),
+                        lineWidth: 1.0
+                    )
+
+                    // Radial spokes (8 primary/intercardinal directions)
+                    for stepDeg in stride(from: 0.0, to: 360.0, by: 45.0) {
+                        var spoke = Path()
+                        spoke.move(to: center)
+                        spoke.addLine(to: point(deg: stepDeg, ratio: 1.0))
+                        context.stroke(
+                            spoke,
+                            with: .color(Color.secondary.opacity(dark ? 0.22 : 0.16)),
+                            lineWidth: 0.7
+                        )
+                    }
+
+                    // Cardinal labels: N / E / S / W
+                    let cardinals: [(Double, String)] = [(0, "N"), (90, "E"), (180, "S"), (270, "W")]
+                    for (deg, title) in cardinals {
+                        let labelPt = point(deg: deg, ratio: 1.0)
+                        let rad = (deg - 90.0) * Double.pi / 180.0
+                        let offsetPt = CGPoint(
+                            x: labelPt.x + CGFloat(cos(rad)) * 12,
+                            y: labelPt.y + CGFloat(sin(rad)) * 12
+                        )
+                        context.draw(
+                            Text(title).font(.caption2.weight(.semibold)).foregroundColor(.secondary),
+                            at: offsetPt,
+                            anchor: .center
+                        )
+                    }
+
+                    // 16-bearing glow score polygon
+                    var polygon = Path()
+                    for (idx, sample) in samples.enumerated() {
+                        let pt = point(deg: sample.deg, ratio: sample.score)
+                        if idx == 0 {
+                            polygon.move(to: pt)
+                        } else {
+                            polygon.addLine(to: pt)
+                        }
+                    }
+                    polygon.closeSubpath()
+                    context.fill(polygon, with: .color(warm.opacity(dark ? 0.30 : 0.24)))
+                    context.stroke(polygon, with: .color(warm), lineWidth: 2.0)
+
+                    // Best azimuth vertex highlight
+                    if let bestSample = samples.max(by: { $0.score < $1.score }) {
+                        let bestDeg = bestAzimuth ?? bestSample.deg
+                        let bestRatio = bestScore ?? bestSample.score
+                        let bestPt = point(deg: bestDeg, ratio: min(max(bestRatio, 0), 1))
+                        let dotRect = CGRect(x: bestPt.x - 4, y: bestPt.y - 4, width: 8, height: 8)
+                        context.fill(Path(ellipseIn: dotRect), with: .color(warm))
+                        context.stroke(Path(ellipseIn: dotRect), with: .color(.white.opacity(0.9)), lineWidth: 1.2)
+                    }
+
+                    // Solar azimuth marker
+                    if let solarAzimuth {
+                        let sunColor = Color(red: 1.0, green: 0.74, blue: 0.22)
+                        let edgePt = point(deg: solarAzimuth, ratio: 1.0)
+                        var ray = Path()
+                        ray.move(to: center)
+                        ray.addLine(to: edgePt)
+                        context.stroke(
+                            ray,
+                            with: .color(sunColor.opacity(0.85)),
+                            style: StrokeStyle(lineWidth: 1.4, dash: [4, 3])
+                        )
+                        let haloRect = CGRect(x: edgePt.x - 7, y: edgePt.y - 7, width: 14, height: 14)
+                        context.fill(Path(ellipseIn: haloRect), with: .color(sunColor.opacity(0.28)))
+                        let sunRect = CGRect(x: edgePt.x - 4.2, y: edgePt.y - 4.2, width: 8.4, height: 8.4)
+                        context.fill(Path(ellipseIn: sunRect), with: .color(sunColor))
+                        context.stroke(Path(ellipseIn: sunRect), with: .color(.white.opacity(0.95)), lineWidth: 1.1)
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .frame(height: 220)
+                .accessibilityLabel(
+                    L10n.text(
+                        "16 方位霞光雷达图，\(recommendationText)",
+                        "16-bearing glow radar, \(recommendationText)"
+                    )
+                )
+
+                HStack(spacing: 12) {
+                    HStack(spacing: 5) {
+                        RoundedRectangle(cornerRadius: 2)
+                            .fill(warm.opacity(0.55))
+                            .frame(width: 12, height: 8)
+                        Text(L10n.text("推荐评分", "Glow score"))
+                    }
+                    if let solarAzimuth {
+                        HStack(spacing: 5) {
+                            Circle()
+                                .fill(Color(red: 1.0, green: 0.74, blue: 0.22))
+                                .frame(width: 8, height: 8)
+                            Text(L10n.text(
+                                String(format: "太阳方位 %.0f°", solarAzimuth),
+                                String(format: "Sun %.0f°", solarAzimuth)
+                            ))
+                            .monospacedDigit()
+                        }
+                    }
+                    Spacer(minLength: 0)
+                    if let bestScore {
+                        Text(String(format: L10n.text("峰值 %.2f", "Peak %.2f"), bestScore))
+                            .monospacedDigit()
+                    }
+                }
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+            }
+
+            if !recommendationText.isEmpty {
+                Text(recommendationText)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .workSurface()
     }
 }

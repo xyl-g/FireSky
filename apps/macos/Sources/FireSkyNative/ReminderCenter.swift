@@ -158,6 +158,22 @@ final class ReminderCenter: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
+    /// 即时投递高分火烧云预警横幅通知（由后台同步完成后的 engine alert_rules 触发）。
+    func deliverImmediate(id: String, title: String, body: String) {
+        guard let center, permission == .authorized else { return }
+        let safeID = id.replacingOccurrences(of: "|", with: "_")
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        let request = UNNotificationRequest(
+            identifier: "firesky.alert.\(safeID)",
+            content: content,
+            trigger: nil
+        )
+        center.add(request) { _ in }
+    }
+
     private func persist(_ item: Scheduled) {
         guard let data = try? JSONEncoder().encode(item) else { return }
         defaults.set(data, forKey: storageKey)
