@@ -2,25 +2,39 @@
   "name": "FireSky",
   "identifier": "cn.firesky.source",
   "subtitle": "火烧云物理预测（GFS / ECMWF / CAMS + 向日葵实况）",
+  "description": "FireSky 官方 iOS 侧载发布源，提供火烧云物理预测瘦客户端自动更新。",
   "sourceURL": "https://github.com/xyl-g/FireSky/releases/latest/download/altstore-source.json",
+  "website": "https://github.com/xyl-g/FireSky",
+  "tintColor": "E06D3A",
   "apps": [
     {
       "name": "FireSky",
       "bundleIdentifier": "cn.firesky.mobile",
       "developerName": "xyl-g",
+      "subtitle": "火烧云物理预测瘦客户端（GFS / EC / CAMS + 向日葵实况）",
+      "localizedDescription": "FireSky iOS 瘦客户端：直连你的 Mac / Windows / Docker FireSky 服务端，提供单点朝晚霞物理预测（CIE 1931 光谱云色与 16 方位观测雷达）、区域热力图与城市排行、向日葵 9 号卫星实况、扫码一键配对与实时 SSE 进度流。",
       "iconURL": "https://raw.githubusercontent.com/xyl-g/FireSky/main/apps/mobile-ios/FireSkyMobile/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
       "tintColor": "E06D3A",
       "category": "weather",
+      "screenshots": [],
+      "appPermissions": {
+        "entitlements": [],
+        "privacy": {
+          "NSCameraUsageDescription": "用于扫描 FireSky 桌面端或 Docker 生成的配对二维码以连接服务器。",
+          "NSLocationWhenInUseUsageDescription": "用于获取当前位置作为观测点，以便预测朝霞与晚霞。"
+        }
+      },
       "versions": [
         {
           "version": "2.0.1",
-          "date": "2026-11-26T08:59:00Z",
+          "date": "2026-11-26T11:48:29Z",
           "localizedDescription": "FireSky 2.0.1 iOS release",
           "downloadURL": "https://github.com/xyl-g/FireSky/releases/download/v2.0.1/FireSky-2.0.1-ios-arm64.ipa",
-          "size": 0,
+          "size": 3557598,
           "minOSVersion": "16.0"
         }
       ]
     }
-  ]
+  ],
+  "news": []
 }

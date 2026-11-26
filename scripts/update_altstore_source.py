@@ -12,11 +12,19 @@ import tempfile
 SOURCE_NAME = "FireSky"
 SOURCE_IDENTIFIER = "cn.firesky.source"
 SOURCE_SUBTITLE = "火烧云物理预测（GFS / ECMWF / CAMS + 向日葵实况）"
+SOURCE_DESCRIPTION = "FireSky 官方 iOS 侧载发布源，提供火烧云物理预测瘦客户端自动更新。"
 SOURCE_URL = "https://github.com/xyl-g/FireSky/releases/latest/download/altstore-source.json"
+SOURCE_WEBSITE = "https://github.com/xyl-g/FireSky"
 
 APP_NAME = "FireSky"
 APP_BUNDLE_IDENTIFIER = "cn.firesky.mobile"
 APP_DEVELOPER_NAME = "xyl-g"
+APP_SUBTITLE = "火烧云物理预测瘦客户端（GFS / EC / CAMS + 向日葵实况）"
+APP_LOCALIZED_DESCRIPTION = (
+    "FireSky iOS 瘦客户端：直连你的 Mac / Windows / Docker FireSky 服务端，"
+    "提供单点朝晚霞物理预测（CIE 1931 光谱云色与 16 方位观测雷达）、"
+    "区域热力图与城市排行、向日葵 9 号卫星实况、扫码一键配对与实时 SSE 进度流。"
+)
 APP_ICON_URL = (
     "https://raw.githubusercontent.com/xyl-g/FireSky/main/"
     "apps/mobile-ios/FireSkyMobile/Assets.xcassets/AppIcon.appiconset/AppIcon.png"
@@ -24,6 +32,13 @@ APP_ICON_URL = (
 APP_TINT_COLOR = "E06D3A"
 APP_CATEGORY = "weather"
 APP_MIN_OS_VERSION = "16.0"
+APP_PERMISSIONS = {
+    "entitlements": [],
+    "privacy": {
+        "NSCameraUsageDescription": "用于扫描 FireSky 桌面端或 Docker 生成的配对二维码以连接服务器。",
+        "NSLocationWhenInUseUsageDescription": "用于获取当前位置作为观测点，以便预测朝霞与晚霞。",
+    },
+}
 
 
 def _normalize_iso8601_utc(value: str | None) -> str:
@@ -57,15 +72,22 @@ def build_altstore_source(
         "name": SOURCE_NAME,
         "identifier": SOURCE_IDENTIFIER,
         "subtitle": SOURCE_SUBTITLE,
+        "description": SOURCE_DESCRIPTION,
         "sourceURL": SOURCE_URL,
+        "website": SOURCE_WEBSITE,
+        "tintColor": APP_TINT_COLOR,
         "apps": [
             {
                 "name": APP_NAME,
                 "bundleIdentifier": APP_BUNDLE_IDENTIFIER,
                 "developerName": APP_DEVELOPER_NAME,
+                "subtitle": APP_SUBTITLE,
+                "localizedDescription": APP_LOCALIZED_DESCRIPTION,
                 "iconURL": APP_ICON_URL,
                 "tintColor": APP_TINT_COLOR,
                 "category": APP_CATEGORY,
+                "screenshots": [],
+                "appPermissions": APP_PERMISSIONS,
                 "versions": [
                     {
                         "version": version,
@@ -78,6 +100,7 @@ def build_altstore_source(
                 ],
             }
         ],
+        "news": [],
     }
 
 
@@ -133,16 +156,24 @@ def run_self_test() -> None:
         assert data["name"] == "FireSky"
         assert data["identifier"] == "cn.firesky.source"
         assert data["subtitle"] == SOURCE_SUBTITLE
+        assert data["description"] == SOURCE_DESCRIPTION
         assert data["sourceURL"] == SOURCE_URL
+        assert data["website"] == SOURCE_WEBSITE
+        assert data["tintColor"] == APP_TINT_COLOR
+        assert data["news"] == []
         assert isinstance(data["apps"], list) and len(data["apps"]) == 1
 
         app = data["apps"][0]
         assert app["name"] == "FireSky"
         assert app["bundleIdentifier"] == "cn.firesky.mobile"
         assert app["developerName"] == "xyl-g"
+        assert app["subtitle"] == APP_SUBTITLE
+        assert app["localizedDescription"] == APP_LOCALIZED_DESCRIPTION
         assert app["iconURL"] == APP_ICON_URL
         assert app["tintColor"] == "E06D3A"
         assert app["category"] == "weather"
+        assert app["screenshots"] == []
+        assert app["appPermissions"] == APP_PERMISSIONS
         assert isinstance(app["versions"], list) and len(app["versions"]) == 1
 
         ver = app["versions"][0]
