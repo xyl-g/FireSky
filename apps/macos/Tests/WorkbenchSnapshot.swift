@@ -338,6 +338,31 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
             }
             let delay = env["FIRESKY_TEST_CAPTURE_DELAY"].flatMap(Double.init) ?? 4
             try? await Task.sleep(for: .seconds(min(600, max(1, delay))))
+            if let scrollStr = env["FIRESKY_TEST_SCROLL_Y"], let scrollY = Double(scrollStr), scrollY > 0,
+               let mainWindow = NSApp.windows.first(where: { $0.isVisible }),
+               let rootView = mainWindow.contentView {
+                @MainActor
+                func collectScrollViews(_ v: NSView) -> [NSScrollView] {
+                    var res: [NSScrollView] = []
+                    if let sv = v as? NSScrollView { res.append(sv) }
+                    for sub in v.subviews { res.append(contentsOf: collectScrollViews(sub)) }
+                    return res
+                }
+                let target = collectScrollViews(rootView)
+                    .compactMap { sv -> (NSScrollView, NSView, CGFloat)? in
+                        guard let doc = sv.documentView else { return nil }
+                        let overflow = doc.frame.height - sv.contentView.bounds.height
+                        return overflow > 100 ? (sv, doc, overflow) : nil
+                    }
+                    .max(by: { $0.2 < $1.2 })
+                if let (sv, doc, maxOffset) = target {
+                    let clamped = min(maxOffset, CGFloat(scrollY))
+                    let targetY = doc.isFlipped ? clamped : max(0, maxOffset - clamped)
+                    sv.contentView.scroll(to: NSPoint(x: 0, y: targetY))
+                    sv.reflectScrolledClipView(sv.contentView)
+                    try? await Task.sleep(for: .milliseconds(450))
+                }
+            }
             guard let main = NSApp.windows.first(where: { $0.isVisible }),
                   let view = (main.attachedSheet ?? main).contentView,
                   let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { NSApp.terminate(nil); return }
@@ -482,6 +507,88 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
                  "dominant_burnable_cloud_top_agl_mean_m": 6800,
                  "quality_aod550": 0.21, "selected_regime": "burnable_cloud_field", "valid": true]
             },
+            "spectral_color": spectralColorFixture(model),
+            "azimuth_radar": azimuthRadarFixture(model),
+        ]
+    }
+
+    private static func spectralColorFixture(_ model: String) -> [String: Any] {
+        let ec = model == "ec"
+        let hexes = ec
+            ? ["#F6C46A", "#F2A152", "#EC7C43", "#E85D3F", "#D94649", "#B93B5B", "#8F3561"]
+            : ["#F8D17E", "#F5B562", "#F2944B", "#F07A3E", "#E36243", "#C54F54", "#98415C"]
+        let labelsZh = ["金黄微光", "琥珀橙", "亮橙红", ec ? "绯红火烧云" : "金橙火烧云", "胭脂晚霞", "暮色紫红", "深绛蓝调"]
+        let labelsEn = ["Gold", "Amber", "Orange", ec ? "Crimson Glow" : "Golden Orange Glow", "Carmine", "Magenta", "Deep Dusk"]
+        let minutes = [55, 0, 5, 10, 15, 20, 25]
+        let hours = [16, 17, 17, 17, 17, 17, 17]
+        let stepRows: [[String: Any]] = hexes.indices.map { idx in
+            [
+                "valid_time_local": String(format: "2026-11-09T%02d:%02d:00+08:00", hours[idx], minutes[idx]),
+                "offset_minutes": (idx - 3) * 5,
+                "hex": hexes[idx],
+                "label_zh": labelsZh[idx],
+                "label_en": labelsEn[idx],
+                "luminance": 0.85 - abs(Double(idx - 3)) * 0.14,
+                "is_peak": idx == 3,
+            ]
+        }
+        return [
+            "contract": "firesky-spectral-color-v1",
+            "peak_hex": hexes[3],
+            "peak_label_zh": labelsZh[3],
+            "peak_label_en": labelsEn[3],
+            "peak_time_local": "2026-11-09T17:10:00+08:00",
+            "sky_gradient_hex": ec
+                ? ["#1A2D5E", "#6F4E7C", "#E85D3F", "#F7A05E"]
+                : ["#1E3468", "#7A5B7A", "#F07A3E", "#F8BC73"],
+            "solar_elevation_deg": ec ? -1.4 : -0.9,
+            "solar_azimuth_deg": 240.0,
+            "cloud_base_km": 4.2,
+            "aod550": ec ? 0.23 : 0.21,
+            "steps": stepRows,
+        ]
+    }
+
+    private static func azimuthRadarFixture(_ model: String) -> [String: Any] {
+        let ec = model == "ec"
+        let dirs: [(String, String)] = [
+            ("北", "N"), ("东北偏北", "NNE"), ("东北", "NE"), ("东北偏东", "ENE"),
+            ("东", "E"), ("东南偏东", "ESE"), ("东南", "SE"), ("东南偏南", "SSE"),
+            ("南", "S"), ("西南偏南", "SSW"), ("西南", "SW"), ("西南偏西", "WSW"),
+            ("西", "W"), ("西北偏西", "WNW"), ("西北", "NW"), ("西北偏北", "NNW"),
+        ]
+        let peakDeg = ec ? 247.5 : 225.0
+        let peakScore = ec ? 0.84 : 0.72
+        let bearings: [[String: Any]] = dirs.enumerated().map { idx, pair in
+            let deg = Double(idx) * 22.5
+            let diff = abs(((deg - peakDeg + 540).truncatingRemainder(dividingBy: 360)) - 180)
+            let shape = max(0.18, cos(diff * .pi / 180.0) * 0.5 + 0.5)
+            let score = min(1.0, max(0.14, peakScore * shape))
+            let canvas = min(1.0, max(0.22, score + 0.08))
+            let lowBlock = min(0.85, max(0.08, 0.42 - 0.30 * shape))
+            return [
+                "deg": deg,
+                "label_zh": pair.0,
+                "label_en": pair.1,
+                "score": (score * 1000).rounded() / 1000,
+                "canvas": (canvas * 1000).rounded() / 1000,
+                "low_block": (lowBlock * 1000).rounded() / 1000,
+            ]
+        }
+        return [
+            "contract": "firesky-azimuth-radar-v1",
+            "solar_azimuth_deg": 240.0,
+            "best_azimuth_deg": peakDeg,
+            "best_direction_zh": ec ? "西南偏西" : "西南",
+            "best_direction_en": ec ? "WSW" : "SW",
+            "best_score": peakScore,
+            "recommendation_zh": ec
+                ? "建议面向西南偏西（248°）拍摄，中高云画布条件最佳，近处低云遮挡少"
+                : "建议面向西南（225°）拍摄，中高云画布条件最佳，近处低云遮挡少",
+            "recommendation_en": ec
+                ? "Best view toward WSW (248°): optimal mid/high canvas with low near-field blocking"
+                : "Best view toward SW (225°): optimal mid/high canvas with low near-field blocking",
+            "bearings": bearings,
         ]
     }
 

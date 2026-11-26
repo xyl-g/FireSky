@@ -913,23 +913,15 @@ private struct WorkSpectralAndRadarRow: View {
     }
 
     var body: some View {
-        if hasSpectral && hasRadar {
-            ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 12) {
+        if hasSpectral || hasRadar {
+            VStack(spacing: 12) {
+                if hasSpectral {
                     SpectralColorBannerView(comparison: comparison, selectedModel: $selectedModel)
-                        .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                    AzimuthRadarView(comparison: comparison, selectedModel: $selectedModel)
-                        .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
                 }
-                VStack(spacing: 12) {
-                    SpectralColorBannerView(comparison: comparison, selectedModel: $selectedModel)
+                if hasRadar {
                     AzimuthRadarView(comparison: comparison, selectedModel: $selectedModel)
                 }
             }
-        } else if hasSpectral {
-            SpectralColorBannerView(comparison: comparison, selectedModel: $selectedModel)
-        } else if hasRadar {
-            AzimuthRadarView(comparison: comparison, selectedModel: $selectedModel)
         }
     }
 }
@@ -1326,13 +1318,14 @@ private struct AzimuthRadarView: View {
     }
 
     private func topBearingsList(_ items: [BearingItem]) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 7) {
             ForEach(items) { item in
-                VStack(alignment: .leading, spacing: 2) {
-                    HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 2.5) {
+                    HStack(spacing: 8) {
                         Text(item.label)
-                            .fireSkyFont(size: 10, weight: .semibold, relativeTo: .caption)
-                            .frame(width: 34, alignment: .leading)
+                            .fireSkyFont(size: 11, weight: .semibold, relativeTo: .caption)
+                            .lineLimit(1)
+                            .frame(width: 54, alignment: .leading)
                         GeometryReader { geo in
                             ZStack(alignment: .leading) {
                                 Capsule().fill(Color.primary.opacity(0.08))
@@ -1340,17 +1333,18 @@ private struct AzimuthRadarView: View {
                                     .frame(width: max(4, geo.size.width * item.score))
                             }
                         }
-                        .frame(height: 5)
+                        .frame(minWidth: 96, maxWidth: 168, minHeight: 6, maxHeight: 6)
                         Text(String(format: "%.0f%%", item.score * 100.0))
-                            .fireSkyFont(size: 10, weight: .medium, relativeTo: .caption)
+                            .fireSkyFont(size: 11, weight: .medium, relativeTo: .caption)
                             .monospacedDigit()
-                            .frame(width: 30, alignment: .trailing)
+                            .frame(width: 34, alignment: .trailing)
                     }
                     Text(String(format: L10n.text("云幕 %.0f%% · 近场低云 %.0f%%", "Canvas %.0f%% · Low %.0f%%"),
                                 item.canvas * 100.0, item.lowBlock * 100.0))
-                        .fireSkyFont(size: 9, relativeTo: .caption)
+                        .fireSkyFont(size: 10, relativeTo: .caption)
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
+                        .lineLimit(1)
                 }
             }
         }
