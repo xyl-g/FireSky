@@ -121,7 +121,7 @@ fn directory(
         if kind.is_dir() {
             if matches!(
                 path.extension().and_then(|s| s.to_str()),
-                Some("grib" | "grib2")
+                Some("grib" | "grib2" | "fsopt")
             ) {
                 return Err("inventory GRIB entries must resolve to regular files".into());
             }
@@ -129,7 +129,7 @@ fn directory(
             continue;
         }
         let suffix = path.extension().and_then(|s| s.to_str());
-        if !matches!(suffix, Some("grib" | "grib2")) {
+        if !matches!(suffix, Some("grib" | "grib2" | "fsopt")) {
             continue;
         }
         let grib2 = suffix == Some("grib2");
@@ -367,12 +367,18 @@ fn area(
         ])
     })();
     let value = cached.or_else(|| {
-        decoder
-            .get_or_insert_with(EcCodes::load)
-            .as_ref()
-            .ok()?
-            .first_area(&entry.path)
-            .ok()
+        if crate::geos_fp::is_fsopt_file(&entry.path) {
+            crate::geos_fp::read_header(&entry.path)
+                .ok()
+                .map(|(h, _, _)| h.bounds)
+        } else {
+            decoder
+                .get_or_insert_with(EcCodes::load)
+                .as_ref()
+                .ok()?
+                .first_area(&entry.path)
+                .ok()
+        }
     })?;
     check(cancel).ok()?;
     let after = fs::metadata(&entry.path).ok()?;
@@ -488,10 +494,13 @@ pub(crate) fn cycle_files(
     walk(root, &mut files, cancel)?;
     static EC_KEY: OnceLock<Regex> = OnceLock::new();
     static CAMS_KEY: OnceLock<Regex> = OnceLock::new();
+    static GEOS_KEY: OnceLock<Regex> = OnceLock::new();
     let ec = EC_KEY
         .get_or_init(|| Regex::new(r"^ifs-basic-v2-([0-9]{10})-f([0-9]{3})\.grib2$").unwrap());
     let cams = CAMS_KEY.get_or_init(||Regex::new(
         r"^cams-optics-v2-([0-9]{4})-([0-9]{2})-([0-9]{2})-([0-9]{4})-([0-9]{3})-([a-z0-9]+)\.grib$").unwrap());
+    let geos = GEOS_KEY.get_or_init(||Regex::new(
+        r"^geosfp-optics-v1-([0-9]{4})-([0-9]{2})-([0-9]{2})-([0-9]{4})-([0-9]{3})-([a-z0-9]+)\.fsopt$").unwrap());
     let mut groups = BTreeMap::<String, Vec<PathBuf>>::new();
     for entry in files {
         let name = entry
@@ -504,6 +513,7 @@ pub(crate) fn cycle_files(
             Source::Ecmwf => ec.captures(name).map(|m| m[1].to_owned()),
             Source::Cams => cams
                 .captures(name)
+                .or_else(|| geos.captures(name))
                 .map(|m| format!("{}-{}-{} {}", &m[1], &m[2], &m[3], &m[4])),
         };
         groups
@@ -531,10 +541,13 @@ fn aggregate(
     let mut decoder = None;
     static EC: OnceLock<Regex> = OnceLock::new();
     static CAMS: OnceLock<Regex> = OnceLock::new();
+    static GEOS: OnceLock<Regex> = OnceLock::new();
     let ec =
         EC.get_or_init(|| Regex::new(r"^ifs-basic-v2-([0-9]{10})-f([0-9]{3})\.grib2$").unwrap());
     let cams = CAMS.get_or_init(||Regex::new(
         r"^cams-optics-v2-([0-9]{4})-([0-9]{2})-([0-9]{2})-([0-9]{4})-([0-9]{3})-([a-z0-9]+)\.grib$").unwrap());
+    let geos = GEOS.get_or_init(||Regex::new(
+        r"^geosfp-optics-v1-([0-9]{4})-([0-9]{2})-([0-9]{2})-([0-9]{4})-([0-9]{3})-([a-z0-9]+)\.fsopt$").unwrap());
     for entry in files {
         check(cancel)?;
         let name = entry
@@ -563,7 +576,7 @@ fn aggregate(
                 (k, m[2].parse::<i64>().unwrap(), label)
             }),
             Source::Cams if !entry.grib2 => {
-                cams.captures(name).and_then(|m| {
+                cams.captures(name).or_else(|| geos.captures(name)).and_then(|m| {
                     let key = m[6].to_owned();
                     // Inventory includes an area result even for an empty matching file.
                     if include_areas && !area_bounds.contains_key(&key) {
@@ -729,5 +742,42 @@ mod tests {
             .unwrap_err()
             .contains("cancelled"));
         assert!(!config.gfs_cache_dir.exists());
+    }
+
+    #[test]
+    fn inventory_and_cycle_files_include_geos_fp_fsopt() {
+        let root = tempfile::tempdir().unwrap();
+        let cams = root.path().join("cams/2026-11-26/00Z");
+        fs::create_dir_all(&cams).unwrap();
+        let fsopt = cams.join("geosfp-optics-v1-2026-11-26-0000-003-testarea.fsopt");
+        crate::geos_fp::write_fsopt(
+            &fsopt,
+            &crate::geos_fp::FsoptHeader {
+                contract: "firesky-optics-v1".into(),
+                source: "geos-fp".into(),
+                valid_time_utc: "2026-11-26T03:00:00+00:00".into(),
+                run_time_utc: "2026-11-26T00:00:00+00:00".into(),
+                lead_hours: 3,
+                n_lat: 2,
+                n_lon: 2,
+                pressure_levels: crate::native::cams::LEVELS.to_vec(),
+                bounds: [32.0, 118.0, 28.0, 122.0],
+            },
+            &[28.0, 32.0],
+            &[118.0, 122.0],
+            &[0.2; 4],
+            &vec![1e-5; 4 * 11],
+        )
+        .unwrap();
+
+        let (snapshot, paths) =
+            local_snapshot("cams", &root.path().join("cams"), &AtomicBool::new(false)).unwrap();
+        assert_eq!(paths.len(), 1);
+        assert_eq!(snapshot["file_count"], 1);
+        assert_eq!(snapshot["latest_cycle"], "2026-11-26 00Z");
+        assert!(snapshot["cycles"]["2026-11-26 0000"].is_object());
+
+        let grouped = cycle_files("cams", &root.path().join("cams"), &AtomicBool::new(false)).unwrap();
+        assert_eq!(grouped["2026-11-26 0000"], vec![fsopt]);
     }
 }

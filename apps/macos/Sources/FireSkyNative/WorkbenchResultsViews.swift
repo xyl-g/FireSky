@@ -71,8 +71,12 @@ private struct WorkFirstRunGuide: View {
                     store.editingCoordinates.toggle()
                 }
                 Step(number: "03", symbol: "key.horizontal", title: L10n.t("数据源"),
-                     detail: L10n.t(store.camsConfigured ? "CAMS 已配置" : "CAMS 可选，仍可使用本地数据"),
-                     action: L10n.t(store.camsConfigured ? "查看配置" : "配置 CAMS")) {
+                     detail: store.usesGeosFP
+                        ? L10n.t("GEOS-FP · NASA 免密钥")
+                        : L10n.t(store.camsConfigured ? "CAMS 已配置" : "CAMS 可选，仍可使用本地数据"),
+                     action: store.usesGeosFP
+                        ? L10n.t("切换来源")
+                        : L10n.t(store.camsConfigured ? "查看配置" : "配置 CAMS")) {
                     store.openCAMSSetup()
                 }
                 Step(number: "04", symbol: "arrow.down.circle", title: L10n.t("预检与下载"),
@@ -530,7 +534,7 @@ struct WorkHeroView: View {
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
-                    .help(modelSourceNote(model))
+                    .help(modelSourceNote(model, usesGeosFP: store.usesGeosFP))
                     .accessibilityElement(children: .combine)
                 }
             }
@@ -595,7 +599,7 @@ struct WorkHeroView: View {
                 }
             }
             .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
-            Text(modelSourceNote(model))
+            Text(modelSourceNote(model, usesGeosFP: store.usesGeosFP))
                 .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             if let message = comparison.error(model) {
@@ -3022,8 +3026,15 @@ private func cycleLabel(_ model: String, _ report: JSONObject?) -> String? {
 }
 
 /// One-line model source note, mirroring the Web source description.
-private func modelSourceNote(_ model: String) -> String {
-    model == "ec"
+private func modelSourceNote(_ model: String, usesGeosFP: Bool = false) -> String {
+    if usesGeosFP {
+        return model == "ec"
+            ? L10n.text("EC 公共 Open Data · TCC + 压力层 RH 云柱代理 · 不含 GFS 云场 · GEOS-FP 气溶胶",
+                        "EC public Open Data · TCC + pressure-level RH cloud-column proxy · no GFS cloud field · GEOS-FP aerosol")
+            : L10n.text("GFS 0.25° 全量云场评分 · GEOS-FP 气溶胶",
+                        "GFS 0.25° full cloud-field scoring · GEOS-FP aerosol")
+    }
+    return model == "ec"
         ? L10n.text("EC 公共 Open Data · TCC + 压力层 RH 云柱代理 · 不含 GFS 云场 · CAMS 气溶胶",
                     "EC public Open Data · TCC + pressure-level RH cloud-column proxy · no GFS cloud field · CAMS aerosol")
         : L10n.text("GFS 0.25° 全量云场评分 · CAMS 气溶胶",

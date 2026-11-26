@@ -271,10 +271,15 @@ public sealed partial class MainWindow
         var report = ModelReport(model);
         if (report == null) return model == "ec" ? L10n.T("EC：未预测") : L10n.T("GFS：未预测");
         var source = Text(report, "model_source");
+        var isGeos = PointAod.Source == "GEOS-FP" || aerosolSource == "geos-fp";
         return source switch
         {
-            "ec" => L10n.T("EC：TCC 总云 + PL-RH 云柱代理；气溶胶来自 CAMS 环境读数"),
-            _ => L10n.T("GFS：全量云场与可烧量来源；气溶胶来自 CAMS 环境读数"),
+            "ec" => isGeos
+                ? L10n.T("EC：TCC 总云 + PL-RH 云柱代理；气溶胶来自 GEOS-FP 环境读数")
+                : L10n.T("EC：TCC 总云 + PL-RH 云柱代理；气溶胶来自 CAMS 环境读数"),
+            _ => isGeos
+                ? L10n.T("GFS：全量云场与可烧量来源；气溶胶来自 GEOS-FP 环境读数")
+                : L10n.T("GFS：全量云场与可烧量来源；气溶胶来自 CAMS 环境读数"),
         };
     }
 
@@ -285,7 +290,8 @@ public sealed partial class MainWindow
         public bool Available => Values.Length > 0;
         public string Source => Sources.Length == 0 ? L10n.T("暂无来源")
             : Sources.All(source => source == "CAMS") ? "CAMS"
-            : Sources.All(source => source != "CAMS") ? L10n.T("其他来源") : L10n.T("混合来源");
+            : Sources.All(source => source == "GEOS-FP") ? "GEOS-FP"
+            : Sources.All(source => source != "CAMS" && source != "GEOS-FP") ? L10n.T("其他来源") : L10n.T("混合来源");
         public string Value => !Available ? "—"
             : Values.Min().ToString("0.00", CultureInfo.InvariantCulture) == Values.Max().ToString("0.00", CultureInfo.InvariantCulture)
                 ? Values.Min().ToString("0.00", CultureInfo.InvariantCulture)
@@ -304,15 +310,21 @@ public sealed partial class MainWindow
             if (report?["aerosol"] is not JsonObject aerosol) continue;
             if (DoubleValue(aerosol["aod550"]) is not { } number || number < 0) continue;
             var rawSource = Text(aerosol, "source");
-            var cams = rawSource.StartsWith("cams", StringComparison.OrdinalIgnoreCase)
-                || Text(aerosol, "quality") == "cams";
+            var quality = Text(aerosol, "quality");
+            var label = rawSource.StartsWith("geos", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(quality, "geos-fp", StringComparison.OrdinalIgnoreCase)
+                ? "GEOS-FP"
+                : rawSource.StartsWith("cams", StringComparison.OrdinalIgnoreCase)
+                    || string.Equals(quality, "cams", StringComparison.OrdinalIgnoreCase)
+                    ? "CAMS"
+                    : L10n.T("其他来源");
             values.Add(number);
-            sources.Add(cams ? "CAMS" : L10n.T("其他来源"));
+            sources.Add(label);
             var time = Text(report, "anchor_local") is { Length: > 0 } anchor ? anchor : L10n.T("时刻未提供");
             details.Add($"{time} · {number:0.0000} · {rawSource}");
         }
         return new AodSummary([.. values], [.. sources],
-            details.Count == 0 ? L10n.T("等待 CAMS 环境读取") : string.Join("\n", details.Distinct().OrderBy(v => v)));
+            details.Count == 0 ? L10n.T("等待气溶胶环境读取") : string.Join("\n", details.Distinct().OrderBy(v => v)));
     }
 
     private AodSummary PointAod => AodReading([ModelReport("gfs"), ModelReport("ec")]);

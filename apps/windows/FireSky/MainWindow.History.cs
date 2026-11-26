@@ -560,6 +560,11 @@ public sealed partial class MainWindow
             ecmwfSource = source;
             EcmwfSourcePicker.SelectedIndex = source switch { "aws" => 1, "google" => 2, _ => 0 };
         }
+        if (StringOrNull(payload["aerosol_source"]) is { } aerosol && aerosol is "cams" or "geos-fp")
+        {
+            aerosolSource = aerosol;
+            AerosolSourcePicker.SelectedIndex = aerosol == "geos-fp" ? 1 : 0;
+        }
         if (kind == "regional")
         {
             selectedRegions.Clear();

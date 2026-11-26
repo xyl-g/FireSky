@@ -202,12 +202,18 @@ pub(crate) fn materialize(
     let duration = core["quality_components"]["duration_minutes"]
         .as_f64()
         .map(|v| v.round_ties_even() as i64);
+    let aerosol_quality = core["aerosol"]["quality"].as_str().unwrap_or("cams");
+    let aerosol_note = if aerosol_quality == "geos-fp" {
+        "每个事件评估时刻都由 shared native scorer 使用对应 NASA GEOS-FP 11 层垂直消光廓线的 3 小时 bracket；未找到完整廓线会直接拒绝质量发布。".into()
+    } else {
+        "每个事件评估时刻都由 shared native scorer 使用对应 CAMS aerext532 11 层垂直 profile 的 3 小时 bracket；未找到完整 CAMS profile 会直接拒绝质量发布。".into()
+    };
     let mut summary = vec![
         "ECMWF IFS basic 是独立云模式数值预测，不读取 GFS 或实况缓存。".to_owned(),
         format!("EC cycle {}，评估 {} 个事件时刻。",cycle.format("%Y-%m-%d %H:%MZ"),steps.len()),
         "当前 public 合同使用 TCC + PL RH 云柱代理；HCC/MCC/LCC 和 model-level 云水/云冰不可用，结果属于 EC-basic proxy。".into(),
         "EC surface z 按 geopotential m2/s2 / 9.80665 转为地形米；原始 z 和 native 网格保留在输入缓存/张量中。".into(),
-        "每个事件评估时刻都由 shared native scorer 使用对应 CAMS aerext532 11 层垂直 profile 的 3 小时 bracket；未找到完整 CAMS profile 会直接拒绝质量发布。".into(),
+        aerosol_note,
         "quality_index 来自 native forward-field scorer；本路径未调用 legacy assess_timestep。".into(),
         "confidence_score=0.42 仅表示输入覆盖诊断，不是统计置信度。".into(),
     ];
@@ -227,7 +233,7 @@ pub(crate) fn materialize(
         "target_date":request.target_date,"timezone_name":request.timezone_name,"anchor_local":events["anchor_time_local"],
         "cycle_time_utc":iso(cycle),"model_cycles":{"ec":iso(cycle)},
         "aerosol":{"aod550":core["aerosol"]["aod550"],"source":core["aerosol"]["source"],
-            "quality":"cams","observer_lat":request.point.lat,"observer_lon":request.point.lon,
+            "quality":aerosol_quality,"observer_lat":request.point.lat,"observer_lon":request.point.lon,
             "path_azimuth_deg":null,"path_samples":[],"pm2_5_ug_m3":null,"pm10_ug_m3":null,"particulate_source":null},
         "overall_score":core["overall_score"],"burn_score":core["peak_quality_index"].as_f64().unwrap()/2.5,
         "duration_minutes":duration,"potential_duration_minutes":duration,"confidence_score":0.42,

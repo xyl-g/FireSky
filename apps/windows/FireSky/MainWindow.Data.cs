@@ -64,7 +64,7 @@ public sealed partial class MainWindow
         if (pendingDataDelete == null || dataDeletePreview == null) return;
         var scope = pendingDataDelete;
         var source = Text(scope, "source");
-        var title = source == "ecmwf" ? "EC" : source.ToUpperInvariant();
+        var title = source == "ecmwf" ? "EC" : source == "geos-fp" ? "GEOS-FP" : source.ToUpperInvariant();
         var files = (long?)DoubleValue(dataDeletePreview["file_count"]) ?? 0;
         var mb = DoubleValue(dataDeletePreview["total_mb"]) ?? 0;
         var protectedCount = (dataDeletePreview["protected"] as JsonArray)?.Count ?? 0;
@@ -165,7 +165,7 @@ public sealed partial class MainWindow
             {
                 if (item is not JsonObject dataset) continue;
                 var source = Text(dataset, "source");
-                var title = source == "ecmwf" ? "EC" : source.ToUpperInvariant();
+                var title = source == "ecmwf" ? "EC" : source == "geos-fp" ? "GEOS-FP" : source.ToUpperInvariant();
                 var files = (long?)DoubleValue(dataset["total_file_count"]) ?? 0;
                 var storageMb = DoubleValue(dataset["total_storage_mb"]) ?? 0;
                 var stack = new StackPanel { Spacing = 12 };

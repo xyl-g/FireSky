@@ -211,9 +211,31 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         didSet {
             UserDefaults.standard.set(ecmwfSource, forKey: "ecmwfSource")
             downloadProbeDate = nil
-            downloadProbeRows = DownloadProbeRow.initial
+            downloadProbeRows = initialProbes()
             downloadProbeError = ""
         }
+    }
+    @Published var aerosolSource = "cams" {
+        didSet {
+            guard ["cams", "geos-fp"].contains(aerosolSource) else {
+                aerosolSource = "cams"
+                return
+            }
+            UserDefaults.standard.set(aerosolSource, forKey: "aerosolSource")
+            downloadProbeDate = nil
+            downloadProbeRows = initialProbes()
+            downloadProbeError = ""
+            if aerosolSource == "geos-fp" {
+                showCAMSReminder = false
+            }
+        }
+    }
+    var usesGeosFP: Bool { aerosolSource == "geos-fp" }
+    var aerosolSourceLabel: String {
+        usesGeosFP ? "GEOS-FP (NASA 免密钥)" : "CAMS · Copernicus ADS"
+    }
+    func initialProbes() -> [DownloadProbeRow] {
+        DownloadProbeRow.initial(aerosolSource: aerosolSource)
     }
     /// 海拔来源三档（v1.1.1 引擎契约）：auto = HTTP 优先、SRTM 兜底；
     /// http = 仅 open-meteo；srtm = 本地时区 + SRTM 瓦片。所有 metadata
@@ -462,6 +484,10 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         engineBinary = env["FIRESKY_RUST_ENGINE_BIN"] ?? defaults.string(forKey: "engineBinary") ?? ""
         appearance = env["FIRESKY_NATIVE_APPEARANCE"] ?? defaults.string(forKey: "appearance") ?? "system"
         ecmwfSource = defaults.string(forKey: "ecmwfSource") ?? "ecmwf"
+        let savedAerosol = defaults.string(forKey: "aerosolSource") ?? "cams"
+        let resolvedAerosol = ["cams", "geos-fp"].contains(savedAerosol) ? savedAerosol : "cams"
+        aerosolSource = resolvedAerosol
+        downloadProbeRows = DownloadProbeRow.initial(aerosolSource: resolvedAerosol)
         let savedDefaultRegions = defaults.stringArray(forKey: "defaultRegionalPreset") ?? ["china"]
         let resolvedDefaultRegions = savedDefaultRegions.isEmpty ? ["china"] : savedDefaultRegions
         defaultRegionalPreset = resolvedDefaultRegions
@@ -505,7 +531,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     func connect() async {
         guard !online, !busy, !probingDownloads else { return }
         online = false
-        downloadProbeRows = DownloadProbeRow.initial
+        downloadProbeRows = initialProbes()
         downloadProbeDate = nil
         downloadProbeError = ""
         do {
@@ -531,7 +557,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 let snapshotSmoke =
                     ProcessInfo.processInfo.environment["FIRESKY_NATIVE_SNAPSHOT"] != nil
                 showCAMSReminder =
-                    !snapshotSmoke && camsConfiguration["configured"] as? Bool != true
+                    !snapshotSmoke && !usesGeosFP && camsConfiguration["configured"] as? Bool != true
             }
             await loadRetentionSettings()
             await loadDataSyncSettings()
@@ -677,6 +703,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             "phenomenon": phenomenon, "model_source": "both", "workers": 1,
             "forecast_mode": "model", "satellite_source": "off",
             "ecmwf_source": ecmwfSource,
+            "aerosol_source": aerosolSource,
             "elevation_source": elevationSource,
         ]
         if page == .nowcast {
@@ -768,7 +795,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                     verified: verified,
                     latest: latest,
                     missing: $0["missing_count"] as? Int ?? 0,
-                    policy: $0["policy"] as? String ?? "")
+                    policy: $0["policy"] as? String ?? "",
+                    aerosolSource: $0["aerosol_source"] as? String ?? "")
         }
         status = ready ? "本次数据已下载" : "缺少 " + rows.filter { !$0.ready }.map(\.title).joined(separator: "、")
     }
@@ -1499,6 +1527,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         }
         if let value = payload["phenomenon"] as? String { phenomenon = value }
         if let value = payload["ecmwf_source"] as? String { ecmwfSource = value }
+        if let value = payload["aerosol_source"] as? String, ["cams", "geos-fp"].contains(value) { aerosolSource = value }
         if kind == .regional {
             if let model = payload["model_source"] as? String, ["gfs", "ec"].contains(model) {
                 regionalModel = model
@@ -1957,8 +1986,9 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 "interval_minutes": dataSyncInteger(dataSyncInterval),
                 "anchor_region": (dataSyncAnchor.isEmpty ? NSNull() : dataSyncAnchor) as Any,
                 "lead_horizon_hours": dataSyncInteger(dataSyncLeadHorizon),
-                // EC 下载源复用现有 ecmwfSource（设计 11.1）。
+                // EC 下载源与气溶胶源复用现有配置。
                 "ecmwf_source": ecmwfSource,
+                "aerosol_source": aerosolSource,
             ],
         ]
         Task {
@@ -2216,7 +2246,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     }
 
     private func dataSyncRoundSummary(_ response: JSONObject) -> String {
-        let labels = ["cams": "CAMS", "gfs": "GFS", "ec": "EC"]
+        let labels = ["cams": usesGeosFP ? "GEOS-FP" : "CAMS", "gfs": "GFS", "ec": "EC"]
         let names = ["cams", "gfs", "ec"]
         let parts = names.compactMap { name -> String? in
             guard let source = response["sources"] as? JSONObject, let row = source[name] as? JSONObject
@@ -2337,7 +2367,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         cancellingDownloadProbe = false
         downloadProbeDate = nil
         downloadProbeError = ""
-        downloadProbeRows = DownloadProbeRow.initial
+        downloadProbeRows = initialProbes()
         downloadProbeTask = Task { [self] in
             defer {
                 probingDownloads = false
@@ -2345,7 +2375,8 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
                 downloadProbeTask = nil
             }
             do {
-                let response = try await engine.call("network_probe", ["ecmwf_source": ecmwfSource],
+                let response = try await engine.call("network_probe",
+                                                     ["ecmwf_source": ecmwfSource, "aerosol_source": aerosolSource],
                                                      progress: { [weak self] event in
                     guard let self, !self.cancellingDownloadProbe,
                           let json = event["probe"] as? JSONObject,
@@ -2519,6 +2550,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         if !sameString("target_date", targetDateLabel) { return true }
         if !sameString("phenomenon", phenomenon) { return true }
         if !sameString("ecmwf_source", ecmwfSource) { return true }
+        if !sameString("aerosol_source", aerosolSource) { return true }
         if resultKind == .regional {
             if !sameString("model_source", regionalModel) { return true }
             if let regions = params["regions"] as? [String] {

@@ -357,8 +357,10 @@ fn parse_cycle(path: &Path, source: &str) -> Result<Option<DateTime<Utc>>, Strin
             .transpose();
     }
     static CAMS: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
-    let re = CAMS
-        .get_or_init(|| Regex::new(r"^cams-optics-v2-(\d{4}-\d{2}-\d{2})-(\d{4})-\d{3}-").unwrap());
+    let re = CAMS.get_or_init(|| {
+        Regex::new(r"^(?:cams-optics-v2|geosfp-optics-v1)-(\d{4}-\d{2}-\d{2})-(\d{4})-\d{3}-")
+            .unwrap()
+    });
     re.captures(name)
         .map(|captures| {
             NaiveDateTime::parse_from_str(
@@ -376,6 +378,7 @@ pub(crate) fn related_files(path: &Path, source: &str, all: &[PathBuf]) -> Vec<P
     let prefix = stem
         .strip_suffix(".grib2")
         .or_else(|| stem.strip_suffix(".grib"))
+        .or_else(|| stem.strip_suffix(".fsopt"))
         .unwrap_or(stem);
     let parent = path.parent().unwrap_or(Path::new(""));
     all.iter()
@@ -405,7 +408,7 @@ fn model_cycles(root: &Path, source: &str, keep: usize) -> Result<ResultSummary,
     for path in &files {
         if !matches!(
             path.extension().and_then(|v| v.to_str()),
-            Some("grib" | "grib2")
+            Some("grib" | "grib2" | "fsopt")
         ) {
             continue;
         }
@@ -1069,13 +1072,16 @@ mod tests {
         fs::create_dir_all(&cache).unwrap();
         let old = cache.join("cams-optics-v2-2026-11-21-1200-084-1c0e9c4c8ed5.grib");
         let new = cache.join("cams-optics-v2-2026-11-22-0000-084-1c0e9c4c8ed5.grib");
+        let geos_old = cache.join("geosfp-optics-v1-2026-11-21-0000-003-1c0e9c4c8ed5.fsopt");
         fs::write(&old, b"old-grib").unwrap();
         fs::write(&new, b"new-grib").unwrap();
+        fs::write(&geos_old, b"old-fsopt").unwrap();
         let result = model_cycles(&cache, "cams", 1).unwrap();
         assert!(result.failed.is_empty(), "unexpected failures: {:?}", result.failed);
         assert!(result.deferred.is_empty());
-        assert_eq!(result.removed.len(), 1);
+        assert_eq!(result.removed.len(), 2);
         assert!(!old.exists());
+        assert!(!geos_old.exists());
         assert!(new.exists());
     }
 

@@ -8,7 +8,9 @@ struct DownloadProbeView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text("下载连通性").font(.headline)
-                    Text("先验证这台电脑能否真正收到 GFS、EC、CAMS 数据，再开始预测。")
+                    Text(store.usesGeosFP
+                         ? "先验证这台电脑能否真正收到 GFS、EC、GEOS-FP 数据，再开始预测。"
+                         : "先验证这台电脑能否真正收到 GFS、EC、CAMS 数据，再开始预测。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -20,7 +22,9 @@ struct DownloadProbeView: View {
                         .disabled(!store.online || store.busy || store.savingCAMS)
                 }
             }
-            Text("当前使用 EC \(store.ecmwfSourceLabel)。GFS 与 CAMS 使用各自官方入口。")
+            Text(store.usesGeosFP
+                 ? "当前使用 EC \(store.ecmwfSourceLabel)，AOD 使用 NASA GEOS-FP（免密钥）。GFS 使用 NOAA NOMADS。"
+                 : "当前使用 EC \(store.ecmwfSourceLabel)。GFS 与 CAMS 使用各自官方入口。")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             ForEach(store.downloadProbeRows) { row in
@@ -54,7 +58,9 @@ struct DownloadProbeView: View {
             }
             HStack {
                 if store.probingDownloads {
-                    Text(store.cancellingDownloadProbe ? "正在停止探测" : "正在验证真实数据下载 · CAMS 等待上限约 90 秒")
+                    Text(store.cancellingDownloadProbe
+                         ? "正在停止探测"
+                         : (store.usesGeosFP ? "正在验证真实数据下载 · GEOS-FP OPeNDAP" : "正在验证真实数据下载 · CAMS 等待上限约 90 秒"))
                 } else if let checked = store.downloadProbeDate {
                     Text(checked, format: .dateTime.hour().minute().second())
                     Text("· \(store.downloadProbeRows.filter(\.passed).count)/3 项下载验证通过")

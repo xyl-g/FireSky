@@ -373,7 +373,7 @@ pub fn execute(params: Params) -> Result<Value, String> {
     }
     let area = aerosol_area(point, radius)?;
     let areas = cams_data::split_areas(area)?;
-    let request = json!({
+    let mut request = json!({
         "target_date": date,
         "timezone_name": timezone_name,
         "lat": point.lat,
@@ -387,6 +387,9 @@ pub fn execute(params: Params) -> Result<Value, String> {
         "reference_time_utc": iso(reference),
         "_gfs_cycle_override": iso(cycle),
     });
+    if let Some(source) = payload["aerosol_source"].as_str() {
+        request["aerosol_source"] = json!(crate::cams_cache::AerosolSource::parse(Some(source))?.as_str());
+    }
     Ok(json!({
         "contract": "rust-desktop-nowcast-context-v1",
         "runtime_python_used": false,

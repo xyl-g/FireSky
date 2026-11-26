@@ -76,6 +76,14 @@ fn source_label(name: &str) -> &'static str {
     }
 }
 
+fn aerosol_label(settings: &Settings) -> &'static str {
+    if settings.aerosol_source.as_deref() == Some("geos-fp") {
+        "GEOS-FP"
+    } else {
+        "CAMS"
+    }
+}
+
 /// User-facing round status for progress messages (F3 localization).
 fn sync_status_label(status: &str) -> &'static str {
     match status {
@@ -119,6 +127,7 @@ pub struct Settings {
     pub anchor_region: Option<String>,
     pub lead_horizon_hours: Option<u32>,
     pub ecmwf_source: Option<String>,
+    pub aerosol_source: Option<String>,
 }
 
 fn settings_path(workspace: &Path) -> PathBuf {
@@ -171,6 +180,11 @@ fn validate(settings: &Settings) -> Result<(), String> {
     if let Some(source) = &settings.ecmwf_source {
         if !["aws", "google", "ecmwf"].contains(&source.as_str()) {
             return Err("ecmwf_source must be ecmwf, aws or google".into());
+        }
+    }
+    if let Some(source) = &settings.aerosol_source {
+        if !["cams", "geos-fp"].contains(&source.as_str()) {
+            return Err("aerosol_source must be cams or geos-fp".into());
         }
     }
     if settings.enabled {
@@ -819,12 +833,14 @@ fn probe_publications(
     sources: &[&str],
     now_utc: Option<&str>,
     force_refresh: bool,
+    aerosol_source: Option<&str>,
 ) -> Result<Map<String, Value>, String> {
     let params: desktop_publications::Params = serde_json::from_value(json!({
         "sources": sources.iter().map(|name| publication_name(name)).collect::<Vec<_>>(),
         "now_utc": now_utc,
         "timeout_seconds": PROBE_TIMEOUT_SECONDS,
         "force_refresh": force_refresh,
+        "aerosol_source": aerosol_source,
     }))
     .map_err(|e| e.to_string())?;
     let value = desktop_publications::execute(params)?;
@@ -870,7 +886,7 @@ pub fn due(workspace: &Path, busy: bool, now_utc: Option<&str>) -> Result<Value,
         settings
             .interval_minutes
             .ok_or("data sync interval is not configured")?;
-        probe_publications(&probe_names, now_utc, false)?
+        probe_publications(&probe_names, now_utc, false, settings.aerosol_source.as_deref())?
     };
     let now = match now_utc {
         Some(value) => time_contract::parse_utc(value)?,
@@ -1084,6 +1100,17 @@ fn gfs_sync_bbox(anchor: &str) -> Result<[f64; 4], String> {
     )
 }
 
+/// Footprint for GEOS-FP sync: padded GFS point-domain envelope split across dateline if needed.
+fn geos_fp_sync_areas(anchor: &str) -> Result<Vec<[f64; 4]>, String> {
+    let [west, east, north, south] = gfs_sync_bbox(anchor)?;
+    cams_data::split_areas([
+        (north + 0.5).min(90.0),
+        west - 0.5,
+        (south - 0.5).max(-90.0),
+        east + 0.5,
+    ])
+}
+
 /// The footprint a successful round with these settings would produce. Used
 /// both to stamp state after a sync and to detect stale `current` states.
 fn expected_fingerprint(name: &str, settings: &Settings) -> Result<String, String> {
@@ -1099,6 +1126,13 @@ fn expected_fingerprint(name: &str, settings: &Settings) -> Result<String, Strin
             Ok(format!(
                 "v{COVERAGE_VERSION}:gfs:{:?}:0-{horizon}",
                 gfs_sync_bbox(anchor)?
+            ))
+        }
+        "cams" if settings.aerosol_source.as_deref() == Some("geos-fp") => {
+            let horizon = settings.lead_horizon_hours.unwrap_or(120).min(120);
+            Ok(format!(
+                "v{COVERAGE_VERSION}:geos-fp:{:?}:0-{horizon}",
+                geos_fp_sync_areas(anchor)?
             ))
         }
         "cams" => Ok(format!(
@@ -1150,9 +1184,66 @@ fn sync_cams(
     progress: &(dyn Fn(Value) -> Result<(), String> + Sync),
     anchor: &str,
     cycle: DateTime<Utc>,
+    aerosol_source: &str,
+    horizon: u32,
     cancel: &AtomicBool,
 ) -> Result<Value, String> {
     check(cancel)?;
+    if aerosol_source == "geos-fp" {
+        let areas = geos_fp_sync_areas(anchor)?;
+        let cap = if horizon == 0 { 120 } else { horizon.min(120) };
+        let targets: Vec<String> = (0..=cap)
+            .step_by(3)
+            .map(|h| {
+                time_contract::checked(
+                    cycle
+                        .checked_add_signed(Duration::hours(i64::from(h)))
+                        .ok_or("GEOS-FP sync target overflow")?,
+                )
+                .map(time_contract::iso)
+            })
+            .collect::<Result<_, _>>()?;
+        let mut all_files = Vec::new();
+        let mut cache_hits = 0usize;
+        for area in &areas {
+            check(cancel)?;
+            let result = cams_data::execute_cancellable(
+                cams_data::Params {
+                    operation: "resolve".into(),
+                    cache_dir: context.cams_cache_dir.clone(),
+                    area: json!(area),
+                    target_utcs: targets.clone(),
+                    target_utc: None,
+                    config: crate::ads::Config::default(),
+                    allow_download: true,
+                    require_exact_valid_time: true,
+                    refresh_before_cycle: Some(time_contract::iso(cycle)),
+                    all_leads: false,
+                    model_bbox: None,
+                    aerosol_source: Some("geos-fp".into()),
+                },
+                cancel,
+                Some(progress),
+            )?;
+            let missing = &result["missing_valid_times"];
+            if missing.as_array().is_some_and(|rows| !rows.is_empty()) {
+                return Err(format!("GEOS-FP sync is incomplete: missing_valid_times={missing}"));
+            }
+            cache_hits += result["cache_hits"].as_u64().unwrap_or(0) as usize;
+            if let Some(files) = result["files"].as_array() {
+                all_files.extend(files.iter().cloned());
+            }
+        }
+        return Ok(json!({
+            "contract": "rust-cams-data-v1",
+            "aerosol_source": "geos-fp",
+            "areas": areas,
+            "files": all_files,
+            "cache_hits": cache_hits,
+            "missing_valid_times": [],
+            "group_errors": [],
+        }));
+    }
     let envelope = cams_area_from_region(region_bounds(anchor)?)?;
     let (_, area_key, _) = cams_data::area_identity(json!(envelope))?;
     let targets = cams_target_utcs(cycle)?;
@@ -1172,6 +1263,7 @@ fn sync_cams(
             refresh_before_cycle: Some(time_contract::iso(cycle)),
             all_leads: true,
             model_bbox: None,
+            aerosol_source: None,
         },
         cancel,
         Some(progress),
@@ -1444,8 +1536,13 @@ pub fn run(
             .lead_horizon_hours
             .ok_or("lead_horizon_hours is not configured")?
     } else {
-        0
+        settings.lead_horizon_hours.unwrap_or(120)
     };
+    let aerosol_source = settings
+        .aerosol_source
+        .as_deref()
+        .unwrap_or("cams")
+        .to_owned();
     let ecmwf_source = if requested.contains(&"ec") {
         settings
             .ecmwf_source
@@ -1476,7 +1573,7 @@ pub fn run(
     let publications = if probe_targets.is_empty() {
         Map::new()
     } else {
-        match probe_publications(&probe_targets, None, force) {
+        match probe_publications(&probe_targets, None, force, Some(aerosol_source.as_str())) {
             Ok(value) => value,
             Err(error) => {
                 commit_probe_failure(&state_file, &probe_targets, &error, task_id)?;
@@ -1613,7 +1710,14 @@ pub fn run(
                 continue;
             }
         };
-        let message = format!("正在同步 {} 最新周期", source_label(name));
+        let label_for = |n: &str| {
+            if n == "cams" {
+                aerosol_label(&settings)
+            } else {
+                source_label(n)
+            }
+        };
+        let message = format!("正在同步 {} 最新周期", label_for(name));
         if progress(
             json!({"stage":"sync","percent":index * 100 / total,"source":name,"message":message}),
         )
@@ -1748,7 +1852,15 @@ pub fn run(
                     }))
                 };
                 match *name {
-                    "cams" => sync_cams(context, progress, &anchor, cycle, cancel),
+                    "cams" => sync_cams(
+                        context,
+                        progress,
+                        &anchor,
+                        cycle,
+                        &aerosol_source,
+                        horizon,
+                        cancel,
+                    ),
                     "gfs" => sync_gfs(context, &anchor, cycle, horizon, cancel, &file_progress),
                     _ => sync_ec(context, cycle, horizon, &ecmwf_source, cancel, &file_progress),
                 }
@@ -1802,7 +1914,12 @@ pub fn run(
             source: source.clone(),
         });
         if !stop {
-            let message = format!("{} 同步{}", source_label(name), sync_status_label(status));
+            let label = if *name == "cams" {
+                aerosol_label(&settings)
+            } else {
+                source_label(name)
+            };
+            let message = format!("{} 同步{}", label, sync_status_label(status));
             if progress(
                 json!({"stage":"sync","percent":(index + 1) * 100 / total,"source_percent":100,"source":name,"message":message}),
             )
@@ -1941,6 +2058,7 @@ mod tests {
                 anchor_region: Some("china".into()),
                 lead_horizon_hours: Some(120),
                 ecmwf_source: Some("aws".into()),
+                aerosol_source: None,
             }
         );
         // Disabled settings may keep valid optional values.
@@ -1988,6 +2106,7 @@ mod tests {
             json!({"settings": {"lead_horizon_hours": 119}}),
             json!({"settings": {"lead_horizon_hours": 241}}),
             json!({"settings": {"ecmwf_source": "noaa"}}),
+            json!({"settings": {"aerosol_source": "noaa"}}),
             json!({"settings": {"unknown": 1}}),
             json!({"settings": {"sources": {"cams": true, "bogus": true}}}),
         ] {

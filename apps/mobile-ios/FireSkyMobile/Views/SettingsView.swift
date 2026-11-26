@@ -185,10 +185,12 @@ struct SettingsView: View {
                 .buttonStyle(.plain)
                 statusBadge(title: L10n.text("数据源与同步", "Data & Sync"),
                             value: store.dataSyncConfigured ? L10n.text("已配置", "Configured") : L10n.text("按需准备", "On-demand"),
-                            healthy: store.dataSyncConfigured || store.camsConfigured)
-                statusBadge(title: "CAMS ADS",
-                            value: store.camsConfigured ? L10n.text("已配置", "Configured") : L10n.t("未配置"),
-                            healthy: store.camsConfigured)
+                            healthy: store.dataSyncConfigured || store.camsConfigured || store.usesGeosFP)
+                statusBadge(title: store.usesGeosFP ? "GEOS-FP" : "CAMS ADS",
+                            value: store.usesGeosFP
+                                ? L10n.text("免密钥直连", "No-key OPeNDAP")
+                                : (store.camsConfigured ? L10n.text("已配置", "Configured") : L10n.t("未配置")),
+                            healthy: store.usesGeosFP || store.camsConfigured)
                 statusBadge(title: L10n.text("保留策略", "Retention"),
                             value: store.retentionConfigured ? L10n.text("已启用", "Active") : L10n.t("不限制"),
                             healthy: store.retentionConfigured)
@@ -289,6 +291,10 @@ struct SettingsView: View {
                 .padding(16)
                 .fireSkySurface(role: .content, cornerRadius: 14)
                 .id("anchor-retention")
+
+            aerosolSourceBlock
+                .padding(16)
+                .fireSkySurface(role: .content, cornerRadius: 14)
 
             elevationSourceBlock
                 .padding(16)
@@ -485,6 +491,25 @@ struct SettingsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10).padding(.vertical, 8)
         .fireSkySurface(role: .grouped, cornerRadius: 10)
+    }
+
+    private var aerosolSourceBlock: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(L10n.text("AOD 数据来源", "AOD Source")).font(.headline)
+            HStack {
+                Text(L10n.text("AOD 来源", "AOD source")).font(.subheadline)
+                Spacer()
+                Picker(L10n.text("AOD 来源", "AOD source"), selection: $store.aerosolSource) {
+                    Text("CAMS · Copernicus ADS").tag("cams")
+                    Text(L10n.text("NASA GEOS-FP（免密钥直连）", "NASA GEOS-FP (No key)")).tag("geos-fp")
+                }
+                .pickerStyle(.menu)
+            }
+            Text(L10n.text("CAMS 需在服务端配置 ADS Key；NASA GEOS-FP 通过 OPeNDAP 免密钥直连。",
+                           "CAMS requires a server ADS key; NASA GEOS-FP connects via OPeNDAP without a key."))
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     private var elevationSourceBlock: some View {

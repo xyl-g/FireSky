@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudQueue
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
@@ -44,6 +45,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -77,6 +79,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.firesky.mobile.R
+import com.firesky.mobile.store.UpdatePhase
 import com.firesky.mobile.store.WorkbenchState
 import com.firesky.mobile.store.WorkbenchStore
 import kotlinx.coroutines.launch
@@ -332,6 +335,100 @@ private fun GeneralSection(store: WorkbenchStore, state: WorkbenchState) {
             }
         }
     }
+
+    SoftwareUpdateCard(store, state)
+}
+
+@Composable
+private fun SoftwareUpdateCard(store: WorkbenchStore, state: WorkbenchState) {
+    val phase = state.updatePhase
+    val busyUpdate = phase == UpdatePhase.CHECKING || phase == UpdatePhase.DOWNLOADING || phase == UpdatePhase.VERIFYING
+    val subtitle = when (phase) {
+        UpdatePhase.CHECKING -> stringResource(R.string.update_checking)
+        UpdatePhase.CURRENT -> stringResource(R.string.update_up_to_date)
+        UpdatePhase.AVAILABLE -> stringResource(R.string.update_available_fmt, state.updateInfo?.version.orEmpty())
+        UpdatePhase.DOWNLOADING -> stringResource(R.string.update_downloading)
+        UpdatePhase.VERIFYING -> stringResource(R.string.update_verifying)
+        UpdatePhase.READY_TO_INSTALL -> stringResource(R.string.update_ready_install)
+        UpdatePhase.FAILED -> state.updateMessage.ifEmpty { stringResource(R.string.update_idle_subtitle) }
+        UpdatePhase.IDLE -> stringResource(R.string.update_idle_subtitle)
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        SectionCaption(stringResource(R.string.section_update))
+        WorkSurface(Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SettingsIconRow(
+                    icon = Icons.Filled.CloudDownload,
+                    tint = if (phase == UpdatePhase.AVAILABLE || phase == UpdatePhase.READY_TO_INSTALL) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        coolAccentColor()
+                    },
+                    title = stringResource(R.string.update_current_version_fmt, state.appVersion.ifEmpty { "—" }),
+                    subtitle = subtitle,
+                ) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (phase == UpdatePhase.AVAILABLE || phase == UpdatePhase.DOWNLOADING ||
+                            phase == UpdatePhase.VERIFYING || phase == UpdatePhase.READY_TO_INSTALL ||
+                            phase == UpdatePhase.FAILED
+                        ) {
+                            Button(
+                                onClick = { store.openUpdateDialog() },
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Text(stringResource(R.string.update_view), fontSize = 12.sp)
+                            }
+                        }
+                        OutlinedButton(
+                            onClick = { store.checkForUpdates(interactive = true) },
+                            enabled = !busyUpdate,
+                            modifier = Modifier.weight(1f),
+                        ) {
+                            if (phase == UpdatePhase.CHECKING) {
+                                CircularProgressIndicator(Modifier.size(13.dp), strokeWidth = 1.8.dp)
+                                Spacer(Modifier.width(6.dp))
+                            }
+                            Text(stringResource(R.string.update_check), fontSize = 12.sp)
+                        }
+                    }
+                }
+                if (phase == UpdatePhase.DOWNLOADING || phase == UpdatePhase.VERIFYING) {
+                    val progress = if (state.updateTotalBytes > 0L) {
+                        (state.updateReceivedBytes.toFloat() / state.updateTotalBytes.toFloat()).coerceIn(0f, 1f)
+                    } else null
+                    if (progress != null && phase == UpdatePhase.DOWNLOADING) {
+                        LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                }
+                IndentedDivider()
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(stringResource(R.string.update_auto_check), fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                        Text(
+                            stringResource(R.string.update_auto_check_subtitle),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                        )
+                    }
+                    Switch(
+                        checked = state.autoUpdateCheck,
+                        onCheckedChange = store::setAutoUpdateCheck,
+                        enabled = phase != UpdatePhase.DOWNLOADING && phase != UpdatePhase.VERIFYING,
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -370,7 +467,7 @@ private fun RuntimeSummaryCard(store: WorkbenchStore, state: WorkbenchState) {
                         title = stringResource(R.string.runtime_data_sync),
                         value = if (state.dataSyncConfigured || store.camsConfigured) stringResource(R.string.runtime_configured)
                         else stringResource(R.string.runtime_on_demand),
-                        healthy = state.dataSyncConfigured || store.camsConfigured,
+                        healthy = state.dataSyncConfigured || store.camsConfigured || state.aerosolSource == "geos-fp",
                         modifier = Modifier
                             .weight(1f)
                             .clip(RoundedCornerShape(12.dp))
@@ -379,10 +476,11 @@ private fun RuntimeSummaryCard(store: WorkbenchStore, state: WorkbenchState) {
                 }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     StatusSummaryBadge(
-                        title = stringResource(R.string.runtime_cams),
-                        value = if (store.camsConfigured) stringResource(R.string.runtime_configured)
+                        title = if (state.aerosolSource == "geos-fp") "GEOS-FP" else stringResource(R.string.runtime_cams),
+                        value = if (state.aerosolSource == "geos-fp") "免密钥直连"
+                        else if (store.camsConfigured) stringResource(R.string.runtime_configured)
                         else stringResource(R.string.runtime_not_configured),
-                        healthy = store.camsConfigured,
+                        healthy = state.aerosolSource == "geos-fp" || store.camsConfigured,
                         modifier = Modifier
                             .weight(1f)
                             .clip(RoundedCornerShape(12.dp))
@@ -460,9 +558,37 @@ private fun StatusSummaryBadge(title: String, value: String, healthy: Boolean, m
 private fun ServerStatusSection(store: WorkbenchStore, state: WorkbenchState) {
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         ReadOnlyNoticeBanner(stringResource(R.string.readonly_settings_notice))
+        AerosolSourceCard(store, state)
         CamsStatusCard(store, state)
         DataSyncReadOnlyCard(state)
         RetentionReadOnlyCard(state)
+    }
+}
+
+@Composable
+private fun AerosolSourceCard(store: WorkbenchStore, state: WorkbenchState) {
+    Section(
+        title = "AOD 数据来源",
+        icon = Icons.Filled.Sync,
+        iconTint = coolAccentColor(),
+    ) {
+        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            SelectableSourceRow(
+                label = "CAMS · Copernicus ADS",
+                selected = state.aerosolSource == "cams",
+                onSelect = { store.setAerosolSource("cams") },
+            )
+            SelectableSourceRow(
+                label = "NASA GEOS-FP（免密钥直连）",
+                selected = state.aerosolSource == "geos-fp",
+                onSelect = { store.setAerosolSource("geos-fp") },
+            )
+            Text(
+                "CAMS 需在服务端配置 ADS Key；NASA GEOS-FP 通过 OPeNDAP 免密钥直连。",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+            )
+        }
     }
 }
 

@@ -40,6 +40,8 @@ struct Input {
     batch_min_points: usize,
     #[serde(default)]
     derived_cache: Option<crate::derived_cache::Config>,
+    #[serde(default)]
+    aerosol_source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -99,6 +101,7 @@ fn cams_plan(
     targets: &BTreeSet<DateTime<Utc>>,
     download: Option<&crate::ads::Config>,
     coverage: Option<&cams_cache::ModelCoverage<'_>>,
+    source: cams_cache::AerosolSource,
 ) -> Result<CamsPlan, String> {
     let areas = cams_data::split_areas(area)?;
     let mut selected_by_time = BTreeMap::<DateTime<Utc>, Vec<cams_cache::Selection>>::new();
@@ -127,13 +130,14 @@ fn cams_plan(
             lons: &part_lons,
         });
         let key = cams_cache::area_key(*sub_area)?;
-        let mut selected = cams_cache::select_with_key(
+        let mut selected = cams_cache::select_with_key_for_source(
             root,
             *sub_area,
             targets,
             &key,
             part_coverage.as_ref(),
             &[],
+            source,
         )?;
         // Wrapped groups share the physical +/-180 boundary column: retry
         // missing targets with the sibling part's newest tile so the seam
@@ -141,11 +145,12 @@ fn cams_plan(
         if part_coverage.is_some() && selected.len() < targets.len() && areas.len() > 1 {
             let (bounds, _, _) = cams_data::area_identity(serde_json::json!(sub_area))?;
             let part = cams_data::Area::from_bounds(bounds);
-            let siblings = cams_data::sibling_tiles(
+            let siblings = cams_data::sibling_tiles_for_source(
                 root,
                 &part,
                 &targets.iter().copied().collect::<Vec<_>>(),
                 true,
+                source,
             )?;
             for target in targets {
                 if selected.contains_key(target) {
@@ -153,13 +158,14 @@ fn cams_plan(
                 }
                 let empty = Vec::new();
                 let group_siblings = siblings.get(target).unwrap_or(&empty);
-                if let Some(hit) = cams_cache::select_with_key(
+                if let Some(hit) = cams_cache::select_with_key_for_source(
                     root,
                     *sub_area,
                     &[*target].into_iter().collect(),
                     &key,
                     part_coverage.as_ref(),
                     group_siblings,
+                    source,
                 )?
                 .remove(target)
                 {
@@ -170,19 +176,21 @@ fn cams_plan(
         cache_hits += selected.len();
         if selected.len() < targets.len() {
             if let Some(config) = download {
-                download_reports.push(cams_data::resolve(
+                download_reports.push(cams_data::resolve_with_source(
                     root,
                     *sub_area,
                     targets.iter().copied().collect(),
                     config.clone(),
+                    Some(source.as_str().to_owned()),
                 )?);
-                selected = cams_cache::select_with_key(
+                selected = cams_cache::select_with_key_for_source(
                     root,
                     *sub_area,
                     targets,
                     &key,
                     part_coverage.as_ref(),
                     &[],
+                    source,
                 )?;
             }
         }
@@ -660,12 +668,14 @@ fn prepare(path: &Path, point_only: bool) -> Result<Prepared, String> {
         lats: &coverage_lats,
         lons: &coverage_lons,
     };
+    let aerosol_source = cams_cache::AerosolSource::parse(input.aerosol_source.as_deref())?;
     let cams_plan = cams_plan(
         &input.cams_cache_dir,
         area,
         &required.cams,
         input.cams_download.as_ref(),
         Some(&model_coverage),
+        aerosol_source,
     )?;
     let cams_ms = phase.elapsed().as_secs_f64() * 1000.0;
     let missing_cams: Vec<_> = required

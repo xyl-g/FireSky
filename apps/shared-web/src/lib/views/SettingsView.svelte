@@ -3,16 +3,16 @@
   import { KeyRound, Map, Check, Palette, Database, RefreshCw, CircleCheck, Cpu, HardDrive, Save } from "@lucide/svelte";
   import type { BaseId, SourceId } from "../map-grid";
   import { rpcRequest } from "../ipc";
-  import { camsConfiguration, camsDescription, elevationSourceDescription, type CamsConfiguration, type ElevationSource } from "../settings-state";
+  import { camsConfiguration, camsDescription, elevationSourceDescription, type AerosolSource, type CamsConfiguration, type ElevationSource } from "../settings-state";
 
   let {
     provider = $bindable("tianditu"), tdtKey = $bindable(""), base = $bindable("imagery"),
-    appearance = $bindable("system"), ecSource = $bindable("ecmwf"), elevationSource = $bindable("auto"),
+    appearance = $bindable("system"), ecSource = $bindable("ecmwf"), aerosolSource = $bindable("cams"), elevationSource = $bindable("auto"),
     online = false, engineWorkspace = "", engineBinary = "", onReconnect = () => {},
     reconnecting = false, generation = 0,
   }: {
     provider?: SourceId; tdtKey?: string; base?: BaseId;
-    appearance?: "system" | "light" | "dark"; ecSource?: string; elevationSource?: ElevationSource;
+    appearance?: "system" | "light" | "dark"; ecSource?: string; aerosolSource?: AerosolSource; elevationSource?: ElevationSource;
     online?: boolean; engineWorkspace?: string; engineBinary?: string;
     onReconnect?: () => void; reconnecting?: boolean; generation?: number;
   } = $props();
@@ -160,8 +160,14 @@
         <option value="ecmwf">ECMWF 官方</option><option value="aws">AWS 欧洲镜像</option><option value="google">Google Cloud 镜像</option>
       </select>
     </div>
+    <div class="setting-row">
+      <label for="aerosol-source">AOD 数据来源</label>
+      <select id="aerosol-source" bind:value={aerosolSource}>
+        <option value="cams">CAMS · Copernicus ADS</option><option value="geos-fp">NASA GEOS-FP（免密钥直连）</option>
+      </select>
+    </div>
     <p class="muted">海拔默认使用本地 SRTM 瓦片，未下载时自动走 open-meteo 在线查询；地形瓦片可在数据页按区域预下载。来源作用于「获取海拔与时区」和地名搜索，观测点会显示实际来源。</p>
-    <p class="muted">GFS · NOAA NOMADS；CAMS · Copernicus ADS</p>
+    <p class="muted">GFS · NOAA NOMADS；CAMS 需 ADS 凭据，GEOS-FP · NASA OPeNDAP 免密钥直连。</p>
   </section>
   <section aria-labelledby="retention-settings">
     <h2 id="retention-settings"><HardDrive size={17} />缓存与历史保留</h2>

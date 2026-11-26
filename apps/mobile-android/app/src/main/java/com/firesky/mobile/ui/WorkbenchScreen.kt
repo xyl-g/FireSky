@@ -110,6 +110,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.firesky.mobile.R
+import com.firesky.mobile.store.UpdatePhase
 import com.firesky.mobile.store.WorkbenchState
 import com.firesky.mobile.store.WorkbenchStore
 import org.json.JSONObject
@@ -164,7 +165,14 @@ fun WorkbenchApp(store: WorkbenchStore) {
                             NavigationItem("history", stringResource(R.string.nav_history), Icons.Filled.History, state.page) {
                                 store.setPage("history")
                             }
-                            NavigationItem("settings", stringResource(R.string.nav_settings), Icons.Filled.Settings, state.page) {
+                            NavigationItem(
+                                "settings",
+                                stringResource(R.string.nav_settings),
+                                Icons.Filled.Settings,
+                                state.page,
+                                showBadge = state.updatePhase == UpdatePhase.AVAILABLE ||
+                                    state.updatePhase == UpdatePhase.READY_TO_INSTALL,
+                            ) {
                                 store.setPage("settings")
                             }
                         }
@@ -192,6 +200,9 @@ fun WorkbenchApp(store: WorkbenchStore) {
                     if (state.showCycleAgeConfirm) {
                         CycleAgeConfirmDialog(store, state)
                     }
+                    if (state.showUpdateDialog) {
+                        SoftwareUpdateDialog(store, state)
+                    }
                 }
             }
         }
@@ -204,13 +215,26 @@ private fun RowScope.NavigationItem(
     title: String,
     icon: androidx.compose.ui.graphics.vector.ImageVector,
     current: String,
+    showBadge: Boolean = false,
     onClick: () -> Unit,
 ) {
     val selected = current == key
     NavigationBarItem(
         selected = selected,
         onClick = onClick,
-        icon = { Icon(icon, contentDescription = title) },
+        icon = {
+            Box {
+                Icon(icon, contentDescription = title)
+                if (showBadge) {
+                    Box(
+                        Modifier
+                            .align(Alignment.TopEnd)
+                            .size(7.dp)
+                            .background(MaterialTheme.colorScheme.primary, CircleShape),
+                    )
+                }
+            }
+        },
         label = {
             Text(
                 title,
@@ -1469,6 +1493,159 @@ private fun CycleAgeConfirmDialog(store: WorkbenchStore, state: WorkbenchState) 
         dismissButton = {
             TextButton(onClick = { store.dismissCycleAgeConfirm() }) {
                 Text(stringResource(R.string.back))
+            }
+        },
+    )
+}
+
+@Composable
+private fun SoftwareUpdateDialog(store: WorkbenchStore, state: WorkbenchState) {
+    val context = LocalContext.current
+    val info = state.updateInfo
+    val phase = state.updatePhase
+    val busyTransfer = phase == UpdatePhase.DOWNLOADING || phase == UpdatePhase.VERIFYING
+    val currentLabel = state.appVersion.ifEmpty { "—" }
+
+    AlertDialog(
+        onDismissRequest = {
+            if (!busyTransfer) store.dismissUpdateDialog()
+        },
+        title = {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                IconBadge(Icons.Filled.CloudDownload, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(38.dp))
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(stringResource(R.string.update_dialog_title), fontSize = 17.sp, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        if (info != null) "v$currentLabel → v${info.version}" else "v$currentLabel",
+                        fontSize = 12.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.68f),
+                    )
+                }
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                when (phase) {
+                    UpdatePhase.CHECKING -> {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+                            Text(stringResource(R.string.update_checking), fontSize = 13.sp)
+                        }
+                    }
+                    UpdatePhase.CURRENT -> {
+                        Text(stringResource(R.string.update_up_to_date), fontSize = 13.sp)
+                    }
+                    else -> {
+                        if (info != null) {
+                            val notesText = info.notes.trim().ifEmpty { stringResource(R.string.update_notes_empty) }
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(max = 220.dp)
+                                    .verticalScroll(rememberScrollState()),
+                            ) {
+                                Text(
+                                    notesText,
+                                    fontSize = 12.sp,
+                                    lineHeight = 18.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.82f),
+                                )
+                            }
+                        }
+                        if (busyTransfer) {
+                            val total = state.updateTotalBytes
+                            val received = state.updateReceivedBytes
+                            if (phase == UpdatePhase.DOWNLOADING && total > 0L) {
+                                val pct = (received.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+                                LinearProgressIndicator(progress = { pct }, modifier = Modifier.fillMaxWidth())
+                                Text(
+                                    "%.1f MB / %.1f MB".format(received / 1_048_576.0, total / 1_048_576.0),
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                                )
+                            } else {
+                                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                                Text(
+                                    stringResource(
+                                        if (phase == UpdatePhase.VERIFYING) R.string.update_verifying
+                                        else R.string.update_downloading,
+                                    ),
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f),
+                                )
+                            }
+                        }
+                        if (state.updateMessage.isNotEmpty()) {
+                            Text(
+                                state.updateMessage,
+                                fontSize = 12.sp,
+                                color = if (phase == UpdatePhase.FAILED) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.primary,
+                            )
+                        }
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            when (phase) {
+                                UpdatePhase.READY_TO_INSTALL -> {
+                                    Button(
+                                        onClick = { store.installDownloadedApk(context) },
+                                        modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
+                                        shape = RoundedCornerShape(12.dp),
+                                    ) {
+                                        Text(stringResource(R.string.update_install_now), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                    }
+                                }
+                                UpdatePhase.AVAILABLE, UpdatePhase.FAILED -> {
+                                    if (info != null) {
+                                        Button(
+                                            onClick = { store.downloadUpdateApk() },
+                                            modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
+                                            shape = RoundedCornerShape(12.dp),
+                                        ) {
+                                            Icon(Icons.Filled.CloudDownload, contentDescription = null, modifier = Modifier.size(16.dp))
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(stringResource(R.string.update_download_install), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                        }
+                                    } else {
+                                        Button(
+                                            onClick = { store.checkForUpdates(interactive = true) },
+                                            modifier = Modifier.fillMaxWidth().heightIn(min = 44.dp),
+                                            shape = RoundedCornerShape(12.dp),
+                                        ) {
+                                            Text(stringResource(R.string.update_check), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                                        }
+                                    }
+                                }
+                                UpdatePhase.DOWNLOADING -> {
+                                    OutlinedButton(
+                                        onClick = { store.cancelUpdateDownload() },
+                                        modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp),
+                                        shape = RoundedCornerShape(12.dp),
+                                    ) {
+                                        Text(stringResource(R.string.update_cancel_download), fontSize = 13.sp)
+                                    }
+                                }
+                                else -> {}
+                            }
+                            if (info != null && phase != UpdatePhase.VERIFYING) {
+                                OutlinedButton(
+                                    onClick = { store.openUpdateInBrowser(context) },
+                                    modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp),
+                                    shape = RoundedCornerShape(12.dp),
+                                ) {
+                                    Text(stringResource(R.string.update_browser_download), fontSize = 13.sp)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            if (!busyTransfer) {
+                TextButton(onClick = { store.dismissUpdateDialog() }) {
+                    Text(stringResource(if (phase == UpdatePhase.CURRENT) R.string.ok else R.string.update_later))
+                }
             }
         },
     )

@@ -14,9 +14,9 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
   import { validCustomRegionBounds } from "../map-region";
   import { metadataSourceTitle, withElevationSource, type ElevationSource } from "../settings-state";
 
-  let { kind, online, generation, regions = [], ecSource, elevationSource = "auto", mapOptions, spot = $bindable(), onOpenMap, onBusy = () => {} }: {
+  let { kind, online, generation, regions = [], ecSource, aerosolSource = "cams", elevationSource = "auto", mapOptions, spot = $bindable(), onOpenMap, onBusy = () => {} }: {
     kind: ForecastKind; online: boolean; generation: number; regions?: Array<Record<string, unknown>>;
-    ecSource: string; elevationSource?: ElevationSource; mapOptions: MapOptions; spot: ObservationSpot; onOpenMap: () => void; onBusy?: (busy: boolean) => void;
+    ecSource: string; aerosolSource?: string; elevationSource?: ElevationSource; mapOptions: MapOptions; spot: ObservationSpot; onOpenMap: () => void; onBusy?: (busy: boolean) => void;
   } = $props();
   const controller = new ForecastSessionController({ start: rpcStart, request: rpcRequest }, (next) => { session = next; });
   let session = $state<ForecastSessionState>(controller.state);
@@ -52,7 +52,7 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
   const payload = $derived({
     name: spot.name, lat: spot.lat, lon: spot.lon, elevation_m: spot.elevation_m, timezone_name: spot.timezone_name,
     target_date: targetDate, phenomenon, model_source: "both", workers: 1, forecast_mode: "model",
-    satellite_source: "off", ecmwf_source: ecSource,
+    satellite_source: "off", ecmwf_source: ecSource, aerosol_source: aerosolSource,
     ...(kind === "regional" ? { model_source: regionalModel, regions: [...selectedRegions].sort().concat(customRegion ? ["custom"] : []), custom_bounds: { west, east, south, north }, custom_timezone_name: spot.timezone_name, spacing_deg: .25 } : {}),
   });
   const published = $derived(session.published[kind] ?? null);
@@ -363,7 +363,7 @@ import { ForecastSessionController, requiresCycleAgeConfirmation, type ForecastS
   <div class="preflight-rows">
     {#each session.report?.datasets ?? [] as row}
       <div class="preflight-row"><Download size={21} /><div>
-        <strong>{sourceTitle(row.source)}</strong>
+        <strong>{sourceTitle(row.source === "cams" && row.aerosol_source === "geos-fp" ? "geos-fp" : row.source)}</strong>
         <span>所需周期 UTC：{row.request_cycle || "未解析"}</span>
         <span>{row.ready ? "本地数据完整" : `缺少 ${row.missing_count ?? "--"} 项`}</span>
         <span>{row.verified ? `最新发布 UTC：${row.latest_available_cycle ?? "未知"}${row.is_latest ? " · 当前周期" : " · 有更新周期"}` : "最新发布：未核验"}</span>

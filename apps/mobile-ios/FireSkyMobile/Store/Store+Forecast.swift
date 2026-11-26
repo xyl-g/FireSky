@@ -64,6 +64,7 @@ extension Store {
             "phenomenon": phenomenon, "model_source": "both", "workers": 1,
             "forecast_mode": "model", "satellite_source": "off",
             "ecmwf_source": ecmwfSource,
+            "aerosol_source": aerosolSource,
             "elevation_source": elevationSource,
         ]
         if targetMode == .nowcast {
@@ -150,7 +151,8 @@ extension Store {
                 verified: verified,
                 latest: latest,
                 missing: $0["missing_count"] as? Int ?? 0,
-                policy: $0["policy"] as? String ?? ""
+                policy: $0["policy"] as? String ?? "",
+                aerosolSource: $0["aerosol_source"] as? String ?? ""
             )
         }
         status = ready ? "本次数据已下载" : "缺少 " + rows.filter { !$0.ready }.map(\.title).joined(separator: "、")
@@ -450,6 +452,7 @@ extension Store {
         if !sameString("phenomenon", phenomenon) { return true }
         if mode == .regional {
             if !sameString("ecmwf_source", ecmwfSource) { return true }
+            if !sameString("aerosol_source", aerosolSource) { return true }
             if !sameString("model_source", regionalModel) { return true }
             if let savedRegions = params["regions"] as? [String] {
                 let current = selectedRegions.isEmpty ? ["china"] : selectedRegions.sorted()
@@ -458,6 +461,7 @@ extension Store {
             return false
         }
         if mode == .point && !sameString("ecmwf_source", ecmwfSource) { return true }
+        if !sameString("aerosol_source", aerosolSource) { return true }
         if !sameNumber("lat", lat) || !sameNumber("lon", lon) { return true }
         if !sameNumber("elevation_m", elevation) { return true }
         if !sameString("timezone_name", timezone) { return true }

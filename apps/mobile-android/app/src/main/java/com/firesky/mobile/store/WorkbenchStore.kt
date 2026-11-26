@@ -1,7 +1,12 @@
 package com.firesky.mobile.store
 
 import android.app.Application
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import androidx.annotation.VisibleForTesting
+import androidx.core.content.FileProvider
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.firesky.mobile.engine.EngineClient
@@ -12,6 +17,7 @@ import com.firesky.mobile.ui.friendlyEngineMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,6 +27,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import java.io.File
 import java.net.URI
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
@@ -77,6 +84,8 @@ class WorkbenchStore private constructor(
 
     private var operationJob: Job? = null
     private var publicationJob: Job? = null
+    private var updateCheckJob: Job? = null
+    private var updateDownloadJob: Job? = null
     private var metadataGeneration = UUID.randomUUID()
     private var generation = UUID.randomUUID()
     private var requestKind: String = "point"
@@ -86,7 +95,15 @@ class WorkbenchStore private constructor(
     init {
         val appearance = prefs.getString(PREF_APPEARANCE, null) ?: "system"
         val ecmwfSource = prefs.getString(PREF_ECMWF_SOURCE, null) ?: "ecmwf"
+        val aerosolSource = prefs.getString(PREF_AEROSOL_SOURCE, null)
+            ?.takeIf { it == "geos-fp" } ?: "cams"
         val elevationSource = ElevationSourceSetting.load(prefs)
+        val appVersion = runCatching {
+            application.packageManager.getPackageInfo(application.packageName, 0).versionName.orEmpty()
+        }.getOrDefault("")
+        val autoUpdateCheck = runCatching {
+            prefs.getBoolean(PREF_AUTO_UPDATE_CHECK, true)
+        }.getOrDefault(true)
         val remoteServerUrl = prefs.getString(PREF_REMOTE_SERVER_URL, null) ?: ""
         val remoteTokenSaved = !prefs.getString(PREF_REMOTE_TOKEN, null).isNullOrEmpty()
         val favorites = runCatching {
@@ -99,7 +116,10 @@ class WorkbenchStore private constructor(
         _state.value = _state.value.copy(
             appearance = appearance,
             ecmwfSource = ecmwfSource,
+            aerosolSource = aerosolSource,
             elevationSource = elevationSource,
+            appVersion = appVersion,
+            autoUpdateCheck = autoUpdateCheck,
             serverConfigured = configured,
             isRemoteTransport = !hasMock,
             remoteServerUrl = remoteServerUrl,
@@ -110,6 +130,12 @@ class WorkbenchStore private constructor(
         if (configured) {
             engine = buildEngine(_state.value)
             viewModelScope.launch { connect() }
+        }
+        if (autoUpdateCheck && !hasMock) {
+            viewModelScope.launch {
+                delay(5_000)
+                checkForUpdates(interactive = false)
+            }
         }
     }
 
@@ -887,6 +913,12 @@ class WorkbenchStore private constructor(
         _state.update { it.copy(ecmwfSource = value) }
     }
 
+    fun setAerosolSource(value: String) {
+        val normalized = if (value == "geos-fp") "geos-fp" else "cams"
+        prefs.edit().putString(PREF_AEROSOL_SOURCE, normalized).apply()
+        _state.update { it.copy(aerosolSource = normalized) }
+    }
+
     fun setElevationSource(value: String) {
         val normalized = ElevationSourceSetting.save(prefs, value)
         _state.update { it.copy(elevationSource = normalized) }
@@ -1371,6 +1403,8 @@ class WorkbenchStore private constructor(
                 dateTab = if (restoredDate != null) "自定义" else current.dateTab,
                 phenomenon = payload.optString("phenomenon", "").ifEmpty { current.phenomenon },
                 ecmwfSource = payload.optString("ecmwf_source", "").ifEmpty { current.ecmwfSource },
+                aerosolSource = payload.optString("aerosol_source", "")
+                    .takeIf { it == "cams" || it == "geos-fp" } ?: current.aerosolSource,
                 selectedRegionCode = regionCode,
                 regionalModel = modelSource,
             )
@@ -1586,7 +1620,8 @@ class WorkbenchStore private constructor(
                 )
                 .put("interval_minutes", current.dataSyncInterval.trim().toIntOrNull() ?: -1)
                 .put("lead_horizon_hours", current.dataSyncLeadHorizon.trim().toIntOrNull() ?: -1)
-                .put("ecmwf_source", current.ecmwfSource),
+                .put("ecmwf_source", current.ecmwfSource)
+                .put("aerosol_source", current.aerosolSource),
         )
         viewModelScope.launch {
             try {
@@ -1957,11 +1992,189 @@ class WorkbenchStore private constructor(
         _state.update { it.copy(terrainCancelling = true) }
     }
 
+    // ---------------------------------------------------------------- 软件更新
+
+    fun setAutoUpdateCheck(enabled: Boolean) {
+        prefs.edit().putBoolean(PREF_AUTO_UPDATE_CHECK, enabled).apply()
+        _state.update { it.copy(autoUpdateCheck = enabled) }
+    }
+
+    fun openUpdateDialog() {
+        _state.update { it.copy(showUpdateDialog = true) }
+    }
+
+    fun dismissUpdateDialog() {
+        _state.update { it.copy(showUpdateDialog = false) }
+    }
+
+    fun checkForUpdates(interactive: Boolean) {
+        val phase = _state.value.updatePhase
+        if (phase == UpdatePhase.CHECKING || phase == UpdatePhase.DOWNLOADING || phase == UpdatePhase.VERIFYING) {
+            if (interactive) _state.update { it.copy(showUpdateDialog = true) }
+            return
+        }
+        updateCheckJob?.cancel()
+        val currentVersion = _state.value.appVersion
+        _state.update {
+            it.copy(
+                updatePhase = UpdatePhase.CHECKING,
+                updateMessage = "",
+                showUpdateDialog = interactive || it.showUpdateDialog,
+            )
+        }
+        updateCheckJob = viewModelScope.launch {
+            try {
+                when (val result = AppUpdater.checkLatestRelease(currentVersion)) {
+                    is UpdateCheckResult.UpToDate -> {
+                        _state.update {
+                            it.copy(
+                                updatePhase = UpdatePhase.CURRENT,
+                                updateInfo = null,
+                                updateMessage = "",
+                            )
+                        }
+                    }
+                    is UpdateCheckResult.Available -> {
+                        _state.update {
+                            it.copy(
+                                updatePhase = UpdatePhase.AVAILABLE,
+                                updateInfo = result.info,
+                                updateTotalBytes = result.info.assetBytes,
+                                updateReceivedBytes = 0L,
+                                downloadedApkPath = null,
+                                updateMessage = "",
+                            )
+                        }
+                    }
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                _state.update {
+                    if (interactive) {
+                        it.copy(
+                            updatePhase = UpdatePhase.FAILED,
+                            updateMessage = AppUpdater.friendlyError(error),
+                        )
+                    } else {
+                        it.copy(updatePhase = UpdatePhase.IDLE, updateMessage = "")
+                    }
+                }
+            }
+        }
+    }
+
+    fun downloadUpdateApk() {
+        val current = _state.value
+        val info = current.updateInfo ?: return
+        if (current.updatePhase == UpdatePhase.DOWNLOADING || current.updatePhase == UpdatePhase.VERIFYING) return
+        val cacheDir = File(getApplication<Application>().cacheDir, "updates")
+        updateDownloadJob?.cancel()
+        _state.update {
+            it.copy(
+                updatePhase = UpdatePhase.DOWNLOADING,
+                updateReceivedBytes = 0L,
+                updateTotalBytes = info.assetBytes,
+                downloadedApkPath = null,
+                updateMessage = "",
+            )
+        }
+        updateDownloadJob = viewModelScope.launch {
+            try {
+                val apkFile = AppUpdater.downloadAndVerifyApk(
+                    info = info,
+                    targetDir = cacheDir,
+                    currentVersion = current.appVersion,
+                    onProgress = { received, total ->
+                        _state.update {
+                            it.copy(
+                                updateReceivedBytes = received,
+                                updateTotalBytes = maxOf(total, it.updateTotalBytes),
+                            )
+                        }
+                    },
+                    onVerifying = {
+                        _state.update { it.copy(updatePhase = UpdatePhase.VERIFYING) }
+                    },
+                )
+                _state.update {
+                    it.copy(
+                        updatePhase = UpdatePhase.READY_TO_INSTALL,
+                        downloadedApkPath = apkFile.absolutePath,
+                        updateMessage = "",
+                    )
+                }
+            } catch (_: CancellationException) {
+                _state.update {
+                    it.copy(
+                        updatePhase = UpdatePhase.AVAILABLE,
+                        updateReceivedBytes = 0L,
+                        updateMessage = "已取消下载",
+                    )
+                }
+            } catch (error: Throwable) {
+                _state.update {
+                    it.copy(
+                        updatePhase = UpdatePhase.FAILED,
+                        updateMessage = AppUpdater.friendlyError(error),
+                    )
+                }
+            }
+        }
+    }
+
+    fun cancelUpdateDownload() {
+        updateDownloadJob?.cancel()
+    }
+
+    fun installDownloadedApk(context: Context): Boolean {
+        val path = _state.value.downloadedApkPath ?: return false
+        val file = File(path)
+        if (!file.isFile) {
+            _state.update {
+                it.copy(
+                    updatePhase = UpdatePhase.AVAILABLE,
+                    downloadedApkPath = null,
+                    updateMessage = "安装包缓存已失效，请重新下载。",
+                )
+            }
+            return false
+        }
+        if (!context.packageManager.canRequestPackageInstalls()) {
+            val permissionIntent = Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:${context.packageName}"),
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(permissionIntent)
+            _state.update {
+                it.copy(updateMessage = "请在系统设置中允许安装未知应用，返回后再次点击「立即安装」。")
+            }
+            return false
+        }
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val installIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        context.startActivity(installIntent)
+        return true
+    }
+
+    fun openUpdateInBrowser(context: Context) {
+        val url = _state.value.updateInfo?.assetUrl
+            ?: "https://github.com/${AppUpdater.REPOSITORY}/releases/latest"
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+    }
+
     // ---------------------------------------------------------------- 生命周期
 
     override fun onCleared() {
         operationJob?.cancel()
         publicationJob?.cancel()
+        updateCheckJob?.cancel()
+        updateDownloadJob?.cancel()
         engine?.stop()
         super.onCleared()
     }
@@ -1969,6 +2182,8 @@ class WorkbenchStore private constructor(
     companion object {
         private const val PREF_APPEARANCE = "appearance"
         private const val PREF_ECMWF_SOURCE = "ecmwfSource"
+        private const val PREF_AEROSOL_SOURCE = "aerosolSource"
+        private const val PREF_AUTO_UPDATE_CHECK = "autoUpdateCheck"
         private const val PREF_FAVORITES = "favorites"
         private const val PREF_REMOTE_SERVER_URL = "remoteServerUrl"
         private const val PREF_REMOTE_TOKEN = "remoteToken"

@@ -11,6 +11,37 @@ use std::{
     time::SystemTime,
 };
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum AerosolSource {
+    Cams,
+    GeosFp,
+}
+
+impl AerosolSource {
+    pub fn parse(raw: Option<&str>) -> Result<Self, String> {
+        match raw.map(str::trim) {
+            None | Some("") | Some("cams") => Ok(Self::Cams),
+            Some("geos-fp") => Ok(Self::GeosFp),
+            Some(_) => Err("aerosol_source must be cams or geos-fp".into()),
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cams => "cams",
+            Self::GeosFp => "geos-fp",
+        }
+    }
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Cams => "grib",
+            Self::GeosFp => "fsopt",
+        }
+    }
+}
+
 #[derive(PartialEq, Eq)]
 struct ProbeKey {
     path: PathBuf,
@@ -42,11 +73,16 @@ fn probe(
             return Ok(result);
         }
     }
-    let decoder = match codes {
-        Some(codes) => codes,
-        None => codes.insert(EcCodes::load()?),
-    };
-    let result = cams::decode(decoder, path).ok().map(|optics| {
+    let result = if crate::geos_fp::is_fsopt_file(path) {
+        crate::geos_fp::decode_fsopt(path).ok()
+    } else {
+        let decoder = match codes {
+            Some(codes) => codes,
+            None => codes.insert(EcCodes::load()?),
+        };
+        cams::decode(decoder, path).ok()
+    }
+    .map(|optics| {
         let north = optics
             .latitudes
             .iter()
@@ -91,17 +127,22 @@ static ARC_CHECKS: OnceLock<Mutex<VecDeque<(ArcKey, bool)>>> = OnceLock::new();
 /// grid yields one. Spacing is detected from the smallest positive gap so
 /// the single wrap seam never merges the two sides.
 pub(crate) fn longitude_runs(path: &Path) -> Option<Vec<(f64, f64)>> {
-    let codes = EcCodes::load().ok()?;
-    let mut longitudes: Option<Vec<f64>> = None;
-    let visit = codes.visit_while(path, 1, |message| {
-        let count = message.size(b"values\0")?;
-        if count == 0 || count > 5_000_000 {
-            return Ok(false);
-        }
-        longitudes = Some(message.array(b"longitudes\0", count)?);
-        Ok(false)
-    });
-    let longitudes = longitudes.filter(|_| visit.is_ok())?;
+    let longitudes: Vec<f64> = if crate::geos_fp::is_fsopt_file(path) {
+        let (_, _, lons) = crate::geos_fp::read_header(path).ok()?;
+        lons
+    } else {
+        let codes = EcCodes::load().ok()?;
+        let mut longitudes: Option<Vec<f64>> = None;
+        let visit = codes.visit_while(path, 1, |message| {
+            let count = message.size(b"values\0")?;
+            if count == 0 || count > 5_000_000 {
+                return Ok(false);
+            }
+            longitudes = Some(message.array(b"longitudes\0", count)?);
+            Ok(false)
+        });
+        longitudes.filter(|_| visit.is_ok())?
+    };
     let mut unique: Vec<f64> = longitudes
         .iter()
         .map(|&v| (v + 180.0).rem_euclid(360.0) - 180.0)
@@ -416,9 +457,18 @@ fn axis_bounds(axis: &[f64], target: f64) -> (usize, usize, f64) {
 /// are judged together: the +/-180 boundary columns are the same physical
 /// meridian, so a sibling part's boundary column bridges the seam gap exactly
 /// like the scorer's merged grid does.
+#[cfg(test)]
 pub(crate) fn model_grid_covers_group(
     paths: &[PathBuf],
     codes: &EcCodes,
+    coverage: &ModelCoverage<'_>,
+) -> bool {
+    model_grid_covers_group_opt(paths, Some(codes), coverage)
+}
+
+pub(crate) fn model_grid_covers_group_opt(
+    paths: &[PathBuf],
+    codes: Option<&EcCodes>,
     coverage: &ModelCoverage<'_>,
 ) -> bool {
     if paths.is_empty() || coverage.lats.len() < 2 || coverage.lons.len() < 2 {
@@ -426,7 +476,7 @@ pub(crate) fn model_grid_covers_group(
     }
     let mut decoded = Vec::with_capacity(paths.len());
     for path in paths {
-        let Ok(optics) = cams::decode(codes, path) else {
+        let Ok(optics) = cams::decode_path(codes, path) else {
             return false;
         };
         decoded.push(optics);
@@ -565,6 +615,7 @@ pub(crate) struct Selection {
     #[serde(serialize_with = "serialize_time")]
     pub run_time_utc: DateTime<Utc>,
     pub lead_hours: u32,
+    pub source: AerosolSource,
 }
 
 fn serialize_time<S: serde::Serializer>(
@@ -576,9 +627,19 @@ fn serialize_time<S: serde::Serializer>(
 
 pub(crate) fn parse(path: &Path) -> Option<Selection> {
     let name = path.file_name()?.to_str()?;
-    let rest = name
-        .strip_prefix("cams-optics-v2-")?
-        .strip_suffix(".grib")?;
+    let (source, rest) = if let Some(rest) = name
+        .strip_prefix("cams-optics-v2-")
+        .and_then(|s| s.strip_suffix(".grib"))
+    {
+        (AerosolSource::Cams, rest)
+    } else if let Some(rest) = name
+        .strip_prefix("geosfp-optics-v1-")
+        .and_then(|s| s.strip_suffix(".fsopt"))
+    {
+        (AerosolSource::GeosFp, rest)
+    } else {
+        return None;
+    };
     let parts: Vec<_> = rest.splitn(6, '-').collect();
     if parts.len() != 6 || parts[5].is_empty() || parts[5].contains('.') {
         return None;
@@ -607,6 +668,7 @@ pub(crate) fn parse(path: &Path) -> Option<Selection> {
         valid_time: valid,
         run_time_utc: run,
         lead_hours: lead,
+        source,
     })
 }
 
@@ -648,8 +710,9 @@ pub(crate) fn paths(root: &Path) -> Result<Vec<PathBuf>, String> {
                 children.push((item.path(), depth + 1));
             } else if kind.is_file() {
                 let name = item.file_name();
-                if name.to_string_lossy().starts_with("cams-optics-v2-")
-                    && name.to_string_lossy().ends_with(".grib")
+                let name_str = name.to_string_lossy();
+                if (name_str.starts_with("cams-optics-v2-") && name_str.ends_with(".grib"))
+                    || (name_str.starts_with("geosfp-optics-v1-") && name_str.ends_with(".fsopt"))
                 {
                     paths.push(item.path());
                     if paths.len() > 100_000 {
@@ -663,14 +726,7 @@ pub(crate) fn paths(root: &Path) -> Result<Vec<PathBuf>, String> {
     Ok(paths)
 }
 
-pub(crate) fn select(
-    root: &Path,
-    area: [f64; 4],
-    required: &BTreeSet<DateTime<Utc>>,
-) -> Result<BTreeMap<DateTime<Utc>, Selection>, String> {
-    select_with_key(root, area, required, &area_key(area)?, None, &[])
-}
-
+#[cfg(test)]
 pub(crate) fn select_with_key(
     root: &Path,
     area: [f64; 4],
@@ -679,12 +735,32 @@ pub(crate) fn select_with_key(
     coverage: Option<&ModelCoverage<'_>>,
     siblings: &[PathBuf],
 ) -> Result<BTreeMap<DateTime<Utc>, Selection>, String> {
-    let suffix = format!("-{key}.grib");
+    select_with_key_for_source(
+        root,
+        area,
+        required,
+        key,
+        coverage,
+        siblings,
+        AerosolSource::Cams,
+    )
+}
+
+pub(crate) fn select_with_key_for_source(
+    root: &Path,
+    area: [f64; 4],
+    required: &BTreeSet<DateTime<Utc>>,
+    key: &str,
+    coverage: Option<&ModelCoverage<'_>>,
+    siblings: &[PathBuf],
+    source: AerosolSource,
+) -> Result<BTreeMap<DateTime<Utc>, Selection>, String> {
+    let suffix = format!("-{key}.{}", source.extension());
     let mut candidates: Vec<_> = paths(root)?
         .into_iter()
         .filter_map(|path| {
             let selection = parse(&path)?;
-            required.contains(&selection.valid_time).then(|| {
+            (selection.source == source && required.contains(&selection.valid_time)).then(|| {
                 let exact = path
                     .file_name()
                     .unwrap()
@@ -746,13 +822,17 @@ pub(crate) fn select_with_key(
         // tile misses the padded model boundary falls through to the next
         // candidate instead of poisoning the whole forecast.
         if let Some(coverage) = coverage {
-            let decoder = match &mut codes {
-                Some(decoder) => decoder,
-                None => codes.insert(EcCodes::load()?),
-            };
             let mut group = vec![selection.path.clone()];
             group.extend(siblings.iter().cloned());
-            if !model_grid_covers_group(&group, decoder, coverage) {
+            let decoder = if group.iter().all(|p| crate::geos_fp::is_fsopt_file(p)) {
+                None
+            } else {
+                Some(match &mut codes {
+                    Some(decoder) => &*decoder,
+                    None => &*codes.insert(EcCodes::load()?),
+                })
+            };
+            if !model_grid_covers_group_opt(&group, decoder, coverage) {
                 continue;
             }
         }
@@ -766,6 +846,7 @@ pub(crate) fn select_with_key(
     Ok(result)
 }
 
+#[cfg(test)]
 pub(crate) fn nearest_with_key(
     root: &Path,
     area: [f64; 4],
@@ -774,11 +855,34 @@ pub(crate) fn nearest_with_key(
     coverage: Option<&ModelCoverage<'_>>,
     siblings: &[PathBuf],
 ) -> Result<Option<Selection>, String> {
-    let suffix = format!("-{key}.grib");
+    nearest_with_key_for_source(
+        root,
+        area,
+        target,
+        key,
+        coverage,
+        siblings,
+        AerosolSource::Cams,
+    )
+}
+
+pub(crate) fn nearest_with_key_for_source(
+    root: &Path,
+    area: [f64; 4],
+    target: DateTime<Utc>,
+    key: &str,
+    coverage: Option<&ModelCoverage<'_>>,
+    siblings: &[PathBuf],
+    source: AerosolSource,
+) -> Result<Option<Selection>, String> {
+    let suffix = format!("-{key}.{}", source.extension());
     let mut candidates: Vec<_> = paths(root)?
         .into_iter()
         .filter_map(|path| {
             let value = parse(&path)?;
+            if value.source != source {
+                return None;
+            }
             let delta = (value.valid_time - target)
                 .num_microseconds()?
                 .unsigned_abs();
@@ -805,11 +909,16 @@ pub(crate) fn nearest_with_key(
             continue;
         }
         if !exact {
-            let decoder = match &mut codes {
-                Some(codes) => codes,
-                None => codes.insert(EcCodes::load()?),
+            let bounds_res = if crate::geos_fp::is_fsopt_file(&value.path) {
+                crate::geos_fp::read_header(&value.path).map(|(h, _, _)| h.bounds)
+            } else {
+                let decoder = match &mut codes {
+                    Some(codes) => codes,
+                    None => codes.insert(EcCodes::load()?),
+                };
+                decoder.first_area(&value.path)
             };
-            let Ok([n, w, s, e]) = decoder.first_area(&value.path) else {
+            let Ok([n, w, s, e]) = bounds_res else {
                 continue;
             };
             let tolerance = 0.2 + 1e-9;
@@ -830,13 +939,17 @@ pub(crate) fn nearest_with_key(
             }
         }
         if let Some(coverage) = coverage {
-            let decoder = match &mut codes {
-                Some(decoder) => decoder,
-                None => codes.insert(EcCodes::load()?),
-            };
             let mut group = vec![value.path.clone()];
             group.extend(siblings.iter().cloned());
-            if !model_grid_covers_group(&group, decoder, coverage) {
+            let decoder = if group.iter().all(|p| crate::geos_fp::is_fsopt_file(p)) {
+                None
+            } else {
+                Some(match &mut codes {
+                    Some(decoder) => &*decoder,
+                    None => &*codes.insert(EcCodes::load()?),
+                })
+            };
+            if !model_grid_covers_group_opt(&group, decoder, coverage) {
                 continue;
             }
         }
@@ -1057,5 +1170,72 @@ mod tests {
         assert!(!wrapped_request([10.0, -10.0, 0.0, 10.0]));
         assert!(wrapped_request([78.85, 26.15, -6.85, -168.15]));
         assert!(wrapped_request([10.0, 170.0, 0.0, -170.0]));
+    }
+
+    #[test]
+    fn source_isolation_separates_cams_grib_and_geos_fp_fsopt() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let area = [32.0, 118.0, 28.0, 122.0];
+        let key = area_key(area).unwrap();
+        let target = Utc.with_ymd_and_hms(2026, 11, 26, 3, 0, 0).unwrap();
+        let cycle = Utc.with_ymd_and_hms(2026, 11, 26, 0, 0, 0).unwrap();
+
+        let lats = [27.5, 32.5];
+        let lons = [117.5, 122.5];
+        let fsopt = root
+            .join("2026-11-26/00Z")
+            .join(format!("geosfp-optics-v1-2026-11-26-0000-003-{key}.fsopt"));
+        crate::geos_fp::write_fsopt(
+            &fsopt,
+            &crate::geos_fp::FsoptHeader {
+                contract: "firesky-optics-v1".into(),
+                source: "geos-fp".into(),
+                valid_time_utc: time_contract::iso(target),
+                run_time_utc: time_contract::iso(cycle),
+                lead_hours: 3,
+                n_lat: 2,
+                n_lon: 2,
+                pressure_levels: crate::native::cams::LEVELS.to_vec(),
+                bounds: [32.5, 117.5, 27.5, 122.5],
+            },
+            &lats,
+            &lons,
+            &[0.2; 4],
+            &vec![1e-5; 4 * 11],
+        )
+        .unwrap();
+
+        let bogus_grib = root
+            .join("2026-11-26/00Z")
+            .join(format!("cams-optics-v2-2026-11-26-0000-003-{key}.grib"));
+        fs::write(&bogus_grib, b"not-a-valid-grib").unwrap();
+
+        let required: BTreeSet<_> = [target].into_iter().collect();
+        let geos_hits = select_with_key_for_source(
+            root,
+            area,
+            &required,
+            &key,
+            None,
+            &[],
+            AerosolSource::GeosFp,
+        )
+        .unwrap();
+        assert_eq!(geos_hits.len(), 1);
+        assert_eq!(geos_hits[&target].source, AerosolSource::GeosFp);
+        assert_eq!(geos_hits[&target].path, fsopt);
+
+        let cams_hits = select_with_key_for_source(
+            root,
+            area,
+            &required,
+            &key,
+            None,
+            &[],
+            AerosolSource::Cams,
+        )
+        .unwrap();
+        assert!(cams_hits.is_empty());
     }
 }

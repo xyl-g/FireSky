@@ -10,6 +10,8 @@ const {
   ELEVATION_SOURCE_CHOICES, ELEVATION_SOURCE_STORAGE_KEY,
   parseElevationSource, loadElevationSource, saveElevationSource,
   withElevationSource, elevationSourceDescription, metadataSourceTitle,
+  AEROSOL_SOURCE_CHOICES, AEROSOL_SOURCE_STORAGE_KEY,
+  parseAerosolSource, loadAerosolSource, saveAerosolSource,
 } = await import(`data:text/javascript;base64,${Buffer.from(js).toString("base64")}`);
 const status = {
   configured: true, state: "configured", path: "/fixture/.cdsapirc",
@@ -61,6 +63,19 @@ test("elevation source persists round-trip and survives corrupt values or unavai
   const broken = { getItem() { throw new Error("storage denied"); }, setItem() { throw new Error("storage denied"); } };
   assert.equal(loadElevationSource(broken), "auto");
   assert.equal(saveElevationSource(broken, "srtm"), false);
+});
+
+test("aerosol source accepts cams or geos-fp and defaults cleanly to cams", () => {
+  assert.deepEqual([...AEROSOL_SOURCE_CHOICES], ["cams", "geos-fp"]);
+  for (const value of AEROSOL_SOURCE_CHOICES) assert.equal(parseAerosolSource(value), value);
+  for (const value of ["", "CAMS", "geos_fp", null, undefined, 42]) {
+    assert.equal(parseAerosolSource(value), "cams");
+  }
+  const memory = new Map();
+  const storage = { getItem: (key) => memory.get(key) ?? null, setItem: (key, value) => memory.set(key, value) };
+  assert.equal(loadAerosolSource(storage), "cams");
+  assert.equal(saveAerosolSource(storage, "geos-fp"), true);
+  assert.equal(loadAerosolSource(storage), "geos-fp");
 });
 
 test("metadata and search params carry elevation_source without mutating the caller payload", () => {

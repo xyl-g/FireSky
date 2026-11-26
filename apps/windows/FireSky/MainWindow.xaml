@@ -842,13 +842,18 @@
                                                     <TextBlock Text="下载源" FontSize="14" FontWeight="SemiBold"
                                                                VerticalAlignment="Center"/>
                                                 </StackPanel>
-                                                <RadioButtons x:Name="EcmwfSourcePicker" SelectedIndex="0"
+                                                <RadioButtons x:Name="EcmwfSourcePicker" Header="EC 下载源" SelectedIndex="0"
                                                               SelectionChanged="OnEcmwfSourceChanged">
                                                     <RadioButton Content="ECMWF 官方" Tag="ecmwf"/>
                                                     <RadioButton Content="AWS 欧洲镜像" Tag="aws"/>
                                                     <RadioButton Content="Google Cloud 镜像" Tag="google"/>
                                                 </RadioButtons>
-                                                <TextBlock Text="EC 下载源同时用于下载探测、数据准备和预测。GFS 使用 NOAA NOMADS，CAMS 使用 Copernicus ADS。"
+                                                <RadioButtons x:Name="AerosolSourcePicker" Header="AOD 数据来源" SelectedIndex="0"
+                                                              SelectionChanged="OnAerosolSourceChanged">
+                                                    <RadioButton Content="CAMS · Copernicus ADS" Tag="cams"/>
+                                                    <RadioButton Content="NASA GEOS-FP（免密钥直连）" Tag="geos-fp"/>
+                                                </RadioButtons>
+                                                <TextBlock Text="EC 下载源与 AOD 数据来源同时用于下载探测、数据准备和预测。GFS 使用 NOAA NOMADS；CAMS 需 ADS Key，GEOS-FP 免密钥直连。"
                                                            FontSize="11" Opacity=".65" TextWrapping="Wrap"/>
                                             </StackPanel>
                                         </Border>

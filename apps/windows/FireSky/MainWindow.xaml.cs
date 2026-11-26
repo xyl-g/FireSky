@@ -33,6 +33,7 @@ public sealed partial class MainWindow : Window
     private string page = "point", resultKind = "";
     private string settingsCategory = "data";
     private string ecmwfSource = "ecmwf";
+    private string aerosolSource = "cams";
     private string elevationSource = "auto";
     private string elevationSourceActual = "";
     private string dateTab = "今天";  // 状态键保持中文原文（显示经树遍历翻译）
@@ -421,7 +422,7 @@ public sealed partial class MainWindow : Window
     /// <summary>启动时 CAMS 未配置 → 提醒直达设置→数据（macOS openCAMSSetup 基准）。</summary>
     private async Task MaybeCamsReminder()
     {
-        if (camsConfigured || !online) return;
+        if (camsConfigured || aerosolSource == "geos-fp" || !online) return;
         var dialog = new ContentDialog
         {
             Title = L10n.T("CAMS 数据源未配置"),
@@ -468,6 +469,9 @@ public sealed partial class MainWindow : Window
         ecmwfSource = Text(saved, "ecmwfSource") is { Length: > 0 } source && source is "ecmwf" or "aws" or "google"
             ? source : "ecmwf";
         EcmwfSourcePicker.SelectedIndex = ecmwfSource switch { "aws" => 1, "google" => 2, _ => 0 };
+        aerosolSource = Text(saved, "aerosolSource") == "geos-fp" ? "geos-fp" : "cams";
+        AerosolSourcePicker.SelectedIndex = aerosolSource == "geos-fp" ? 1 : 0;
+        ProbeEcNote.Text = ProbeSourceNote();
         elevationSource = Text(saved, "elevationSource") is { Length: > 0 } elevation && elevation is "auto" or "http" or "srtm"
             ? elevation : "auto";
         ElevationSourcePicker.SelectedIndex = elevationSource switch { "http" => 1, "srtm" => 2, _ => 0 };
@@ -506,6 +510,7 @@ public sealed partial class MainWindow : Window
         saved["engineBinary"] = EnginePath.Text;
         saved["appearance"] = TagOf(Appearance.SelectedItem);
         saved["ecmwfSource"] = ecmwfSource;
+        saved["aerosolSource"] = aerosolSource;
         saved["elevationSource"] = elevationSource;
         saved["settingsCategory"] = settingsCategory;
         saved["autoUpdateCheck"] = updater.AutoCheck;
@@ -1166,6 +1171,7 @@ public sealed partial class MainWindow : Window
             ["forecast_mode"] = "model", ["satellite_source"] = "off",
             // v1.1.1 契约：EC 下载源与海拔来源随每次请求透传。
             ["ecmwf_source"] = ecmwfSource,
+            ["aerosol_source"] = aerosolSource,
             ["elevation_source"] = elevationSource,
         };
         if (page == "nowcast")
@@ -1274,6 +1280,7 @@ public sealed partial class MainWindow : Window
             if (!SameString("target_date", TargetDateLabel())) return true;
             if (!SameString("phenomenon", TagOf(Phenomenon.SelectedItem))) return true;
             if (!SameString("ecmwf_source", ecmwfSource)) return true;
+            if (!SameString("aerosol_source", aerosolSource)) return true;
             if (resultKind == "regional")
             {
                 if (!SameString("model_source", TagOf(RegionalModel.SelectedItem))) return true;
@@ -1421,9 +1428,28 @@ public sealed partial class MainWindow : Window
         // 修改来源后，旧连通性结果标记为过期，不能继续显示为当前配置通过。
         probeDate = null;
         ResetProbeRows();
-        ProbeEcNote.Text = $"当前使用 EC {EcmwfSourceLabel()}。GFS 与 CAMS 使用各自官方入口。";
+        ProbeEcNote.Text = ProbeSourceNote();
         SaveSettings();
     }
+
+    private void OnAerosolSourceChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (!initialized) return;
+        var next = SettingsCategories.SelectedIndex >= 0
+            ? TagOf(AerosolSourcePicker.SelectedItem) : "cams";
+        if (next is not ("cams" or "geos-fp")) next = "cams";
+        if (next == aerosolSource) return;
+        aerosolSource = next;
+        probeDate = null;
+        ResetProbeRows();
+        ProbeEcNote.Text = ProbeSourceNote();
+        UpdateRuntimeSummary();
+        SaveSettings();
+    }
+
+    internal string ProbeSourceNote() => aerosolSource == "geos-fp"
+        ? $"当前使用 EC {EcmwfSourceLabel()}，AOD 使用 NASA GEOS-FP（免密钥）。GFS 使用 NOAA NOMADS。"
+        : $"当前使用 EC {EcmwfSourceLabel()}。GFS 与 CAMS 使用各自官方入口。";
 
     internal string EcmwfSourceLabel() => ecmwfSource switch
     {

@@ -30,8 +30,10 @@ public sealed partial class MainWindow
             : dataSyncConfigured ? L10n.T("已配置") : L10n.T("按需准备");
         SummarySyncDot.Fill = ThemeBrush(syncHealthy ? "FireSkySuccessBrush" : "FireSkyWarningBrush");
 
-        SummaryCamsText.Text = camsConfigured ? L10n.T("已配置") : L10n.T("未配置");
-        SummaryCamsDot.Fill = ThemeBrush(camsConfigured ? "FireSkySuccessBrush" : "FireSkyWarningBrush");
+        SummaryCamsText.Text = aerosolSource == "geos-fp"
+            ? "GEOS-FP"
+            : camsConfigured ? L10n.T("已配置") : L10n.T("未配置");
+        SummaryCamsDot.Fill = ThemeBrush(aerosolSource == "geos-fp" || camsConfigured ? "FireSkySuccessBrush" : "FireSkyWarningBrush");
 
         SummaryRetentionText.Text = dataSyncRetentionConfigured ? L10n.T("已配置") : L10n.T("不限制");
         SummaryRetentionDot.Fill = ThemeBrush(dataSyncRetentionConfigured ? "FireSkySuccessBrush" : "FireSkyWarningBrush");
@@ -140,7 +142,7 @@ public sealed partial class MainWindow
     private void ResetProbeRows()
     {
         probeRows.Clear();
-        probeRows.AddRange(ProbeRow.Initial());
+        probeRows.AddRange(ProbeRow.Initial(aerosolSource));
         probeDate = null;
         ProbeErrorText.Text = "";
         ProbeErrorText.Visibility = Visibility.Collapsed;
@@ -156,14 +158,16 @@ public sealed partial class MainWindow
         ProbeErrorText.Text = "";
         ProbeErrorText.Visibility = Visibility.Collapsed;
         probeRows.Clear();
-        probeRows.AddRange(ProbeRow.Initial());
+        probeRows.AddRange(ProbeRow.Initial(aerosolSource));
         probeOperation = new CancellationTokenSource();
         var token = probeOperation.Token;
         RenderProbeRows();
         UpdateProbeControls();
         try
         {
-            var response = await engine.Call("network_probe", new() { ["ecmwf_source"] = ecmwfSource },
+            var response = await engine.Call(
+                "network_probe",
+                new() { ["ecmwf_source"] = ecmwfSource, ["aerosol_source"] = aerosolSource },
                 progress: e => DispatcherQueue.TryEnqueue(() =>
                 {
                     if (cancellingProbe || e["probe"] is not JsonObject json) return;
@@ -234,7 +238,10 @@ public sealed partial class MainWindow
         ProbeCopyButton.Visibility = probeDate != null && !probingDownloads
             ? Visibility.Visible : Visibility.Collapsed;
         ProbeFooter.Text = probingDownloads
-            ? (cancellingProbe ? L10n.T("正在停止探测") : L10n.T("正在验证真实数据下载 · CAMS 等待上限约 90 秒"))
+            ? (cancellingProbe ? L10n.T("正在停止探测")
+                : aerosolSource == "geos-fp"
+                    ? L10n.T("正在验证真实数据下载 · GEOS-FP OPeNDAP")
+                    : L10n.T("正在验证真实数据下载 · CAMS 等待上限约 90 秒"))
             : probeDate != null
                 ? $"{probeDate:HH:mm:ss} · {probeRows.Count(row => row.Passed)}/3 项下载验证通过"
                 : L10n.T("尚无本次网络的下载验证结果");
@@ -454,8 +461,9 @@ public sealed partial class MainWindow
                     ["interval_minutes"] = DataSyncInteger(SyncIntervalBox.Text),
                     ["anchor_region"] = dataSyncAnchor.Length == 0 ? null : JsonValue.Create(dataSyncAnchor),
                     ["lead_horizon_hours"] = DataSyncInteger(SyncLeadBox.Text),
-                    // EC 下载源复用现有 ecmwfSource。
+                    // EC 下载源与气溶胶源复用现有配置。
                     ["ecmwf_source"] = ecmwfSource,
+                    ["aerosol_source"] = aerosolSource,
                 },
             };
             // 重存设置即解锁通道：引擎在保存时清零熔断计数与挂起标记。

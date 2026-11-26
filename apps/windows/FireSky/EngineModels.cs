@@ -33,11 +33,15 @@ public sealed class ProbeRow
     public string Measurement =>
         $"{Bytes / 1024d:0.#} KB · {ElapsedMs / 1000d:0.0} 秒";
 
-    public static ProbeRow[] Initial() =>
+    public static ProbeRow[] Initial(string aerosolSource = "cams") =>
     [
         new() { Source = "gfs", Title = "GFS · NOAA NOMADS" },
         new() { Source = "ec", Title = "EC · ECMWF Open Data" },
-        new() { Source = "cams", Title = "CAMS · Copernicus ADS" },
+        new()
+        {
+            Source = "cams",
+            Title = aerosolSource == "geos-fp" ? "GEOS-FP · NASA OPeNDAP" : "CAMS · Copernicus ADS",
+        },
     ];
 
     /// <summary>引擎探测行解析；source 必须是三个已知源之一。</summary>

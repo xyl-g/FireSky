@@ -555,6 +555,7 @@ impl<'a> SharedDecoder<'a> {
 struct OpticalCatalog {
     files: BTreeMap<DateTime<Utc>, Vec<PathBuf>>,
     mapped: BTreeMap<DateTime<Utc>, Mapped>,
+    aerosol_source: Option<String>,
 }
 impl OpticalCatalog {
     fn preload_parallel(
@@ -608,10 +609,17 @@ impl OpticalCatalog {
                     for source in &loaded_sources {
                         source.revalidate()?;
                     }
-                    Ok((time, loaded_sources, mapped))
+                    Ok((time, loaded_sources, mapped, optics.source))
                 })
                 .collect::<Result<Vec<_>, String>>()?;
-            for (time, loaded_sources, mapped) in loaded {
+            for (time, loaded_sources, mapped, opt_source) in loaded {
+                if let Some(existing) = &self.aerosol_source {
+                    if existing != &opt_source {
+                        return Err("aerosol catalog mixed CAMS and GEOS-FP sources".into());
+                    }
+                } else {
+                    self.aerosol_source = Some(opt_source);
+                }
                 sources.extend(loaded_sources);
                 self.mapped.insert(time, mapped);
             }
@@ -655,6 +663,13 @@ impl OpticalCatalog {
         // Keep the original order stable so source provenance remains
         // deterministic for ordinary single-area catalogs and wrapped
         // two-area catalogs alike.
+        if let Some(existing) = &self.aerosol_source {
+            if existing != &optics.source {
+                return Err("aerosol catalog mixed CAMS and GEOS-FP sources".into());
+            }
+        } else {
+            self.aerosol_source = Some(optics.source);
+        }
         sources.extend(loaded_sources);
         self.mapped.insert(time, mapped);
         Ok(())
@@ -1057,6 +1072,7 @@ fn run_input(
     let mut catalog = OpticalCatalog {
         files: BTreeMap::new(),
         mapped: BTreeMap::new(),
+        aerosol_source: None,
     };
     for file in &input.cams {
         let time = parse_utc(&file.valid_time)?;
@@ -1714,18 +1730,24 @@ fn run_input(
                 anchor: r.anchor,
             })
             .collect();
+        let aerosol_tag = catalog.aerosol_source.as_deref().unwrap_or("cams-ads");
+        let aerosol_quality = if aerosol_tag == "geos-fp" {
+            "geos-fp"
+        } else {
+            "cams"
+        };
         let sources = anchor_brackets
             .iter()
             .map(|b| {
                 Ok(format!(
-                    "cams-ads {}..{} w={:.6}",
+                    "{aerosol_tag} {}..{} w={:.6}",
                     from_epoch(b[0])?.format("%Y-%m-%d %H:%MZ"),
                     from_epoch(b[1])?.format("%Y-%m-%d %H:%MZ"),
                     b[2],
                 ))
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let qualities = vec!["cams".to_owned(); points.len()];
+        let qualities = vec![aerosol_quality.to_owned(); points.len()];
         let retained = quality_data.as_ref().unwrap();
         let empty_extras = vec![[0.0; 20]; points.len()];
         let payload = crate::frames::Payload::prepare(crate::frames::Input {
@@ -1798,8 +1820,15 @@ fn run_input(
                 "stored_point_payload_complete":true,"automatic_input_selection":plan.is_some(),
                 "numpy_blas_tie_parity_proven":false,"public_forecast_complete":false});
             if let Some(plan) = &plan {
+                let is_geos_fp = catalog.aerosol_source.as_deref() == Some("geos-fp");
                 artifact["automatic_input_selection_scope"] =
-                    json!(if plan["cams_download_enabled"] == true {
+                    json!(if is_geos_fp {
+                        if matches!(input.model, Model::EcmwfBasic) {
+                            "EC-event-hours-and-GEOS-FP"
+                        } else {
+                            "GFS-event-hours-and-GEOS-FP"
+                        }
+                    } else if plan["cams_download_enabled"] == true {
                         if matches!(input.model, Model::EcmwfBasic) {
                             "EC-event-hours-and-CAMS-ADS"
                         } else {
@@ -1909,6 +1938,12 @@ fn run_input(
     } else {
         None
     };
+    let aerosol_tag = catalog.aerosol_source.as_deref().unwrap_or("cams-ads");
+    let aerosol_quality = if aerosol_tag == "geos-fp" {
+        "geos-fp"
+    } else {
+        "cams"
+    };
     *writer.metadata_mut() = json!({
         "backend":if with_point {"rust-stored-point-forecast-v1"} else if with_frames {"rust-stored-frames-v1"} else if with_profiles {"rust-stored-profile-diagnostics-v1"} else if with_diagnostics {"rust-stored-diagnostics-v1"} else if with_quality {"rust-stored-quality-v1"} else {"rust-stored-assessment-v1"},
         "model":input.model,"cycle_utc":input.cycle_utc,
@@ -1917,9 +1952,9 @@ fn run_input(
         "assessment_fields":NATIONAL_OUTPUT_FIELDS,"pressure_levels":levels,"aerosol_pressure_levels":LEVELS,
         "compact_results":input.compact_results,
         "profile_bundles":profiles,"sources":sources,
-        "point_source_template":"cams-ads {left:%Y-%m-%d %H:%MZ}..{right:%Y-%m-%d %H:%MZ} w={weight:.6f}",
+        "point_source_template":format!("{aerosol_tag} {{left:%Y-%m-%d %H:%MZ}}..{{right:%Y-%m-%d %H:%MZ}} w={{weight:.6f}}"),
         "aerosol_anchor_bracket_fields":["left_epoch","right_epoch","right_weight"],
-        "point_quality":"cams","optical_profile_coverage":1.0,
+        "point_quality":aerosol_quality,"optical_profile_coverage":1.0,
         "native_step_range":[step_start,step_stop],"native_abi":crate::native::NATIVE_ABI_VERSION,
         "compute_backend":"cpu","source_scope":"consumed-model-and-CAMS-files",
         "timezone_database":chrono_tz::IANA_TZDB_VERSION,"polar_policy":"legacy-hour-angle-clamp",

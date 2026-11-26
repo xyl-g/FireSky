@@ -8,12 +8,13 @@
     type InventoryDataset, type ProbeRow,
   } from "../data-display";
 
-  let { online, generation, regions = [], visible = true, ecSource = $bindable("ecmwf"), onBusy = () => {} }: {
+  let { online, generation, regions = [], visible = true, ecSource = $bindable("ecmwf"), aerosolSource = $bindable("cams"), onBusy = () => {} }: {
     online: boolean;
     generation: number;
     regions?: Array<Record<string, unknown>>;
     visible?: boolean;
     ecSource?: string;
+    aerosolSource?: string;
     onBusy?: (busy: boolean) => void;
   } = $props();
   const controller = new DataSessionController({ start: rpcStart, request: rpcRequest }, (next) => { session = next; });
@@ -28,12 +29,13 @@
   let phenomenon = $state("dusk");
   let confirmOpen = $state(false);
   let confirmationDialog: HTMLDialogElement;
-  let probeRows = $state(initialProbes());
+  let probeRows = $state(initialProbes("cams"));
   let probeBusy = $state(false);
   let probeCancelling = $state(false);
   let probeError = $state("");
   let probeTime = $state("");
   let probeECSource = $state("ecmwf");
+  let probeAerosolSource = $state("cams");
   let eventError = $state("");
   let probeHandle: RpcRequestHandle<{ datasets: ProbeRow[]; checked_at: string }> | null = null;
   let inventoryRevision = 0;
@@ -41,6 +43,7 @@
   let previousGeneration = -1;
   let previouslyOnline = false;
   let previousECSource: string | undefined;
+  let previousAerosolSource: string | undefined;
   let alive = false;
 
   const busy = $derived(["checking", "preparing", "cancelling"].includes(session.phase));
@@ -90,7 +93,7 @@
     if (!online || busy || !targetDate || !region) return;
     void controller.check({
       regions: [region], target_date: targetDate, phenomenon,
-      ecmwf_source: ecSource, spacing_deg: 0.25, workers: 1,
+      ecmwf_source: ecSource, aerosol_source: aerosolSource, spacing_deg: 0.25, workers: 1,
       model_source: "both", forecast_mode: "model", satellite_source: "off",
     });
   }
@@ -104,7 +107,7 @@
 
   function handleProgress(id: string, event: ProgressEvent) {
     controller.progress(id, event);
-    if (id !== probeHandle?.requestId || probeCancelling || probeECSource !== ecSource || !event.probe) return;
+    if (id !== probeHandle?.requestId || probeCancelling || probeECSource !== ecSource || probeAerosolSource !== aerosolSource || !event.probe) return;
     const row = event.probe as unknown as ProbeRow;
     if (probeRows.some((item) => item.source === row.source)) {
       probeRows = probeRows.map((item) => item.source === row.source ? row : item);
@@ -115,31 +118,33 @@
     if (!online || probeBusy) return;
     const revision = connectionRevision;
     const source = ecSource;
+    const aerosol = aerosolSource;
     probeECSource = source;
+    probeAerosolSource = aerosol;
     probeBusy = true;
     probeCancelling = false;
     probeError = "";
     probeTime = "";
-    probeRows = initialProbes().map((row) => ({ ...row, state: "testing", detail: "正在连接数据源" }));
-    const handle = rpcStart<{ datasets: ProbeRow[]; checked_at: string }>("network_probe", { ecmwf_source: source });
+    probeRows = initialProbes(aerosol).map((row) => ({ ...row, state: "testing", detail: "正在连接数据源" }));
+    const handle = rpcStart<{ datasets: ProbeRow[]; checked_at: string }>("network_probe", { ecmwf_source: source, aerosol_source: aerosol });
     probeHandle = handle;
     try {
       const result = await handle.result;
       if (!alive || revision !== connectionRevision || probeCancelling) return;
-      if (source !== ecSource) return;
+      if (source !== ecSource || aerosol !== aerosolSource) return;
       probeRows = result.datasets;
       probeTime = new Date(result.checked_at).toLocaleString();
     } catch (error) {
       if (!alive || revision !== connectionRevision) return;
-      if (source !== ecSource) return;
+      if (source !== ecSource || aerosol !== aerosolSource) return;
       const cancelled = probeCancelling || (error instanceof RpcError && error.code === "cancelled");
       probeError = cancelled ? "探测已取消；未完成的数据源尚未证明可下载。" : errorText(error);
     } finally {
       if (alive && revision === connectionRevision) {
-        if (source !== ecSource) {
-          probeRows = initialProbes();
+        if (source !== ecSource || aerosol !== aerosolSource) {
+          probeRows = initialProbes(aerosolSource);
           probeTime = "";
-          probeError = "EC 下载源已变更，请重新探测当前来源。";
+          probeError = "下载源已变更，请重新探测当前来源。";
         } else {
           probeRows = probeRows.map((row) => row.state === "testing"
             ? { ...row, state: probeCancelling ? "cancelled" : "error", detail: "未完成探测" } : row);
@@ -176,14 +181,16 @@
 
   $effect(() => {
     const source = ecSource;
-    if (source === previousECSource) return;
-    const changed = previousECSource !== undefined;
+    const aerosol = aerosolSource;
+    if (source === previousECSource && aerosol === previousAerosolSource) return;
+    const changed = previousECSource !== undefined || previousAerosolSource !== undefined;
     previousECSource = source;
+    previousAerosolSource = aerosol;
     if (!changed) return;
     parametersChanged();
-    probeRows = initialProbes();
+    probeRows = initialProbes(aerosol);
     probeTime = "";
-    probeError = probeBusy ? "EC 下载源已变更，等待原探测结束后可重新探测。" : "";
+    probeError = probeBusy ? "下载源已变更，等待原探测结束后可重新探测。" : "";
   });
 
   function keydown(event: KeyboardEvent) {
@@ -212,7 +219,7 @@
       probeHandle = null;
       probeBusy = false;
       probeCancelling = false;
-      probeRows = initialProbes();
+      probeRows = initialProbes(aerosolSource);
       probeTime = "";
       probeError = "";
       parametersChanged();
@@ -257,7 +264,7 @@
       {#if probeBusy}<button disabled={probeCancelling} onclick={cancelProbe}><Square size={14} />{probeCancelling ? "取消中…" : "取消探测"}</button>
       {:else}<button disabled={!online || !!eventError} onclick={probe}><Network size={16} />探测下载</button>{/if}
     </div>
-    <p class="muted probe-source">EC · {ecSourceLabel}</p>
+    <p class="muted probe-source">EC · {ecSourceLabel} · AOD · {aerosolSource === "geos-fp" ? "NASA GEOS-FP（免密钥）" : "CAMS ADS"}</p>
     <div class="probe-list">
       {#each probeRows as row (row.source)}
         <div class="probe-row">
@@ -317,7 +324,7 @@
   </section>
 
   <section aria-labelledby="prepare-title">
-    <div class="section-head"><h2 id="prepare-title"><Download size={17} />区域数据准备</h2><span class="muted">GFS + EC + CAMS</span></div>
+    <div class="section-head"><h2 id="prepare-title"><Download size={17} />区域数据准备</h2><span class="muted">GFS + EC + {aerosolSource === "geos-fp" ? "GEOS-FP" : "CAMS"}</span></div>
     <div class="form-row">
       <label>区域<select bind:value={region} onchange={parametersChanged} disabled={busy || !online || !regionOptions.length}>
         {#each regionOptions as item}<option value={String(item.code)}>{String(item.label)}</option>{/each}
@@ -334,7 +341,7 @@
           <table>
             <thead><tr><th>数据源</th><th>本次所需周期 UTC</th><th>本地状态</th><th>最新发布 UTC</th></tr></thead>
             <tbody>{#each session.report.datasets as row, index (`${row.source}-${index}`)}
-              <tr><td><strong>{sourceTitle(row.source)}</strong></td><td>{row.request_cycle ?? "未知"}</td>
+              <tr><td><strong>{sourceTitle(row.aerosol_source === "geos-fp" && row.source === "cams" ? "geos-fp" : row.source)}</strong></td><td>{row.request_cycle ?? "未知"}</td>
                 <td class:ready={row.ready}>{row.ready ? "本地已齐" : `缺少 ${row.missing_count ?? "未知"} 项`}</td>
                 <td>{row.verified ? `${row.latest_available_cycle ?? "未知"}${row.is_latest ? " · 已是最新" : ""}` : "未核验"}</td></tr>
             {/each}</tbody>
@@ -361,7 +368,7 @@
 <dialog bind:this={confirmationDialog} class="confirm-dialog" aria-labelledby="download-confirm" oncancel={(event) => { event.preventDefault(); confirmOpen = false; }} onclose={() => { confirmOpen = false; }}>
       <h2 id="download-confirm">准备区域数据？</h2>
       <p>{regionTitle} · {targetDate} · {phenomenon === "dawn" ? "朝霞" : "晚霞"}</p>
-      <p>将下载或更新 GFS、EC 与 CAMS 所需原始数据。区域文件可能较大，CAMS 需要已配置的 ADS 凭据。取消需等待当前下载阶段结束。</p>
+      <p>{aerosolSource === "geos-fp" ? "将下载或更新 GFS、EC 与 NASA GEOS-FP 所需原始数据（GEOS-FP 无需密钥）。取消需等待当前下载阶段结束。" : "将下载或更新 GFS、EC 与 CAMS 所需原始数据。区域文件可能较大，CAMS 需要已配置的 ADS 凭据。取消需等待当前下载阶段结束。"}</p>
       <div class="action-row"><button onclick={() => { confirmOpen = false; }}>返回</button><span class="action-spacer"></span><button class="primary" onclick={prepare}><Download size={16} />确认准备</button></div>
 </dialog>
 

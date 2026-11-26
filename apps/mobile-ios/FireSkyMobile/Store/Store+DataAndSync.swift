@@ -79,6 +79,7 @@ extension Store {
         }
         if let value = payload["phenomenon"] as? String { phenomenon = value }
         if let value = payload["ecmwf_source"] as? String { ecmwfSource = value }
+        if let value = payload["aerosol_source"] as? String, ["cams", "geos-fp"].contains(value) { aerosolSource = value }
         if kind == .regional {
             if let model = payload["model_source"] as? String, ["gfs", "ec"].contains(model) {
                 regionalModel = model
@@ -693,6 +694,7 @@ extension Store {
                 "anchor_region": (dataSyncAnchor.isEmpty ? NSNull() : dataSyncAnchor) as Any,
                 "lead_horizon_hours": dataSyncInteger(dataSyncLeadHorizon),
                 "ecmwf_source": ecmwfSource,
+                "aerosol_source": aerosolSource,
             ],
         ]
         Task {
@@ -855,7 +857,7 @@ extension Store {
         cancellingDownloadProbe = false
         downloadProbeDate = nil
         downloadProbeError = ""
-        downloadProbeRows = DownloadProbeRow.initial
+        downloadProbeRows = DownloadProbeRow.initial(aerosolSource: aerosolSource)
         downloadProbeTask = Task { [self] in
             defer {
                 probingDownloads = false
@@ -863,7 +865,7 @@ extension Store {
                 downloadProbeTask = nil
             }
             do {
-                let response = try await engine.call("network_probe", ["ecmwf_source": ecmwfSource],
+                let response = try await engine.call("network_probe", ["ecmwf_source": ecmwfSource, "aerosol_source": aerosolSource],
                                                      progress: { [weak self] event in
                     guard let self, !self.cancellingDownloadProbe,
                           let json = event["probe"] as? JSONObject,

@@ -257,6 +257,7 @@ fn cams_paths_for_time(
     target_iso: &str,
     exact: bool,
     allow_download: bool,
+    aerosol_source: Option<&str>,
 ) -> Result<Vec<PathBuf>, String> {
     let mut paths = Vec::new();
     for area in areas {
@@ -264,6 +265,7 @@ fn cams_paths_for_time(
             "operation":"resolve", "cache_dir":cache_dir,
             "area":area, "target_utc":target_iso,
             "allow_download":allow_download,"require_exact_valid_time":exact,
+            "aerosol_source":aerosol_source,
         }))
         .map_err(|e| e.to_string())?;
         let result = crate::cams_data::execute(params)?;
@@ -284,9 +286,14 @@ fn cams_paths_for_time(
     Ok(paths)
 }
 
-fn corridor_source<'a>(paths: impl Iterator<Item = &'a PathBuf>) -> String {
+fn corridor_source<'a>(optics_source: &str, paths: impl Iterator<Item = &'a PathBuf>) -> String {
+    let tag = if optics_source == "geos-fp" {
+        "geos-fp corridor"
+    } else {
+        "cams-native corridor"
+    };
     format!(
-        "cams-native corridor {}",
+        "{tag} {}",
         paths
             .map(|path| path.display().to_string())
             .collect::<Vec<_>>()
@@ -310,11 +317,12 @@ fn aerosol_reading(
         "FIRESKY_CAMS_CACHE_DIR",
         ".cache/cams",
     )?;
+    let aerosol_source = payload["aerosol_source"].as_str();
     let lat = finite(&context["request"], "lat")?;
     let lon = finite(&context["request"], "lon")?;
     let radius = finite(&context["request"], "radius_km")?;
     let anchor = text(context, "anchor")?;
-    let codes = crate::grib::EcCodes::load()?;
+    let mut codes: Option<crate::grib::EcCodes> = None;
 
     // Interpolate AOD to the event time when both 3-hour brackets resolve; else nearest.
     let mut interpolated = None;
@@ -325,6 +333,7 @@ fn aerosol_reading(
             &time_contract::iso(left_time),
             true,
             allow_download,
+            aerosol_source,
         );
         let right = cams_paths_for_time(
             &areas,
@@ -332,31 +341,53 @@ fn aerosol_reading(
             &time_contract::iso(right_time),
             true,
             allow_download,
+            aerosol_source,
         );
         if let (Ok(left_paths), Ok(right_paths)) = (left, right) {
-            let left_optics = crate::cams::decode_many(&codes, &left_paths)?;
-            let right_optics = crate::cams::decode_many(&codes, &right_paths)?;
+            if !left_paths.iter().chain(&right_paths).all(|p| crate::geos_fp::is_fsopt_file(p))
+                && codes.is_none()
+            {
+                codes = Some(crate::grib::EcCodes::load()?);
+            }
+            let left_optics = crate::cams::decode_many_paths(codes.as_ref(), &left_paths)?;
+            let right_optics = crate::cams::decode_many_paths(codes.as_ref(), &right_paths)?;
             if let (Some((aod_left, samples)), Some((aod_right, _))) = (
                 corridor_aod(&left_optics, lat, lon, radius, azimuth),
                 corridor_aod(&right_optics, lat, lon, radius, azimuth),
             ) {
                 let aod = aod_left + (aod_right - aod_left) * f64::from(weight);
-                let source = corridor_source(left_paths.iter().chain(&right_paths));
-                interpolated = Some((aod, samples, source));
+                let source = corridor_source(&left_optics.source, left_paths.iter().chain(&right_paths));
+                interpolated = Some((aod, samples, source, left_optics.source));
             }
         }
     }
 
-    let (aod, samples, source) = if let Some(value) = interpolated {
+    let (aod, samples, source, optics_source) = if let Some(value) = interpolated {
         value
     } else {
-        let paths = cams_paths_for_time(&areas, &cache_dir, anchor, false, allow_download)?;
-        let optics = crate::cams::decode_many(&codes, &paths)?;
+        let paths = cams_paths_for_time(
+            &areas,
+            &cache_dir,
+            anchor,
+            false,
+            allow_download,
+            aerosol_source,
+        )?;
+        if !paths.iter().all(|p| crate::geos_fp::is_fsopt_file(p)) && codes.is_none() {
+            codes = Some(crate::grib::EcCodes::load()?);
+        }
+        let optics = crate::cams::decode_many_paths(codes.as_ref(), &paths)?;
         let (aod, samples) = corridor_aod(&optics, lat, lon, radius, azimuth)
             .ok_or("CAMS corridor did not contain usable AOD samples")?;
-        (aod, samples, corridor_source(paths.iter()))
+        let source = corridor_source(&optics.source, paths.iter());
+        (aod, samples, source, optics.source)
     };
-    Ok(json!({"aod550":aod,"quality":"cams","source":source,
+    let quality = if optics_source == "geos-fp" {
+        "geos-fp"
+    } else {
+        "cams"
+    };
+    Ok(json!({"aod550":aod,"quality":quality,"source":source,
         "observer_lat":lat,"observer_lon":lon,"path_samples":samples}))
 }
 
@@ -1442,6 +1473,7 @@ mod tests {
             aod: samples.iter().map(|sample| sample.2).collect(),
             extinction: vec![0.0; samples.len() * 11],
             valid_time: time_contract::parse_utc("2026-11-10T08:00:00Z").unwrap(),
+            source: "cams-ads".into(),
         }
     }
 

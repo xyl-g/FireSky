@@ -30,10 +30,13 @@ struct DownloadProbeRow: Identifiable {
         let size = ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file)
         return "\(size) · \(String(format: "%.1f", Double(elapsedMS) / 1000)) 秒"
     }
-    static var initial: [Self] {
+    static var initial: [Self] { initial(aerosolSource: "cams") }
+    static func initial(aerosolSource: String) -> [Self] {
         [Self(source: "gfs", title: "GFS · NOAA NOMADS"),
          Self(source: "ec", title: "EC · ECMWF Open Data"),
-         Self(source: "cams", title: "CAMS · Copernicus ADS")]
+         Self(source: "cams", title: aerosolSource == "geos-fp"
+            ? "GEOS-FP · NASA OPeNDAP"
+            : "CAMS · Copernicus ADS")]
     }
     init(source: String, title: String) { self.source = source; self.title = title }
     init?(_ json: [String: Any]) {

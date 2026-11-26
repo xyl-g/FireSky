@@ -641,6 +641,7 @@ pub fn retry_request_snapshot(value: &Value) -> Value {
         "forecast_mode",
         "satellite_source",
         "ecmwf_source",
+        "aerosol_source",
         "regions",
         "custom_bounds",
         "custom_timezone_name",

@@ -381,7 +381,12 @@ fn download_cams(
         Some(Value::String(value)) if value == "request" => false,
         Some(_) => return Err("invalid cams_download_scope".into()),
     };
-    let cycle_scope = scope && areas.len() == 1;
+    let aerosol_source = input.payload["aerosol_source"].as_str().unwrap_or("cams");
+    let parsed_source = crate::cams_cache::AerosolSource::parse(Some(aerosol_source))?;
+    // GEOS-FP 零排队且按 bbox 服务端裁剪：交互式 prepare 只下当前请求范围，数十秒内完成。
+    let cycle_scope = scope
+        && areas.len() == 1
+        && parsed_source == crate::cams_cache::AerosolSource::Cams;
     let download_areas: Vec<[f64; 4]> = if cycle_scope {
         vec![crate::continents::envelope_for(areas[0])?]
     } else {
@@ -406,6 +411,7 @@ fn download_cams(
                 refresh_before_cycle: refresh.clone(),
                 all_leads: cycle_scope,
                 model_bbox: Some(array4(context, "bbox")?),
+                aerosol_source: Some(parsed_source.as_str().to_owned()),
             },
             cancel,
             progress,
@@ -659,14 +665,18 @@ pub fn execute_cancellable(
         }
         _ => return Err("desktop context model source is invalid".into()),
     };
-    // CAMS 段（55→90）：ADS 排队 + 整周期资产下载，无文件粒度事件，
-    // 给出段边界与提示（排队时间占大头）。
+    // CAMS 段（55→90）：ADS 排队或 GEOS-FP 直下。
+    let is_geos_fp = input.payload["aerosol_source"].as_str() == Some("geos-fp");
     if let Some(progress) = progress {
         progress(json!({
             "stage": "prepare",
             "percent": 55,
             "source": "cams",
-            "message": "正在准备 CAMS 全球大气数据（ADS 排队与整周期下载，耗时数分钟属正常）",
+            "message": if is_geos_fp {
+                "正在准备 NASA GEOS-FP 全球气溶胶数据（OPeNDAP 免排队下载）"
+            } else {
+                "正在准备 CAMS 全球大气数据（ADS 排队与整周期下载，耗时数分钟属正常）"
+            },
         }))?;
     }
     let cams_result = download_cams(&input, &context, cancel, progress)?;
@@ -675,7 +685,7 @@ pub fn execute_cancellable(
             "stage": "prepare",
             "percent": 90,
             "source": "cams",
-            "message": "CAMS 数据就绪",
+            "message": if is_geos_fp { "GEOS-FP 数据就绪" } else { "CAMS 数据就绪" },
         }))?;
     }
     check(cancel)?;

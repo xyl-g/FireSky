@@ -19,11 +19,13 @@ data class DataRow(
     val latest: Boolean = true,
     /** 日期策略（v1.8.0）：past-local-cache-only 表示旧日期仅本地缓存。 */
     val policy: String = "",
+    val aerosolSource: String = "",
 ) {
     val id: String get() = source
-    val title: String get() = when (source) {
-        "ecmwf" -> "EC"
-        "hsd" -> "卫星帧"
+    val title: String get() = when {
+        source == "cams" && aerosolSource == "geos-fp" -> "GEOS-FP"
+        source == "ecmwf" -> "EC"
+        source == "hsd" -> "卫星帧"
         else -> source.uppercase()
     }
     val status: String get() = when {
@@ -362,6 +364,7 @@ data class WorkbenchState(
     // 设置
     val appearance: String = "system",
     val ecmwfSource: String = "ecmwf",
+    val aerosolSource: String = "cams",
     val elevationSource: String = "auto",
     val camsConfiguration: JSONObject? = null,
     val camsKeyDraft: String = "",
@@ -450,6 +453,16 @@ data class WorkbenchState(
     val remoteWorkspace: String = "",
     // 设置分类（通用/数据/高级）
     val settingsCategory: String = "通用",
+    // 软件更新（GitHub Releases）
+    val appVersion: String = "",
+    val autoUpdateCheck: Boolean = true,
+    val updatePhase: UpdatePhase = UpdatePhase.IDLE,
+    val updateInfo: UpdateInfo? = null,
+    val updateMessage: String = "",
+    val updateReceivedBytes: Long = 0L,
+    val updateTotalBytes: Long = 0L,
+    val downloadedApkPath: String? = null,
+    val showUpdateDialog: Boolean = false,
 ) {
     /** 仅返回归属于 targetPage 的错误文本；errorPage == null 时为全局连接错误。 */
     fun errorText(targetPage: String): String {
@@ -488,6 +501,7 @@ data class WorkbenchState(
             if (resultKind == "regional") {
                 if (!sameString("model_source", regionalModel)) return true
                 if (!sameString("ecmwf_source", ecmwfSource)) return true
+                if (!sameString("aerosol_source", aerosolSource)) return true
                 val regions = params.optJSONArray("regions")
                 if (regions != null && regions.length() > 0) {
                     val savedCodes = (0 until regions.length()).map { regions.optString(it) }
@@ -496,6 +510,7 @@ data class WorkbenchState(
                 return false
             }
             if (resultKind == "point" && !sameString("ecmwf_source", ecmwfSource)) return true
+            if (!sameString("aerosol_source", aerosolSource)) return true
             if (!sameNumber("lat", location.lat) || !sameNumber("lon", location.lon)) return true
             if (!sameNumber("elevation_m", location.elevation)) return true
             if (!sameString("timezone_name", location.timezone)) return true

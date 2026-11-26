@@ -518,4 +518,27 @@
     <string name="st_not_latest">Not the latest cycle</string>
     <string name="st_data_incomplete">Forecast data incomplete</string>
     <string name="st_not_downloaded">Forecast data not downloaded</string>
+
+    <!-- Software Update -->
+    <string name="section_update">Software Update</string>
+    <string name="update_current_version_fmt">Current version v%1$s</string>
+    <string name="update_check">Check for Updates</string>
+    <string name="update_view">View Update</string>
+    <string name="update_checking">Checking GitHub Releases…</string>
+    <string name="update_up_to_date">You\'re up to date</string>
+    <string name="update_available_fmt">Update available: v%1$s</string>
+    <string name="update_downloading">Downloading update…</string>
+    <string name="update_verifying">Verifying SHA-256…</string>
+    <string name="update_ready_install">Installer ready — tap to install</string>
+    <string name="update_auto_check">Check for updates on launch</string>
+    <string name="update_auto_check_subtitle">Silently check GitHub Releases after launch</string>
+    <string name="update_dialog_title">Software Update</string>
+    <string name="update_download_install">Download &amp; Install</string>
+    <string name="update_install_now">Install Now</string>
+    <string name="update_browser_download">Open in Browser</string>
+    <string name="update_cancel_download">Cancel Download</string>
+    <string name="update_later">Later</string>
+    <string name="update_notes_empty">No release notes provided; view details on GitHub Releases.</string>
+    <string name="update_permission_hint">Allow installing unknown apps in system settings, then return and tap Install Now.</string>
+    <string name="update_idle_subtitle">Check GitHub Releases for newer APK builds</string>
 </resources>

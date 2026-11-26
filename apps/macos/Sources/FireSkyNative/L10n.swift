@@ -370,6 +370,14 @@ enum L10n {
         "CAMS 可选，仍可使用本地数据": "CAMS is optional; local data can still be used",
         "查看配置": "View settings",
         "配置 CAMS": "Set up CAMS",
+        "AOD 数据来源": "AOD data source",
+        "NASA GEOS-FP（免密钥直连）": "NASA GEOS-FP (No key required)",
+        "GEOS-FP · NASA 免密钥": "GEOS-FP · NASA no-key",
+        "切换来源": "Switch source",
+        "EC 下载源与 AOD 数据来源同时用于下载探测、数据准备和预测。GFS 使用 NOAA NOMADS；CAMS 需 ADS Key，GEOS-FP 免密钥直连。":
+            "The EC and AOD sources are used for download probes, data preparation and forecasts. GFS uses NOAA NOMADS; CAMS needs an ADS key, while GEOS-FP connects without a key.",
+        "当前 AOD 数据来源为 NASA GEOS-FP（免密钥），此处仅在切换回 CAMS 时需要配置。":
+            "AOD source is currently set to NASA GEOS-FP (no key required); configure CAMS only if you switch back to CAMS.",
         "预检与下载": "Check data and download",
         "逐项确认缺失数据，过程中可取消": "Review missing data; downloads can be cancelled",
         "数据预检": "Check data",

@@ -29,6 +29,24 @@ export function elevationSourceDescription(source: ElevationSource): string {
   return "自动：优先 open-meteo 在线查询，失败时自动回退本地时区 + SRTM 地形瓦片。";
 }
 
+export type AerosolSource = "cams" | "geos-fp";
+export const AEROSOL_SOURCE_CHOICES: readonly AerosolSource[] = ["cams", "geos-fp"];
+export const AEROSOL_SOURCE_STORAGE_KEY = "firesky.aerosolSource";
+
+export function parseAerosolSource(value: unknown): AerosolSource {
+  return AEROSOL_SOURCE_CHOICES.includes(value as AerosolSource) ? value as AerosolSource : "cams";
+}
+
+export function loadAerosolSource(storage: Pick<Storage, "getItem">): AerosolSource {
+  try { return parseAerosolSource(storage.getItem(AEROSOL_SOURCE_STORAGE_KEY)); }
+  catch { return "cams"; }
+}
+
+export function saveAerosolSource(storage: Pick<Storage, "setItem">, value: AerosolSource): boolean {
+  try { storage.setItem(AEROSOL_SOURCE_STORAGE_KEY, parseAerosolSource(value)); return true; }
+  catch { return false; }
+}
+
 /** 按引擎响应 source 字段展示海拔来源；未知取值不展示。 */
 export function metadataSourceTitle(source: unknown): string {
   if (source === "open-meteo-point-metadata") return "海拔来源：open-meteo 在线";

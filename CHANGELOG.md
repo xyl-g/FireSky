@@ -8,6 +8,18 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v2.1.0 (2026-11-26)
+
+新增 **NASA GEOS-FP OPeNDAP 免密钥气溶胶数据源**、全平台 **「AOD 数据来源」** 切换与 **Android 应用内版本更新检查与安装器**。
+Added zero-key **NASA GEOS-FP OPeNDAP** aerosol data source, unified **AOD Data Source** switching across all clients, and **Android in-app GitHub Releases updater & APK installer**.
+
+- **NASA GEOS-FP OPeNDAP 免密钥气溶胶数据源**：[geos_fp.rs](engine/src/geos_fp.rs) 实现纯 Rust DAP2 格网解析与 SHA-256 校验的 `.fsopt` 紧凑缓存（`totexttau` 550nm AOD + `inst3_3d_ext_Np` 七组分 3D 消光廓线），与 [cams_cache.rs](engine/src/cams_cache.rs)、[cams_data.rs](engine/src/cams_data.rs) 及全链路预检/准备/探测/同步/评估/实况模块集成；严格隔离 CAMS `.grib` 与 GEOS-FP `.fsopt` 缓存并在结果中如实标注 `"geos-fp"` 来源。
+  Added [geos_fp.rs](engine/src/geos_fp.rs) pure-Rust OPeNDAP DAP2 client and SHA-256-verified `.fsopt` codec (`totexttau` 550nm AOD + 7-species `inst3_3d_ext_Np` extinction profiles), wired through [cams_cache.rs](engine/src/cams_cache.rs), [cams_data.rs](engine/src/cams_data.rs), preflight, prepare, probes, background sync, nowcast, and forecast assessment with strict cache isolation and honest `"geos-fp"` provenance.
+- **全端统一「AOD 数据来源」切换（CAMS ADS / NASA GEOS-FP）**：macOS、Shared Web、Windows、iOS 与 Android 均可在设置中切换 AOD 数据来源，选用 GEOS-FP 时自动免除 CAMS Key 提醒并在预检/探测/结果卡直观标注。
+  Added a unified **"AOD Data Source"** selector (`CAMS · Copernicus ADS` / `NASA GEOS-FP (No key required)`) across macOS, Shared Web, Windows, iOS, and Android, suppressing unnecessary CAMS token prompts and labeling GEOS-FP honestly in probes, preflight, and AOD cards.
+- **Android 应用内版本更新检查与校验安装**：新增 [AppUpdater.kt](apps/mobile-android/app/src/main/java/com/firesky/mobile/store/AppUpdater.kt)、[file_paths.xml](apps/mobile-android/app/src/main/res/xml/file_paths.xml) 及 [AndroidManifest.xml](apps/mobile-android/app/src/main/AndroidManifest.xml) 安装权限配置，支持 GitHub Releases API 检查（403/429 自动跳转页面重定向回退）、`SHA256SUMS.txt` 校验、私有缓存流式下载与拉起系统安装（及浏览器下载备选）。
+  Added [AppUpdater.kt](apps/mobile-android/app/src/main/java/com/firesky/mobile/store/AppUpdater.kt), [file_paths.xml](apps/mobile-android/app/src/main/res/xml/file_paths.xml), and [AndroidManifest.xml](apps/mobile-android/app/src/main/AndroidManifest.xml) `FileProvider`/`REQUEST_INSTALL_PACKAGES` integration supporting automatic & manual update checks, 403/429 redirect fallback, SHA-256 verification, in-app APK installation, and browser download fallback.
+
 ## v2.0.3 (2026-11-26)
 
 macOS 应用更新/退出时 8765 端口同步停服与孤儿回收、雷达 Top-3 排版精修及设置页与工作台全套 UI Test 视觉复验。

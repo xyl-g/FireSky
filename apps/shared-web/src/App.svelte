@@ -10,7 +10,7 @@
   import type { BaseId, SourceId } from "./lib/map-grid";
   import type { RetryRequest } from "./lib/task-history";
   import { parseRestoredRequest } from "./lib/workbench-restore";
-  import { loadElevationSource, saveElevationSource, type ElevationSource } from "./lib/settings-state";
+  import { loadElevationSource, saveElevationSource, loadAerosolSource, saveAerosolSource, parseAerosolSource, type AerosolSource, type ElevationSource } from "./lib/settings-state";
   import {
     hello, onDesktopAction, onEngineStatus, quitDesktop, rpcRestart, rpcStatus, RpcError, type DesktopAction, type EngineStatus,
   } from "./lib/ipc";
@@ -45,6 +45,7 @@
   let appearance = $state<"system" | "light" | "dark">(preference("firesky.appearance", ["system", "light", "dark"], "system"));
   let systemDark = $state(false);
   let ecSource = $state(preference("firesky.ecSource", ["ecmwf", "aws", "google"], "ecmwf") as string);
+  let aerosolSource = $state<AerosolSource>(loadAerosolSource(localStorage));
   let elevationSource = $state<ElevationSource>(loadElevationSource(localStorage));
   let engineWorkspace = $state("");
   let engineBinary = $state("");
@@ -157,6 +158,7 @@
     if (!parseRestoredRequest(request.kind, request.payload)) return false;
     const previousKind = workKind;
     const previousSource = ecSource;
+    const previousAerosol = aerosolSource;
     workKind = request.kind;
     await tick();
     if (forecastBusy || dataBusy || engineOk !== true) {
@@ -166,11 +168,15 @@
     if (["ecmwf", "aws", "google"].includes(String(request.payload.ecmwf_source))) {
       ecSource = String(request.payload.ecmwf_source);
     }
+    if (["cams", "geos-fp"].includes(String(request.payload.aerosol_source))) {
+      aerosolSource = parseAerosolSource(request.payload.aerosol_source);
+    }
     if (workbench?.restoreRequest(request.kind, request.payload)) {
       current = request.kind;
       return true;
     }
     ecSource = previousSource;
+    aerosolSource = previousAerosol;
     workKind = previousKind;
     return false;
   }
@@ -237,6 +243,7 @@
     try { localStorage.setItem("firesky.appearance", appearance); } catch { /* Optional preference storage. */ }
   });
   $effect(() => { try { localStorage.setItem("firesky.ecSource", ecSource); } catch { /* Optional preference storage. */ } });
+  $effect(() => { saveAerosolSource(localStorage, aerosolSource); });
   $effect(() => { saveElevationSource(localStorage, elevationSource); });
   $effect(() => { try { localStorage.setItem("firesky.mapProvider", mapProvider); localStorage.setItem("firesky.mapBase", mapBase); } catch { /* Credentials remain in memory. */ } });
   $effect(() => { if (showMap) { mapVisited = true; mapDialog?.showModal(); } else mapDialog?.close(); });
@@ -352,11 +359,11 @@
     </header>
     <div class="workspace">
     <div hidden={current === "data" || current === "settings"}>
-      <WorkbenchView bind:this={workbench} kind={workKind} online={engineOk === true} generation={engineGeneration} {regions} {ecSource} {elevationSource} {mapOptions} bind:spot onOpenMap={() => { showMap = true; }} onBusy={(value) => { forecastBusy = value; }} />
+      <WorkbenchView bind:this={workbench} kind={workKind} online={engineOk === true} generation={engineGeneration} {regions} {ecSource} {aerosolSource} {elevationSource} {mapOptions} bind:spot onOpenMap={() => { showMap = true; }} onBusy={(value) => { forecastBusy = value; }} />
     </div>
     {#if dataVisited}
       <div hidden={current !== "data"}>
-        <DataView bind:this={dataView} online={engineOk === true} generation={engineGeneration} {regions} bind:ecSource visible={current === "data"} onBusy={(value) => { dataBusy = value; }} />
+        <DataView bind:this={dataView} online={engineOk === true} generation={engineGeneration} {regions} bind:ecSource bind:aerosolSource visible={current === "data"} onBusy={(value) => { dataBusy = value; }} />
       </div>
     {/if}
     {#if historyVisited}
@@ -365,7 +372,7 @@
       </div>
     {/if}
     {#if current === "settings"}
-      <SettingsView bind:provider={mapProvider} bind:tdtKey bind:base={mapBase} bind:appearance bind:ecSource bind:elevationSource online={engineOk === true} generation={engineGeneration} {engineWorkspace} {engineBinary} onReconnect={reconnect} {reconnecting} />
+      <SettingsView bind:provider={mapProvider} bind:tdtKey bind:base={mapBase} bind:appearance bind:ecSource bind:aerosolSource bind:elevationSource online={engineOk === true} generation={engineGeneration} {engineWorkspace} {engineBinary} onReconnect={reconnect} {reconnecting} />
     {/if}
     </div>
   </main>

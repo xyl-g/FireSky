@@ -34,7 +34,8 @@ struct AODSummary {
     var source: String {
         if sources.isEmpty { return "暂无来源" }
         if sources.allSatisfy({ $0 == "CAMS" }) { return "CAMS" }
-        return sources.allSatisfy({ $0 != "CAMS" }) ? "其他来源" : "混合来源"
+        if sources.allSatisfy({ $0 == "GEOS-FP" }) { return "GEOS-FP" }
+        return sources.allSatisfy({ $0 != "CAMS" && $0 != "GEOS-FP" }) ? "其他来源" : "混合来源"
     }
     var value: String {
         guard let low = values.min(), let high = values.max() else { return "—" }
@@ -56,14 +57,23 @@ struct AODSummary {
                   number.doubleValue.isFinite, number.doubleValue >= 0 else { continue }
             // Environmental reading, not a model's peak-quality component.
             let rawSource = aerosol["source"] as? String ?? ""
-            let cams = rawSource.lowercased().hasPrefix("cams") || aerosol["quality"] as? String == "cams"
+            let lowerSource = rawSource.lowercased()
+            let quality = (aerosol["quality"] as? String ?? "").lowercased()
+            let label: String
+            if lowerSource.hasPrefix("geos") || quality == "geos-fp" {
+                label = "GEOS-FP"
+            } else if lowerSource.hasPrefix("cams") || quality == "cams" {
+                label = "CAMS"
+            } else {
+                label = "其他来源"
+            }
             values.append(number.doubleValue)
-            sources.append(cams ? "CAMS" : "其他来源")
+            sources.append(label)
             let time = report["anchor_local"] as? String ?? "时刻未提供"
             details.append("\(time) · \(String(format: "%.4f", number.doubleValue)) · \(rawSource)")
         }
         return AODSummary(values: values, sources: sources,
-                          detail: details.isEmpty ? "等待 CAMS 环境读取" : Array(Set(details)).sorted().joined(separator: "\n"))
+                          detail: details.isEmpty ? "等待气溶胶环境读取" : Array(Set(details)).sorted().joined(separator: "\n"))
     }
 }
 

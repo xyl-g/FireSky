@@ -28,7 +28,12 @@ export interface ProbeRow {
   elapsed_ms?: number;
 }
 
-export const sourceTitle = (source: string) => source === "ecmwf" || source === "ec" ? "EC" : source.toUpperCase();
+export const sourceTitle = (source: string) =>
+  source === "ecmwf" || source === "ec"
+    ? "EC"
+    : source === "geos-fp"
+      ? "GEOS-FP"
+      : source.toUpperCase();
 
 export function formatMB(value: number | null | undefined): string {
   if (value == null || !Number.isFinite(value)) return "未知";
@@ -57,11 +62,16 @@ export function cycleCoverage(dataset: InventoryDataset, cycle: InventoryCycle):
   return [...areas].sort().join(" / ") || "范围未识别";
 }
 
-export function initialProbes(): ProbeRow[] {
+export function initialProbes(aerosolSource = "cams"): ProbeRow[] {
   return [
     { source: "gfs", title: "GFS · NOAA NOMADS", state: "idle", detail: "尚未探测" },
     { source: "ec", title: "EC · ECMWF Open Data", state: "idle", detail: "尚未探测" },
-    { source: "cams", title: "CAMS · Copernicus ADS", state: "idle", detail: "尚未探测" },
+    {
+      source: "cams",
+      title: aerosolSource === "geos-fp" ? "GEOS-FP · NASA OPeNDAP" : "CAMS · Copernicus ADS",
+      state: "idle",
+      detail: "尚未探测",
+    },
   ];
 }
 

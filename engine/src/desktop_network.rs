@@ -97,7 +97,12 @@ struct Transfer<'a, F> {
     cams_waiting: bool,
 }
 impl<'a, F: Fn(Value) -> Result<(), String>> Transfer<'a, F> {
-    fn new(source: &'a str, ec_source: &'a str, progress: &'a F) -> ProbeResult<Self> {
+    fn new(
+        source: &'a str,
+        ec_source: &'a str,
+        aerosol_source: &'a str,
+        progress: &'a F,
+    ) -> ProbeResult<Self> {
         let (title, host) = match source {
             "gfs" => ("GFS · NOAA NOMADS", "nomads.ncep.noaa.gov"),
             "ec" => (
@@ -108,6 +113,9 @@ impl<'a, F: Fn(Value) -> Result<(), String>> Transfer<'a, F> {
                     _ => "data.ecmwf.int",
                 },
             ),
+            "cams" if aerosol_source == "geos-fp" => {
+                ("GEOS-FP · NASA OPeNDAP", "opendap.nccs.nasa.gov")
+            }
             "cams" => ("CAMS · Copernicus ADS", "ads.atmosphere.copernicus.eu"),
             _ => return Err(fail("invalid_source", "下载源设置无效。")),
         };
@@ -127,7 +135,12 @@ impl<'a, F: Fn(Value) -> Result<(), String>> Transfer<'a, F> {
             host,
             progress,
             started,
-            deadline: started + Duration::from_secs(if source == "cams" { 90 } else { 40 }),
+            deadline: started
+                + Duration::from_secs(if source == "cams" && aerosol_source != "geos-fp" {
+                    90
+                } else {
+                    45
+                }),
             bytes: 0,
             client,
             cams_waiting: false,
@@ -532,6 +545,40 @@ fn cams<F: Fn(Value) -> Result<(), String>>(
     result
 }
 
+fn geos_fp<F: Fn(Value) -> Result<(), String>>(
+    transfer: &mut Transfer<'_, F>,
+    now: DateTime<Utc>,
+) -> ProbeResult<String> {
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let _ = transfer.tick("正在连接 NASA GEOS-FP OPeNDAP")?;
+    let bytes = std::sync::atomic::AtomicUsize::new(0);
+    let outcome = crate::geos_fp::probe_sample(now, &cancel, &|n| {
+        let total = bytes.fetch_add(n, std::sync::atomic::Ordering::AcqRel) + n;
+        (transfer.progress)(json!({
+            "source": transfer.source,
+            "stage": "network_probe",
+            "probe": {
+                "source": transfer.source,
+                "title": transfer.title,
+                "host": transfer.host,
+                "state": "testing",
+                "detail": "正在下载并校验 GEOS-FP 样本",
+                "bytes_received": total,
+                "elapsed_ms": transfer.started.elapsed().as_millis() as u64,
+            },
+            "percent": 0,
+        }))
+    });
+    transfer.bytes = bytes.load(std::sync::atomic::Ordering::Acquire);
+    outcome.map_err(|msg| {
+        if msg.contains("cancelled") {
+            fail("cancelled", msg)
+        } else {
+            fail("connection_error", msg)
+        }
+    })
+}
+
 pub fn execute(params: Value) -> Result<Value, String> {
     execute_with_progress(params, |_| Ok(()))
 }
@@ -547,6 +594,10 @@ where
     if !["ecmwf", "aws", "google"].contains(&ec_source) {
         return Err("EC 下载源设置无效。".into());
     }
+    let aerosol_source = params["aerosol_source"].as_str().unwrap_or("cams");
+    if !["cams", "geos-fp"].contains(&aerosol_source) {
+        return Err("气溶胶数据源设置无效。".into());
+    }
     let now: DateTime<Utc> = if let Some(now) = params["now_utc"].as_str() {
         DateTime::parse_from_rfc3339(now)
             .map_err(|_| "invalid now_utc")?
@@ -559,11 +610,12 @@ where
         let handles: Vec<_> = sources.iter().map(|source| {
             let progress = &progress;
             scope.spawn(move || -> Result<Value, String> {
-                let mut transfer = Transfer::new(source, ec_source, progress)
+                let mut transfer = Transfer::new(source, ec_source, aerosol_source, progress)
                     .map_err(|error| error.message)?;
                 let result = match *source {
                     "gfs" => gfs(&mut transfer,now),
                     "ec" => ec(&mut transfer,now,ec_source),
+                    _ if aerosol_source == "geos-fp" => geos_fp(&mut transfer, now),
                     _ => cams(&mut transfer,now),
                 };
                 let row = match result {
@@ -634,11 +686,13 @@ mod tests {
     }
     #[test]
     fn cancellation_is_not_reported_as_failed_row() {
-        let transfer = Transfer::new("gfs", "ecmwf", &|_| Err("cancelled".into())).unwrap();
+        let transfer =
+            Transfer::new("gfs", "ecmwf", "cams", &|_| Err("cancelled".into())).unwrap();
         assert_eq!(transfer.tick("testing").unwrap_err().state, "cancelled");
     }
     #[test]
     fn invalid_source_is_rejected_before_network() {
         assert!(execute(json!({"ecmwf_source":"not-a-source"})).is_err());
+        assert!(execute(json!({"aerosol_source":"not-a-source"})).is_err());
     }
 }

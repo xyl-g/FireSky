@@ -806,10 +806,12 @@ private fun MetricCard(spec: MetricSpec, result: JSONObject, modifier: Modifier 
                 "aod" -> {
                     val aod = aodSummary(result) { modelReport(result, it) }
                     Text(
-                        if (aod.sourceKind == "cams") "CAMS"
-                        else stringResource(
-                            if (aod.sourceKind == "mixed") R.string.aod_mixed_source else R.string.aod_other_source,
-                        ),
+                        when (aod.sourceKind) {
+                            "cams" -> "CAMS"
+                            "geos-fp" -> "GEOS-FP"
+                            "mixed" -> stringResource(R.string.aod_mixed_source)
+                            else -> stringResource(R.string.aod_other_source)
+                        },
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Medium,
                         color = MaterialTheme.colorScheme.secondary,

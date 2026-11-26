@@ -1362,9 +1362,13 @@ fn resolve(mut input: Input) -> Result<Value, String> {
     if !["ecmwf", "aws", "google"].contains(&ec_source) {
         return Err("ecmwf_source must be ecmwf, aws or google".into());
     }
+    let aerosol_source = input.payload["aerosol_source"].as_str().unwrap_or("cams");
+    if !["cams", "geos-fp"].contains(&aerosol_source) {
+        return Err("aerosol_source must be cams or geos-fp".into());
+    }
     let common = json!({"target_date":input.payload["target_date"],"phenomenon":input.payload["phenomenon"],
         "model_source":model,"forecast_mode":"model","satellite_source":"off","radius_km":radius,
-        "compute_backend":"auto","gfs_resolution":"0p25","ecmwf_source":ec_source,
+        "compute_backend":"auto","gfs_resolution":"0p25","ecmwf_source":ec_source,"aerosol_source":aerosol_source,
         "workers":input.payload.get("workers").unwrap_or(&json!(4)),
         "_compute_region":compute_region,"_grid_region":grid_region,"_model_fixed_bbox":bbox,"_gfs_fixed_bbox":bbox,
         "_model_cycle_override":iso(cycle),format!("_{model}_cycle_override"):iso(cycle)});

@@ -185,6 +185,12 @@ impl Runtime {
         payload.insert("workers".into(), json!(1));
         payload.entry("phenomenon").or_insert(json!("dusk"));
         payload.entry("model_source").or_insert(json!("gfs"));
+        let aerosol_source = payload
+            .get("aerosol_source")
+            .and_then(Value::as_str)
+            .unwrap_or("cams");
+        crate::cams_cache::AerosolSource::parse(Some(aerosol_source))?;
+        payload.insert("aerosol_source".into(), json!(aerosol_source));
         Ok(Value::Object(payload))
     }
 
@@ -211,6 +217,7 @@ impl Runtime {
             "cams_valid_times":brackets,"point_count":context["points"].as_array().ok_or("context points missing")?.len(),
             "terrain_pending":context["terrain_pending"],
             "compute_region":context["common"]["_compute_region"],"notes":[],
+            "aerosol_source":context["common"]["aerosol_source"],
         }))
     }
 
@@ -335,6 +342,7 @@ impl Runtime {
                     "bbox":context["bbox"],"area":context["area"],"hours":hours,
                     "cams_valid_times":context["cams_valid_times"],"point_count":1,
                     "terrain_pending":false,"compute_region":context["region"],"notes":[],
+                    "aerosol_source":payload.get("aerosol_source").and_then(Value::as_str).unwrap_or("cams"),
                 }],
                 "fast":fast,"publications":{},
                 "config":{
@@ -925,6 +933,7 @@ impl Runtime {
                 let value = desktop_publications::execute(decode(json!({
                     "sources":["gfs","ecmwf","cams"],"now_utc":null,"timeout_seconds":2.0,
                     "force_refresh":force_refresh,
+                    "aerosol_source":snapshot["payload"].get("aerosol_source").and_then(Value::as_str).unwrap_or("cams"),
                 }))?)?;
                 check(&cancel)?;
                 let mut report = snapshot["report"].clone();
@@ -964,15 +973,17 @@ impl Runtime {
                             "ready":false,"datasets":snapshot["report"]["datasets"],
                         }}),
                     )?;
+                    let is_geos_fp = payload["aerosol_source"].as_str() == Some("geos-fp");
+                    let aerosol_name = if is_geos_fp { "GEOS-FP" } else { "CAMS" };
                     if nowcast {
                         progress(json!({"stage":"prepare","percent":10,"source":"satellite",
-                            "message":"正在准备卫星、GFS 与 CAMS 数据"}))?;
+                            "message":format!("正在准备卫星、GFS 与 {aerosol_name} 数据")}))?;
                         self.prepare_nowcast(&payload, &cancel, Some(&progress))?;
                     } else {
                         for model in Self::models(&payload)? {
                             check(&cancel)?;
                             progress(json!({"stage":"prepare","percent":5,"source":model,
-                            "message":format!("正在准备 {} 模式与 CAMS 数据", model.to_uppercase())}))?;
+                            "message":format!("正在准备 {} 模式与 {aerosol_name} 数据", model.to_uppercase())}))?;
                             let mut request = payload.clone();
                             request["model_source"] = json!(model);
                             self.prepare_one(&request, regional, &cancel, Some(&progress))?;
@@ -1359,6 +1370,7 @@ impl Runtime {
             "date":payload["target_date"],"phenomenon":payload["phenomenon"],
             "radius_km":context["common"]["radius_km"],"cycle_utc":context["cycle"],
             "cams_cache_dir":self.inventory.cams_cache_dir,
+            "aerosol_source":payload.get("aerosol_source").and_then(Value::as_str).unwrap_or("cams"),
             "derived_cache":null,
         });
         if model == "gfs" {
@@ -1726,7 +1738,7 @@ impl Runtime {
                 let percent = 20 + permille * 65 / 2000;
                 let message = match permille {
                     p if p < 1000 => "解码模型帧",
-                    p if p < 1400 => "装配 CAMS 气溶胶",
+                    p if p < 1400 => "装配气溶胶廓线",
                     p if p < 1600 => "对齐观测点锚点",
                     _ => "光线追踪评估",
                 };

@@ -18,8 +18,12 @@ struct DataRow: Identifiable {
     let missing: Int
     /// 日期策略（v1.8.0）：past-local-cache-only 表示旧日期仅本地缓存。
     var policy: String = ""
+    var aerosolSource: String = ""
     var id: String { source }
-    var title: String { source == "ecmwf" ? "EC" : source == "hsd" ? "卫星帧" : source.uppercased() }
+    var title: String {
+        if source == "cams" && aerosolSource == "geos-fp" { return "GEOS-FP" }
+        return source == "ecmwf" ? "EC" : source == "hsd" ? "卫星帧" : source.uppercased()
+    }
     var status: String { !ready ? "需下载" : old ? "可更新" : "已下载" }
     var detail: String {
         let base = !ready

@@ -87,6 +87,8 @@ pub struct Params {
     /// miss (which would suppress the ADS download that fixes the hole).
     #[serde(default)]
     pub model_bbox: Option<[f64; 4]>,
+    #[serde(default)]
+    pub aerosol_source: Option<String>,
 }
 
 pub(crate) struct Area {
@@ -372,6 +374,7 @@ fn current_cache(
     exact: bool,
     refresh: Option<DateTime<Utc>>,
     model_bbox: Option<[f64; 4]>,
+    source: cams_cache::AerosolSource,
 ) -> Result<BTreeMap<DateTime<Utc>, PathBuf>, String> {
     let axes = model_bbox.map(cams_cache::model_axes);
     let part_lons: Vec<f64> = axes
@@ -398,18 +401,20 @@ fn current_cache(
     // Wrapped groups share the physical +/-180 boundary column. Collect the
     // sibling part's newest cached tile per valid time so the seam bridge can
     // use it; interior coverage still has to come from this part itself.
-    let siblings_by_time = sibling_tiles(root, area, targets, coverage.is_some())?;
+    let siblings_by_time =
+        sibling_tiles_for_source(root, area, targets, coverage.is_some(), source)?;
     let selected = if exact {
         let mut hits = BTreeMap::new();
         for &target in targets {
             let siblings = siblings_by_time.get(&target).cloned().unwrap_or_default();
-            if let Some(selection) = cams_cache::select_with_key(
+            if let Some(selection) = cams_cache::select_with_key_for_source(
                 root,
                 area.bounds,
                 &[target].into_iter().collect(),
                 &area.key,
                 coverage.as_ref(),
                 &siblings,
+                source,
             )?
             .remove(&target)
             {
@@ -426,13 +431,14 @@ fn current_cache(
         let selection = if exact {
             selected.get(&target).cloned()
         } else {
-            cams_cache::nearest_with_key(
+            cams_cache::nearest_with_key_for_source(
                 root,
                 area.bounds,
                 target,
                 &area.key,
                 coverage.as_ref(),
                 &siblings,
+                source,
             )?
         };
         if let Some(value) = selection {
@@ -449,11 +455,12 @@ fn current_cache(
 /// area hash) for each requested valid time. Only used when a model-grid
 /// coverage contract is active; ordinary single-area plans keep the legacy
 /// header-only selection.
-pub(crate) fn sibling_tiles(
+pub(crate) fn sibling_tiles_for_source(
     root: &Path,
     area: &Area,
     targets: &[DateTime<Utc>],
     active: bool,
+    source: cams_cache::AerosolSource,
 ) -> Result<BTreeMap<DateTime<Utc>, Vec<PathBuf>>, String> {
     let mut result: BTreeMap<DateTime<Utc>, Vec<PathBuf>> = BTreeMap::new();
     if !active {
@@ -465,21 +472,22 @@ pub(crate) fn sibling_tiles(
     }
     let required: BTreeSet<_> = targets.iter().copied().collect();
     let mut newest: BTreeMap<(DateTime<Utc>, String), (DateTime<Utc>, PathBuf)> = BTreeMap::new();
+    let ext = source.extension();
     for path in cams_cache::paths(root)? {
         let Some(selection) = cams_cache::parse(&path) else {
             continue;
         };
-        if !required.contains(&selection.valid_time) {
+        if selection.source != source || !required.contains(&selection.valid_time) {
             continue;
         }
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        if name.ends_with(&format!("-{}.grib", area.key)) {
+        if name.ends_with(&format!("-{}.{ext}", area.key)) {
             continue;
         }
         let sibling = rectangles.iter().any(|rect| {
             *rect != area.bounds
                 && cams_cache::area_key(*rect)
-                    .is_ok_and(|key| name.ends_with(&format!("-{key}.grib")))
+                    .is_ok_and(|key| name.ends_with(&format!("-{key}.{ext}")))
         });
         if !sibling {
             continue;
@@ -788,11 +796,12 @@ fn fallback_candidates(
     Ok(candidates)
 }
 
-pub(crate) fn resolve(
+pub(crate) fn resolve_with_source(
     root: &Path,
     area: [f64; 4],
     targets: Vec<DateTime<Utc>>,
     config: Config,
+    aerosol_source: Option<String>,
 ) -> Result<Value, String> {
     execute(Params {
         operation: "resolve".into(),
@@ -806,6 +815,7 @@ pub(crate) fn resolve(
         refresh_before_cycle: None,
         all_leads: false,
         model_bbox: None,
+        aerosol_source,
     })
 }
 
@@ -839,6 +849,7 @@ fn run<'a>(
 ) -> Result<Value, String> {
     let started = Instant::now();
     params.config.validate()?;
+    let source = cams_cache::AerosolSource::parse(params.aerosol_source.as_deref())?;
     let exact = params.require_exact_valid_time;
     if params.cache_dir.as_os_str().is_empty() {
         return Err("invalid CAMS cache area/root".into());
@@ -891,6 +902,7 @@ fn run<'a>(
         exact,
         refresh,
         params.model_bbox,
+        source,
     )?;
     let cache_hits = results.len();
     let missing: Vec<_> = targets
@@ -904,7 +916,43 @@ fn run<'a>(
     let mut session_stats = Value::Null;
     let mut groups_count = 0;
     let mut fallbacks = 0;
-    if params.allow_download && !missing.is_empty() {
+    if params.allow_download && !missing.is_empty() && source == cams_cache::AerosolSource::GeosFp {
+        let _slot = Slot::acquire(params.config.lock_timeout_seconds)?;
+        let stage = if params.operation == "resolve" {
+            "prepare"
+        } else {
+            "sync"
+        };
+        let dl_start = Instant::now();
+        let downloaded = crate::geos_fp::download_targets(
+            &params.cache_dir,
+            area.bounds,
+            &area.key,
+            &missing,
+            refresh,
+            stage,
+            cancel,
+            progress,
+        )?;
+        let mut runs = BTreeSet::new();
+        for (target, path) in downloaded {
+            if let Some(parsed) = cams_cache::parse(&path) {
+                runs.insert(parsed.run_time_utc);
+            }
+            results.insert(target, path);
+        }
+        groups_count = runs.len();
+        session_stats = json!({
+            "constraints_requests": 0,
+            "execution_requests": 0,
+            "asset_downloads": results.len().saturating_sub(cache_hits),
+            "constraints_ms": 0.0,
+            "retrieval_ms": dl_start.elapsed().as_secs_f64() * 1000.0,
+            "local_work_ms": 0.0,
+            "decoder_load_ms": 0.0,
+            "decode_ms": 0.0,
+        });
+    } else if params.allow_download && !missing.is_empty() {
         let _slot = Slot::acquire(params.config.lock_timeout_seconds)?;
         // v1.9.8：ADS 排队/读取事件包装为用户可读的 CAMS 进度——排队占
         // 大头（等待分钟级），读取期携带字节量。Box 必须定义在
@@ -1095,7 +1143,7 @@ fn run<'a>(
         .map(time_contract::iso)
         .collect();
     Ok(
-        json!({"contract":"rust-cams-data-v1","files":rows,"missing_valid_times":missing,
+        json!({"contract":"rust-cams-data-v1","aerosol_source":source.as_str(),"files":rows,"missing_valid_times":missing,
         "cache_hits":cache_hits,"groups":groups_count,"single_fallbacks":fallbacks,"group_errors":errors,
         "network_enabled":params.allow_download,"all_leads":params.all_leads,
         "constraints_requests":session_stats["constraints_requests"],

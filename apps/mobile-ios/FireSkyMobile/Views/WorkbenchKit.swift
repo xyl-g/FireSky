@@ -291,8 +291,15 @@ func cycleLabel(_ model: String, _ report: JSONObject?) -> String? {
     return value.contains("+00:00") || value.hasSuffix("Z") ? text + "Z" : text
 }
 
-func modelSourceNote(_ model: String) -> String {
-    model == "ec"
+func modelSourceNote(_ model: String, usesGeosFP: Bool = false) -> String {
+    if usesGeosFP {
+        return model == "ec"
+            ? L10n.text("EC 公共 Open Data · TCC + 压力层 RH 云柱代理 · GEOS-FP 气溶胶",
+                        "EC public Open Data · TCC + pressure-level RH proxy · GEOS-FP aerosol")
+            : L10n.text("GFS 0.25° 全量云场评分 · GEOS-FP 气溶胶",
+                        "GFS 0.25° full cloud-field scoring · GEOS-FP aerosol")
+    }
+    return model == "ec"
         ? L10n.text("EC 公共 Open Data · TCC + 压力层 RH 云柱代理 · CAMS 气溶胶",
                     "EC public Open Data · TCC + pressure-level RH proxy · CAMS aerosol")
         : L10n.text("GFS 0.25° 全量云场评分 · CAMS 气溶胶",

@@ -34,6 +34,8 @@ struct Input {
     compute_backend: String,
     #[serde(default)]
     derived_cache: Option<crate::derived_cache::Config>,
+    #[serde(default)]
+    aerosol_source: Option<String>,
 }
 fn auto_backend() -> String {
     "auto".into()
@@ -61,21 +63,40 @@ fn cams_plan(
     area: [f64; 4],
     targets: &BTreeSet<DateTime<Utc>>,
     download: Option<&crate::ads::Config>,
+    source: cams_cache::AerosolSource,
 ) -> Result<CamsPlan, String> {
     let areas = cams_data::split_areas(area)?;
     let mut selected_by_time = BTreeMap::<DateTime<Utc>, Vec<cams_cache::Selection>>::new();
     let mut download_reports = Vec::new();
     for sub_area in &areas {
-        let mut selected = cams_cache::select(root, *sub_area, targets)?;
+        let key = cams_cache::area_key(*sub_area)?;
+        let mut selected = cams_cache::select_with_key_for_source(
+            root,
+            *sub_area,
+            targets,
+            &key,
+            None,
+            &[],
+            source,
+        )?;
         if selected.len() < targets.len() {
             if let Some(config) = download {
-                download_reports.push(cams_data::resolve(
+                download_reports.push(cams_data::resolve_with_source(
                     root,
                     *sub_area,
                     targets.iter().copied().collect(),
                     config.clone(),
+                    Some(source.as_str().to_owned()),
                 )?);
-                selected = cams_cache::select(root, *sub_area, targets)?;
+                selected = cams_cache::select_with_key_for_source(
+                    root,
+                    *sub_area,
+                    targets,
+                    &key,
+                    None,
+                    &[],
+                    source,
+                )?;
             }
         }
         for target in targets {
@@ -432,11 +453,13 @@ fn prepare_context(
             round(selected_bbox[3] + 0.6),
         ];
         area = Some(value);
+        let aerosol_source = cams_cache::AerosolSource::parse(input.aerosol_source.as_deref())?;
         let plan = cams_plan(
             &input.cams_cache_dir,
             value,
             &required,
             input.cams_download.as_ref(),
+            aerosol_source,
         )?;
         if plan.download_reports.len() == 1 {
             cams_download = plan.download_reports[0].clone();

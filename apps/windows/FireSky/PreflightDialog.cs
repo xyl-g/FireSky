@@ -417,7 +417,12 @@ public sealed class PreflightDialog : ContentDialog
         {
             var item = datasetRows[index];
             var source = item["source"]?.GetValue<string>() ?? "";
-            var title = source == "ecmwf" ? "EC" : source == "hsd" ? L10n.T("卫星帧") : source.ToUpperInvariant();
+            var aerosolSrc = item["aerosol_source"]?.GetValue<string>() ?? "";
+            var title = source == "ecmwf" ? "EC"
+                : source == "cams" && aerosolSrc == "geos-fp" ? "GEOS-FP"
+                : source == "geos-fp" ? "GEOS-FP"
+                : source == "hsd" ? L10n.T("卫星帧")
+                : source.ToUpperInvariant();
             var available = item["ready"]?.GetValue<bool>() ?? false;
             var verified = item["verified"]?.GetValue<bool>() ?? false;
             var latest = item["is_latest"]?.GetValue<bool>() ?? false;

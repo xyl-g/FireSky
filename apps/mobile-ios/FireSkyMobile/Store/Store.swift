@@ -388,10 +388,26 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         didSet {
             UserDefaults.standard.set(ecmwfSource, forKey: "ecmwfSource")
             downloadProbeDate = nil
-            downloadProbeRows = DownloadProbeRow.initial
+            downloadProbeRows = DownloadProbeRow.initial(aerosolSource: aerosolSource)
             downloadProbeError = ""
         }
     }
+    @Published var aerosolSource = "cams" {
+        didSet {
+            guard ["cams", "geos-fp"].contains(aerosolSource) else {
+                aerosolSource = "cams"
+                return
+            }
+            UserDefaults.standard.set(aerosolSource, forKey: "aerosolSource")
+            downloadProbeDate = nil
+            downloadProbeRows = DownloadProbeRow.initial(aerosolSource: aerosolSource)
+            downloadProbeError = ""
+            if aerosolSource == "geos-fp" {
+                showCAMSReminder = false
+            }
+        }
+    }
+    var usesGeosFP: Bool { aerosolSource == "geos-fp" }
     var ecmwfSourceLabel: String {
         switch ecmwfSource {
         case "aws": return "AWS 欧洲镜像"
@@ -472,6 +488,10 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         hasSavedRemoteServer = !savedURL.isEmpty
         remoteTokenSaved = ServerCredentialStore.hasToken()
         ecmwfSource = defaults.string(forKey: "ecmwfSource") ?? "ecmwf"
+        let savedAerosol = defaults.string(forKey: "aerosolSource") ?? "cams"
+        let resolvedAerosol = ["cams", "geos-fp"].contains(savedAerosol) ? savedAerosol : "cams"
+        aerosolSource = resolvedAerosol
+        downloadProbeRows = DownloadProbeRow.initial(aerosolSource: resolvedAerosol)
         elevationSource = ElevationSourceSetting.load(defaults)
 
         super.init()
@@ -490,7 +510,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         connecting = true
         defer { connecting = false }
         online = false
-        downloadProbeRows = DownloadProbeRow.initial
+        downloadProbeRows = DownloadProbeRow.initial(aerosolSource: aerosolSource)
         downloadProbeDate = nil
         downloadProbeError = ""
 
@@ -524,7 +544,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             camsConfiguration = hello["cams_credentials"] as? JSONObject
             if !didCheckStartupCredentials, let camsConfiguration {
                 didCheckStartupCredentials = true
-                showCAMSReminder = camsConfiguration["configured"] as? Bool != true
+                showCAMSReminder = !usesGeosFP && camsConfiguration["configured"] as? Bool != true
             }
             if isRemoteMode {
                 remoteWorkspace = hello["workspace"] as? String ?? remoteWorkspace

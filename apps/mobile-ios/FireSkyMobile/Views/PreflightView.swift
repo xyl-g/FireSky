@@ -61,7 +61,7 @@ struct PreflightView: View {
                             Text(L10n.t("首次下载耗时取决于本机缺失的数据集与网络。上方只列本次预测所需文件；已下载文件不会重复下载，过程中可取消，失败项会保留并提示重试。"))
                                 .font(.caption).foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
-                            if !store.camsConfigured {
+                            if !store.camsConfigured && !store.usesGeosFP {
                                 Text(L10n.t("CAMS Key 未配置时仍可使用本地缓存；如需气溶胶数据，可在设置中配置后重新预检。"))
                                     .font(.caption2).foregroundStyle(.secondary)
                                     .fixedSize(horizontal: false, vertical: true)
@@ -456,8 +456,11 @@ struct DownloadProbeView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
                     Text(L10n.text("下载连通性", "Download connectivity")).font(.headline)
-                    Text(L10n.text("先验证这台设备能否真正收到 GFS、EC、CAMS 数据，再开始预测。",
-                                   "Verify this device can receive GFS, EC, and CAMS data."))
+                    Text(store.usesGeosFP
+                         ? L10n.text("先验证这台设备能否真正收到 GFS、EC、GEOS-FP 数据，再开始预测。",
+                                     "Verify this device can receive GFS, EC, and GEOS-FP data.")
+                         : L10n.text("先验证这台设备能否真正收到 GFS、EC、CAMS 数据，再开始预测。",
+                                     "Verify this device can receive GFS, EC, and CAMS data."))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -469,7 +472,9 @@ struct DownloadProbeView: View {
                         .disabled(!store.online || store.busy || store.savingCAMS)
                 }
             }
-            Text("当前使用 EC \(store.ecmwfSourceLabel)。GFS 与 CAMS 使用各自官方入口。")
+            Text(store.usesGeosFP
+                 ? "当前使用 EC \(store.ecmwfSourceLabel)，AOD 使用 NASA GEOS-FP（免密钥）。GFS 使用 NOAA NOMADS。"
+                 : "当前使用 EC \(store.ecmwfSourceLabel)。GFS 与 CAMS 使用各自官方入口。")
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             ForEach(store.downloadProbeRows) { row in
@@ -503,7 +508,9 @@ struct DownloadProbeView: View {
             }
             HStack {
                 if store.probingDownloads {
-                    Text(store.cancellingDownloadProbe ? "正在停止探测" : "正在验证真实数据下载 · CAMS 等待上限约 90 秒")
+                    Text(store.cancellingDownloadProbe
+                         ? "正在停止探测"
+                         : (store.usesGeosFP ? "正在验证真实数据下载 · GEOS-FP OPeNDAP" : "正在验证真实数据下载 · CAMS 等待上限约 90 秒"))
                 } else if let checked = store.downloadProbeDate {
                     Text(checked, format: .dateTime.hour().minute().second())
                     Text("· \(store.downloadProbeRows.filter(\.passed).count)/3 项下载验证通过")

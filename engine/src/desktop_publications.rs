@@ -43,6 +43,8 @@ pub struct Params {
     pub timeout_seconds: f64,
     #[serde(default)]
     pub force_refresh: bool,
+    #[serde(default)]
+    pub aerosol_source: Option<String>,
 }
 
 fn default_timeout() -> f64 {
@@ -129,6 +131,7 @@ fn heuristic(source: &str, now: DateTime<Utc>) -> Result<DateTime<Utc>, String> 
                 ),
             )
         }
+        "geos-fp" => choose_cycle(now, &[0, 12], 6),
         _ => Err("unknown publication source".into()),
     }
 }
@@ -222,8 +225,17 @@ fn query_cams(now: DateTime<Utc>, timeout_seconds: f64) -> Result<Value, String>
     }
 }
 
+fn query_geos_fp(now: DateTime<Utc>, timeout_seconds: f64) -> Result<Value, String> {
+    let fallback = heuristic("geos-fp", now)?;
+    match crate::geos_fp::latest_publication_cycle(now, timeout_seconds) {
+        Ok(cycle) => Ok(publication(cycle, true)),
+        Err(_) => Ok(publication(fallback, false)),
+    }
+}
+
 fn query(
     source: &str,
+    aerosol_source: Option<&str>,
     now: DateTime<Utc>,
     timeout: StdDuration,
     timeout_seconds: f64,
@@ -231,6 +243,7 @@ fn query(
     match source {
         "gfs" => query_gfs(now, timeout),
         "ecmwf" => query_ecmwf(now, timeout),
+        "cams" if aerosol_source == Some("geos-fp") => query_geos_fp(now, timeout_seconds),
         "cams" => query_cams(now, timeout_seconds),
         _ => Err("unknown publication source".into()),
     }
@@ -280,26 +293,35 @@ pub fn execute(params: Params) -> Result<Value, String> {
     let timeout = checked_timeout(params.timeout_seconds)?;
     let now = parse_now(params.now_utc.as_deref())?;
     let sources = validate_sources(&params.sources)?;
+    let aerosol_source = params.aerosol_source.as_deref();
+    if let Some(src) = aerosol_source {
+        if !["cams", "geos-fp"].contains(&src) {
+            return Err("aerosol_source must be cams or geos-fp".into());
+        }
+    }
     let values = std::thread::scope(|scope| {
         let handles = sources
             .into_iter()
             .map(|source| {
                 let key = source.clone();
+                let is_geos_fp = key == "cams" && aerosol_source == Some("geos-fp");
                 scope.spawn(move || {
+                    let cache_key = if is_geos_fp { "geos-fp" } else { key.as_str() };
                     let cached_value = if params.force_refresh {
                         None
                     } else {
-                        cached(&key, now)
+                        cached(cache_key, now)
                     };
                     let value = if let Some(value) = cached_value {
                         value
                     } else {
-                        let value = query(&key, now, timeout, params.timeout_seconds)
+                        let fallback_key = if is_geos_fp { "geos-fp" } else { key.as_str() };
+                        let value = query(&key, aerosol_source, now, timeout, params.timeout_seconds)
                             .unwrap_or_else(|_| {
-                                publication(heuristic(&key, now).unwrap_or(now), false)
+                                publication(heuristic(fallback_key, now).unwrap_or(now), false)
                             });
                         if value["verified"] == true {
-                            store(&key, now, value)
+                            store(cache_key, now, value)
                         } else {
                             value
                         }
@@ -369,6 +391,7 @@ mod tests {
             now_utc: Some("2026-11-10T15:30:00Z".into()),
             timeout_seconds: 0.0001,
             force_refresh: false,
+            aerosol_source: None,
         });
         assert!(invalid.is_err());
         let result = execute(Params {
@@ -376,6 +399,7 @@ mod tests {
             now_utc: Some("2026-11-10T15:30:00Z".into()),
             timeout_seconds: 0.2,
             force_refresh: false,
+            aerosol_source: None,
         })
         .unwrap();
         assert_eq!(result["publications"], json!({}));

@@ -75,6 +75,7 @@ internal fun parseDataReportRows(report: JSONObject): Pair<Boolean, List<DataRow
             missing = item.optInt("missing_count", 0),
             latest = latest,
             policy = item.optString("policy", ""),
+            aerosolSource = item.optString("aerosol_source", ""),
         )
     }
     return ready to rows
@@ -111,6 +112,7 @@ internal fun buildForecastPayload(state: WorkbenchState, kind: String): JSONObje
         .put("forecast_mode", "model")
         .put("satellite_source", "off")
         .put("ecmwf_source", state.ecmwfSource)
+        .put("aerosol_source", state.aerosolSource)
         .put("elevation_source", state.elevationSource)
     when (kind) {
         "nowcast" -> {

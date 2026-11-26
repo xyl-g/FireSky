@@ -250,7 +250,8 @@ data class AodSummary(val values: List<Double>, val sources: List<String>, val d
     val sourceKind: String
         get() = when {
             sources.isEmpty() || sources.all { it == "CAMS" } -> "cams"
-            sources.all { it != "CAMS" } -> "other"
+            sources.all { it == "GEOS-FP" } -> "geos-fp"
+            sources.all { it != "CAMS" && it != "GEOS-FP" } -> "other"
             else -> "mixed"
         }
     val value: String
@@ -273,12 +274,17 @@ fun aodSummary(result: JSONObject?, modelReport: (String) -> JSONObject?): AodSu
         val number = aerosol.optNum("aod550") ?: continue
         if (!number.isFinite() || number < 0) continue
         val rawSource = aerosol.optString("source", "")
-        val cams = rawSource.lowercase().startsWith("cams") || aerosol.optString("quality", "") == "cams"
+        val quality = aerosol.optString("quality", "").lowercase()
+        val label = when {
+            rawSource.lowercase().startsWith("geos") || quality == "geos-fp" -> "GEOS-FP"
+            rawSource.lowercase().startsWith("cams") || quality == "cams" -> "CAMS"
+            else -> "其他来源"
+        }
         values.add(number)
-        sources.add(if (cams) "CAMS" else "其他来源")
+        sources.add(label)
         details.add("${report.optString("anchor_local", "时刻未提供")} · %.4f".format(number) + " · $rawSource")
     }
-    return AodSummary(values, sources, details.distinct().sorted().joinToString("\n").ifEmpty { "等待 CAMS 环境读取" })
+    return AodSummary(values, sources, details.distinct().sorted().joinToString("\n").ifEmpty { "等待气溶胶环境读取" })
 }
 
 /** 单模型报告读取（result.model_results[model]；model_errors 非空时视作未完成）。 */

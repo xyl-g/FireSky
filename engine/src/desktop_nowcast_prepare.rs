@@ -227,6 +227,7 @@ fn cams_result(
                 refresh_before_cycle: refresh.clone(),
                 all_leads: false,
                 model_bbox: None,
+                aerosol_source: payload["aerosol_source"].as_str().map(str::to_owned),
             },
             cancel,
             progress,

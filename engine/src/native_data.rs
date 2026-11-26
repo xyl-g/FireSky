@@ -246,6 +246,7 @@ fn plan(workspace: &Path, payload: &Value, cancel: &AtomicBool) -> Result<Plan, 
                     "spacing_deg":payload.get("spacing_deg").cloned().unwrap_or(json!(2.0)),
                     "radius_km":payload.get("radius_km").cloned().unwrap_or(json!(1000.)),
                     "ecmwf_source":payload["ecmwf_source"].as_str().unwrap_or("ecmwf"),
+                    "aerosol_source":payload["aerosol_source"].as_str().unwrap_or("cams"),
                 });
                 if known == Some(bbox) {
                     request["regions"] = json!([region]);
@@ -306,6 +307,7 @@ fn plan(workspace: &Path, payload: &Value, cancel: &AtomicBool) -> Result<Plan, 
     }
     if selected.contains("cams") {
         grouped.insert("cams".into(),json!({"source":"cams","areas":cams_areas,
+            "aerosol_source":payload["aerosol_source"].as_str().unwrap_or("cams"),
             "required_valid_times":cams_targets,"regions":[region],"cycle_source":"native-valid-time-resolution"}));
     }
     if let Some(raw) = payload.get("lead_hours") {
@@ -422,10 +424,16 @@ fn verify_plan(workspace: &Path, plan: &Value, cancel: &AtomicBool) -> Result<Va
                                 .map(|_| ())
                         }
                         "cams" => {
-                            if codes.is_none() {
-                                codes = Some(crate::grib::EcCodes::load()?);
-                            }
-                            cams::decode(codes.as_ref().unwrap(), Path::new(path)).and_then(
+                            let file_path = Path::new(path);
+                            let decoder = if crate::geos_fp::is_fsopt_file(file_path) {
+                                None
+                            } else {
+                                if codes.is_none() {
+                                    codes = Some(crate::grib::EcCodes::load()?);
+                                }
+                                codes.as_ref()
+                            };
+                            cams::decode_path(decoder, file_path).and_then(
                                 |optics| {
                                     let requested = time_contract::parse_utc(
                                         key["valid_time"]
@@ -467,6 +475,7 @@ fn verify_plan(workspace: &Path, plan: &Value, cancel: &AtomicBool) -> Result<Va
                     let params = serde_json::from_value(json!({
                         "operation":"resolve","cache_dir":cfg.cams_cache_dir,"area":area,
                         "target_utcs":[target],"allow_download":false,"require_exact_valid_time":true,
+                        "aerosol_source":dataset["aerosol_source"].as_str().unwrap_or("cams"),
                     })).map_err(|e| e.to_string())?;
                     verify(
                         json!({"area":area,"valid_time":target}),
@@ -590,6 +599,7 @@ pub fn fetch(workspace: &Path, payload: &Value, cancel: &AtomicBool) -> Result<V
                 refresh_before_cycle: None,
                 all_leads: false,
                 model_bbox: None,
+                aerosol_source: dataset["aerosol_source"].as_str().map(str::to_owned),
             };
             match cams_data::execute(params) {
                 Ok(value)

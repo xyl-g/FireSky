@@ -32,4 +32,6 @@ test("only explicitly passed probes are labeled successful", () => {
   assert.equal(exports.probeLabel("passed"), "下载解码通过");
   assert.equal(exports.probeLabel("unexpected"), "未通过");
   assert.equal(exports.initialProbes().length, 3);
+  assert.equal(exports.initialProbes("geos-fp")[2].title, "GEOS-FP · NASA OPeNDAP");
+  assert.equal(exports.sourceTitle("geos-fp"), "GEOS-FP");
 });

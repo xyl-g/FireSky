@@ -417,7 +417,7 @@ struct SettingsView: View {
                             healthy: store.online)
                 statusBadge(title: L10n.text("数据源与同步", "Data & Sync"),
                             value: store.dataSyncConfigured ? L10n.text("已配置", "Configured") : L10n.text("按需准备", "On-demand"),
-                            healthy: store.dataSyncConfigured || store.camsConfigured)
+                            healthy: store.dataSyncConfigured || store.camsConfigured || store.usesGeosFP)
                 statusBadge(title: L10n.text("后台助手", "Helper"),
                             value: store.helperLoaded ? L10n.text("运行中", "Running")
                                 : store.helperInstalled ? L10n.text("未加载", "Not loaded")
@@ -615,7 +615,13 @@ struct SettingsView: View {
                 Text(L10n.t("Google Cloud 镜像")).tag("google")
             }.pickerStyle(.radioGroup).disabled(store.probingDownloads)
                 .accessibilityLabel("EC 下载源")
-            Text(L10n.t("EC 下载源同时用于下载探测、数据准备和预测。GFS 使用 NOAA NOMADS，CAMS 使用 Copernicus ADS。"))
+            Divider().padding(.vertical, 2)
+            Picker(L10n.t("AOD 数据来源"), selection: $store.aerosolSource) {
+                Text("CAMS · Copernicus ADS").tag("cams")
+                Text(L10n.t("NASA GEOS-FP（免密钥直连）")).tag("geos-fp")
+            }.pickerStyle(.radioGroup).disabled(store.probingDownloads)
+                .accessibilityLabel("AOD 数据来源")
+            Text(L10n.t("EC 下载源与 AOD 数据来源同时用于下载探测、数据准备和预测。GFS 使用 NOAA NOMADS；CAMS 需 ADS Key，GEOS-FP 免密钥直连。"))
                 .font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -623,6 +629,11 @@ struct SettingsView: View {
     private var camsBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
             settingsBlockTitle("CAMS · Copernicus ADS")
+            if store.usesGeosFP {
+                Text(L10n.t("当前 AOD 数据来源为 NASA GEOS-FP（免密钥），此处仅在切换回 CAMS 时需要配置。"))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: store.camsConfigured ? "checkmark.circle.fill" : "key")
                     .foregroundStyle(store.camsConfigured ? Color.green : Color.secondary)
@@ -684,7 +695,7 @@ struct SettingsView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             HStack(spacing: 12) {
-                Toggle("CAMS", isOn: $store.dataSyncCAMS).disabled(!store.dataSyncEnabled)
+                Toggle(store.usesGeosFP ? "AOD (GEOS-FP)" : "AOD (CAMS)", isOn: $store.dataSyncCAMS).disabled(!store.dataSyncEnabled)
                 Toggle("GFS", isOn: $store.dataSyncGFS).disabled(!store.dataSyncEnabled)
                 Toggle("EC", isOn: $store.dataSyncEC).disabled(!store.dataSyncEnabled)
             }
@@ -732,7 +743,7 @@ struct SettingsView: View {
             if store.dataSyncLoaded {
                 VStack(alignment: .leading, spacing: 8) {
                     settingsBlockTitle(L10n.t("同步状态"))
-                    dataSyncSourceRow("cams", "CAMS")
+                    dataSyncSourceRow("cams", store.usesGeosFP ? "AOD (GEOS-FP)" : "AOD (CAMS)")
                     dataSyncSourceRow("gfs", "GFS")
                     dataSyncSourceRow("ec", "EC")
                 }

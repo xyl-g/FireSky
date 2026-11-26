@@ -48,6 +48,7 @@ pub mod ecmwf_service;
 pub mod ffi;
 pub mod frames;
 pub mod gfs_data;
+pub mod geos_fp;
 pub mod glow_spectrum;
 /// Shared HTTP client posture: ambient proxy by default, direct egress when
 /// FIRESKY_NO_PROXY=1 (stalled system proxies must not block data downloads).

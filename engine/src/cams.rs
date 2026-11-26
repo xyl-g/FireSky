@@ -8,12 +8,14 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+#[derive(Debug)]
 pub struct Optics {
     pub latitudes: Vec<f64>,
     pub longitudes: Vec<f64>,
     pub aod: Vec<f64>,
     pub extinction: Vec<f64>,
     pub valid_time: DateTime<Utc>,
+    pub source: String,
 }
 
 const MERGE_COORD_SCALE: f64 = 10_000_000.0;
@@ -48,6 +50,7 @@ pub fn merge(parts: &[Optics]) -> Result<Optics, String> {
         return Err("CAMS merge requires at least one optical grid".into());
     }
     let valid_time = parts[0].valid_time;
+    let source = parts[0].source.clone();
     let mut cells = BTreeMap::<(i64, i64), usize>::new();
     let mut latitudes = Vec::new();
     let mut longitudes = Vec::new();
@@ -56,6 +59,9 @@ pub fn merge(parts: &[Optics]) -> Result<Optics, String> {
     for part in parts {
         if part.valid_time != valid_time {
             return Err("CAMS merge parts use different valid times".into());
+        }
+        if part.source != source {
+            return Err("CAMS merge parts use different aerosol sources".into());
         }
         let count = part.latitudes.len();
         if count == 0
@@ -103,18 +109,31 @@ pub fn merge(parts: &[Optics]) -> Result<Optics, String> {
         aod,
         extinction,
         valid_time,
+        source,
     })
 }
 
 pub fn decode_many(codes: &EcCodes, paths: &[PathBuf]) -> Result<Optics, String> {
+    decode_many_paths(Some(codes), paths)
+}
+
+pub fn decode_many_paths(codes: Option<&EcCodes>, paths: &[PathBuf]) -> Result<Optics, String> {
     if paths.is_empty() {
         return Err("CAMS decode requires at least one path".into());
     }
     let parts = paths
         .iter()
-        .map(|path| decode(codes, path))
+        .map(|path| decode_path(codes, path))
         .collect::<Result<Vec<_>, _>>()?;
     merge(&parts)
+}
+
+pub fn decode_path(codes: Option<&EcCodes>, path: &Path) -> Result<Optics, String> {
+    if crate::geos_fp::is_fsopt_file(path) {
+        return crate::geos_fp::decode_fsopt(path);
+    }
+    let codes = codes.ok_or("ecCodes decoder is required for CAMS GRIB files")?;
+    decode(codes, path)
 }
 
 fn valid_time(message: &Message<'_>) -> Result<DateTime<Utc>, String> {
@@ -142,6 +161,9 @@ pub(crate) fn validity(date: i64, time: i64) -> Result<DateTime<Utc>, String> {
 }
 
 pub fn decode(codes: &EcCodes, path: &Path) -> Result<Optics, String> {
+    if crate::geos_fp::is_fsopt_file(path) {
+        return crate::geos_fp::decode_fsopt(path);
+    }
     let mut lats = None;
     let mut lons = None;
     let mut aod = None;
@@ -230,6 +252,7 @@ pub fn decode(codes: &EcCodes, path: &Path) -> Result<Optics, String> {
         aod,
         extinction,
         valid_time: time.ok_or("missing CAMS valid time")?,
+        source: "cams-ads".into(),
     })
 }
 
@@ -243,7 +266,7 @@ impl Optics {
         }
     }
     fn metadata(&self) -> Value {
-        json!({"decoder_backend": "rust-cams-v1", "pressure_levels": LEVELS,
+        json!({"decoder_backend": "rust-cams-v1", "aerosol_source": self.source, "pressure_levels": LEVELS,
             "valid_time_utc": self.valid_time.to_rfc3339_opts(SecondsFormat::AutoSi, true)})
     }
     pub fn write(&self, output: &Path, source: SourceIdentity) -> Result<BundleWriter, String> {
@@ -418,6 +441,7 @@ mod tests {
                 .flat_map(|level| [level as f64 + 1.0, level as f64 + 2.0])
                 .collect(),
             valid_time: Utc.with_ymd_and_hms(2026, 11, 12, 0, 0, 0).unwrap(),
+            source: "cams-ads".into(),
         };
         let right = Optics {
             latitudes: vec![1.0, 1.0],
@@ -427,6 +451,7 @@ mod tests {
                 .flat_map(|level| [level as f64 + 20.0, level as f64 + 3.0])
                 .collect(),
             valid_time: left.valid_time,
+            source: "cams-ads".into(),
         };
         let merged = merge(&[left, right]).unwrap();
         assert_eq!(merged.latitudes.len(), 3);
@@ -456,6 +481,7 @@ mod tests {
             aod: vec![1.0],
             extinction: vec![1.0; LEVELS.len()],
             valid_time,
+            source: "cams-ads".into(),
         };
         let other = Optics {
             latitudes: vec![0.0],
@@ -463,6 +489,7 @@ mod tests {
             aod: vec![1.0],
             extinction: vec![1.0; LEVELS.len()],
             valid_time: valid_time + chrono::Duration::hours(3),
+            source: "cams-ads".into(),
         };
         assert!(merge(&[base, other]).is_err());
     }

@@ -31,6 +31,8 @@ pub struct Plan {
     #[serde(default)]
     notes: Vec<String>,
     compute_region: Option<String>,
+    #[serde(default)]
+    aerosol_source: Option<String>,
 }
 #[derive(Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -82,9 +84,11 @@ struct ResolvedPlan {
     event_start: DateTime<Utc>,
     areas: Vec<CamsArea>,
     targets: BTreeSet<DateTime<Utc>>,
+    aerosol_source: cams_cache::AerosolSource,
 }
 impl ResolvedPlan {
     fn new(input: Plan) -> Result<Self, String> {
+        let aerosol_source = cams_cache::AerosolSource::parse(input.aerosol_source.as_deref())?;
         if !matches!(input.model_source.as_str(), "gfs" | "ec")
             || !(1..=100_000).contains(&input.point_count)
             || input.hours.is_empty()
@@ -151,6 +155,7 @@ impl ResolvedPlan {
             event_start,
             areas,
             targets,
+            aerosol_source,
         })
     }
 }
@@ -201,11 +206,12 @@ impl CamsCatalog {
         fast: bool,
         cancel: &AtomicBool,
     ) -> Result<BTreeMap<DateTime<Utc>, cams_cache::Selection>, String> {
-        let suffix = format!("-{}.grib", area.key);
+        let ext = plan.aerosol_source.extension();
+        let suffix = format!("-{}.{ext}", area.key);
         let mut candidates: Vec<_> = self
             .candidates
             .iter()
-            .filter(|v| plan.targets.contains(&v.valid_time))
+            .filter(|v| v.source == plan.aerosol_source && plan.targets.contains(&v.valid_time))
             .map(|v| {
                 (
                     v.clone(),
@@ -234,7 +240,7 @@ impl CamsCatalog {
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default();
                 let sibling = plan.areas.iter().any(|other| {
-                    other.key != area.key && name.ends_with(&format!("-{}.grib", other.key))
+                    other.key != area.key && name.ends_with(&format!("-{}.{ext}", other.key))
                 });
                 if !sibling {
                     continue;
@@ -323,15 +329,19 @@ impl CamsCatalog {
                     lats: &lats,
                     lons: &part_lons,
                 };
-                let codes = match &mut self.codes {
-                    Some(codes) => codes,
-                    None => self.codes.insert(crate::grib::EcCodes::load()?),
-                };
                 let mut group = vec![candidate.path.clone()];
                 if let Some(siblings) = sibling_groups.get(&candidate.valid_time) {
                     group.extend(siblings.iter().cloned());
                 }
-                if !cams_cache::model_grid_covers_group(&group, codes, &coverage) {
+                let decoder = if group.iter().all(|p| crate::geos_fp::is_fsopt_file(p)) {
+                    None
+                } else {
+                    Some(match &mut self.codes {
+                        Some(codes) => &*codes,
+                        None => &*self.codes.insert(crate::grib::EcCodes::load()?),
+                    })
+                };
+                if !cams_cache::model_grid_covers_group_opt(&group, decoder, &coverage) {
                     continue;
                 }
             }
@@ -453,6 +463,7 @@ fn report(
             "missing_valid_times":if key=="cams" {missing_cams.iter().map(|t|iso(*t)).collect::<Vec<_>>()} else {vec![]},
             "missing_keys":if key=="cams" {missing_cams_keys.iter().cloned().collect::<Vec<_>>()} else {vec![]},
             "ready":missing_count==0,
+            "aerosol_source": if key == "cams" { Some(plan.aerosol_source.as_str()) } else { None },
         }));
     }
     let cams_cycle = publications
