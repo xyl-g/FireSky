@@ -182,6 +182,8 @@ def test_enabled_settings_reject_missing_or_invalid_fields_over_the_bridge(
         {"enabled": True, "sources": {"ec": True}, "interval_minutes": 60,
          "anchor_region": "china", "lead_horizon_hours": 119,
          "ecmwf_source": "noaa"},
+        {"enabled": True, "sources": {"cams": True}, "interval_minutes": 60,
+         "anchor_region": "china", "aerosol_source": "noaa"},
         {"enabled": True, "sources": {"cams": True, "bogus": True},
          "interval_minutes": 60, "anchor_region": "china"},
         {"enabled": True, "sources": {"cams": True}, "interval_minutes": 60,
@@ -201,7 +203,7 @@ def test_enabled_settings_reject_missing_or_invalid_fields_over_the_bridge(
         assert status["settings"] == {
             "enabled": True, "sources": {"cams": True, "gfs": False, "ec": False},
             "interval_minutes": 60, "anchor_region": "china",
-            "lead_horizon_hours": None, "ecmwf_source": None,
+            "lead_horizon_hours": None, "ecmwf_source": None, "aerosol_source": None,
         }
 
 

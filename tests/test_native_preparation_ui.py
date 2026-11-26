@@ -29,6 +29,7 @@ def preparation_checks(tmp_path_factory):
             "5",
             "-target",
             swift_target,
+            str(root / "apps/macos/Sources/FireSkyNative/L10n.swift"),
             str(root / "apps/macos/Sources/FireSkyNative/PreparationActions.swift"),
             str(root / "apps/macos/Sources/FireSkyNative/DownloadProbe.swift"),
             str(root / "apps/macos/Sources/FireSkyNative/ObservationDate.swift"),
@@ -68,6 +69,8 @@ def test_regional_palette_matches_web_renderer(preparation_checks):
     if not node:
         pytest.skip("Web palette parity requires Node.js with TypeScript support")
     root = Path(__file__).resolve().parents[1]
+    if not (root / "frontend/src/lib/utils/cloud-render.ts").is_file():
+        pytest.skip("Legacy frontend/src/lib/utils/cloud-render.ts has been retired")
     native = subprocess.run(
         [str(preparation_checks), "regional-web-palette"],
         check=True, capture_output=True, text=True, timeout=10,
