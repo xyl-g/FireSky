@@ -1402,10 +1402,12 @@ struct CrossSectionFigureView: View {
                     .foregroundColor(Color(red: 0.96, green: 0.72, blue: 0.34))
                 let pillResolved = layer.resolve(pillText)
                 let pillTextSize = pillResolved.measure(in: size)
-                let pillW = pillTextSize.width + 10
-                let pillH = pillTextSize.height + 4
-                let pillX = Swift.min(right - pillW - 6, Swift.max(left + 6, anchorPt.x - pillW * 0.5))
-                let pillY = Swift.max(top + 6, Swift.min(bottom - pillH - 6, anchorPt.y - pillH - 6))
+                let pillW = Double(pillTextSize.width) + 10
+                let pillH = Double(pillTextSize.height) + 4
+                let anchorX = Double(anchorPt.x)
+                let anchorY = Double(anchorPt.y)
+                let pillX = Swift.min(right - pillW - 6, Swift.max(left + 6, anchorX - pillW * 0.5))
+                let pillY = Swift.max(top + 6, Swift.min(bottom - pillH - 6, anchorY - pillH - 6))
                 let pillRect = CGRect(x: pillX, y: pillY, width: pillW, height: pillH)
                 layer.fill(Path(roundedRect: pillRect, cornerRadius: pillH * 0.5),
                            with: .color((scheme == .dark ? Color.black : Color.white).opacity(0.55)))
