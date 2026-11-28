@@ -1470,10 +1470,12 @@ struct CrossSectionFigureView: View {
                     .foregroundColor(.white)
                 let resolvedTarget = layer.resolve(targetText)
                 let tSize = resolvedTarget.measure(in: size)
-                let tW = tSize.width + 10
-                let tH = tSize.height + 4
-                let tX = Swift.min(right - tW - 6, Swift.max(left + 6, targetPt.x - tW * 0.5))
-                let tY = targetPt.y - tH - 10 >= top + 6 ? targetPt.y - tH - 10 : Swift.min(bottom - tH - 6, targetPt.y + 10)
+                let tW = Double(tSize.width) + 10
+                let tH = Double(tSize.height) + 4
+                let targetX = Double(targetPt.x)
+                let targetY = Double(targetPt.y)
+                let tX = Swift.min(right - tW - 6, Swift.max(left + 6, targetX - tW * 0.5))
+                let tY = targetY - tH - 10 >= top + 6 ? targetY - tH - 10 : Swift.min(bottom - tH - 6, targetY + 10)
                 let tRect = CGRect(x: tX, y: tY, width: tW, height: tH)
                 layer.fill(Path(roundedRect: tRect, cornerRadius: tH * 0.5),
                            with: .color(Color(red: 0.92, green: 0.36, blue: 0.16).opacity(0.88)))
