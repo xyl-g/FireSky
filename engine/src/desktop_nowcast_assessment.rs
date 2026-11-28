@@ -6579,30 +6579,23 @@ fn build_map_cloud_cells(
     max_distance_km: f64,
 ) -> Vec<MapCloudCellOutput> {
     // First-best signal per rounded grid point (Python `>` keeps the first max).
-    let mut signal_by_point: Vec<((u64, u64), usize)> = Vec::new();
-    let mut signal_index: HashMap<(u64, u64), usize> = HashMap::new();
+    let mut lookup: HashMap<(u64, u64), usize> = HashMap::new();
     for (position, signal) in signals.iter().enumerate() {
         let key = (
             python_round(signal.lat, 4).to_bits(),
             python_round(signal.lon, 4).to_bits(),
         );
-        match signal_index.get(&key) {
+        match lookup.get(&key) {
             Some(&current) => {
                 if signal.score > signals[current].score {
-                    signal_by_point[current] = (key, position);
-                    signal_index.insert(key, position);
+                    lookup.insert(key, position);
                 }
             }
             None => {
-                signal_index.insert(key, position);
-                signal_by_point.push((key, position));
+                lookup.insert(key, position);
             }
         }
     }
-    let lookup: HashMap<(u64, u64), usize> = signal_by_point
-        .iter()
-        .map(|(key, position)| (*key, *position))
-        .collect();
     let mut cells: Vec<MapCloudCellOutput> = Vec::new();
     for (_, column) in columns {
         if column.distance_km > max_distance_km {

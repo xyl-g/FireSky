@@ -478,15 +478,15 @@ pub(crate) fn window(steps: &[Step], threshold: f64, regime: &str) -> Result<Val
             score(i) >= threshold
         }
     };
-    let mut best = 0;
-    for i in 1..order.len() {
-        if score(order[i]) > score(order[best]) {
-            best = i;
+    let mut best: Option<usize> = None;
+    for i in 0..order.len() {
+        if active(order[i]) && best.is_none_or(|b| score(order[i]) > score(order[b])) {
+            best = Some(i);
         }
     }
-    if !order.iter().any(|&i| active(i)) {
+    let Some(best) = best else {
         return Ok(Value::Null);
-    }
+    };
     let crossing = |a: usize, b: usize| -> Result<Stamp, String> {
         let (low, high, target) = if uses_quality {
             (
