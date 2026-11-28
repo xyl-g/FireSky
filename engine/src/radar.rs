@@ -255,22 +255,19 @@ pub fn image_metrics(
     }
     let mut path = Vec::new();
     let mut weights = Vec::new();
-    let mut full_patches = true;
     for ((x, y), weight) in path_points(lat, lon, azimuth, width, height, zoom) {
         let start_x = (x - 2).max(0) as u32;
         let end_x = (x + 3).min(width as i32) as u32;
         let start_y = (y - 2).max(0) as u32;
         let end_y = (y + 3).min(height as i32) as u32;
-        full_patches &= (end_x - start_x) * (end_y - start_y) == 25;
         for y in start_y..end_y {
             for x in start_x..end_x {
-                path.push(values[(y * width + x) as usize]);
-                weights.push(weight);
+                if coverage.get_pixel(x, y)[3] == 0 {
+                    path.push(values[(y * width + x) as usize]);
+                    weights.push(weight);
+                }
             }
         }
-    }
-    if !full_patches {
-        weights.fill(1.0);
     }
     let weighted = |threshold: f32, local_values: bool| {
         let mut total = if local_values {
@@ -498,5 +495,26 @@ mod tests {
         let wrapped = path_points(0.0, 179.8, 90.0, 256, 256, 6);
         assert_eq!(ordinary.len(), 25);
         assert_eq!(wrapped, ordinary);
+    }
+    #[test]
+    fn path_metrics_skip_uncovered_pixels_and_keep_distance_weights() {
+        let echo = image::Rgba([10, 20, 30, 255]);
+        let clear = image::Rgba([0, 0, 0, 0]);
+        let uncovered = image::Rgba([0, 0, 0, 255]);
+        let palette = BTreeMap::from([([0, 0, 0, 0], -32.0), ([10, 20, 30, 255], 40.0)]);
+        let mut radar = RgbaImage::from_pixel(256, 256, clear);
+        let mut coverage = RgbaImage::from_pixel(256, 256, uncovered);
+        let pts = path_points(45.0, 120.0, 270.0, 256, 256, 6);
+        let ((x0, y0), _) = pts[0];
+        for dy in -2..=2 {
+            for dx in -2..=2 {
+                let px = (x0 + dx).clamp(0, 255) as u32;
+                let py = (y0 + dy).clamp(0, 255) as u32;
+                radar.put_pixel(px, py, echo);
+                coverage.put_pixel(px, py, clear);
+            }
+        }
+        let metrics = image_metrics(&radar, &coverage, &palette, 45.0, 120.0, 270.0, 6).unwrap();
+        assert!((metrics["path_precip_ratio"].as_f64().unwrap() - 1.0).abs() < 1e-9);
     }
 }

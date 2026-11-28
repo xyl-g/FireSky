@@ -144,7 +144,7 @@ impl GfsGrid {
             .collect();
         let visibility = self.field("surface", 0, &["vis"]);
         let precipitation = self.field("surface", 0, &["prate"]);
-        let high = self.field("highCloudLayer", 0, &["hcc", "hcdc", "tcc", "tcdc"]);
+        let high = self.field("highCloudLayer", 0, &["hcc", "avg_hcc", "hcdc", "tcc", "tcdc"]);
         let mut rows = Vec::new();
         for level in PRESSURE_LEVELS {
             let height = self.field("isobaricInhPa", level, &["gh"]);
@@ -258,6 +258,12 @@ mod tests {
         assert!(grid.native_features([0.0, 0.0], 100.0).is_err());
         grid.insert(("isobaricInhPa".into(), 300, "r".into()), vec![90.0])
             .unwrap();
+        grid.insert(("highCloudLayer".into(), 0, "avg_hcc".into()), vec![75.0])
+            .unwrap();
+        assert_eq!(
+            grid.native_features([0.0, 0.0], 100.0).unwrap()[0][11],
+            75.0
+        );
         grid.insert(("highCloudLayer".into(), 0, "hcc".into()), vec![80.0])
             .unwrap();
         assert_eq!(

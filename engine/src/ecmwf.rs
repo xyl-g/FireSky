@@ -496,7 +496,7 @@ pub fn decode_basic_terrain(
             return Ok(true);
         }
         let units = message.string(b"units\0")?;
-        if !["m**2 s**-2", "m2 s-2", "m^2 s^-2"].contains(&units.as_str()) {
+        if !["m**2 s**-2", "m2 s-2", "m^2 s^-2", "m**2 s^-2"].contains(&units.as_str()) {
             return Err(format!("EC surface z units={units:?}"));
         }
         let cycle = date(message, b"dataDate\0", b"dataTime\0")

@@ -784,7 +784,9 @@ impl EcCodes {
                 f64::NEG_INFINITY,
             ];
             for (lat, lon) in lat.into_iter().zip(lon) {
-                if bbox.is_some_and(|[w, e, n, s]| lat < s || lat > n || lon < w || lon > e) {
+                if bbox.is_some_and(|[w, e, n, s]| {
+                    lat < s || lat > n || if w <= e { lon < w || lon > e } else { lon < w && lon > e }
+                }) {
                     continue;
                 }
                 bounds[0] = bounds[0].max(lat);

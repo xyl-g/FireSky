@@ -216,14 +216,9 @@ pub(crate) fn enrich_point_report(result: &mut Value) {
             .unwrap_or(default_aod);
         let sample = compute_color(elev, aod, cloud_base_km);
         let q = step["instant_quality_index"].as_f64().unwrap_or(0.0);
-        let time_match = best_time
-            .as_deref()
-            .is_some_and(|bt| step_local_time(step) == Some(bt));
-        if time_match || (best_time.is_none() && q > best_q) || (best_time.is_some() && q > best_q && best_idx == 0 && idx > 0 && !time_match) {
-            if time_match || q > best_q {
-                best_q = q;
-                best_idx = idx;
-            }
+        if q > best_q {
+            best_q = q;
+            best_idx = idx;
         }
         step_colors.push((sample, step));
     }
@@ -372,5 +367,41 @@ mod tests {
         assert_eq!(steps[1]["is_peak"], true);
         assert_eq!(steps[2]["offset_minutes"], 10);
         assert_eq!(steps[2]["is_peak"], false);
+    }
+
+    #[test]
+    fn enrich_point_report_falls_back_to_highest_quality_when_best_time_unmatched() {
+        let mut payload = json!({
+            "best_time_local": "2026-11-26T17:99:00+08:00",
+            "dominant_burnable_cloud_base_agl_mean_m": 5400.0,
+            "aerosol": { "aod550": 0.28 },
+            "steps": [
+                {
+                    "valid_time_local": "2026-11-26T17:05:00+08:00",
+                    "solar_elevation_deg": 1.2,
+                    "solar_azimuth_deg": 244.0,
+                    "instant_quality_index": 0.5
+                },
+                {
+                    "valid_time_local": "2026-11-26T17:15:00+08:00",
+                    "solar_elevation_deg": -1.3,
+                    "solar_azimuth_deg": 246.5,
+                    "instant_quality_index": 1.1
+                },
+                {
+                    "valid_time_local": "2026-11-26T17:25:00+08:00",
+                    "solar_elevation_deg": -3.1,
+                    "solar_azimuth_deg": 248.0,
+                    "instant_quality_index": 1.9
+                }
+            ]
+        });
+        enrich_point_report(&mut payload);
+        let spectral = &payload["spectral_color"];
+        assert_eq!(spectral["peak_time_local"], "2026-11-26T17:25:00+08:00");
+        let steps = spectral["steps"].as_array().unwrap();
+        assert_eq!(steps[0]["is_peak"], false);
+        assert_eq!(steps[1]["is_peak"], false);
+        assert_eq!(steps[2]["is_peak"], true);
     }
 }

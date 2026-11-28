@@ -453,7 +453,7 @@ pub(crate) fn features_at(grid: &DecodedGrid, geometry: &Geometry) -> Result<Vec
     if geometry.indices.is_empty() {
         return Ok(Vec::new());
     }
-    let high_cloud = field(grid, "highCloudLayer", 0, &["hcc", "hcdc", "tcc", "tcdc"]);
+    let high_cloud = field(grid, "highCloudLayer", 0, &["hcc", "avg_hcc", "hcdc", "tcc", "tcdc"]);
     let mut output = Vec::new();
     for level in PRESSURE_LEVELS {
         let height = field(grid, "isobaricInhPa", level, &["gh"]);
