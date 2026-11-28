@@ -99,11 +99,10 @@ pub fn map(grid: &Grid<'_>, target_lats: &[f64], target_lons: &[f64]) -> Result<
     {
         return Err("invalid CAMS grid dimensions, coordinates or cell limit".into());
     }
-    let mut lons: Vec<_> = grid.longitudes.iter().copied().map(longitude).collect();
-    // The boundary column's raw sign selects the axis end it is copied to.
-    restore_antimeridian(&mut lons, grid.longitudes);
+    let lons: Vec<_> = grid.longitudes.iter().copied().map(longitude).collect();
     let lat_axis = axis(grid.latitudes);
     let mut lon_axis = axis(&lons);
+    // The boundary column's raw sign selects the axis end it is copied to.
     restore_antimeridian(&mut lon_axis, grid.longitudes);
     let dense_cells = lat_axis
         .len()
@@ -115,15 +114,25 @@ pub fn map(grid: &Grid<'_>, target_lats: &[f64], target_lons: &[f64]) -> Result<
     // One index grid replaces twelve floating-point matrices. Last duplicates
     // win and holes remain missing, matching the reference matrix assignment.
     let mut indices = vec![usize::MAX; dense_cells];
-    for (index, (&lat, &lon)) in grid.latitudes.iter().zip(&lons).enumerate() {
+    for (index, (&lat, (&raw_lon, &lon))) in grid
+        .latitudes
+        .iter()
+        .zip(grid.longitudes.iter().zip(&lons))
+        .enumerate()
+    {
         let row = lat_axis.partition_point(|&v| v < lat);
-        let mut col = lon_axis.partition_point(|&v| v < lon);
-        // The appended +180 column shares the physical -180 column; seam
-        // targets read the raw-sign copy so bilinear stays finite there.
-        if lon == -180.0 && lon_axis.last() == Some(&180.0) {
-            col = lon_axis.len() - 1;
+        let col = lon_axis.partition_point(|&v| v < lon);
+        let is_raw_positive_180 = (raw_lon - 180.0).abs() < 1e-9;
+        // A raw +180 column lives only on the restored +180 end; a raw -180
+        // column populates -180 and mirrors onto +180 when both ends exist.
+        if is_raw_positive_180 && lon_axis.last() == Some(&180.0) {
+            indices[row * lon_axis.len() + (lon_axis.len() - 1)] = index;
+        } else {
+            indices[row * lon_axis.len() + col] = index;
+            if lon == -180.0 && lon_axis.last() == Some(&180.0) {
+                indices[row * lon_axis.len() + (lon_axis.len() - 1)] = index;
+            }
         }
-        indices[row * lon_axis.len() + col] = index;
     }
     // Target cells are independent: map them in parallel (regional domains
     // have 100k+ cells per CAMS bracket). Per-cell arithmetic is unchanged.
@@ -450,8 +459,21 @@ mod tests {
             aod: &[1., 2., 1., 2.],
             extinction: &[0.001; 44],
         };
-        let mapped = map(&grid, &[0.5], &[179.75]).unwrap();
-        assert_eq!(mapped.covered, [true]);
+        let mapped = map(&grid, &[0.5, 0.5, 0.5], &[179.75, 179.5, -180.0]).unwrap();
+        assert_eq!(mapped.covered, [true, true, true]);
         assert!((mapped.aod[0] - 1.5).abs() < 1e-6, "aod={}", mapped.aod[0]);
+        assert!((mapped.aod[1] - 1.0).abs() < 1e-6, "aod={}", mapped.aod[1]);
+        assert!((mapped.aod[2] - 2.0).abs() < 1e-6, "aod={}", mapped.aod[2]);
+        // Seam-bridging grid with raw -180 must interpolate both sides without a hole.
+        let grid = Grid {
+            latitudes: &[0., 0., 0., 1., 1., 1.],
+            longitudes: &[179.5, -180., -179.5, 179.5, -180., -179.5],
+            aod: &[1., 2., 4., 1., 2., 4.],
+            extinction: &ext,
+        };
+        let mapped = map(&grid, &[0.5, 0.5], &[179.75, -179.75]).unwrap();
+        assert_eq!(mapped.covered, [true, true]);
+        assert!((mapped.aod[0] - 1.5).abs() < 1e-6, "aod={}", mapped.aod[0]);
+        assert!((mapped.aod[1] - 3.0).abs() < 1e-6, "aod={}", mapped.aod[1]);
     }
 }

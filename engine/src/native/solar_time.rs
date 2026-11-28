@@ -142,9 +142,9 @@ pub fn glow_window(
             )
         }
         1 => {
-            let relative_base = (base - point.elevation_m).max(0.0) / 1000.0;
-            // Preserve the reference's max/units order even for top below base.
-            let relative_top = relative_base.max(top - point.elevation_m) / 1000.0;
+            let relative_base_m = (base - point.elevation_m).max(0.0);
+            let relative_base = relative_base_m / 1000.0;
+            let relative_top = relative_base_m.max(top - point.elevation_m) / 1000.0;
             let maximum = (2.0 * RADIUS * point.elevation_m.max(0.0) / 1000.0).sqrt()
                 + (2.0 * RADIUS * relative_top).sqrt();
             if relative_top <= 0.0 || distance <= 0.0 || distance > maximum * 1.08 {
@@ -354,5 +354,25 @@ mod tests {
             },
             -1
         );
+    }
+    #[test]
+    fn glow_window_target_depth_clamps_top_below_base_in_meters() {
+        let point = Point {
+            lat: 31.2,
+            lon: 121.5,
+            elevation_m: 0.0,
+        };
+        let anchor = DateTime::from_timestamp(1718964000, 0).unwrap();
+        let expected_max = (2.0 * RADIUS * 6.0).sqrt();
+        // top (4000m) < base (6000m) should clamp top up to base (6 km), not 4 km.
+        let window = glow_window(point, anchor, false, 1, [100.0, 6000.0, 4000.0, 0.0]).unwrap();
+        // When top == base, start == end so glow_window returns None, whereas
+        // a unit-mixed top (4 km < 6 km) would produce a spurious non-empty window.
+        assert!(window.is_none());
+        // With top (8000m) > base (6000m), maximum_distance reflects 8 km top.
+        let window = glow_window(point, anchor, false, 1, [100.0, 6000.0, 8000.0, 0.0])
+            .unwrap()
+            .expect("valid target depth window");
+        assert!(window.maximum_distance > expected_max);
     }
 }
