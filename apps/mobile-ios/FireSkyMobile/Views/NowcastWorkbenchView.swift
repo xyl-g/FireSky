@@ -1297,9 +1297,11 @@ private struct WorkSatelliteProfileView: View {
                     .foregroundColor(sunTextColor)
             )
             let sunTextSize = sunResolved.measure(in: size)
-            let sunPillW = sunTextSize.width + 12
-            let sunPillH = sunTextSize.height + 5
-            let sunPillRect = CGRect(x: right - sunPillW - 8, y: top + 7, width: sunPillW, height: sunPillH)
+            let sunPillW: CGFloat = sunTextSize.width + 12
+            let sunPillH: CGFloat = sunTextSize.height + 5
+            let sunPillX: CGFloat = CGFloat(right) - sunPillW - 8
+            let sunPillY: CGFloat = CGFloat(top) + 7
+            let sunPillRect = CGRect(x: sunPillX, y: sunPillY, width: sunPillW, height: sunPillH)
             layer.fill(Path(roundedRect: sunPillRect, cornerRadius: sunPillH * 0.5),
                        with: .color((scheme == .dark ? Color.black : Color.white).opacity(0.70)))
             layer.stroke(Path(roundedRect: sunPillRect, cornerRadius: sunPillH * 0.5),
