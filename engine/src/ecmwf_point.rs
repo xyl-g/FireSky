@@ -386,12 +386,9 @@ pub(crate) fn web_payload(report: &Value, quality: &Value, elevation: f64) -> Va
             if let (Some(base), Some(top)) = (base_asl, top_asl) {
                 row["dominant_burnable_cloud_base_agl_mean_m"] =
                     json!((base - terrain_asl).max(0.0));
-                row["dominant_burnable_cloud_top_agl_mean_m"] =
-                    json!((top - terrain_asl).max(0.0));
-                row["dominant_burnable_cloud_base_above_observer_mean_m"] =
-                    json!(base - elevation);
-                row["dominant_burnable_cloud_top_above_observer_mean_m"] =
-                    json!(top - elevation);
+                row["dominant_burnable_cloud_top_agl_mean_m"] = json!((top - terrain_asl).max(0.0));
+                row["dominant_burnable_cloud_base_above_observer_mean_m"] = json!(base - elevation);
+                row["dominant_burnable_cloud_top_above_observer_mean_m"] = json!(top - elevation);
             }
         } else {
             for key in [
@@ -558,10 +555,22 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0]["valid"], json!(true));
         assert_eq!(rows[0]["valid_time_utc"], json!("2026-11-27T09:05:00Z"));
-        assert_eq!(rows[0]["dominant_burnable_cloud_base_agl_mean_m"], json!(8000.0));
-        assert_eq!(rows[0]["dominant_burnable_cloud_top_agl_mean_m"], json!(10000.0));
-        assert_eq!(rows[0]["dominant_burnable_cloud_base_above_observer_mean_m"], json!(8150.0));
-        assert_eq!(rows[0]["dominant_burnable_cloud_top_above_observer_mean_m"], json!(10150.0));
+        assert_eq!(
+            rows[0]["dominant_burnable_cloud_base_agl_mean_m"],
+            json!(8000.0)
+        );
+        assert_eq!(
+            rows[0]["dominant_burnable_cloud_top_agl_mean_m"],
+            json!(10000.0)
+        );
+        assert_eq!(
+            rows[0]["dominant_burnable_cloud_base_above_observer_mean_m"],
+            json!(8150.0)
+        );
+        assert_eq!(
+            rows[0]["dominant_burnable_cloud_top_above_observer_mean_m"],
+            json!(10150.0)
+        );
         assert_eq!(rows[1]["valid"], json!(false));
         assert_eq!(rows[1]["valid_time_utc"], json!("2026-11-27T09:45:00Z"));
         assert!(rows[1]["dominant_burnable_cloud_base_agl_mean_m"].is_null());
