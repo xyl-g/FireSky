@@ -73,7 +73,7 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<string, JsonObject> dataSyncProgress = new();
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? syncTickTimer, sessionSaveTimer;
     private readonly string settingsFile = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FireSky", "settings.json");
+        App.LocalDataRoot, "FireSky", "settings.json");
     private int locationRevision;
     private readonly Dictionary<string, TextBlock> metricValues = new();
     private readonly Dictionary<string, StackPanel> heroPanels = new();
@@ -407,7 +407,7 @@ public sealed partial class MainWindow : Window
     // ---------- 连接与启动 ----------
 
     private static string DefaultWorkspaceDirectory() =>
-        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FireSky", "Data");
+        Path.Combine(App.LocalDataRoot, "FireSky", "Data");
 
     private async Task Connect()
     {

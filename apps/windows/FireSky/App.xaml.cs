@@ -6,6 +6,19 @@ namespace FireSky;
 public partial class App : Application
 {
     private Window? window;
+
+    // Portable acceptance runs can keep settings and diagnostics out of the signed-in profile.
+    internal static string LocalDataRoot
+    {
+        get
+        {
+            var configured = Environment.GetEnvironmentVariable("FIRESKY_LOCAL_DATA_ROOT");
+            return string.IsNullOrWhiteSpace(configured)
+                ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
+                : Path.GetFullPath(configured);
+        }
+    }
+
     public App()
     {
         InitializeComponent();
@@ -16,7 +29,7 @@ public partial class App : Application
             try
             {
                 var log = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                    LocalDataRoot,
                     "FireSky", "crash.log");
                 Directory.CreateDirectory(Path.GetDirectoryName(log)!);
                 File.AppendAllText(log,

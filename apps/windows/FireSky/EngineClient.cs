@@ -641,7 +641,7 @@ public sealed class EngineClient : IDisposable
             var child = process;
             var logPath = Path.Combine(
                 Environment.GetEnvironmentVariable("FIRESKY_NATIVE_LOG_DIR")
-                    ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FireSky"),
+                    ?? Path.Combine(App.LocalDataRoot, "FireSky"),
                 logName);
             Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
             _ = ReadOutput(child);
