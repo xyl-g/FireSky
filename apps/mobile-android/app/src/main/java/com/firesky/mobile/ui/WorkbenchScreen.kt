@@ -427,7 +427,6 @@ fun RemoteServerConnectionForm(store: WorkbenchStore, state: WorkbenchState) {
     val cameraDeniedMsg = stringResource(R.string.remote_camera_denied)
     val clipboardEmptyMsg = stringResource(R.string.remote_clipboard_empty)
     val pairingInvalidMsg = stringResource(R.string.remote_pairing_invalid)
-
     val scanLauncher = rememberLauncherForActivityResult(ScanContract()) { result ->
         val contents = result.contents?.trim().orEmpty()
         if (contents.isNotEmpty()) {
@@ -549,13 +548,7 @@ fun RemoteServerConnectionForm(store: WorkbenchStore, state: WorkbenchState) {
                 modifier = Modifier.padding(11.dp),
             )
         }
-        if (state.remoteTestMessage.isNotEmpty()) {
-            Text(
-                state.remoteTestMessage,
-                fontSize = 12.sp,
-                color = if (state.remoteTestOk) Color(0xFF2E8B72) else MaterialTheme.colorScheme.error,
-            )
-        }
+        RemoteConnectionStatusText(state)
         Row(
             Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -577,6 +570,25 @@ fun RemoteServerConnectionForm(store: WorkbenchStore, state: WorkbenchState) {
                 store.saveAndConnectRemoteServer()
             }
         }
+    }
+}
+
+@Composable
+internal fun RemoteConnectionStatusText(state: WorkbenchState) {
+    val message = when {
+        !state.remoteTestOk -> state.remoteTestMessage
+        state.remoteWorkspace.isNotBlank() -> stringResource(
+            R.string.remote_connection_workspace_fmt,
+            state.remoteWorkspace,
+        )
+        else -> stringResource(R.string.remote_connection_succeeded)
+    }
+    if (message.isNotEmpty()) {
+        Text(
+            message,
+            fontSize = 12.sp,
+            color = if (state.remoteTestOk) Color(0xFF2E8B72) else MaterialTheme.colorScheme.error,
+        )
     }
 }
 

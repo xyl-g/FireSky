@@ -173,6 +173,8 @@
     <string name="remote_mac_badge">远程服务器</string>
     <string name="remote_connected_badge">已连接</string>
     <string name="remote_unconfigured_badge">未配置</string>
+    <string name="remote_connection_succeeded">已连接到 FireSky 服务器</string>
+    <string name="remote_connection_workspace_fmt">已连接 · 服务器工作区：%1$s</string>
     <string name="onboarding_connect_title">连接 FireSky 服务器</string>
     <string name="onboarding_connect_subtitle">Android 端作为纯远程客户端连接你的 Mac / Windows / Docker 服务，计算与数据均在服务端完成。</string>
 

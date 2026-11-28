@@ -173,6 +173,8 @@
     <string name="remote_mac_badge">Remote</string>
     <string name="remote_connected_badge">Connected</string>
     <string name="remote_unconfigured_badge">Setup</string>
+    <string name="remote_connection_succeeded">Connected to FireSky server</string>
+    <string name="remote_connection_workspace_fmt">Connected · Server workspace: %1$s</string>
     <string name="onboarding_connect_title">Connect to FireSky Server</string>
     <string name="onboarding_connect_subtitle">Android operates as a pure remote thin client connecting to your Mac, Windows, or Docker FireSky server.</string>
 

@@ -12,10 +12,13 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performClick
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalContext
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.firesky.mobile.R
 import com.firesky.mobile.engine.MockTransport
+import com.firesky.mobile.store.WorkbenchState
 import com.firesky.mobile.store.WorkbenchStore
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -122,6 +125,25 @@ class WorkbenchComposeUiTest {
         composeTestRule.waitForIdle()
         composeTestRule.onAllNodesWithText(app.getString(R.string.remote_server_title)).onFirst().assertIsDisplayed()
         composeTestRule.onNodeWithText(app.getString(R.string.remote_save_and_connect)).assertIsDisplayed()
+    }
+
+    @Test
+    fun remoteConnectionSuccessUsesEnglishResources() {
+        app.getSharedPreferences("firesky", Context.MODE_PRIVATE)
+            .edit()
+            .putString(L10n.KEY_LANGUAGE, "en")
+            .commit()
+
+        composeTestRule.setContent {
+            CompositionLocalProvider(LocalContext provides L10n.wrap(LocalContext.current)) {
+                FireSkyTheme(appearance = "dark") {
+                    RemoteConnectionStatusText(WorkbenchState(remoteTestOk = true))
+                }
+            }
+        }
+
+        composeTestRule.onNodeWithText("Connected to FireSky server").assertIsDisplayed()
+        composeTestRule.onAllNodesWithText("已连接到 FireSky 服务器").assertCountEquals(0)
     }
 
     @Test

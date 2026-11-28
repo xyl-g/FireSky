@@ -67,12 +67,15 @@ body.dark #offline-hint {
 </head>
 <body>
 <div id="map"></div>
-<div id="offline-hint">底图暂不可用（离线或网络受限）· 仍可点按或缩放</div>
+<div id="offline-hint">Map tiles unavailable (offline or network restricted) · Tap or zoom to explore</div>
 <script src="leaflet/leaflet.js"></script>
 <script>
 window.onerror = function(msg, src, line, col) {
   console.error('map error:', msg, src, line, col);
 };
+if (navigator.language.toLowerCase().startsWith('zh')) {
+  document.getElementById('offline-hint').textContent = '底图暂不可用（离线或网络受限）· 仍可点按或缩放';
+}
 const STOPS = [
   [0.00, [253, 230, 220]],
   [0.20, [251, 176, 122]],
