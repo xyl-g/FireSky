@@ -255,6 +255,15 @@ fn gate(row: &mut Row, allowed: bool) {
 /// The caller supplies its own observation/visibility gate. Instant scoring
 /// does not infer the event's visibility or validity masks.
 pub fn score_instant(row: &Row, allowed: bool, blocker_cap: bool) -> Instant {
+    score_instant_with_ceiling(row, allowed, blocker_cap, false)
+}
+
+pub fn score_instant_with_ceiling(
+    row: &Row,
+    allowed: bool,
+    blocker_cap: bool,
+    apply_ceiling: bool,
+) -> Instant {
     let mut row = normalized(row);
     if blocker_cap {
         cap(&mut row);
@@ -284,7 +293,10 @@ pub fn score_instant(row: &Row, allowed: bool, blocker_cap: bool) -> Instant {
     };
     let observer_delta = after_incoming * (observer - 1.0);
     let raw = (after_incoming + observer_delta).max(0.0);
-    let pre = if active { clip(raw, 2.5) } else { 0.0 };
+    let mut pre = if active { clip(raw, 2.5) } else { 0.0 };
+    if apply_ceiling && active {
+        pre = pre.min(empirical::inverse_calibrated_quality_response(row[16]));
+    }
     let index = empirical::calibrated_quality_response(pre);
     let aod = if row[9].is_finite() {
         row[9].max(0.0)
@@ -1059,5 +1071,30 @@ mod tests {
         let capped = score(&capped_rows, options, None).unwrap();
         assert!((capped.values[Metric::Ceiling as usize] - 1.2).abs() < 1e-12);
         assert!(capped.index() <= 1.2 + 1e-12);
+    }
+
+    #[test]
+    fn instant_scoring_respects_optional_score_ceiling() {
+        let row: Row = [
+            0.9, 0.9, 2.25, 2.25, 2.25, 0.0, 1.0, 0.9, 0.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            0.85, 1.0,
+        ];
+        let uncapped = score_instant(&row, true, true);
+        let capped = score_instant_with_ceiling(&row, true, true, true);
+        let single_event = score(
+            &[row],
+            Options {
+                mode: Mode::Scalar,
+                apply_duration: false,
+                local_columns: false,
+                score_ceiling: true,
+                radius_km: 200.0,
+            },
+            None,
+        )
+        .unwrap();
+        assert!(uncapped[0] > 1.5);
+        assert!((capped[0] - 0.85).abs() < 1e-12);
+        assert!((capped[0] - single_event.index()).abs() < 1e-12);
     }
 }

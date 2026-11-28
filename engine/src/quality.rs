@@ -100,19 +100,29 @@ pub fn metadata(radius: f64) -> Value {
     })
 }
 
-fn instant_values(rows: &[Row], mode: Mode, force_valid: bool) -> Vec<Vec<f64>> {
+fn instant_values(
+    rows: &[Row],
+    mode: Mode,
+    force_valid: bool,
+    score_ceiling: bool,
+) -> Vec<Vec<f64>> {
     rows.iter()
         .map(|row| {
             let allowed = (force_valid || row[17] >= 0.5)
                 && row[6] >= 0.05
                 && (mode == Mode::Regional || row[15] >= 0.5);
-            quality::score_instant(row, allowed, true).to_vec()
+            quality::score_instant_with_ceiling(row, allowed, true, score_ceiling).to_vec()
         })
         .collect()
 }
 
-fn instant_ledger(rows: &[Row], mode: Mode, force_valid: bool) -> Vec<Value> {
-    instant_values(rows, mode, force_valid)
+fn instant_ledger(
+    rows: &[Row],
+    mode: Mode,
+    force_valid: bool,
+    score_ceiling: bool,
+) -> Vec<Value> {
+    instant_values(rows, mode, force_valid, score_ceiling)
         .into_iter()
         .map(|values| {
             let mut object = Map::new();
@@ -206,7 +216,7 @@ pub fn execute_nowcast(params: NowcastParams) -> Result<Value, String> {
             )?));
         }
     }
-    let instant = instant_values(&params.rows, options.mode, true);
+    let instant = instant_values(&params.rows, options.mode, true, options.score_ceiling);
     let mut nowcast_metadata = metadata(params.radius_km);
     nowcast_metadata["nowcast_event_fields"] = json!(NOWCAST_EVENT_FIELDS);
     Ok(json!({
@@ -249,7 +259,7 @@ pub fn execute(params: Params) -> Result<Value, String> {
         let aod = params.scalar_aod.as_ref().map(|v| v[i].as_slice());
         let score = quality::score(rows, options, aod)?;
         events.push(render(&score, params.radius_km));
-        let instant = instant_ledger(rows, options.mode, false);
+        let instant = instant_ledger(rows, options.mode, false, options.score_ceiling);
         instants.push(instant);
     }
     Ok(json!({"events":events,"instant":instants,"metadata":metadata(params.radius_km)}))

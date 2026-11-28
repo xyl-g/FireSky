@@ -2485,7 +2485,7 @@ fn build_result(request: AssessmentRequest) -> Result<AssessmentOutput, String> 
         serde_json::from_value(serde_json::json!({
             "rows": quality_rows,
             "apply_duration": request.apply_duration,
-            "local_columns": true,
+            "local_columns": false,
             "score_ceiling": any_ceiling,
             "radius_km": MAX_ANALYSIS_RADIUS_KM,
             "parallel_instants": true,

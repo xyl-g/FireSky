@@ -1975,7 +1975,7 @@ fn for_each_angular_cloud_cell_precomputed(
             continue;
         }
         let elevation_start = base.floor().clamp(0.0, VIEW_ELEVATION_BINS as f32) as usize;
-        let elevation_end = top.ceil().clamp(0.0, VIEW_ELEVATION_BINS as f32) as usize;
+        let elevation_end = top.ceil().clamp(1.0, VIEW_ELEVATION_BINS as f32) as usize;
         for elevation_bin in elevation_start..elevation_end {
             let bin_base = elevation_bin as f32;
             // Bin 0 owns the sub-horizon skirt as well: a deck whose top is
