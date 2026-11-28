@@ -19,6 +19,8 @@ Aligns the native Windows UI with macOS and Android with iOS; refreshes point, r
   **macOS and iOS workbench/results refinement**: improves point, regional, satellite-nowcast, task-history, data-management, settings and preflight/error workflows while preserving independent GFS/EC results and explicit missing/failure states.
 - **共享大气剖面诊断补充**：[cross_section.rs](engine/src/cross_section.rs) 输出逐层日照比例和沿太阳方向的云路径透过率；[ecmwf_point.rs](engine/src/ecmwf_point.rs) 补充可供统一界面展示的云层几何字段。
   **Shared atmospheric-profile diagnostics**: [cross_section.rs](engine/src/cross_section.rs) now returns per-layer sunlit fractions and solar-direction cloud-path transmission; [ecmwf_point.rs](engine/src/ecmwf_point.rs) adds cloud geometry fields for consistent UI presentation.
+- **共享引擎边界修复**：修正 CAMS 跨日期变更经度边界列映射，以及目标云层日照窗口中云顶低于云底时的高度单位计算，并新增回归测试。
+  **Shared engine boundary fixes**: corrects CAMS antimeridian boundary-column mapping and altitude-unit handling when a target cloud top is below its base in solar-window calculations, with regression coverage.
 - **Android 异步恢复竞态修复**：恢复旧任务期间若用户主动切换模式，延迟到达的恢复结果不再覆盖用户选择。
   **Android async-restore race fix**: a late task restore no longer overrides a mode selected by the user while restoration is in flight.
 
