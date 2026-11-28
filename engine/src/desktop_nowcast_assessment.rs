@@ -2444,8 +2444,12 @@ fn build_result(request: AssessmentRequest) -> Result<AssessmentOutput, String> 
         let burn_load = py_clamp(load_override.unwrap_or(material_load), 0.0, 2.5);
         let incoming_aerosol_load = py_clamp(incoming_override.unwrap_or(material_load), 0.0, 2.5);
         let ceiling = match &steps[index].observation_score_ceiling {
-            Some(value) => *value,
-            None => 2.5,
+            Some(value) => py_clamp(
+                *value * crate::native::empirical::MAX_SCORE,
+                0.0,
+                crate::native::empirical::MAX_SCORE,
+            ),
+            None => crate::native::empirical::MAX_SCORE,
         };
         // Python stores every cell through float32 before the ledger reads it.
         let quantize = |value: f64| -> f64 { value as f32 as f64 };

@@ -88,7 +88,7 @@ $$z_b=\min\left(\min_{i\in\mathcal M}z^{\rm lower}_{i}, z_b^{\rm model}\right), 
 
 $$o=\mathrm{clamp}_{01}\left(0.22 u_{\rm rh}+0.78 u_{\rm op}\right),\qquad u_{\rm rh}=\mathrm{clamp}_{01}\left(\frac{{\rm RH}-82}{16}\right)$$
 
-$$u_{\rm op}=\mathrm{clamp}_{01}\left(0.35+0.65 u_{\rm cond}\right),\qquad u_{\rm cond}=\mathrm{clamp}_{01}\left(\frac{\log_{10}q_{c}+8}{3}\right)$$
+$$u_{\rm op}=\mathrm{clamp}_{01}\left(0.35+0.65 u_{\rm cond}\right),\qquad u_{\rm cond}=\mathrm{clamp}_{01}\left(\frac{\log_{10}q_{c}+7}{3.5}\right)$$
 
 $q_c$ 为液水 + 冰水混合比（kg/kg）。相对湿度始终占 22% 权重（它区分灰霾背景与
 真正能占满天空的云）； $u_{\rm op}$ 的前置常数 $0.35$ 只在模式给出云量分数时生效，
@@ -355,7 +355,7 @@ $A_{\rm burn}\approx0.9124$ 。
 
 | $q$ | 档位 |
 |---|---|
-| $\lt 0.001$ | 无明显火烧云 |
+| $\lt 0.02$ | 无明显火烧云 |
 | $\lt 0.05$ | 微微烧 |
 | $\lt 0.20$ | 小烧 |
 | $\lt 0.40$ | 小烧到中等烧 |
@@ -394,7 +394,7 @@ $$t_{\rm low}=0.55+0.15 \mathrm{clamp}_{01}\left(\frac{z_{\rm terrain}-1500}{200
 
 $$q_{\rm conv}=\mathrm{clamp}\Big(1-0.88 S\left(r_{\rm path}; 0.18, 0.72\right),  {\rm low}=0.12\Big)$$
 
-$$\text{nowcast}=\min\left(q, q_{\rm conv}\right)$$
+$$\text{nowcast}=\min\left(q, 2.5\, q_{\rm conv}\right)$$
 
 卫星来源缺帧时 fail-closed：不回退到模式评分。
 
