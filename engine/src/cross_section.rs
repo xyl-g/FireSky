@@ -10,6 +10,8 @@ use std::path::{Component, Path, PathBuf};
 
 const CONTRACT: &str = "rust-cross-section-source-v1";
 const RADIUS_KM: f64 = 6371.0;
+const MIN_PATH_CLOUD_AMOUNT: f32 = 0.06;
+const PATH_LAYER_EDGE_SOFTNESS_M: f64 = 200.0;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -28,6 +30,159 @@ fn default_radius() -> f64 {
 }
 fn default_step() -> f64 {
     25.0
+}
+
+fn layer_bounds(profile: &[[f32; 24]], row: usize, terrain_m: f64) -> Option<(f64, f64)> {
+    let center = f64::from(profile.get(row)?[1]);
+    if !center.is_finite() || center <= terrain_m {
+        return None;
+    }
+    let below = profile
+        .iter()
+        .map(|value| f64::from(value[1]))
+        .filter(|&height| height.is_finite() && height < center)
+        .max_by(f64::total_cmp);
+    let above = profile
+        .iter()
+        .map(|value| f64::from(value[1]))
+        .filter(|&height| height.is_finite() && height > center)
+        .min_by(f64::total_cmp);
+    let bottom = below
+        .map_or(terrain_m, |height| (height + center) * 0.5)
+        .max(terrain_m);
+    let top = above.map_or_else(
+        || center + (center - bottom).max(500.0) * 0.5,
+        |height| (height + center) * 0.5,
+    );
+    (top > bottom).then_some((bottom, top))
+}
+
+fn smooth_unit(value: f64) -> f64 {
+    let value = value.clamp(0.0, 1.0);
+    value * value * (3.0 - 2.0 * value)
+}
+
+fn layer_intersection(ray_height_m: f64, bottom_m: f64, top_m: f64) -> f32 {
+    if ray_height_m <= bottom_m || ray_height_m >= top_m {
+        return 0.0;
+    }
+    let edge_distance = (ray_height_m - bottom_m).min(top_m - ray_height_m);
+    smooth_unit(edge_distance / PATH_LAYER_EDGE_SOFTNESS_M) as f32
+}
+
+fn sample_bin_width_km(distances: &[f32], index: usize, target_distance: f32) -> f32 {
+    let distance = distances[index];
+    let left = if index == 0 {
+        distance
+    } else {
+        (distances[index - 1] + distance) * 0.5
+    };
+    let right = if index + 1 == distances.len() {
+        distance + (distance - distances[index - 1]) * 0.5
+    } else {
+        (distance + distances[index + 1]) * 0.5
+    };
+    (right - left.max(target_distance)).max(0.0)
+}
+
+/// Estimate cloud extinction from each theoretically sunlit model layer toward
+/// the sun using only the sampled vertical profiles in this cross-section.
+fn cloud_path_diagnostics(
+    distances: &[f32],
+    profiles: &[Vec<[f32; 24]>],
+    terrain: &[f64],
+    required_height: &[f32],
+    solar_elevation_deg: f64,
+) -> (Vec<Vec<Option<f32>>>, Vec<Vec<Option<f32>>>) {
+    let level_count = profiles.first().map_or(0, Vec::len);
+    let mut transmissions = vec![vec![None; level_count]; profiles.len()];
+    let mut sunlit_fractions = vec![vec![None; level_count]; profiles.len()];
+    if profiles.len() != distances.len()
+        || profiles.len() != terrain.len()
+        || profiles.len() != required_height.len()
+        || level_count == 0
+        || profiles.iter().any(|profile| profile.len() != level_count)
+    {
+        return (transmissions, sunlit_fractions);
+    }
+
+    let bounds: Vec<Vec<_>> = profiles
+        .iter()
+        .zip(terrain)
+        .map(|(profile, &ground)| {
+            (0..level_count)
+                .map(|row| layer_bounds(profile, row, ground))
+                .collect()
+        })
+        .collect();
+    let optics: Vec<Vec<[f32; 5]>> = profiles
+        .iter()
+        .map(|profile| {
+            profile
+                .iter()
+                .map(crate::native::cloud::effective_profile)
+                .collect()
+        })
+        .collect();
+
+    for target in 0..profiles.len() {
+        for row in 0..level_count {
+            let Some((bottom, top)) = bounds[target][row] else {
+                continue;
+            };
+            let amount = optics[target][row][0];
+            if !amount.is_finite() || amount < MIN_PATH_CLOUD_AMOUNT {
+                continue;
+            }
+            let lit_bottom = bottom.max(f64::from(required_height[target]));
+            let sunlit = ((top - lit_bottom) / (top - bottom)).clamp(0.0, 1.0) as f32;
+            if sunlit <= 0.0 {
+                continue;
+            }
+            sunlit_fractions[target][row] = Some(sunlit);
+            let target_height = (lit_bottom + top) * 0.5;
+            let mut optical_depth = 0.0_f32;
+            let mut peak_blocking = 0.0_f32;
+
+            for blocker in target + 1..profiles.len() {
+                let path_height = crate::native::solar_ray_height(
+                    f64::from(distances[target]),
+                    target_height,
+                    f64::from(distances[blocker]),
+                    solar_elevation_deg,
+                );
+                let mut transmission = 1.0_f32;
+                for blocker_row in 0..level_count {
+                    let Some((blocker_bottom, blocker_top)) = bounds[blocker][blocker_row] else {
+                        continue;
+                    };
+                    let blocker_amount = optics[blocker][blocker_row][0];
+                    let blocker_opacity = optics[blocker][blocker_row][2];
+                    if !blocker_amount.is_finite() || !blocker_opacity.is_finite() {
+                        continue;
+                    }
+                    let intersection = layer_intersection(path_height, blocker_bottom, blocker_top);
+                    let blocking =
+                        (blocker_amount * blocker_opacity * intersection).clamp(0.0, 1.0);
+                    transmission *= 1.0 - blocking;
+                }
+                let blocking = (1.0 - transmission).clamp(0.0, 1.0);
+                let step_km = sample_bin_width_km(distances, blocker, distances[target]);
+                optical_depth += crate::native::cloud_optical_depth_increment(blocking, step_km);
+                peak_blocking = peak_blocking.max(blocking);
+                if optical_depth >= 7.0 {
+                    optical_depth = 7.0;
+                    break;
+                }
+            }
+            transmissions[target][row] = Some(if optical_depth >= 7.0 {
+                0.0
+            } else {
+                crate::native::cloud_transmission_from_path(optical_depth, peak_blocking)
+            });
+        }
+    }
+    (transmissions, sunlit_fractions)
 }
 
 #[derive(Deserialize)]
@@ -411,6 +566,8 @@ fn assemble(
             crate::native::required_illumination_height_m(f64::from(distance), solar, 0.0) as f32
         })
         .collect();
+    let (path_transmission, sunlit_fraction) =
+        cloud_path_diagnostics(distances, profiles, terrain, &shadow, solar);
     let mut targets = Vec::new();
     let mut amounts = Vec::new();
     let mut status_rows = Vec::new();
@@ -604,6 +761,7 @@ fn assemble(
         "pressure_levels_hpa":levels.iter().map(|&v| v as i32).collect::<Vec<_>>(),
         "required_illumination_base_asl_m":shadow.iter().map(|&h| f64::from(h)).collect::<Vec<_>>(),
         "required_illumination_base_agl_m":shadow.iter().zip(terrain).map(|(&h,&t)| rounded(f64::from(h)-t,2)).collect::<Vec<_>>(),
+        "cloud_path_diagnostic":{"method":"sampled-profile-beer-lambert-v1","solar_direction":"increasing-distance","radius_limit_km":radius,"peak_blocking_weight":0.72},
         "theoretical_targets":targets,
         "fields":{
             "geopotential_height_asl_m":matrix(1,0.0),"temperature_c":matrix(2,-273.15),
@@ -612,6 +770,8 @@ fn assemble(
             "omega_pa_s":matrix(3,0.0),"u_wind_ms":matrix(4,0.0),"v_wind_ms":matrix(5,0.0),
             "cloud_layer_status":status_rows,"pressure_family_code":family_rows,
             "cloud_layer_base_asl_m":base_rows,"cloud_layer_top_asl_m":top_rows,
+            "cloud_path_transmission":path_transmission.iter().map(|column| column.iter().map(|value| value.map(|v| rounded(f64::from(v),4)).unwrap_or(Value::Null)).collect::<Vec<_>>()).collect::<Vec<_>>(),
+            "cloud_sunlit_fraction":sunlit_fraction.iter().map(|column| column.iter().map(|value| value.map(|v| rounded(f64::from(v),4)).unwrap_or(Value::Null)).collect::<Vec<_>>()).collect::<Vec<_>>(),
         },
     })
 }
@@ -658,7 +818,7 @@ fn sight_height(observer: f64, target: f64, distance: f64, sample: f64) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::nearest_evaluation_index;
+    use super::{cloud_path_diagnostics, nearest_evaluation_index};
 
     #[test]
     fn offset_snaps_to_nearest_event_grid_step() {
@@ -709,6 +869,40 @@ mod tests {
         assert_eq!(radar["best_azimuth_deg"], 225.0);
         assert_eq!(radar["best_direction_zh"], "西南");
         assert_eq!(radar["best_direction_en"], "SW");
+    }
+
+    #[test]
+    fn cloud_path_diagnostic_marks_lit_layers_and_attenuates_behind_clouds() {
+        let profile = |height: f32, fraction: f32| {
+            let mut row = [0.0_f32; 24];
+            row[0] = 95.0;
+            row[1] = height;
+            row[6] = fraction;
+            row[11] = 1e-3;
+            row[13] = fraction / 100.0;
+            row[14] = 300.0;
+            row[23] = 0.0;
+            row
+        };
+        let profiles = vec![
+            vec![profile(8_000.0, 0.0), profile(4_000.0, 100.0)],
+            vec![profile(8_000.0, 0.0), profile(4_000.0, 100.0)],
+        ];
+        let (transmission, sunlit) =
+            cloud_path_diagnostics(&[0.0, 25.0], &profiles, &[0.0, 0.0], &[0.0, 0.0], -2.0);
+        assert!(sunlit[0][1].is_some_and(|value| value > 0.0));
+        assert!(transmission[0][1].is_some_and(|value| value < 1.0));
+        assert_eq!(transmission[1][1], Some(1.0));
+
+        let unlit = cloud_path_diagnostics(
+            &[0.0, 25.0],
+            &profiles,
+            &[0.0, 0.0],
+            &[10_000.0, 10_000.0],
+            -2.0,
+        );
+        assert_eq!(unlit.0[0][1], None);
+        assert_eq!(unlit.1[0][1], None);
     }
 }
 

@@ -81,7 +81,7 @@ final class MockTransport: EngineTransport {
                 "engine": "firesky-rust-mock",
                 "cams_credentials": camsCredentials(),
                 "regions": [
-                    ["code": "china", "label": "中国", "bounds": [73.0, 18.0, 135.0, 54.0]],
+                    ["code": "china", "label": "中国", "bounds": [73.0, 18.0, 136.0, 54.0]],
                     ["code": "east-asia", "label": "东亚", "bounds": [100.0, 20.0, 146.0, 54.0]],
                 ],
             ])
@@ -208,6 +208,38 @@ final class MockTransport: EngineTransport {
             guard !key.isEmpty else { emitError(id: id, "Key 不能为空。"); return }
             camsConfigured = true
             emitResult(id: id, camsCredentials())
+        case "profile_query":
+            await pause(160)
+            let model = params["model_source"] as? String ?? "gfs"
+            let identity = params["source_identity"] as? JSONObject ?? ["bytes": 1024, "sha256": String(repeating: "b", count: 64)]
+            let resultID = params["result_id"] as? String ?? String(repeating: "a", count: 64)
+            let lat = (params["lat"] as? NSNumber)?.doubleValue ?? 30.2741
+            let lon = (params["lon"] as? NSNumber)?.doubleValue ?? 120.1551
+            let validUTC = params["valid_time_utc"] as? String ?? Self.isoUTC(Date())
+            let cycleUTC = Self.mockCycleUTC
+            var section = Self.mockCrossSection
+            section["valid_time_local"] = validUTC
+            if model == "satellite" {
+                section["profile"] = [
+                    ["distance_km": 50.0, "solar_azimuth_deg": 248.0],
+                    ["distance_km": 150.0, "solar_azimuth_deg": 248.0],
+                    ["distance_km": 250.0, "solar_azimuth_deg": 248.0],
+                ]
+                section["samples_count"] = 6
+            }
+            emitResult(id: id, [
+                "contract": "rust-desktop-profile-query-v1",
+                "status": "ready",
+                "result_id": resultID,
+                "source_identity": identity,
+                "model_source": model,
+                "lat": lat,
+                "lon": lon,
+                "valid_time_utc": validUTC,
+                "cycle_utc": cycleUTC,
+                "source_times_utc": [cycleUTC],
+                "cross_section": section,
+            ])
         default:
             emitError(id: id, "未知方法 \(method)（MockTransport）")
         }
@@ -390,6 +422,13 @@ final class MockTransport: EngineTransport {
                 "elevation_m": 12.0, "timezone_name": "Asia/Shanghai"]
     }
 
+    private static var mockCycleUTC: String {
+        let timezone = TimeZone(identifier: "Asia/Shanghai") ?? .current
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timezone
+        return isoUTC(calendar.date(bySettingHour: 6, minute: 0, second: 0, of: Date()) ?? Date())
+    }
+
     private static func isoUTC(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
@@ -480,8 +519,10 @@ final class MockTransport: EngineTransport {
                 "burnable_cloud_coverage": min(0.85, 0.35 + quality * 0.2),
                 "forward_burnable_cloud_ratio": min(0.9, 0.4 + quality * 0.2),
                 "observer_return_transmission": 0.72,
+                "solar_incoming_block_risk": 0.08,
                 "brightness_color": 0.76,
                 "quality_aod550": 0.31,
+                "selected_regime": valid ? "burnable_cloud_field" : "invalid",
                 "dominant_burnable_pressure_family": "high",
                 "dominant_burnable_cloud_base_agl_mean_m": 6400.0,
                 "dominant_burnable_cloud_top_agl_mean_m": 8900.0,
@@ -491,10 +532,14 @@ final class MockTransport: EngineTransport {
                 "physically_burnable": valid && quality >= 1.0,
             ])
         }
-        func model(aod: Double, material: Double, brightness: Double, genus: String, conf: Double) -> JSONObject {
-            [
-                "peak_quality_index": (best * 100).rounded() / 100,
-                "quality_level": best >= 1.5 ? "值得一看" : "一般",
+        let cycleUTC = isoUTC(calendar.date(bySettingHour: 6, minute: 0, second: 0, of: now) ?? now)
+        func model(sourceName: String, aod: Double, material: Double, brightness: Double, genus: String, conf: Double, deltaBias: Double) -> JSONObject {
+            let peakVal = max(0.2, ((best + deltaBias) * 100).rounded() / 100)
+            return [
+                "model_source": sourceName,
+                "peak_quality_index": peakVal,
+                "quality_index": peakVal,
+                "quality_level": peakVal >= 1.5 ? "中等烧到大烧" : "小烧到中等烧",
                 "best_time_local": bestTime,
                 "timing_window": [
                     "start_time_local": localStamp(calendar.date(byAdding: .minute, value: -25,
@@ -502,8 +547,8 @@ final class MockTransport: EngineTransport {
                     "end_time_local": localStamp(calendar.date(byAdding: .minute, value: 65,
                                                                to: calendar.date(byAdding: .minute, value: 30, to: evening)!) ?? now, timezone: timezone),
                 ],
-                "summary": "模拟报告：傍晚高云层完整，霞光质量指数峰值为 \(String(format: "%.2f", best))，核心窗口约 60 分钟。",
-                "cycle_time_utc": isoUTC(calendar.date(bySettingHour: 6, minute: 0, second: 0, of: now) ?? now),
+                "summary": "模拟报告：傍晚高云层完整，霞光质量指数峰值为 \(String(format: "%.2f", peakVal))，核心窗口约 60 分钟。",
+                "cycle_time_utc": cycleUTC,
                 "duration_minutes": 58,
                 "confidence_score": 0.82,
                 "convective_risk": 0.08,
@@ -522,7 +567,23 @@ final class MockTransport: EngineTransport {
                 "aerosol": ["aod550": aod, "source": "cams", "quality": "cams"],
                 "anchor_local": bestTime,
                 "quality_components": [
+                    "coverage_base_score": 1.68 + deltaBias,
+                    "raw_quality_index": peakVal,
                     "burnable_cloud_coverage_effective": 0.71,
+                    "forward_burnable_cloud_load_effective": 0.64,
+                    "forward_burnable_cloud_ratio_peak": 0.84,
+                    "forward_burnable_cloud_field_amount_peak": 0.72,
+                    "forward_view_cloud_field_amount_peak": 0.86,
+                    "solar_incoming_block_risk_at_best_cloud": 0.08,
+                    "duration_adjustment": 0.14,
+                    "duration_factor": 1.084,
+                    "incoming_aod_adjustment": -0.09,
+                    "observer_aod_adjustment": -0.07,
+                    "observer_return_optical_depth_mean": 0.33,
+                    "observer_return_transmission_mean": 0.72,
+                    "forward_field_radius_km": 300.0,
+                    "forward_sector_half_angle_deg": 35.0,
+                    "quality_limiting_factor": "太阳入射 AOD 削光",
                     "cloud_material": material,
                     "brightness_color": brightness,
                     "incoming_aod_illumination_factor": 0.66,
@@ -531,13 +592,53 @@ final class MockTransport: EngineTransport {
                     "duration_minutes": 58,
                 ],
                 "cross_section": mockCrossSection,
+                "profile_source": [
+                    "contract": "rust-desktop-profile-source-v1",
+                    "available": true,
+                    "query_method": "profile_query",
+                    "model_source": sourceName,
+                    "profile_kind": "model-pressure-cross-section",
+                    "cycle_utc": mockCycleUTC,
+                    "result_id": String(repeating: "a", count: 64),
+                    "source_identity": ["bytes": 1024, "sha256": String(repeating: "b", count: 64)],
+                ] as JSONObject,
+                "spectral_color": [
+                    "peak_hex": "#EE6A32",
+                    "peak_label_zh": "赤橙余晖",
+                    "peak_label_en": "Crimson Amber",
+                    "sky_gradient_hex": ["#1C2B4D", "#4F5D7A", "#C46D53", "#F07B3F"],
+                    "solar_elevation_deg": 1.8,
+                    "solar_azimuth_deg": 248.0,
+                ] as JSONObject,
+                "azimuth_radar": [
+                    "solar_azimuth_deg": 248.0,
+                    "best_azimuth_deg": 247.5,
+                    "best_direction_zh": "西南偏西",
+                    "best_direction_en": "WSW",
+                    "best_score": 0.86,
+                    "recommendation_zh": "朝向西南偏西视野通透，高云受光面完整。",
+                    "recommendation_en": "Look WSW for unobstructed high clouds catching sunset light.",
+                    "bearings": stride(from: 0.0, to: 360.0, by: 22.5).map { deg in
+                        let diff = abs(deg - 247.5)
+                        let wrapped = min(diff, 360.0 - diff)
+                        let score = max(0.15, 0.86 * exp(-pow(wrapped / 65.0, 2)))
+                        return [
+                            "deg": deg,
+                            "label_zh": "\(Int(deg))°",
+                            "label_en": "\(Int(deg))°",
+                            "score": score,
+                            "canvas": 0.72,
+                            "low_block": 0.08,
+                        ] as JSONObject
+                    },
+                ] as JSONObject,
                 "steps": steps,
             ]
         }
         return [
             "kind": "point",
-            "model_results": ["gfs": model(aod: 0.31, material: 0.54, brightness: 0.78, genus: "cirrus", conf: 0.72),
-                              "ec": model(aod: 0.34, material: 0.51, brightness: 0.74, genus: "cirrostratus", conf: 0.64)],
+            "model_results": ["gfs": model(sourceName: "gfs", aod: 0.31, material: 0.54, brightness: 0.78, genus: "cirrus", conf: 0.72, deltaBias: 0.0),
+                              "ec": model(sourceName: "ec", aod: 0.34, material: 0.51, brightness: 0.74, genus: "cirrostratus", conf: 0.64, deltaBias: -0.14)],
             "model_errors": [:] as JSONObject,
         ]
     }
@@ -631,7 +732,7 @@ final class MockTransport: EngineTransport {
         let gfsReport: JSONObject = [
             "scope": "regional",
             "regions": ["china"],
-            "coverage": [["code": "china", "label": "中国", "bounds": [73.0, 18.0, 135.0, 54.0]]],
+            "coverage": [["code": "china", "label": "中国", "bounds": [73.0, 18.0, 136.0, 54.0]]],
             "cycle_time_utc": cycle,
             "precision": ["point_spacing_deg": 0.25, "model_grid_spacing_deg": 0.25],
             "point_count": points.count,
@@ -749,6 +850,14 @@ final class MockTransport: EngineTransport {
             "coverage_base_score": 1.62,
             "raw_quality_index": best,
             "forward_burnable_cloud_ratio_peak": 0.81,
+            "forward_burnable_cloud_load_effective": 0.66,
+            "forward_view_cloud_field_amount_peak": 0.83,
+            "solar_incoming_block_risk_mean": 0.14,
+            "duration_adjustment": 0.10,
+            "duration_factor": 1.055,
+            "incoming_aod_adjustment": -0.06,
+            "observer_aod_adjustment": -0.04,
+            "material_adjustment": 0.04,
             "horizon_gap_score": 0.78,
             "overcast_shadow_factor": 0.12,
             "quality_aod550": 0.28,
@@ -784,6 +893,16 @@ final class MockTransport: EngineTransport {
             "map_capability": ["available": false, "reason": "native-nowcast-map-publication-not-requested"] as JSONObject,
             "quality_components": qualityComponents,
             "nowcast": nowcastObject,
+            "profile_source": [
+                "contract": "rust-desktop-profile-source-v1",
+                "available": true,
+                "query_method": "profile_query",
+                "model_source": "satellite",
+                "profile_kind": "satellite-step-solar-path-diagnostic",
+                "cycle_utc": mockCycleUTC,
+                "result_id": String(repeating: "a", count: 64),
+                "source_identity": ["bytes": 1024, "sha256": String(repeating: "b", count: 64)],
+            ] as JSONObject,
             "cross_section": mockCrossSection,
             "steps": steps,
         ]

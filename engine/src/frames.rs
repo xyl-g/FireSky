@@ -548,12 +548,15 @@ impl<'a> Payload<'a> {
     }
 
     fn confidence_score(&self, i: usize, geometry_confidence: f64) -> f64 {
-        (if self.input.aerosol_qualities[i].eq_ignore_ascii_case("cams") {
+        let quality = self.input.aerosol_qualities[i].as_str();
+        let base = if quality.eq_ignore_ascii_case("cams")
+            || quality.eq_ignore_ascii_case("geos-fp")
+        {
             0.82
         } else {
             0.60
-        } * (0.70 + 0.30 * geometry_confidence.clamp(0.0, 1.0)))
-            .clamp(0.25, 0.96)
+        };
+        (base * (0.70 + 0.30 * geometry_confidence.clamp(0.0, 1.0))).clamp(0.25, 0.96)
     }
     fn geometry(&self, i: usize, s: usize) -> (Option<&'static str>, [f64; 3]) {
         let v = self.v(i, s);
@@ -1632,6 +1635,48 @@ mod tests {
             full_row["confidence_score"].as_f64().unwrap().to_bits(),
             expected.to_bits()
         );
+    }
+
+    #[test]
+    fn geos_fp_aerosol_quality_receives_full_base_confidence() {
+        let (points, times, values, samples, columns, scores, marks, extras, sources) =
+            fixture_input(1);
+        let make = |quality: &str| {
+            let qualities = vec![quality.to_owned()];
+            let payload = Payload::prepare(Input {
+                points: &points,
+                times: &times,
+                values: &values,
+                samples: &samples,
+                columns: &columns,
+                profiles: None,
+                scores: &scores,
+                marks: &marks,
+                extras: &extras,
+                aerosol_sources: &sources,
+                aerosol_qualities: &qualities,
+                rows: 1,
+                cols: 2,
+                origin: [0.0, 100.0],
+                spacing: 1.0,
+                date: "2026-11-09",
+                cycle: time_contract::parse_utc("2026-11-09T00:00:00Z").unwrap(),
+                rising: false,
+                ec: false,
+                include_point_core: false,
+                point_spacing_deg: Some(0.25),
+                compact_results: false,
+            })
+            .unwrap();
+            payload.point(0).unwrap().0["confidence_score"]
+                .as_f64()
+                .unwrap()
+        };
+        let cams = make("cams");
+        let geos_fp = make("geos-fp");
+        let fallback = make("fallback");
+        assert_eq!(geos_fp.to_bits(), cams.to_bits());
+        assert!(geos_fp > fallback);
     }
 
     /// Run each mode in a separate process for comparable process high-water RSS.

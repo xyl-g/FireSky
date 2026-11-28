@@ -2,16 +2,23 @@ package com.firesky.mobile.ui
 
 import android.app.Application
 import android.content.Context
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onFirst
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performClick
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalContext
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.firesky.mobile.R
 import com.firesky.mobile.engine.MockTransport
+import com.firesky.mobile.store.WorkbenchState
 import com.firesky.mobile.store.WorkbenchStore
 import org.junit.Assert.assertEquals
 import org.junit.Before
@@ -69,19 +76,27 @@ class WorkbenchComposeUiTest {
 
         // 切换到区域预测
         composeTestRule.onNodeWithText(app.getString(R.string.mode_regional)).performClick()
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            store.state.value.workbenchMode == "regional"
+        }
         composeTestRule.waitForIdle()
         assertEquals("regional", store.state.value.workbenchMode)
-        composeTestRule.onNodeWithText(app.getString(R.string.regional_scope_title)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(app.getString(R.string.regional_scope_title))
+            .performScrollTo()
+            .assertIsDisplayed()
         composeTestRule.onNodeWithText(app.getString(R.string.start_regional_forecast)).assertIsDisplayed()
 
         // 切换到卫星实况
         composeTestRule.onNodeWithText(app.getString(R.string.mode_nowcast)).performClick()
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            store.state.value.workbenchMode == "nowcast"
+        }
         composeTestRule.waitForIdle()
         assertEquals("nowcast", store.state.value.workbenchMode)
         composeTestRule.onNodeWithText(app.getString(R.string.start_nowcast_analysis)).assertIsDisplayed()
         composeTestRule.onAllNodesWithText(
             app.getString(R.string.nowcast_window_guidance),
-        ).onFirst().assertIsDisplayed()
+        ).onFirst().performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -110,5 +125,81 @@ class WorkbenchComposeUiTest {
         composeTestRule.waitForIdle()
         composeTestRule.onAllNodesWithText(app.getString(R.string.remote_server_title)).onFirst().assertIsDisplayed()
         composeTestRule.onNodeWithText(app.getString(R.string.remote_save_and_connect)).assertIsDisplayed()
+    }
+
+    @Test
+    fun remoteConnectionSuccessUsesEnglishResources() {
+        app.getSharedPreferences("firesky", Context.MODE_PRIVATE)
+            .edit()
+            .putString(L10n.KEY_LANGUAGE, "en")
+            .commit()
+
+        composeTestRule.setContent {
+            CompositionLocalProvider(LocalContext provides L10n.wrap(LocalContext.current)) {
+                FireSkyTheme(appearance = "dark") {
+                    RemoteConnectionStatusText(WorkbenchState(remoteTestOk = true))
+                }
+            }
+        }
+
+        composeTestRule.onNodeWithText("Connected to FireSky server").assertIsDisplayed()
+        composeTestRule.onAllNodesWithText("已连接到 FireSky 服务器").assertCountEquals(0)
+    }
+
+    @Test
+    fun downloadProbeShowsThreeMockSourceResults() {
+        val store = WorkbenchStore.forTesting(app, MockTransport())
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            store.state.value.online
+        }
+        store.setPage("settings")
+        store.setSettingsCategory("数据")
+
+        composeTestRule.setContent {
+            WorkbenchApp(store)
+        }
+
+        composeTestRule.onNodeWithText(app.getString(R.string.download_probe_title)).assertIsDisplayed()
+        composeTestRule.onNodeWithText(app.getString(R.string.download_probe_run)).performClick()
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            val state = store.state.value
+            !state.probingDownloads && state.downloadProbeDate != null
+        }
+
+        assertEquals(setOf("gfs", "ec", "cams"), store.state.value.downloadProbeRows.map { it.source }.toSet())
+        assertEquals(3, store.state.value.downloadProbeRows.count { it.passed })
+        composeTestRule.onAllNodesWithText(app.getString(R.string.download_probe_status_passed))
+            .assertCountEquals(3)
+    }
+
+    @Test
+    fun taskHistoryFiltersSwitchBetweenForecastAndSyncRows() {
+        val store = WorkbenchStore.forTesting(app, MockTransport())
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            store.state.value.online
+        }
+        store.setPage("history")
+        composeTestRule.waitUntil(timeoutMillis = 5_000) {
+            store.state.value.taskHistoryLoaded
+        }
+        assertEquals(5, store.state.value.taskHistory.size)
+
+        composeTestRule.setContent {
+            WorkbenchApp(store)
+        }
+
+        val syncLabel = app.getString(R.string.history_filter_sync)
+        val syncTaskTag = "history-task-${"d".repeat(64)}"
+        composeTestRule.onAllNodesWithText(syncLabel).onFirst().performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag(syncTaskTag).assertIsDisplayed()
+
+        composeTestRule.onNodeWithText(app.getString(R.string.history_filter_active)).performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onAllNodesWithTag(syncTaskTag).assertCountEquals(0)
+
+        composeTestRule.onNodeWithText(app.getString(R.string.history_filter_all)).performClick()
+        composeTestRule.waitForIdle()
+        composeTestRule.onNodeWithTag(syncTaskTag).performScrollTo().assertIsDisplayed()
     }
 }

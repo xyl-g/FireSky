@@ -7,11 +7,12 @@ native desktop clients**. The physics follows the methodology of the
 
 > 中文文档：[README.md](README.md)
 
-> Current release **v2.1.1** (see [Download & install](#download--install-releases)):
+> Current release **v2.2.0** (see [Download & install](#download--install-releases)):
 > macOS DMGs (dual arch), Windows zip + installer (x64/ARM64), universal Android
 > APK, and unsigned sideloadable iOS `.ipa` are all built and attached to GitHub
 > Releases automatically on `v*` tags (with independent `mobile-v*` mobile releases).
-> v2.1.1 fixes regional forecast (`check` vs `prepare`) GEOS-FP window parity, cycle
+> v2.2.0 aligns native Windows UI with macOS and Android UI with iOS, and expands
+> atmospheric profile diagnostics; v2.1.1 fixes regional forecast (`check` vs `prepare`) GEOS-FP window parity, cycle
 > upgrades/verification retention after `prepare`, and switches CI Android builds to
 > persistent release APK signing; v2.1.0 adds zero-key **NASA GEOS-FP OPeNDAP** as an selectable AOD data source
 > alongside CAMS ADS across all platforms plus an **Android in-app GitHub Releases updater & SHA-256 APK installer**;
@@ -102,7 +103,7 @@ native desktop clients**. The physics follows the methodology of the
 
 Official builds are published on
 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) (current:
-**v2.1.1**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
+**v2.2.0**). Verify integrity after downloading (`SHA256SUMS.txt` uses bare
 file names; run it in the directory holding the assets):
 
 ```bash

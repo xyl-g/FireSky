@@ -379,10 +379,13 @@ fn spot_dedup_key(date: &str, phenomenon: &str, spot: &WatchedSpot) -> String {
 fn best_model_summary(models: &serde_json::Map<String, Value>) -> Option<(&str, &Value, f64)> {
     let mut best: Option<(&str, &Value, f64)> = None;
     for (name, report) in models {
-        let peak = report["peak_quality_index"]
+        let Some(peak) = report["peak_quality_index"]
             .as_f64()
             .or_else(|| report["quality_index"].as_f64())
-            .filter(|v| v.is_finite())?;
+            .filter(|v| v.is_finite())
+        else {
+            continue;
+        };
         if best.is_none_or(|(_, _, cur)| peak > cur) {
             best = Some((name.as_str(), report, peak));
         }
@@ -652,5 +655,17 @@ mod tests {
         assert_eq!(reqs.len(), 1);
         assert!(reqs[0].contains("FireSky"));
         assert!(reqs[0].contains("\"group\":\"FireSky\""));
+    }
+
+    #[test]
+    fn best_model_summary_ignores_failed_models() {
+        let val = json!({
+            "ec": { "peak_quality_index": 2.1 },
+            "gfs": { "error": "cache missing" }
+        });
+        let models = val.as_object().unwrap();
+        let (name, _, peak) = best_model_summary(models).expect("valid model should win");
+        assert_eq!(name, "ec");
+        assert!((peak - 2.1).abs() < 1e-9);
     }
 }

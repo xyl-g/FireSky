@@ -1975,7 +1975,7 @@ fn for_each_angular_cloud_cell_precomputed(
             continue;
         }
         let elevation_start = base.floor().clamp(0.0, VIEW_ELEVATION_BINS as f32) as usize;
-        let elevation_end = top.ceil().clamp(0.0, VIEW_ELEVATION_BINS as f32) as usize;
+        let elevation_end = top.ceil().clamp(1.0, VIEW_ELEVATION_BINS as f32) as usize;
         for elevation_bin in elevation_start..elevation_end {
             let bin_base = elevation_bin as f32;
             // Bin 0 owns the sub-horizon skirt as well: a deck whose top is
@@ -9216,7 +9216,7 @@ impl Batch<'_> {
                     let blocking = blockings[layer];
                     cloud_optical_depth[layer] += cloud_optical_depth_increment(blocking, step_km);
                     peak_blocking[layer] = peak_blocking[layer].max(blocking);
-                    if peak_blocking[layer] >= 0.995 || cloud_optical_depth[layer] >= 7.0 {
+                    if cloud_optical_depth[layer] >= 7.0 {
                         lights[layer] = SolarCloudBaseLight {
                             cloud_transmission: 0.0,
                             geometry_reachable: true,
@@ -9781,7 +9781,7 @@ impl Batch<'_> {
             // negative or NaN inputs retain the original powf semantics.
             cloud_optical_depth += cloud_optical_depth_increment(blocking, step_km);
             peak_blocking = peak_blocking.max(blocking);
-            if peak_blocking >= 0.995 || cloud_optical_depth >= 7.0 {
+            if cloud_optical_depth >= 7.0 {
                 opaque_cutoff = true;
                 return SolarCloudBaseLight {
                     cloud_transmission: 0.0,
@@ -15378,9 +15378,11 @@ mod tests {
         );
 
         assert!(light.geometry_reachable);
-        assert_eq!(light.path_cloud_transmission_before_target_self, 0.0);
-        assert_eq!(light.cloud_transmission, 0.0);
-        assert!(light.audit.opaque_cutoff);
+        assert!(light.path_cloud_transmission_before_target_self > 0.0);
+        assert!(light.path_cloud_transmission_before_target_self < 0.3);
+        assert!(light.cloud_transmission > 0.0);
+        assert!(light.cloud_transmission < 0.3);
+        assert!(!light.audit.opaque_cutoff);
         assert!(light.audit.trace_steps > 0);
     }
 
@@ -15440,9 +15442,11 @@ mod tests {
         );
 
         assert!(light.geometry_reachable);
-        assert_eq!(light.path_cloud_transmission_before_target_self, 0.0);
-        assert_eq!(light.cloud_transmission, 0.0);
-        assert!(light.audit.opaque_cutoff);
+        assert!(light.path_cloud_transmission_before_target_self > 0.0);
+        assert!(light.path_cloud_transmission_before_target_self < 0.3);
+        assert!(light.cloud_transmission > 0.0);
+        assert!(light.cloud_transmission < 0.3);
+        assert!(!light.audit.opaque_cutoff);
     }
 
     #[test]

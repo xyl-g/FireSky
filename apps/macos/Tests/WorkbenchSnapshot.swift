@@ -57,10 +57,15 @@ final class WorkbenchSnapshotDelegate: NSObject, NSApplicationDelegate {
         let isRegional = ProcessInfo.processInfo.environment["FIRESKY_TEST_REGIONAL"] == "1"
         store.page = isRegional ? .regional : isNowcast ? .nowcast : .point
         if isRegional {
-            store.selectedRegions = []
-            store.customRegion = true
-            store.west = 118; store.east = 123
-            store.south = 28; store.north = 33
+            if ProcessInfo.processInfo.environment["FIRESKY_TEST_REGIONAL_CHINA"] == "1" {
+                store.selectedRegions = ["china"]
+                store.customRegion = false
+            } else {
+                store.selectedRegions = []
+                store.customRegion = true
+                store.west = 118; store.east = 123
+                store.south = 28; store.north = 33
+            }
         }
         store.resultKind = store.page
         let partial = ProcessInfo.processInfo.environment["FIRESKY_TEST_PARTIAL"] == "1"

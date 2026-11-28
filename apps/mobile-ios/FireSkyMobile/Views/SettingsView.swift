@@ -230,7 +230,7 @@ struct SettingsView: View {
 
     private let dataAnchors: [(String, String)] = [
         ("CAMS", "anchor-cams"), ("连通性", "anchor-probe"),
-        ("同步", "anchor-sync"), ("保留", "anchor-retention"),
+        ("同步", "anchor-sync"), ("存储与保留", "anchor-retention"),
         ("海拔", "anchor-elevation"),
     ]
 

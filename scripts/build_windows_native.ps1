@@ -104,6 +104,34 @@ foreach ($required in @(
         throw "package payload missing: $required"
     }
 }
+$ResourceRoot = [System.IO.Path]::GetFullPath((Join-Path $AppDir "Resources\app-data"))
+$ResourceRootPrefix = $ResourceRoot.TrimEnd([char[]]@([char]92, [char]47)) + [System.IO.Path]::DirectorySeparatorChar
+$ResourceManifest = Get-Content (Join-Path $ResourceRoot "RESOURCE-MANIFEST.json") -Raw -Encoding UTF8 | ConvertFrom-Json
+if ($ResourceManifest.schema -ne "firesky-app-resources-v1" -or
+    $ResourceManifest.read_only -ne $true -or
+    $ResourceManifest.user_data_is_external -ne $true -or
+    -not $ResourceManifest.files) {
+    throw "packaged application resource manifest is invalid"
+}
+foreach ($resource in $ResourceManifest.files) {
+    $relative = [string]$resource.path
+    $resourcePath = [System.IO.Path]::GetFullPath((Join-Path $ResourceRoot $relative))
+    if (-not $resourcePath.StartsWith($ResourceRootPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "application resource path escapes package root: $relative"
+    }
+    if (-not (Test-Path -LiteralPath $resourcePath -PathType Leaf)) {
+        throw "packaged application resource missing: $relative"
+    }
+    $resourceItem = Get-Item -LiteralPath $resourcePath
+    if ($resourceItem.Length -ne [long]$resource.bytes) {
+        throw "packaged application resource size mismatch: $relative"
+    }
+    $resourceHash = (Get-FileHash -LiteralPath $resourcePath -Algorithm SHA256).Hash.ToLowerInvariant()
+    if ($resourceHash -ne ([string]$resource.sha256).ToLowerInvariant()) {
+        throw "packaged application resource checksum mismatch: $relative"
+    }
+}
+Write-Host "verified immutable application resources: $($ResourceManifest.files.Count) files"
 $pythonFiles = Get-ChildItem $AppDir -Recurse -Include "*python*", "*pyside*", "*pyobjc*" -ErrorAction SilentlyContinue
 if ($pythonFiles) { throw "Python runtime files found in native package" }
 

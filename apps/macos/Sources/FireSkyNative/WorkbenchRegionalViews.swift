@@ -4,16 +4,16 @@ import SwiftUI
 struct WorkRegionPage: View {
     @EnvironmentObject private var store: Store
     var body: some View {
-        VStack(spacing: 12) {
+        VStack(spacing: 8) {
             controls
             WorkStaleResultBanner()
-            HStack(spacing: 16) {
+            HStack(spacing: 14) {
                 summary(store.regionalModel)
-                Divider().frame(height: 44).opacity(0.5)
+                Divider().frame(height: 40).opacity(0.5)
                 regionalMetadata(store.regionalModel.uppercased(),
                                  store.regionalForecast.model(store.regionalModel))
             }
-            .padding(.horizontal, 16).padding(.vertical, 11)
+            .padding(.horizontal, 14).padding(.vertical, 8)
             .fireSkySurface(role: .content, cornerRadius: 12)
             HStack(spacing: 10) {
                 Text(regionalGridLabel).font(.system(size: 10)).foregroundStyle(.secondary)
@@ -41,8 +41,8 @@ struct WorkRegionPage: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                 if store.showRegionalInspector {
                     inspector
-                        .padding(12)
-                        .frame(width: 248)
+                        .padding(10)
+                        .frame(width: 264)
                         .fireSkySurface(role: .content, cornerRadius: 12)
                 }
             }.frame(maxHeight: .infinity)
@@ -68,15 +68,16 @@ struct WorkRegionPage: View {
                         .help(L10n.t("关闭"))
                 }
             }
-        }.padding(.horizontal, 20).padding(.top, 8).padding(.bottom, 16)
+        }.padding(.horizontal, 14).padding(.top, 6).padding(.bottom, 12)
             .onExitCommand { store.editingRegionOnMap = false }
     }
 
     private var selectedRegionMenuTitle: String {
-        let labels = store.regionDefinitions.compactMap { item -> String? in
-            guard let code = item["code"] as? String, store.selectedRegions.contains(code) else { return nil }
-            return item["label"] as? String ?? code
-        }
+        let byCode: [String: String] = Dictionary(uniqueKeysWithValues: store.regionDefinitions.compactMap { item in
+            guard let code = item["code"] as? String else { return nil }
+            return (code, item["label"] as? String ?? code)
+        })
+        let labels = store.selectedRegions.sorted().map { byCode[$0] ?? Store.fallbackRegionLabels[$0] ?? $0 }
         if labels.count == 1, !store.customRegion { return labels[0] }
         if !labels.isEmpty { return "\(labels[0])+\(labels.count - 1 + (store.customRegion ? 1 : 0))" }
         if store.customRegion { return L10n.text("自定义范围", "Custom") }
@@ -266,7 +267,7 @@ struct WorkRegionPage: View {
     }
 
     private var inspector: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             if let coordinate = store.selectedRegionalCoordinate {
                 HStack {
                     Text(L10n.t("网格详情")).font(.system(size: 12, weight: .semibold))
@@ -299,9 +300,9 @@ struct WorkRegionPage: View {
                         }
                     }.font(.system(size: 11)).help(display?.error ?? display?.level ?? "无该模式结果")
                 }
-                if let cell = store.regionalForecast.model(store.selectedModel).cell(at: coordinate)
-                    ?? store.regionalForecast.model(store.selectedModel).cityRanking.first(where: { $0.coordinate == coordinate }) {
-                    RegionalCellDetail(model: store.selectedModel, cell: cell)
+                if let cell = store.regionalForecast.model(store.regionalModel).cell(at: coordinate)
+                    ?? store.regionalForecast.model(store.regionalModel).cityRanking.first(where: { $0.coordinate == coordinate }) {
+                    RegionalCellDetail(model: store.regionalModel, cell: cell)
                 }
                 if store.regionalProfileCoordinate == coordinate,
                    !store.regionalProfileModel.isEmpty {
@@ -327,7 +328,7 @@ struct WorkRegionPage: View {
                                 HStack(spacing: 6) {
                                     Text("\(index + 1)").font(.system(size: 10, weight: .semibold))
                                         .monospacedDigit().foregroundStyle(.secondary).frame(width: 18, alignment: .leading)
-                                    VStack(alignment: .leading, spacing: 4) {
+                                    VStack(alignment: .leading, spacing: 2) {
                                         Text(cell.label).font(.system(size: 10, weight: .medium))
                                         Text(timeLabel(cell.bestTime)).font(.system(size: 9)).foregroundStyle(.secondary)
                                     }
@@ -335,7 +336,7 @@ struct WorkRegionPage: View {
                                     Text(cell.quality.map { String(format: "%.2f", $0) } ?? "—")
                                         .font(.system(size: 12, weight: .semibold)).monospacedDigit()
                                 }
-                                .padding(.horizontal, 7).padding(.vertical, 9).contentShape(Rectangle())
+                                .padding(.horizontal, 7).padding(.vertical, 5.5).contentShape(Rectangle())
                                 .background(store.selectedRegionalCoordinate == cell.coordinate ? coolAccent.opacity(0.12) : Color.clear,
                                             in: RoundedRectangle(cornerRadius: 5))
                             }.buttonStyle(.plain)
@@ -343,11 +344,11 @@ struct WorkRegionPage: View {
                         }
                     }
                     if rows.isEmpty {
-                        let model = store.regionalForecast.model(store.selectedModel)
+                        let model = store.regionalForecast.model(store.regionalModel)
                         Text(model.cityRankingStatus == "unavailable"
                              ? (model.cityRankingReason ?? "该区域暂无城市排名")
                              : model.available ? "无匹配城市" : "等待预测")
-                            .font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 32)
+                            .font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 24)
                     }
                 }
                 Text("前 \(rows.count) 个城市").font(.system(size: 9)).foregroundStyle(.tertiary)
@@ -359,7 +360,7 @@ struct WorkRegionPage: View {
                         ForEach(rows) { cell in
                             Button { store.focusRegionalCell(cell.coordinate) } label: {
                                 HStack(spacing: 6) {
-                                    VStack(alignment: .leading, spacing: 4) {
+                                    VStack(alignment: .leading, spacing: 2) {
                                         Text(cell.coordinate.label).font(.system(size: 10)).monospacedDigit()
                                         Text(timeLabel(cell.bestTime)).font(.system(size: 9)).foregroundStyle(.secondary)
                                     }
@@ -367,7 +368,7 @@ struct WorkRegionPage: View {
                                     Text(cell.quality.map { String(format: "%.2f", $0) } ?? "—").font(.system(size: 12, weight: .semibold))
                                         .monospacedDigit()
                                 }
-                                .padding(.horizontal, 7).padding(.vertical, 9).contentShape(Rectangle())
+                                .padding(.horizontal, 7).padding(.vertical, 5.5).contentShape(Rectangle())
                                 .background(store.selectedRegionalCoordinate == cell.coordinate ? coolAccent.opacity(0.12) : Color.clear,
                                             in: RoundedRectangle(cornerRadius: 5))
                             }.buttonStyle(.plain)
@@ -375,8 +376,8 @@ struct WorkRegionPage: View {
                         }
                     }
                     if rows.isEmpty {
-                        Text(store.regionalForecast.model(store.selectedModel).available ? "无匹配网格" : "等待预测")
-                            .font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 32)
+                        Text(store.regionalForecast.model(store.regionalModel).available ? "无匹配网格" : "等待预测")
+                            .font(.system(size: 11)).foregroundStyle(.secondary).padding(.top, 24)
                     }
                 }
                 Text("前 \(rows.count) 个网格").font(.system(size: 9)).foregroundStyle(.tertiary)
@@ -386,13 +387,13 @@ struct WorkRegionPage: View {
 
     private var ranking: [RegionalCell] {
         let query = store.regionalQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        let rows = store.regionalForecast.model(store.selectedModel).ranked
+        let rows = store.regionalForecast.model(store.regionalModel).ranked
         return Array((query.isEmpty ? rows : rows.filter { $0.label.localizedCaseInsensitiveContains(query) }).prefix(2000))
     }
 
     private var cityRanking: [RegionalCell] {
         let query = store.regionalQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        let rows = store.regionalForecast.model(store.selectedModel).cityRanking
+        let rows = store.regionalForecast.model(store.regionalModel).cityRanking
         return Array((query.isEmpty ? rows : rows.filter { $0.label.localizedCaseInsensitiveContains(query) }).prefix(2000))
     }
 
@@ -412,8 +413,13 @@ private struct RegionalCellDetail: View {
     let model: String
     let cell: RegionalCell
 
+    private let metricColumns = [
+        GridItem(.flexible(), spacing: 5),
+        GridItem(.flexible(), spacing: 5),
+    ]
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
                 Text(model.uppercased()).font(.system(size: 10, weight: .bold)).foregroundStyle(modelColor(model))
                 if let peakLevel = cell.peakLevel, !peakLevel.isEmpty {
@@ -423,20 +429,20 @@ private struct RegionalCellDetail: View {
                 }
                 Spacer()
             }
-            HStack(alignment: .top, spacing: 8) {
+            HStack(alignment: .top, spacing: 6) {
                 scoreCard("峰值质量 / 2.5", cell.peakQuality)
                 scoreCard("事件窗口质量 / 2.5", cell.eventQuality)
             }
-            VStack(alignment: .leading, spacing: 3) {
-                row("主导可烧压力族", cell.pressureFamily.map { familyLabel($0) } ?? "未提供")
+            LazyVGrid(columns: metricColumns, alignment: .leading, spacing: 4) {
+                gridMetric("压力族", cell.pressureFamily.map { familyLabel($0) } ?? "未提供")
                     .help("结果未包含该格点的主导可烧压力族字段；通常表示无可烧目标云。")
-                row("有效可烧云", cell.cloudCoverageEffective.map { String(format: "%.1f%%", $0 * 100) } ?? "未计算")
-                row("可烧时长", cell.durationMinutes.map { String(format: "%.0f 分钟", $0) } ?? "未计算")
-                row("质量 AOD", cell.qualityAod.map { String(format: "%.3f", $0) } ?? "未计算")
-                row("入射修正", signedText(cell.incomingAdjustment))
-                row("观测修正", signedText(cell.observerAdjustment))
-                row("最佳时刻", cell.bestTime.map { timeLabel($0) } ?? "无明显峰值")
-                row("置信度", cell.confidenceScore.map { "\(Int(($0 * 100).rounded()))%" } ?? "未提供")
+                gridMetric("可烧云", cell.cloudCoverageEffective.map { String(format: "%.1f%%", $0 * 100) } ?? "未计算")
+                gridMetric("时长", cell.durationMinutes.map { String(format: "%.0f 分钟", $0) } ?? "未计算")
+                gridMetric("质量 AOD", cell.qualityAod.map { String(format: "%.3f", $0) } ?? "未计算")
+                gridMetric("入射修正", signedText(cell.incomingAdjustment))
+                gridMetric("观测修正", signedText(cell.observerAdjustment))
+                gridMetric("最佳时刻", cell.bestTime.map { timeLabel($0) } ?? "无明显峰值")
+                gridMetric("置信度", cell.confidenceScore.map { "\(Int(($0 * 100).rounded()))%" } ?? "未提供")
             }
             Button {
                 store.openRegionalCellInPointForecast(cell, model: model)
@@ -453,24 +459,28 @@ private struct RegionalCellDetail: View {
     }
 
     private func scoreCard(_ title: String, _ value: Double?) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.system(size: 8)).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 1.5) {
+            Text(title).font(.system(size: 8)).foregroundStyle(.secondary).lineLimit(1)
             Text(value.map { String(format: "%.3f", $0) } ?? "未计算")
-                .font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                .font(.system(size: 12.5, weight: .semibold)).monospacedDigit()
                 .foregroundStyle(value == nil ? Color.secondary : Color.primary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(6)
+        .padding(5)
         .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 5))
         .accessibilityElement(children: .combine)
     }
 
-    private func row(_ title: String, _ value: String) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(title).font(.system(size: 9)).foregroundStyle(.secondary)
-            Spacer(minLength: 6)
-            Text(value).font(.system(size: 10)).monospacedDigit()
+    private func gridMetric(_ title: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title).font(.system(size: 8)).foregroundStyle(.secondary).lineLimit(1)
+            Text(value).font(.system(size: 10, weight: .medium)).monospacedDigit()
+                .lineLimit(1).minimumScaleFactor(0.85)
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 3.5)
+        .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 4))
         .accessibilityElement(children: .combine)
     }
 

@@ -14,7 +14,7 @@ extension Store {
             }
         }
         return [
-            ("china", L10n.text("中国", "China"), [73.0, 18.0, 135.0, 54.0]),
+            ("china", L10n.text("中国", "China"), [73.0, 18.0, 136.0, 54.0]),
             ("east-asia", L10n.text("东亚", "East Asia"), [100.0, 20.0, 146.0, 54.0]),
         ]
     }
@@ -29,10 +29,10 @@ extension Store {
         let areas = availableRegions
             .filter { selectedRegions.contains($0.code) }
             .compactMap(\.bounds)
-        guard !areas.isEmpty else { return [73.0, 18.0, 135.0, 54.0] }
+        guard !areas.isEmpty else { return [73.0, 18.0, 136.0, 54.0] }
         let west = areas.map { $0[0] }.min() ?? 73.0
         let south = areas.map { $0[1] }.min() ?? 18.0
-        let east = areas.map { $0[2] }.max() ?? 135.0
+        let east = areas.map { $0[2] }.max() ?? 136.0
         let north = areas.map { $0[3] }.max() ?? 54.0
         return [west, south, east, north]
     }
@@ -507,5 +507,235 @@ extension Store {
             parts.append("现象：\(value == "dawn" ? "朝霞" : "晚霞")")
         }
         return "结果原始参数 — " + parts.joined(separator: "；")
+    }
+
+    // MARK: - 冻结剖面查询
+
+    func queryPointProfile() {
+        guard resultKind == .point, let report = modelResult,
+              let model = (report["profile_source"] as? JSONObject)?["model_source"] as? String,
+              let validTime = (report["best_time_local"] as? String)
+                  ?? (report["cross_section"] as? JSONObject)?["valid_time_local"] as? String
+                  ?? (report["anchor_local"] as? String) else {
+            frozenProfile = nil
+            frozenProfileState = "unavailable"
+            frozenProfileError = L10n.text("该结果没有可读取的冻结剖面时次。", "No frozen profile step available for this result.")
+            return
+        }
+        runFrozenProfileQuery(model: model, lat: lat, lon: lon,
+                              validTimeLocal: validTime, report: report, point: true)
+    }
+
+    func queryNowcastProfile(validTimeLocal: String) {
+        guard resultKind == .nowcast, let report = nowcastReport else {
+            frozenProfile = nil
+            frozenProfileState = "unavailable"
+            frozenProfileError = L10n.text("该结果没有可查询的冻结卫星剖面。", "No frozen satellite profile available for this result.")
+            return
+        }
+        runFrozenProfileQuery(model: "satellite", lat: lat, lon: lon,
+                              validTimeLocal: validTimeLocal, report: report)
+    }
+
+    private func runFrozenProfileQuery(model: String, lat: Double, lon: Double,
+                                       validTimeLocal: String, report: JSONObject, point: Bool = false) {
+        let resolvedUTC = Self.resolveStepUTC(validTimeLocal: validTimeLocal, report: report, timezone: timezone) ?? validTimeLocal
+        let build = point ? MobileProfileQueryBuilder.pointRequest : MobileProfileQueryBuilder.request
+        guard let request = build(report, model, lat, lon, resolvedUTC) else {
+            frozenProfile = nil
+            frozenProfileModel = model
+            frozenProfileTime = validTimeLocal
+            frozenProfileState = "unavailable"
+            frozenProfileError = L10n.text("该结果没有可读取的冻结剖面时次。", "No frozen profile step available for this result.")
+            return
+        }
+        frozenProfileTask?.cancel()
+        frozenProfile = nil
+        frozenProfileModel = model
+        frozenProfileTime = validTimeLocal
+        frozenProfileState = "loading"
+        frozenProfileError = ""
+        frozenProfileTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let response = try await engine.call("profile_query", request.params)
+                try Task.checkCancellation()
+                guard MobileProfileQueryBuilder.responseMatches(response, request: request) else {
+                    throw EngineError(message: L10n.text("剖面响应与当前结果、模式、坐标或时次不匹配。",
+                                                       "Profile response does not match result, model, location, or time."))
+                }
+                guard response["status"] as? String == "ready",
+                      var section = response["cross_section"] as? JSONObject else {
+                    let status = response["status"] as? String ?? "unavailable"
+                    let reason = status == "expired"
+                        ? L10n.text("冻结源已过期，请重新运行预测以获取新剖面。", "Frozen source expired; run forecast again.")
+                        : (response["reason"] as? String ?? L10n.text("所选时次没有可用剖面。", "No profile available for selected time."))
+                    frozenProfile = nil
+                    frozenProfileState = status
+                    frozenProfileError = reason
+                    return
+                }
+                guard MobileProfileQueryBuilder.sameUTC(
+                    response["cycle_utc"] as? String ?? "", request.cycleUTC) else {
+                    throw EngineError(message: L10n.text("剖面响应的模式周期与已发布结果不匹配。",
+                                                       "Profile response cycle does not match published result."))
+                }
+                if model == "satellite", let times = response["source_times_utc"] {
+                    section["source_times_utc"] = times
+                }
+                frozenProfile = section
+                frozenProfileState = "ready"
+                frozenProfileError = ""
+            } catch {
+                guard !Task.isCancelled else { return }
+                frozenProfile = nil
+                frozenProfileState = "error"
+                frozenProfileError = friendlyEngineMessage(error.localizedDescription)
+            }
+        }
+    }
+
+    private static func resolveStepUTC(validTimeLocal: String, report: JSONObject, timezone: String) -> String? {
+        if let steps = report["steps"] as? [JSONObject],
+           let match = steps.first(where: { ($0["valid_time_local"] as? String) == validTimeLocal }),
+           let utc = match["valid_time_utc"] as? String, !utc.isEmpty {
+            return utc
+        }
+        return nil
+    }
+}
+
+struct MobileProfileQueryRequest: Sendable {
+    let resultID: String
+    let sourceBytes: Int64
+    let sourceSHA256: String
+    let model: String
+    let lat: Double
+    let lon: Double
+    let validTimeUTC: String
+    let cycleUTC: String
+
+    var params: [String: Any] {
+        [
+            "result_id": resultID,
+            "source_identity": ["bytes": sourceBytes, "sha256": sourceSHA256],
+            "model_source": model,
+            "lat": lat,
+            "lon": lon,
+            "valid_time_utc": validTimeUTC,
+        ]
+    }
+}
+
+enum MobileProfileQueryBuilder {
+    static func pointRequest(report: [String: Any], model: String,
+                             lat: Double, lon: Double, localTime: String) -> MobileProfileQueryRequest? {
+        let observer = (report["cross_section"] as? [String: Any])?["observer"] as? [String: Any]
+        if let observer {
+            guard let frozenLat = number(observer["lat"]),
+                  let frozenLon = number(observer["lon"]) else { return nil }
+            return request(report: report, model: model, lat: frozenLat, lon: frozenLon, localTime: localTime)
+        }
+        return request(report: report, model: model, lat: lat, lon: lon, localTime: localTime)
+    }
+
+    static func request(report: [String: Any], model: String,
+                        lat: Double, lon: Double, localTime: String) -> MobileProfileQueryRequest? {
+        guard ["gfs", "ec", "satellite"].contains(model),
+              lat.isFinite, (-90...90).contains(lat),
+              lon.isFinite, (-180...180).contains(lon),
+              let source = report["profile_source"] as? [String: Any],
+              source["contract"] as? String == "rust-desktop-profile-source-v1",
+              source["available"] as? Bool == true,
+              source["query_method"] as? String == "profile_query",
+              source["model_source"] as? String == model,
+              source["profile_kind"] as? String == (model == "satellite"
+                  ? "satellite-step-solar-path-diagnostic" : "model-pressure-cross-section"),
+              let cycle = source["cycle_utc"] as? String,
+              let cycleDate = utcDate(cycle),
+              let resultID = source["result_id"] as? String,
+              isHex64(resultID),
+              let identity = source["source_identity"] as? [String: Any],
+              let bytes = integer(identity["bytes"]), bytes >= 0,
+              let sha = identity["sha256"] as? String, isHex64(sha),
+              let validDate = utcDate(localTime) else {
+            return nil
+        }
+        return MobileProfileQueryRequest(
+            resultID: resultID,
+            sourceBytes: bytes,
+            sourceSHA256: sha,
+            model: model,
+            lat: lat,
+            lon: lon,
+            validTimeUTC: formatUTC(validDate, source: localTime),
+            cycleUTC: formatUTC(cycleDate, source: cycle)
+        )
+    }
+
+    static func responseMatches(_ response: [String: Any], request: MobileProfileQueryRequest) -> Bool {
+        guard response["contract"] as? String == "rust-desktop-profile-query-v1",
+              response["result_id"] as? String == request.resultID,
+              response["model_source"] as? String == request.model,
+              let lat = number(response["lat"]),
+              let lon = number(response["lon"]),
+              abs(lat - request.lat) <= 0.000001,
+              abs(lon - request.lon) <= 0.000001,
+              let identity = response["source_identity"] as? [String: Any],
+              integer(identity["bytes"]) == request.sourceBytes,
+              identity["sha256"] as? String == request.sourceSHA256,
+              let responseTime = response["valid_time_utc"] as? String,
+              let expectedTime = utcDate(request.validTimeUTC),
+              let actualTime = utcDate(responseTime),
+              abs(actualTime.timeIntervalSince(expectedTime)) <= 0.000001 else {
+            return false
+        }
+        return true
+    }
+
+    static func sameUTC(_ lhs: String, _ rhs: String) -> Bool {
+        guard let left = utcDate(lhs), let right = utcDate(rhs) else { return false }
+        return abs(left.timeIntervalSince(right)) <= 0.000001
+    }
+
+    private static func number(_ value: Any?) -> Double? {
+        if let value = value as? NSNumber, value.doubleValue.isFinite { return value.doubleValue }
+        if let value = value as? Double, value.isFinite { return value }
+        if let value = value as? Int { return Double(value) }
+        return nil
+    }
+
+    private static func integer(_ value: Any?) -> Int64? {
+        if let value = value as? NSNumber {
+            let integer = value.int64Value
+            return value.doubleValue == Double(integer) ? integer : nil
+        }
+        if let value = value as? Int { return Int64(value) }
+        if let value = value as? Int64 { return value }
+        return nil
+    }
+
+    private static func isHex64(_ value: String) -> Bool {
+        value.count == 64 && value.unicodeScalars.allSatisfy {
+            ($0.value >= 48 && $0.value <= 57) || ($0.value >= 97 && $0.value <= 102)
+        }
+    }
+
+    private static func utcDate(_ value: String) -> Date? {
+        let internet = ISO8601DateFormatter()
+        internet.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let date = internet.date(from: value) { return date }
+        internet.formatOptions = [.withInternetDateTime]
+        return internet.date(from: value)
+    }
+
+    private static func formatUTC(_ value: Date, source: String) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.formatOptions = [.withInternetDateTime]
+        let seconds = formatter.string(from: Date(timeIntervalSince1970: floor(value.timeIntervalSince1970)))
+        let parts = source.split(separator: ".", maxSplits: 1)
+        let fraction = parts.count == 2 ? String(parts[1].prefix(while: { $0.isNumber })) : "000"
+        return String(seconds.dropLast()) + "." + fraction + "Z"
     }
 }

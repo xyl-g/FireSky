@@ -148,6 +148,7 @@ fn cams_plan(
             let siblings = cams_data::sibling_tiles_for_source(
                 root,
                 &part,
+                &areas,
                 &targets.iter().copied().collect::<Vec<_>>(),
                 true,
                 source,

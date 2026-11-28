@@ -151,8 +151,40 @@ class MockTransport : EngineTransport {
         "terrain_download" -> terrainDownload(requestId)
         "cams_credentials" -> camsCredentials()
         "save_cams_key" -> saveCamsKey(params)
+        "profile_query" -> profileQuery(params)
+        "network_probe" -> networkProbe(requestId, params)
         "cancel" -> JSONObject()
         else -> throw EngineError("unsupported method: $method")
+    }
+
+    /** 供 UI 审计模式直接获取模拟结果，无需完整交互等待。 */
+    internal fun auditForecast(kind: String, date: String, name: String, phenomenon: String, regionalModel: String, regionCode: String): JSONObject = when (kind) {
+        "regional" -> regionalForecastResult(date, regionalModel, regionCode)
+        "nowcast" -> nowcastReport(date, name, phenomenon)
+        else -> {
+            val gfs = pointReport(date, peakIndex = 1.82, peakMinute = 19 * 60 + 5, spread = 46.0, modelSource = "gfs")
+            val ec = pointReport(date, peakIndex = 1.58, peakMinute = 19 * 60 + 25, spread = 58.0, modelSource = "ec")
+            JSONObject()
+                .put("report", availabilityReport())
+                .put("model_results", JSONObject().put("gfs", gfs).put("ec", ec))
+                .put("model_errors", JSONObject())
+        }
+    }
+
+    private fun profileQuery(params: JSONObject): JSONObject {
+        val validTime = params.optString("valid_time_utc", "2026-11-12T09:55:00Z")
+        return JSONObject()
+            .put("contract", "rust-desktop-profile-query-v1")
+            .put("status", "ready")
+            .put("result_id", params.optString("result_id", "a".repeat(64)))
+            .put("model_source", params.optString("model_source", "satellite"))
+            .put("lat", params.optDouble("lat", 30.2741))
+            .put("lon", params.optDouble("lon", 120.1551))
+            .put("valid_time_utc", validTime)
+            .put("cycle_utc", validTime)
+            .put("source_identity", params.optJSONObject("source_identity") ?: JSONObject().put("bytes", 4096).put("sha256", "b".repeat(64)))
+            .put("source_times_utc", JSONArray(listOf("09:10Z", "09:20Z")))
+            .put("cross_section", mockCrossSection(validTime))
     }
 
     private fun hello(): JSONObject {
@@ -174,7 +206,7 @@ class MockTransport : EngineTransport {
                         "score_window", "check_desktop_data", "desktop_inventory",
                         "desktop_publications", "desktop_prepare", "desktop_session", "location",
                         "data_sync", "task_history", "task_events", "task_forget", "result_restore",
-                        "data_delete", "terrain_inventory", "terrain_download",
+                        "data_delete", "terrain_inventory", "terrain_download", "network_probe",
                     ),
                 ),
             )
@@ -251,8 +283,8 @@ class MockTransport : EngineTransport {
                 stage(requestId, "gfs", "正在计算 GFS", steps = 5, delayMs = 40)
                 stage(requestId, "ec", "正在计算 ECMWF", steps = 5, delayMs = 40)
                 stage(requestId, "assess", "正在评估霞光质量", steps = 3, delayMs = 30)
-                val gfs = pointReport(payloadDate, peakIndex = 1.82, peakMinute = 19 * 60 + 5, spread = 46.0)
-                val ec = pointReport(payloadDate, peakIndex = 1.58, peakMinute = 19 * 60 + 25, spread = 58.0)
+                val gfs = pointReport(payloadDate, peakIndex = 1.82, peakMinute = 19 * 60 + 5, spread = 46.0, modelSource = "gfs")
+                val ec = pointReport(payloadDate, peakIndex = 1.58, peakMinute = 19 * 60 + 25, spread = 58.0, modelSource = "ec")
                 JSONObject()
                     .put("report", availabilityReport())
                     .put("model_results", JSONObject().put("gfs", gfs).put("ec", ec))
@@ -459,6 +491,56 @@ class MockTransport : EngineTransport {
             .put("existing", 0).put("downloaded", total).put("absent", 0).put("failed", 0)
             .put("received_bytes", total * 10_000_000L).put("received_gb", total * 0.01)
             .put("stopped_reason", JSONObject.NULL)
+    }
+
+    private fun networkProbe(requestId: String, params: JSONObject): JSONObject {
+        val aerosolSource = params.optString("aerosol_source", "cams")
+        val rows = JSONArray()
+        val sources = listOf(
+            Triple("gfs", "GFS · NOAA NOMADS", "noaa.ncep.noaa.gov"),
+            Triple("ec", "EC · ECMWF Open Data", "data.ecmwf.int"),
+            Triple(
+                "cams",
+                if (aerosolSource == "geos-fp") "GEOS-FP · NASA OPeNDAP" else "CAMS · Copernicus ADS",
+                if (aerosolSource == "geos-fp") "opendap.nccs.nasa.gov" else "ads.atmosphere.copernicus.eu",
+            ),
+        )
+        for ((source, title, host) in sources) {
+            checkCancelled(requestId)
+            emitProbeProgress(
+                requestId,
+                JSONObject()
+                    .put("source", source)
+                    .put("title", title)
+                    .put("state", "testing")
+                    .put("detail", "正在建立连接（模拟）"),
+            )
+            Thread.sleep(40)
+            checkCancelled(requestId)
+            val row = JSONObject()
+                .put("source", source)
+                .put("title", title)
+                .put("state", "passed")
+                .put("host", host)
+                .put("detail", "示例数据首块校验通过（模拟）")
+                .put("bytes_received", 65_536)
+                .put("elapsed_ms", 812)
+            emitProbeProgress(requestId, row)
+            rows.put(row)
+        }
+        return JSONObject()
+            .put("checked_at", java.time.Instant.now().toString())
+            .put("all_passed", true)
+            .put("datasets", rows)
+    }
+
+    private fun emitProbeProgress(requestId: String, row: JSONObject) {
+        emitFrame(
+            JSONObject()
+                .put("id", requestId)
+                .put("type", "progress")
+                .put("event", JSONObject().put("probe", row)),
+        )
     }
 
     private fun inventory(): JSONObject {
@@ -693,27 +775,36 @@ class MockTransport : EngineTransport {
                 bestIndex = quality
                 bestTime = time
             }
+            val valid = quality > 0.35
             steps.put(
                 JSONObject()
                     .put("valid_time_local", time)
-                    .put("valid", true)
+                    .put("valid", valid)
+                    .put("selected_regime", if (valid) "high-canvas" else "invalid")
                     .put("instant_quality_index", quality)
                     .put("instant_quality_level", qualityLevel(quality))
+                    .put("physically_burnable", valid && quality > 0.55)
+                    .put("burnable_cloud_coverage", (quality / 2.6).coerceIn(0.05, 0.85))
+                    .put("brightness_color", (0.4 + quality / 3.5).coerceIn(0.2, 0.95))
+                    .put("forward_burnable_cloud_ratio", (0.3 + quality / 3.2).coerceIn(0.1, 0.9))
+                    .put("solar_incoming_block_risk", 0.18)
+                    .put("quality_aod550", 0.24)
                     .put("solar_elevation_deg", solar)
                     .put("solar_azimuth_deg", 251.2),
             )
         }
         val profileSamples = JSONArray()
-        for (dist in listOf(40.0, 120.0, 200.0, 320.0)) {
+        for (dist in listOf(40.0, 120.0, 200.0, 280.0, 340.0)) {
+            val isUnknown = dist == 280.0
             val levels = JSONArray()
-                .put(JSONObject().put("pressure_hpa", 300).put("height_m", 9100.0).put("status", "retrieved").put("hsd_posterior_percent", 72.0))
-                .put(JSONObject().put("pressure_hpa", 500).put("height_m", 5600.0).put("status", "retrieved").put("hsd_posterior_percent", 38.0))
-                .put(JSONObject().put("pressure_hpa", 700).put("height_m", 3000.0).put("status", "retrieved").put("hsd_posterior_percent", 12.0))
+                .put(JSONObject().put("pressure_hpa", 300).put("height_m", 9100.0).put("status", if (isUnknown) "unknown" else "retrieved").put("hsd_posterior_percent", if (isUnknown) JSONObject.NULL else 72.0))
+                .put(JSONObject().put("pressure_hpa", 500).put("height_m", 5600.0).put("status", if (isUnknown) "unknown" else "retrieved").put("hsd_posterior_percent", if (isUnknown) JSONObject.NULL else 38.0))
+                .put(JSONObject().put("pressure_hpa", 700).put("height_m", 3000.0).put("status", if (isUnknown) "unknown" else "retrieved").put("hsd_posterior_percent", if (isUnknown) JSONObject.NULL else 12.0))
             profileSamples.put(
                 JSONObject()
                     .put("distance_km", dist)
                     .put("bearing_deg", 251.2)
-                    .put("status", "retrieved")
+                    .put("status", if (isUnknown) "unknown" else "retrieved")
                     .put("levels", levels),
             )
         }
@@ -752,12 +843,12 @@ class MockTransport : EngineTransport {
             .put(
                 "satellite_vertical_profile",
                 JSONObject()
-                    .put("status", "available")
+                    .put("status", "partial_unknown")
                     .put("valid_time_utc", "${date}T09:20:00Z")
-                    .put("sample_count", 4)
+                    .put("sample_count", 5)
                     .put("usable_sample_count", 4)
-                    .put("unknown_sample_count", 0)
-                    .put("coverage", 0.96)
+                    .put("unknown_sample_count", 1)
+                    .put("coverage", 0.80)
                     .put("pressure_levels_hpa", JSONArray(listOf(300, 500, 700)))
                     .put("bands", JSONArray(listOf("B07", "B13", "B15")))
                     .put("samples", profileSamples),
@@ -794,13 +885,27 @@ class MockTransport : EngineTransport {
                     .put("quality_aod550", 0.24),
             )
             .put("map_capability", JSONObject().put("available", false).put("reason", "native-nowcast-map-publication-not-requested"))
+            .put(
+                "profile_source",
+                JSONObject()
+                    .put("contract", "rust-desktop-profile-source-v1")
+                    .put("available", true)
+                    .put("query_method", "profile_query")
+                    .put("model_source", "satellite")
+                    .put("profile_kind", "satellite-step-solar-path-diagnostic")
+                    .put("cycle_utc", "${date}T09:20:00Z")
+                    .put("result_id", "a".repeat(64))
+                    .put("source_identity", JSONObject().put("bytes", 4096).put("sha256", "b".repeat(64))),
+            )
+            .put("spectral_color", mockSpectralColor())
+            .put("azimuth_radar", mockAzimuthRadar())
             .put("nowcast", nowcastObs)
             .put("cross_section", mockCrossSection(bestTime))
             .put("steps", steps)
             .put("summary", JSONArray(listOf("Himawari 卫星实况：高空卷云适中、地平线通透度良好。")))
     }
 
-    private fun pointReport(date: String, peakIndex: Double, peakMinute: Int, spread: Double): JSONObject {
+    private fun pointReport(date: String, peakIndex: Double, peakMinute: Int, spread: Double, modelSource: String = "gfs"): JSONObject {
         val steps = JSONArray()
         var bestIndex = 0.0
         var bestTime = "--"
@@ -811,7 +916,7 @@ class MockTransport : EngineTransport {
             val quality = 0.12 + peakIndex * exp(-(delta * delta) / (2 * spread * spread))
             val solar = 8.0 * cos(delta / 190.0 * kotlin.math.PI / 2) - 1.0
             val time = "%sT%02d:%02d:00".format(date, minute / 60, minute % 60)
-            val valid = quality > 0.15
+            val valid = quality > 0.25
             if (valid && quality > bestIndex) {
                 bestIndex = quality
                 bestTime = time
@@ -824,14 +929,29 @@ class MockTransport : EngineTransport {
                 JSONObject()
                     .put("valid_time_local", time)
                     .put("valid", valid)
+                    .put("selected_regime", if (valid) "burnable_cloud_field" else "invalid")
                     .put("instant_quality_index", quality)
                     .put("instant_quality_level", qualityLevel(quality))
                     .put("solar_elevation_deg", solar)
-                    .put("physically_burnable", quality > 0.55),
+                    .put("physically_burnable", valid && quality > 0.55)
+                    .put("burnable_cloud_coverage", (quality / 2.5).coerceIn(0.08, 0.88))
+                    .put("dominant_burnable_pressure_family", if (quality >= 1.1) "high" else "middle")
+                    .put("brightness_color", (0.42 + quality / 3.4).coerceIn(0.2, 0.95))
+                    .put("forward_burnable_cloud_ratio", (0.35 + quality / 3.0).coerceIn(0.1, 0.92))
+                    .put("observer_return_transmission", 0.73)
+                    .put("solar_incoming_block_risk", 0.14)
+                    .put("quality_aod550", 0.28),
             )
         }
+        val covScore = if (modelSource == "gfs") 1.72 else 1.48
+        val durAdj = if (modelSource == "gfs") 0.12 else 0.08
+        val inAodAdj = -0.04
+        val obsAodAdj = -0.02
         return JSONObject()
+            .put("model_source", modelSource)
             .put("peak_quality_index", bestIndex)
+            .put("peak_quality_level", qualityLevel(bestIndex))
+            .put("quality_index", bestIndex * 0.96)
             .put("quality_level", qualityLevel(bestIndex))
             .put("best_time_local", bestTime)
             .put(
@@ -842,14 +962,30 @@ class MockTransport : EngineTransport {
             .put(
                 "quality_components",
                 JSONObject()
+                    .put("coverage_base_score", covScore)
+                    .put("raw_quality_index", bestIndex + 0.06)
                     .put("burnable_cloud_coverage_effective", 0.62 + bestIndex / 12)
+                    .put("forward_burnable_cloud_load_effective", 0.64)
+                    .put("forward_burnable_cloud_ratio_peak", if (modelSource == "gfs") 0.78 else 0.66)
+                    .put("forward_burnable_cloud_field_amount_peak", if (modelSource == "gfs") 0.56 else 0.48)
+                    .put("forward_view_cloud_field_amount_peak", 0.72)
+                    .put("solar_incoming_block_risk_at_best_cloud", if (modelSource == "gfs") 0.14 else 0.22)
+                    .put("duration_adjustment", durAdj)
+                    .put("duration_factor", if (modelSource == "gfs") 1.068 else 1.045)
+                    .put("incoming_aod_adjustment", inAodAdj)
+                    .put("observer_aod_adjustment", obsAodAdj)
                     .put("cloud_material", 0.44 + bestIndex / 18)
                     .put("brightness_color", 0.53 + bestIndex / 8)
                     .put("incoming_aod_illumination_factor", 0.71)
                     .put("observer_aod_contrast_factor", 0.66)
-                    .put("quality_aod550", 0.28),
+                    .put("observer_return_optical_depth_mean", 0.31)
+                    .put("observer_return_transmission_mean", 0.73)
+                    .put("quality_aod550", 0.28)
+                    .put("forward_field_radius_km", 200.0)
+                    .put("forward_sector_half_angle_deg", 35.0)
+                    .put("quality_limiting_factor", if (modelSource == "gfs") "轻度气溶胶消光" else "近场中低云轻微遮挡"),
             )
-            .put("duration_minutes", 42.0)
+            .put("duration_minutes", if (modelSource == "gfs") 42.0 else 36.0)
             .put("confidence_score", 0.74)
             .put("convective_risk", 0.12)
             .put("model_disagreement_score", 0.18)
@@ -869,11 +1005,49 @@ class MockTransport : EngineTransport {
                         JSONObject().put("cirrus", 0.72).put("cirrostratus", 0.21).put("altocumulus", 0.07),
                     ),
             )
+            .put("spectral_color", mockSpectralColor())
+            .put("azimuth_radar", mockAzimuthRadar())
             .put("cross_section", mockCrossSection(bestTime))
             .put("aerosol", JSONObject().put("aod550", 0.28).put("source", "CAMS").put("quality", "cams"))
             .put("summary", "模拟结果：傍晚高云量适中，霞光窗口集中，建议提前 15 分钟到场。")
             .put("cycle_time_utc", "2026-11-12T12:00:00Z")
             .put("steps", steps)
+    }
+
+    private fun mockSpectralColor(): JSONObject = JSONObject()
+        .put("peak_hex", "#E85D2A")
+        .put("peak_label_zh", "炽烈橙红霞")
+        .put("peak_label_en", "Fiery Coral-Orange Glow")
+        .put("sky_gradient_hex", JSONArray(listOf("#243B6B", "#7B5074", "#D86843", "#F49A42")))
+        .put("solar_azimuth_deg", 251.2)
+        .put("solar_elevation_deg", -1.4)
+
+    private fun mockAzimuthRadar(): JSONObject {
+        val bearings = JSONArray()
+        val labelsZh = listOf("北", "北东北", "东北", "东东北", "东", "东东南", "东南", "南东南", "南", "南西南", "西南", "西西南", "西", "西西北", "西北", "北西北")
+        for (i in 0 until 16) {
+            val deg = i * 22.5
+            val delta = kotlin.math.abs(((deg - 251.2 + 540.0) % 360.0) - 180.0)
+            val score = (0.25 + 0.68 * exp(-(delta * delta) / (2 * 42.0 * 42.0))).coerceIn(0.1, 0.95)
+            bearings.put(
+                JSONObject()
+                    .put("deg", deg)
+                    .put("score", score)
+                    .put("label_zh", labelsZh[i])
+                    .put("label_en", "${deg.toInt()}°")
+                    .put("canvas", 0.72)
+                    .put("low_block", 0.14),
+            )
+        }
+        return JSONObject()
+            .put("solar_azimuth_deg", 251.2)
+            .put("best_azimuth_deg", 247.5)
+            .put("best_direction_zh", "西西南")
+            .put("best_direction_en", "WSW")
+            .put("best_score", 0.91)
+            .put("recommendation_zh", "建议朝西西南方向（248°）低仰角取景，高空卷云受光完整。")
+            .put("recommendation_en", "Face WSW (248°) for the clearest sunlit high cloud canvas.")
+            .put("bearings", bearings)
     }
 
     private fun mockCrossSection(validTimeLocal: String): JSONObject {
@@ -894,8 +1068,13 @@ class MockTransport : EngineTransport {
 
         val cloudMask = Array(distances.size) { i ->
             Array(levels.size) { l ->
-                (l == 0 || l == 1) && i in 1..4
+                ((l == 0 || l == 1) && i in 1..4) || (l == 2 && i in 2..3)
             }
+        }
+        fun layerStatus(i: Int, l: Int): Int {
+            if (!cloudMask[i][l]) return 0
+            if (l == 2 && i == 2) return 2
+            return 3
         }
 
         return JSONObject()
@@ -919,7 +1098,7 @@ class MockTransport : EngineTransport {
                     .put("cloud_presence", grid { i, l -> if (cloudMask[i][l]) 0.72 else 0.0 })
                     .put("cloud_fraction_percent", grid { i, l -> if (cloudMask[i][l]) 68.0 else 2.0 })
                     .put("pressure_family_code", grid { _, l -> if (l <= 1) 1 else if (l == 2) 2 else 3 })
-                    .put("cloud_layer_status", grid { i, l -> if (cloudMask[i][l]) 3 else 0 })
+                    .put("cloud_layer_status", grid { i, l -> layerStatus(i, l) })
                     .put("cloud_layer_base_asl_m", grid { _, l -> levelHeights[l] - 650.0 })
                     .put("cloud_layer_top_asl_m", grid { _, l -> levelHeights[l] + 650.0 }),
             )

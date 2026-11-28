@@ -399,13 +399,18 @@ fn coverage_axes(
     for (index, (&lat, &raw_lon)) in grid.latitudes.iter().zip(grid.longitudes).enumerate() {
         let lon = norm_lon(raw_lon);
         let row = lats.partition_point(|&v| v < lat);
-        let mut col = lons.partition_point(|&v| v < lon);
-        // The appended +180 column shares the physical -180 column; targets
-        // on the seam itself read the raw-sign copy, exactly like the scorer.
-        if lon == -180.0 && lons.last() == Some(&180.0) {
-            col = lons.len() - 1;
+        let col = lons.partition_point(|&v| v < lon);
+        let is_raw_positive_180 = (raw_lon - 180.0).abs() < 1e-9;
+        // A raw +180 column lives only on the restored +180 end; a raw -180
+        // column populates -180 and mirrors onto +180 when both ends exist.
+        if is_raw_positive_180 && lons.last() == Some(&180.0) {
+            indices[row * lons.len() + (lons.len() - 1)] = index;
+        } else {
+            indices[row * lons.len() + col] = index;
+            if lon == -180.0 && lons.last() == Some(&180.0) {
+                indices[row * lons.len() + (lons.len() - 1)] = index;
+            }
         }
-        indices[row * lons.len() + col] = index;
     }
     // Fill borrowed boundary columns from the sibling bridge. Bridge cells
     // are encoded as (slot + 1) * MAX_SOURCE_CELLS + cell so they never
@@ -495,12 +500,12 @@ pub(crate) fn model_grid_covers_group_opt(
         axes.push(axis);
     }
     let stride = crate::native::cams::MAX_SOURCE_CELLS;
-    let value = |channel: usize, index: usize| -> f64 {
+    let value = |grid_slot: usize, channel: usize, index: usize| -> f64 {
         if index == usize::MAX {
             return f64::NAN;
         }
         let (slot, cell) = if index < stride {
-            (0, index)
+            (grid_slot, index)
         } else {
             (index / stride - 1, index % stride)
         };
@@ -531,7 +536,7 @@ pub(crate) fn model_grid_covers_group_opt(
                 [lon, lon]
             };
             let mut covered = false;
-            'axes: for axes in &axes {
+            'axes: for (grid_slot, axes) in axes.iter().enumerate() {
                 for &lon in &candidates {
                     // `native::cams::map` marks targets outside the source
                     // envelope uncovered even when the clamped sample is finite.
@@ -554,7 +559,7 @@ pub(crate) fn model_grid_covers_group_opt(
                         + if x <= 0.5 { c } else { d }];
                     let mut cell_ok = true;
                     for channel in 0..12 {
-                        let q = corners.map(|i| value(channel, i));
+                        let q = corners.map(|i| value(grid_slot, channel, i));
                         let bilinear = q[0] * (1.0 - y) * (1.0 - x)
                             + q[1] * (1.0 - y) * x
                             + q[2] * y * (1.0 - x)
@@ -562,7 +567,7 @@ pub(crate) fn model_grid_covers_group_opt(
                         let sampled = if bilinear.is_finite() {
                             bilinear
                         } else {
-                            value(channel, nearest)
+                            value(grid_slot, channel, nearest)
                         };
                         if !sampled.is_finite() || sampled < 0.0 || (channel == 0 && sampled > 10.0)
                         {
@@ -1237,5 +1242,85 @@ mod tests {
         )
         .unwrap();
         assert!(cams_hits.is_empty());
+    }
+
+    #[test]
+    fn coverage_axes_populates_both_antimeridian_columns_for_raw_negative_180() {
+        let lats = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        let lons = [179.5, -180.0, -179.5, 179.5, -180.0, -179.5];
+        let aod = [0.2; 6];
+        let ext = [1e-5; 6 * 11];
+        let grid = crate::native::cams::Grid {
+            latitudes: &lats,
+            longitudes: &lons,
+            aod: &aod,
+            extinction: &ext,
+        };
+        let axes = coverage_axes(&grid, None, None).unwrap();
+        assert_eq!(axes.lons.first(), Some(&-180.0));
+        assert_eq!(axes.lons.last(), Some(&180.0));
+        for row in 0..axes.lats.len() {
+            assert_ne!(axes.indices[row * axes.lons.len()], usize::MAX);
+            assert_ne!(
+                axes.indices[row * axes.lons.len() + (axes.lons.len() - 1)],
+                usize::MAX
+            );
+        }
+    }
+
+    #[test]
+    fn model_grid_covers_group_indexes_each_grid_slot_independently() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = Utc.with_ymd_and_hms(2026, 11, 26, 3, 0, 0).unwrap();
+        let cycle = Utc.with_ymd_and_hms(2026, 11, 26, 0, 0, 0).unwrap();
+        let west_path = dir.path().join("west.fsopt");
+        let east_path = dir.path().join("east.fsopt");
+        crate::geos_fp::write_fsopt(
+            &west_path,
+            &crate::geos_fp::FsoptHeader {
+                contract: "firesky-optics-v1".into(),
+                source: "geos-fp".into(),
+                valid_time_utc: time_contract::iso(target),
+                run_time_utc: time_contract::iso(cycle),
+                lead_hours: 3,
+                n_lat: 2,
+                n_lon: 2,
+                pressure_levels: crate::native::cams::LEVELS.to_vec(),
+                bounds: [32.0, 170.0, 28.0, 180.0],
+            },
+            &[28.0, 32.0],
+            &[170.0, 180.0],
+            &[0.2; 4],
+            &vec![1e-5; 4 * 11],
+        )
+        .unwrap();
+        crate::geos_fp::write_fsopt(
+            &east_path,
+            &crate::geos_fp::FsoptHeader {
+                contract: "firesky-optics-v1".into(),
+                source: "geos-fp".into(),
+                valid_time_utc: time_contract::iso(target),
+                run_time_utc: time_contract::iso(cycle),
+                lead_hours: 3,
+                n_lat: 3,
+                n_lon: 3,
+                pressure_levels: crate::native::cams::LEVELS.to_vec(),
+                bounds: [32.0, -180.0, 28.0, -170.0],
+            },
+            &[28.0, 30.0, 32.0],
+            &[-180.0, -175.0, -170.0],
+            &[0.3; 9],
+            &vec![1e-5; 9 * 11],
+        )
+        .unwrap();
+        let coverage = ModelCoverage {
+            lats: &[29.0, 31.0],
+            lons: &[175.0, -175.0],
+        };
+        assert!(model_grid_covers_group_opt(
+            &[west_path, east_path],
+            None,
+            &coverage,
+        ));
     }
 }

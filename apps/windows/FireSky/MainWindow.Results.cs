@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json.Nodes;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
 using Microsoft.UI.Xaml.Media;
 using Microsoft.UI.Xaml.Shapes;
 
@@ -10,8 +11,8 @@ namespace FireSky;
 
 /// <summary>
 /// 点预测 / 实况结果渲染（深度展示对齐 macOS Workbench）：
-/// GFS+EC 双摘要卡、分组指标卡、AOD 环境读数、评分组成、对比曲线（缺测断线 + 悬停读数）、
-/// 15 列逐时台账、太阳方向剖面图层、冻结剖面查询、诊断分组。
+/// GFS+EC 双摘要卡、分组指标卡、AOD 环境读数、统一对比评分表、对比曲线（缺测断线 + 悬停读数）、
+/// 15 列逐时台账、v3 太阳方向平滑大气剖面、冻结剖面查询、弹窗诊断分组。
 /// 所有数值只读后端报告，不在客户端重算或填补缺测。
 /// </summary>
 public sealed partial class MainWindow
@@ -32,7 +33,52 @@ public sealed partial class MainWindow
     }
 
     private readonly Dictionary<string, HeroCard> heroCards = new();
+    private readonly StackPanel DiagnosticPanel = new() { Spacing = 14 };
     private bool showInvalidLedgerSteps;
+    private bool diagnosticsDialogOpen;
+    private bool pointShowIsobars;
+    private bool crossSectionShowIsobars;
+    private double crossSectionZoomScale = 1.0;
+    private JsonObject? activeCrossSection;
+    private bool activeCrossSectionIsNowcast;
+    private JsonObject? activeRegionalCrossSection;
+
+    internal static bool IsStepValid(JsonObject step) =>
+        BoolValue(step, "valid") != false && Text(step, "selected_regime") != "invalid";
+
+    private async void OnOpenDiagnostics(object sender, RoutedEventArgs args) =>
+        await ShowDiagnosticsDialogAsync();
+
+    internal async Task ShowDiagnosticsDialogAsync()
+    {
+        if (diagnosticsDialogOpen || Root?.XamlRoot == null) return;
+        diagnosticsDialogOpen = true;
+        RenderDiagnostics();
+        var scroll = new ScrollViewer
+        {
+            MaxHeight = 560,
+            MinWidth = 540,
+            VerticalScrollBarVisibility = ScrollBarVisibility.Auto,
+            Content = DiagnosticPanel,
+        };
+        var dialog = new ContentDialog
+        {
+            Title = L10n.T("诊断与时间窗"),
+            CloseButtonText = L10n.T("关闭"),
+            DefaultButton = ContentDialogButton.None,
+            XamlRoot = Root.XamlRoot,
+            Content = scroll,
+        };
+        try
+        {
+            await dialog.ShowAsync();
+        }
+        finally
+        {
+            scroll.Content = null;
+            diagnosticsDialogOpen = false;
+        }
+    }
 
     private static readonly (string Key, string Key1, string Title, string Caption)[] NowcastMetrics =
     [
@@ -55,7 +101,10 @@ public sealed partial class MainWindow
 
     internal JsonObject? SelectedReport()
     {
-        var model = TagOf(ResultModel?.SelectedItem) is { Length: > 0 } tag ? tag : "gfs";
+        var model = (page == "regional" || resultKind == "regional") && RegionalModel != null
+            ? (TagOf(RegionalModel.SelectedItem) is { Length: > 0 } rTag ? rTag : selectedResultModel)
+            : selectedResultModel;
+        if (model is not ("gfs" or "ec")) model = "gfs";
         return result?["model_results"] is JsonObject models ? models[model] as JsonObject : result;
     }
 
@@ -78,13 +127,13 @@ public sealed partial class MainWindow
 
     private static string ModelColorHex(string model) => model == "ec" ? "#148A9C" : "#E3664A";
 
-    // ---------- Hero 双摘要卡 ----------
+    // ---------- 顶部紧凑双模型指数条（对齐 macOS Hero 顶栏 + 概览摘要详情卡） ----------
 
     private void BuildHeroCards()
     {
         HeroHost.Children.Clear();
         heroCards.Clear();
-        var grid = new Grid { ColumnSpacing = 18 };
+        var grid = new Grid { ColumnSpacing = 14 };
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
@@ -95,7 +144,8 @@ public sealed partial class MainWindow
         Grid.SetColumn(gfs.Panel, 0);
         var divider = new Border
         {
-            Width = 1, Height = 132, Opacity = .5,
+            Width = 1, Height = 30, Opacity = .55,
+            VerticalAlignment = VerticalAlignment.Center,
             Background = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
         };
         Grid.SetColumn(divider, 1);
@@ -108,75 +158,58 @@ public sealed partial class MainWindow
 
     private static HeroCard BuildHeroCard(string model)
     {
-        var panel = new StackPanel { Spacing = 8 };
-        var top = new Grid { ColumnSpacing = 8 };
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        top.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        top.Children.Add(new StackPanel
+        var panel = new StackPanel { Spacing = 2 };
+        var row = new Grid { ColumnSpacing = 10 };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var left = new StackPanel { Spacing = 1, VerticalAlignment = VerticalAlignment.Center };
+        var headline = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
+        headline.Children.Add(new Ellipse
         {
-            Orientation = Orientation.Horizontal, Spacing = 6,
-            Children =
-            {
-                new Ellipse
-                {
-                    Width = 6, Height = 6, Fill = ModelBrush(model),
-                    VerticalAlignment = VerticalAlignment.Center,
-                },
-                new TextBlock
-                {
-                    Text = model.ToUpperInvariant(), FontSize = 12,
-                    FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                },
-            },
+            Width = 6, Height = 6, Fill = ModelBrush(model),
+            VerticalAlignment = VerticalAlignment.Center,
         });
-        var status = new TextBlock { Text = L10n.T("等待预测"), FontSize = 9, Opacity = .7 };
-        Grid.SetColumn(status, 2);
-        top.Children.Add(status);
-        panel.Children.Add(top);
-        var middle = new Grid { ColumnSpacing = 12 };
-        middle.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        middle.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        var scoreStack = new StackPanel { Spacing = 3 };
+        headline.Children.Add(new TextBlock
+        {
+            Text = model.ToUpperInvariant(), FontSize = 11.5,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
         var score = new TextBlock
         {
-            Text = "--", FontSize = 30, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Foreground = ModelBrush(model),
+            Text = "--", FontSize = 18, FontWeight = Microsoft.UI.Text.FontWeights.Bold,
+            Foreground = ModelBrush(model), VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(2, -1, 0, 0),
         };
-        var level = new TextBlock { Text = L10n.T("峰值质量指数"), FontSize = 9, Opacity = .65 };
-        scoreStack.Children.Add(score);
-        scoreStack.Children.Add(level);
-        var bestStack = new StackPanel { Spacing = 3 };
-        bestStack.Children.Add(new TextBlock { Text = L10n.T("最佳时刻"), FontSize = 9, Opacity = .65 });
+        headline.Children.Add(score);
+        headline.Children.Add(new TextBlock
+        {
+            Text = "/ 2.5", FontSize = 11, Opacity = .62,
+            VerticalAlignment = VerticalAlignment.Bottom, Margin = new Thickness(0, 0, 0, 1),
+        });
+        left.Children.Add(headline);
+        var status = new TextBlock { Text = L10n.T("等待预测"), FontSize = 10, Opacity = .66 };
+        left.Children.Add(status);
+
         var best = new TextBlock
         {
-            Text = "--", FontSize = 21, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Text = "--", FontSize = 14, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
         };
-        bestStack.Children.Add(best);
-        Grid.SetColumn(scoreStack, 0);
-        Grid.SetColumn(bestStack, 1);
-        middle.Children.Add(scoreStack);
-        middle.Children.Add(bestStack);
-        panel.Children.Add(middle);
-        var window = new TextBlock { Text = L10n.T("推荐窗口 --"), FontSize = 10, Opacity = .7 };
-        panel.Children.Add(window);
-        var chips = new TextBlock { Text = "", FontSize = 9, Opacity = .7, TextWrapping = TextWrapping.Wrap };
-        panel.Children.Add(chips);
-        var genusText = new TextBlock { Text = "", FontSize = 10, Opacity = .85 };
-        var genusBadge = new Border
-        {
-            CornerRadius = new CornerRadius(6),
-            Padding = new Thickness(7, 2, 7, 2),
-            HorizontalAlignment = HorizontalAlignment.Left,
-            Background = new SolidColorBrush(Windows.UI.Color.FromArgb(0x1C, 0x88, 0x99, 0xAA)),
-            BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"],
-            BorderThickness = new Thickness(1),
-            Visibility = Visibility.Collapsed,
-            Child = genusText,
-        };
-        panel.Children.Add(genusBadge);
-        var source = new TextBlock { Text = "", FontSize = 9, Opacity = .65, TextWrapping = TextWrapping.Wrap };
-        panel.Children.Add(source);
+        Grid.SetColumn(left, 0);
+        Grid.SetColumn(best, 1);
+        row.Children.Add(left);
+        row.Children.Add(best);
+        panel.Children.Add(row);
+
+        // 详情字段保留对象并在概览摘要卡渲染，不撑高顶部条。
+        var level = new TextBlock { Text = L10n.T("峰值质量指数"), Visibility = Visibility.Collapsed };
+        var window = new TextBlock { Text = L10n.T("推荐窗口 --"), Visibility = Visibility.Collapsed };
+        var chips = new TextBlock { Text = "", Visibility = Visibility.Collapsed };
+        var genusText = new TextBlock { Text = "" };
+        var genusBadge = new Border { Visibility = Visibility.Collapsed, Child = genusText };
+        var source = new TextBlock { Text = "", Visibility = Visibility.Collapsed };
         var error = new TextBlock
         {
             Text = "", FontSize = 10, Foreground = new SolidColorBrush(Colors.Red),
@@ -340,7 +373,13 @@ public sealed partial class MainWindow
         // UX #1：标题跟随原始参数；表单改动不清空结果，只显示 stale 徽标。
         StaleBanner.IsOpen = hasResult && ResultParametersStale;
         ToolTipService.SetToolTip(StaleBanner, ResultParamsSummary());
-        ResultModel.Visibility = page == "nowcast" ? Visibility.Collapsed : Visibility.Visible;
+        if (ResultModelPillTrack != null)
+            ResultModelPillTrack.Visibility = page == "nowcast" ? Visibility.Collapsed : Visibility.Visible;
+        if (RegionalModelPillTrack != null)
+            RegionalModelPillTrack.Visibility = hasResult && resultKind == "regional" ? Visibility.Visible : Visibility.Collapsed;
+        if (DiagnosticsButton != null)
+            DiagnosticsButton.Visibility = hasResult && resultKind != "regional"
+                ? Visibility.Visible : Visibility.Collapsed;
         RegionalInspector.Visibility = page == "regional" ? Visibility.Visible : Visibility.Collapsed;
         if (!hasResult)
         {
@@ -349,6 +388,8 @@ public sealed partial class MainWindow
             ClearRegionalProfile();
             ResetHeroCards();
             ResetMetricCards();
+            if (OverviewSummaryHost != null) OverviewSummaryHost.Children.Clear();
+            if (OverviewSummaryCard != null) OverviewSummaryCard.Visibility = Visibility.Collapsed;
             PointVisualHost.Children.Clear();
             PointVisualHost.Visibility = Visibility.Collapsed;
             BreakdownCard.Visibility = Visibility.Collapsed;
@@ -359,10 +400,7 @@ public sealed partial class MainWindow
             ChartLegend.Text = "";
             LedgerHost.Children.Clear();
             DiagnosticPanel.Children.Clear();
-            ProfileStatus.Text = L10n.T("等待预测");
-            FrozenProfileButton.Visibility = Visibility.Collapsed;
-            PointCrossSection.Visibility = Visibility.Collapsed;
-            PointProfileNote.Text = "";
+            ResetCrossSectionVisuals();
             frozenProfile = null; frozenProfileModel = ""; frozenProfileState = "idle";
             if (page == "regional")
             {
@@ -426,10 +464,11 @@ public sealed partial class MainWindow
     private void ResetHeroCards()
     {
         heroCards["ec"].Panel.Visibility = Visibility.Visible;
+        var muted = SecondaryBrush();
         foreach (var (model, card) in heroCards)
         {
             card.Status.Text = L10n.T("等待预测");
-            card.Status.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+            card.Status.Foreground = muted;
             card.Score.Text = "--";
             card.Level.Text = L10n.T("峰值质量指数");
             card.Best.Text = "--";
@@ -440,13 +479,14 @@ public sealed partial class MainWindow
             card.Source.Text = "";
             card.Error.Text = "";
             card.Error.Visibility = Visibility.Collapsed;
-            card.Score.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+            card.Score.Foreground = muted;
         }
         ResultContext.Text = $"{LocationName.Text} · {TargetDateLabel()} {ResultPhenomenonLabel()}";
     }
 
     private void RenderHero()
     {
+        var muted = SecondaryBrush();
         foreach (var model in new[] { "gfs", "ec" })
         {
             var card = heroCards[model];
@@ -455,13 +495,13 @@ public sealed partial class MainWindow
             card.Status.Text = ModelStatus(error, report, result != null);
             card.Status.Foreground = error != null
                 ? new SolidColorBrush(Colors.Red)
-                : (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+                : muted;
             var quality = report != null && DoubleValue(report["peak_quality_index"] ?? report["quality_index"]) is { } q
                 ? q : (double?)null;
             card.Score.Text = quality is { } value ? value.ToString("0.00") : "--";
             card.Score.Foreground = quality is { }
                 ? ModelBrush(model)
-                : (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+                : muted;
             card.Level.Text = Text(report, "peak_quality_level") is { Length: > 0 } level ? level
                 : Text(report, "quality_level") is { Length: > 0 } fallback ? fallback : L10n.T("峰值质量指数");
             card.Best.Text = TimeLabel(Text(report, "best_time_local"));
@@ -492,6 +532,61 @@ public sealed partial class MainWindow
             card.Error.Text = error ?? "";
             card.Error.Visibility = error != null ? Visibility.Visible : Visibility.Collapsed;
         }
+        RenderOverviewSummaryCard(nowcastMode: false);
+    }
+
+    private void RenderOverviewSummaryCard(bool nowcastMode)
+    {
+        if (OverviewSummaryCard == null || OverviewSummaryHost == null) return;
+        OverviewSummaryHost.Children.Clear();
+        var models = nowcastMode ? new[] { "gfs" } : new[] { "gfs", "ec" };
+        var grid = new Grid { ColumnSpacing = 14 };
+        for (var i = 0; i < models.Length; i++)
+        {
+            var m = models[i];
+            if (!heroCards.TryGetValue(m, out var card)) continue;
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var col = new StackPanel { Spacing = 4 };
+            var head = new Grid { ColumnSpacing = 8 };
+            head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var tagRow = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6, VerticalAlignment = VerticalAlignment.Center };
+            tagRow.Children.Add(new Ellipse { Width = 6, Height = 6, Fill = ModelBrush(m), VerticalAlignment = VerticalAlignment.Center });
+            tagRow.Children.Add(new TextBlock
+            {
+                Text = nowcastMode ? L10n.T("实况综合结论") : m.ToUpperInvariant(),
+                FontSize = 11.5, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            });
+            var lvl = new TextBlock { Text = card.Level.Text, FontSize = 11.5, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold, Foreground = ModelBrush(m) };
+            Grid.SetColumn(tagRow, 0);
+            Grid.SetColumn(lvl, 2);
+            head.Children.Add(tagRow);
+            head.Children.Add(lvl);
+            col.Children.Add(head);
+            col.Children.Add(new TextBlock { Text = card.Window.Text, FontSize = 11, Opacity = .8 });
+            if (card.Chips.Text.Length > 0)
+                col.Children.Add(new TextBlock { Text = card.Chips.Text, FontSize = 10.5, Opacity = .68, TextWrapping = TextWrapping.Wrap });
+            if (card.GenusBadge.Visibility == Visibility.Visible && card.GenusText.Text.Length > 0)
+            {
+                col.Children.Add(new Border
+                {
+                    CornerRadius = new CornerRadius(6),
+                    Padding = new Thickness(7, 2, 7, 2),
+                    HorizontalAlignment = HorizontalAlignment.Left,
+                    Background = ThemeBrush("FireSkyGroupedCardBrush"),
+                    BorderBrush = ThemeBrush("FireSkyGroupedBorderBrush"),
+                    BorderThickness = new Thickness(1),
+                    Child = new TextBlock { Text = card.GenusText.Text, FontSize = 10.5, Opacity = .85 },
+                });
+            }
+            if (card.Source.Text.Length > 0)
+                col.Children.Add(new TextBlock { Text = card.Source.Text, FontSize = 10, Opacity = .6, TextWrapping = TextWrapping.Wrap });
+            Grid.SetColumn(col, i);
+            grid.Children.Add(col);
+        }
+        OverviewSummaryHost.Children.Add(grid);
+        OverviewSummaryCard.Visibility = Visibility.Visible;
     }
 
     // ---------- 点预测光谱色彩 & 拍摄方位雷达（v2.0.0） ----------
@@ -506,7 +601,7 @@ public sealed partial class MainWindow
             PointVisualHost.Visibility = Visibility.Collapsed;
             return;
         }
-        var modelLabel = (TagOf(ResultModel?.SelectedItem) is { Length: > 0 } tag ? tag : "gfs").ToUpperInvariant();
+        var modelLabel = selectedResultModel.ToUpperInvariant();
         if (report["spectral_color"] is JsonObject spectral
             && BuildSpectralColorCard(modelLabel, spectral) is { } spectralCard)
         {
@@ -946,7 +1041,15 @@ public sealed partial class MainWindow
                 Text = MetricGroups[group], FontSize = 10, Opacity = .65,
                 FontWeight = Microsoft.UI.Text.FontWeights.Medium,
             });
-            var row = new Grid { ColumnSpacing = 10 };
+            var row = new Grid { ColumnSpacing = 10, RowSpacing = 10 };
+            var twoByTwo = (end - start) == 4;
+            if (twoByTwo)
+            {
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                row.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            }
             for (var index = start; index < end; index++)
             {
                 var spec = Metrics[index];
@@ -1029,8 +1132,17 @@ public sealed partial class MainWindow
                     BorderBrush = ThemeBrush("FireSkyCardBorderBrush"),
                     BorderThickness = new Thickness(1),
                 };
-                Grid.SetColumn(border, index - start);
-                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                if (twoByTwo)
+                {
+                    var slot = index - start;
+                    Grid.SetRow(border, slot / 2);
+                    Grid.SetColumn(border, slot % 2);
+                }
+                else
+                {
+                    Grid.SetColumn(border, index - start);
+                    row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+                }
                 row.Children.Add(border);
                 metricCards[spec.Key] = new MetricCard
                 {
@@ -1101,41 +1213,312 @@ public sealed partial class MainWindow
         }
     }
 
-    // ---------- 评分组成（只读后端分量） ----------
+    // ---------- 评分组成（统一 GFS | EC 对比表，只读后端分量） ----------
 
     private void RenderBreakdown()
     {
         BreakdownHost.Children.Clear();
-        var hasContent = false;
+        var gfsReport = ModelReport("gfs");
+        var ecReport = ModelReport("ec");
+        var gfsErr = ModelError("gfs");
+        var ecErr = ModelError("ec");
+        if (gfsReport == null && ecReport == null && gfsErr == null && ecErr == null)
+        {
+            BreakdownCard.Visibility = Visibility.Collapsed;
+            return;
+        }
         BreakdownCard.Visibility = Visibility.Visible;
+
+        // 标题栏：评分组成 + GFS / EC 摘要徽标
+        var header = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 12 };
+        header.Children.Add(new TextBlock
+        {
+            Text = L10n.T("评分组成"),
+            FontSize = 13,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            VerticalAlignment = VerticalAlignment.Center,
+        });
         foreach (var model in new[] { "gfs", "ec" })
         {
-            var error = ModelError(model);
+            var err = ModelError(model);
             var report = ModelReport(model);
-            if (error != null)
+            var badge = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center };
+            if (report != null)
             {
-                BreakdownHost.Children.Add(new TextBlock
+                badge.Children.Add(new Ellipse { Width = 6, Height = 6, Fill = ModelBrush(model), VerticalAlignment = VerticalAlignment.Center });
+                badge.Children.Add(new TextBlock { Text = model.ToUpperInvariant(), FontSize = 11, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold });
+                badge.Children.Add(new TextBlock
                 {
-                    Text = $"{model.ToUpperInvariant()} 未完成：{error}",
-                    FontSize = 10, Foreground = new SolidColorBrush(Colors.Red),
-                    TextWrapping = TextWrapping.Wrap, IsTextSelectionEnabled = true,
+                    Text = $"{QualityText(report["quality_index"], 3)} / 2.5",
+                    FontSize = 11,
+                    FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                    Foreground = ModelBrush(model),
                 });
-                hasContent = true;
-                continue;
+                var lvl = Text(report, "quality_level");
+                if (lvl.Length > 0)
+                    badge.Children.Add(new TextBlock { Text = L10n.T(lvl), FontSize = 10, Opacity = .68, VerticalAlignment = VerticalAlignment.Center });
             }
-            if (report == null)
+            else if (err != null)
             {
-                BreakdownHost.Children.Add(new TextBlock
+                badge.Children.Add(new Ellipse { Width = 6, Height = 6, Fill = new SolidColorBrush(Colors.Red), VerticalAlignment = VerticalAlignment.Center });
+                badge.Children.Add(new TextBlock
                 {
-                    Text = $"{model.ToUpperInvariant()} 暂无结果", FontSize = 10, Opacity = .65,
+                    Text = $"{model.ToUpperInvariant()} {L10n.T("未完成")}",
+                    FontSize = 10,
+                    Foreground = new SolidColorBrush(Colors.Red),
                 });
-                hasContent = true;
-                continue;
             }
-            BreakdownHost.Children.Add(BuildBreakdownCard(model, report));
-            hasContent = true;
+            else
+            {
+                badge.Children.Add(new Ellipse
+                {
+                    Width = 6, Height = 6, Opacity = .45,
+                    Fill = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"],
+                    VerticalAlignment = VerticalAlignment.Center,
+                });
+                badge.Children.Add(new TextBlock
+                {
+                    Text = $"{model.ToUpperInvariant()} {L10n.T("暂无结果")}",
+                    FontSize = 10, Opacity = .65,
+                });
+            }
+            header.Children.Add(badge);
         }
-        BreakdownCard.Visibility = hasContent ? Visibility.Visible : Visibility.Collapsed;
+        BreakdownHost.Children.Add(header);
+
+        // 若单模型失败，简要提示
+        foreach (var model in new[] { "gfs", "ec" })
+        {
+            if (ModelError(model) is { } err)
+            {
+                BreakdownHost.Children.Add(new TextBlock
+                {
+                    Text = $"{model.ToUpperInvariant()} {L10n.T("未完成")}：{err}",
+                    FontSize = 10,
+                    Foreground = new SolidColorBrush(Colors.Red),
+                    TextWrapping = TextWrapping.Wrap,
+                    IsTextSelectionEnabled = true,
+                });
+            }
+        }
+
+        BreakdownHost.Children.Add(new Border
+        {
+            Height = 1,
+            Opacity = .45,
+            Background = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
+        });
+
+        // 3 列对比表：评分项 | GFS | EC
+        var table = new StackPanel { Spacing = 0 };
+        var colHeader = new Grid { ColumnSpacing = 12, Padding = new Thickness(0, 2, 0, 5) };
+        colHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(116) });
+        colHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        colHeader.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        colHeader.Children.Add(new TextBlock
+        {
+            Text = L10n.T("评分项"), FontSize = 10, Opacity = .68,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        });
+        for (var m = 0; m < 2; m++)
+        {
+            var model = m == 0 ? "gfs" : "ec";
+            var h = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
+            h.Children.Add(new Ellipse { Width = 5, Height = 5, Fill = ModelBrush(model), VerticalAlignment = VerticalAlignment.Center });
+            h.Children.Add(new TextBlock
+            {
+                Text = model.ToUpperInvariant(), FontSize = 10, Opacity = .68,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            });
+            Grid.SetColumn(h, m + 1);
+            colHeader.Children.Add(h);
+        }
+        table.Children.Add(colHeader);
+
+        string[] rowTitles =
+        [
+            L10n.T("云量基础分"),
+            L10n.T("可烧云占比"),
+            L10n.T("入射遮挡"),
+            L10n.T("持续时间修正"),
+            L10n.T("入射 AOD 修正"),
+            L10n.T("观测 AOD 修正"),
+        ];
+
+        (string Primary, string Detail, Brush PrimaryBrush) CellContent(int idx, JsonObject report)
+        {
+            var c = report["quality_components"] as JsonObject ?? new JsonObject();
+            var primaryDefault = (Brush)Application.Current.Resources["TextFillColorPrimaryBrush"];
+            switch (idx)
+            {
+                case 0:
+                {
+                    var delta = SignedDelta(c["coverage_base_score"] ?? c["coverage_score"]);
+                    var load = QualityText(c["forward_burnable_cloud_load_effective"] ?? c["forward_burnable_cloud_load_peak"], 2);
+                    return (delta, $"有效 {RatioText(c["burnable_cloud_coverage_effective"])} · 载荷 {load}", DeltaBrush(delta));
+                }
+                case 1:
+                    return (RatioText(c["forward_burnable_cloud_ratio_peak"]),
+                        $"前方可烧 {RatioText(c["forward_burnable_cloud_field_amount_peak"])} / 总云 {RatioText(c["forward_view_cloud_field_amount_peak"])}",
+                        primaryDefault);
+                case 2:
+                    return (RatioText(c["solar_incoming_block_risk_at_best_cloud"] ?? c["solar_incoming_block_risk_mean"]),
+                        L10n.T("已计入可烧量"),
+                        primaryDefault);
+                case 3:
+                {
+                    var delta = SignedDelta(c["duration_adjustment"]);
+                    var mins = QualityText(report["duration_minutes"] ?? c["duration_minutes"], 0);
+                    return (delta, $"{mins} 分 · ×{QualityText(c["duration_factor"], 3)}", DeltaBrush(delta));
+                }
+                case 4:
+                {
+                    var delta = SignedDelta(c["incoming_aod_adjustment"]);
+                    return (delta, $"AOD {QualityText(c["quality_aod550"], 3)} · ×{QualityText(c["incoming_aod_illumination_factor"], 3)}", DeltaBrush(delta));
+                }
+                default:
+                {
+                    var delta = SignedDelta(c["observer_aod_adjustment"]);
+                    return (delta, $"对比 ×{QualityText(c["observer_aod_contrast_factor"], 3)}", DeltaBrush(delta));
+                }
+            }
+        }
+
+        for (var idx = 0; idx < rowTitles.Length; idx++)
+        {
+            table.Children.Add(new Border
+            {
+                Height = 1,
+                Opacity = .35,
+                Background = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
+            });
+            var row = new Grid { ColumnSpacing = 12, Padding = new Thickness(0, 6, 0, 6) };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(116) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            row.Children.Add(new TextBlock
+            {
+                Text = rowTitles[idx], FontSize = 11, Opacity = .7,
+                VerticalAlignment = VerticalAlignment.Center,
+            });
+            for (var m = 0; m < 2; m++)
+            {
+                var rep = m == 0 ? gfsReport : ecReport;
+                FrameworkElement cellView;
+                if (rep != null)
+                {
+                    var (primary, detail, brush) = CellContent(idx, rep);
+                    var cellStack = new StackPanel
+                    {
+                        Orientation = Orientation.Horizontal, Spacing = 8,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    };
+                    cellStack.Children.Add(new TextBlock
+                    {
+                        Text = primary, FontSize = 11.5,
+                        FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                        Foreground = brush, MinWidth = 48,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    });
+                    cellStack.Children.Add(new TextBlock
+                    {
+                        Text = detail, FontSize = 10, Opacity = .68,
+                        TextTrimming = TextTrimming.CharacterEllipsis,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    });
+                    cellView = cellStack;
+                }
+                else
+                {
+                    cellView = new TextBlock
+                    {
+                        Text = "—", FontSize = 11, Opacity = .55,
+                        VerticalAlignment = VerticalAlignment.Center,
+                    };
+                }
+                Grid.SetColumn(cellView, m + 1);
+                row.Children.Add(cellView);
+            }
+            table.Children.Add(row);
+        }
+        BreakdownHost.Children.Add(table);
+
+        // 单行限制因素摘要
+        var gfsLimit = StringOf((gfsReport?["quality_components"] as JsonObject)?["quality_limiting_factor"]);
+        var ecLimit = StringOf((ecReport?["quality_components"] as JsonObject)?["quality_limiting_factor"]);
+        var limitText = (gfsLimit.Length > 0, ecLimit.Length > 0) switch
+        {
+            (true, true) when gfsLimit == ecLimit => $"{L10n.T("限制因素")}：{gfsLimit}",
+            (true, true) => $"{L10n.T("限制因素")} · GFS：{gfsLimit} · EC：{ecLimit}",
+            (true, false) => $"GFS {L10n.T("限制因素")}：{gfsLimit}",
+            (false, true) => $"EC {L10n.T("限制因素")}：{ecLimit}",
+            _ => "",
+        };
+        if (limitText.Length > 0)
+        {
+            var limitBlock = new TextBlock
+            {
+                Text = limitText,
+                FontSize = 10.5,
+                Opacity = .72,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxLines = 1,
+            };
+            ToolTipService.SetToolTip(limitBlock, limitText);
+            BreakdownHost.Children.Add(limitBlock);
+        }
+
+        // 详情与口径 Expander（默认折叠）
+        var sample = gfsReport ?? ecReport!;
+        var sampleComp = sample["quality_components"] as JsonObject ?? new JsonObject();
+        var radius = NumText(sampleComp["forward_field_radius_km"] ?? sample["analysis_radius_km"], 0, " km");
+        var sector = NumText(sampleComp["forward_sector_half_angle_deg"], 0, "°", "±");
+        var detailStack = new StackPanel { Spacing = 6, Padding = new Thickness(0, 4, 0, 0) };
+        detailStack.Children.Add(new TextBlock
+        {
+            Text = $"{L10n.T("分析范围")} {radius} · {L10n.T("太阳方向扇区")} {sector}",
+            FontSize = 10.5, Opacity = .75,
+            FontWeight = Microsoft.UI.Text.FontWeights.Medium,
+        });
+        foreach (var model in new[] { "gfs", "ec" })
+        {
+            if (ModelReport(model) is not { } rep) continue;
+            var c = rep["quality_components"] as JsonObject ?? new JsonObject();
+            var src = (Text(rep, "model_source") is { Length: > 0 } s ? s : model) == "ec"
+                ? L10n.T("EC TCC + PL-RH 云柱代理")
+                : L10n.T("GFS 全量云场");
+            var line = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
+            line.Children.Add(new TextBlock
+            {
+                Text = model.ToUpperInvariant(),
+                FontSize = 10.5,
+                FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                Foreground = ModelBrush(model),
+                Width = 30,
+            });
+            line.Children.Add(new TextBlock
+            {
+                Text = $"原始分 {QualityText(c["raw_quality_index"], 3)} · {src} · 观测回程 τ {QualityText(c["observer_return_optical_depth_mean"], 3)} · T {QualityText(c["observer_return_transmission_mean"], 3)}",
+                FontSize = 10.5,
+                Opacity = .72,
+                TextWrapping = TextWrapping.Wrap,
+            });
+            detailStack.Children.Add(line);
+        }
+        detailStack.Children.Add(new TextBlock
+        {
+            Text = L10n.T("几何遮挡已包含在可烧云量中，不再重复扣分；同一视线由近及远合成（低云遮挡其后中高云）。摄影焦段、Top-K、代表云与云边界不进入主评分。"),
+            FontSize = 10,
+            Opacity = .62,
+            TextWrapping = TextWrapping.Wrap,
+        });
+        BreakdownHost.Children.Add(new Expander
+        {
+            Header = L10n.T("详情与口径"),
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            IsExpanded = false,
+            Content = detailStack,
+        });
     }
 
     private static string SignedDelta(JsonNode? value)
@@ -1161,146 +1544,47 @@ public sealed partial class MainWindow
     private static string QualityText(JsonNode? node, int digits) =>
         DoubleValue(node) is { } value ? value.ToString($"0.{new string('0', digits)}", CultureInfo.InvariantCulture) : "—";
 
-    private FrameworkElement BuildBreakdownCard(string model, JsonObject report)
-    {
-        var components = report["quality_components"] as JsonObject ?? new JsonObject();
-        var modelSource = Text(report, "model_source") is { Length: > 0 } source ? source : model;
-        var panel = new StackPanel { Spacing = 8 };
-        var head = new Grid { ColumnSpacing = 8 };
-        head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        head.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-        head.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        head.Children.Add(new StackPanel
-        {
-            Orientation = Orientation.Horizontal, Spacing = 6,
-            Children =
-            {
-                new Ellipse { Width = 6, Height = 6, Fill = ModelBrush(model) },
-                new TextBlock
-                {
-                    Text = model.ToUpperInvariant(), FontSize = 11,
-                    FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-                },
-            },
-        });
-        head.Children.Add(new TextBlock
-        {
-            Text = $"{QualityText(report["quality_index"], 3)} / 2.5",
-            FontSize = 12, FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
-            Foreground = ModelBrush(model),
-        });
-        head.Children.Add(new TextBlock { Text = Text(report, "quality_level"), FontSize = 9, Opacity = .65 });
-        var limiting = StringOf(components["quality_limiting_factor"]);
-        if (limiting.Length > 0)
-        {
-            var limitingText = new TextBlock
-            {
-                Text = $"当前限制因素 {limiting}", FontSize = 9, Opacity = .65,
-                TextTrimming = TextTrimming.CharacterEllipsis,
-            };
-            ToolTipService.SetToolTip(limitingText, limiting);
-            Grid.SetColumn(limitingText, 4);
-            head.Children.Add(limitingText);
-        }
-        for (var i = 0; i < head.Children.Count; i++) Grid.SetColumn((FrameworkElement)head.Children[i], i);
-        panel.Children.Add(head);
-        void AdjustmentRow(string title, string measured, string? delta)
-        {
-            var row = new Grid { ColumnSpacing = 10, Padding = new Thickness(0, 5, 0, 5) };
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(64) });
-            row.Children.Add(new TextBlock { Text = title, FontSize = 10, Opacity = .7 });
-            row.Children.Add(new TextBlock { Text = measured, FontSize = 10, TextWrapping = TextWrapping.Wrap });
-            var deltaText = new TextBlock
-            {
-                Text = delta ?? "—", FontSize = 11,
-                FontWeight = Microsoft.UI.Text.FontWeights.Medium,
-                Foreground = DeltaBrush(delta ?? "—"),
-                HorizontalAlignment = HorizontalAlignment.Right,
-            };
-            Grid.SetColumn(deltaText, 2);
-            row.Children.Add(deltaText);
-            panel.Children.Add(row);
-        }
-        AdjustmentRow(L10n.T("云量基础分"),
-            $"有效可烧 {RatioText(components["burnable_cloud_coverage_effective"])} · 可烧载荷 {QualityText(components["forward_burnable_cloud_load_effective"] ?? components["forward_burnable_cloud_load_peak"], 2)} · 前方总云场 {RatioText(components["forward_view_cloud_field_amount_peak"])}",
-            SignedDelta(components["coverage_base_score"] ?? components["coverage_score"]));
-        AdjustmentRow(L10n.T("可烧云比例"),
-            $"可烧/总云量 {RatioText(components["forward_burnable_cloud_ratio_peak"])} · 前方可烧云量 {RatioText(components["forward_burnable_cloud_field_amount_peak"])}", null);
-        AdjustmentRow(L10n.T("几何遮挡（已计入可烧量）"),
-            $"最佳云入射遮挡 {RatioText(components["solar_incoming_block_risk_at_best_cloud"] ?? components["solar_incoming_block_risk_mean"])} · 不重复扣分", null);
-        AdjustmentRow(L10n.T("持续时间修正"),
-            $"{QualityText(report["duration_minutes"] ?? components["duration_minutes"], 0)} 分钟 · ×{QualityText(components["duration_factor"], 3)}",
-            SignedDelta(components["duration_adjustment"]));
-        AdjustmentRow(L10n.T("入射 AOD 修正"),
-            $"本地 AOD {QualityText(components["quality_aod550"], 3)} · 入射因子 ×{QualityText(components["incoming_aod_illumination_factor"], 3)}",
-            SignedDelta(components["incoming_aod_adjustment"]));
-        AdjustmentRow(L10n.T("观测 AOD 修正"),
-            $"观测对比因子 ×{QualityText(components["observer_aod_contrast_factor"], 3)}",
-            SignedDelta(components["observer_aod_adjustment"]));
-        void CapRow(string title, string value)
-        {
-            var row = new Grid { ColumnSpacing = 6 };
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-            row.Children.Add(new TextBlock { Text = title, FontSize = 9, Opacity = .65 });
-            row.Children.Add(new TextBlock
-            {
-                Text = value, FontSize = 9, FontWeight = Microsoft.UI.Text.FontWeights.Medium,
-                TextWrapping = TextWrapping.Wrap,
-            });
-            Grid.SetColumn((FrameworkElement)row.Children[1], 1);
-            panel.Children.Add(row);
-        }
-        CapRow(L10n.T("修正后原始分"), QualityText(components["raw_quality_index"], 3));
-        CapRow(L10n.T("云量基础分"), QualityText(components["coverage_base_score"] ?? components["coverage_score"], 3));
-        CapRow(L10n.T("分析范围"), NumText(components["forward_field_radius_km"] ?? report["analysis_radius_km"], 0, " km"));
-        CapRow(L10n.T("太阳方向扇区"), NumText(components["forward_sector_half_angle_deg"], 0, "°", "±"));
-        CapRow(L10n.T("总云场来源"), modelSource == "ec" ? L10n.T("EC TCC + PL-RH 云柱代理") : L10n.T("GFS 全量云场"));
-        CapRow(L10n.T("可烧量来源"), StringOf(components["quality_coverage_source"]) is { Length: > 0 } coverageSource
-            ? coverageSource : L10n.T("前方全量云场"));
-        CapRow(L10n.T("持续时间修正系数"), $"×{QualityText(components["duration_factor"], 3)}");
-        CapRow(L10n.T("入射 / 观测回程因子"),
-            $"×{QualityText(components["incoming_aod_illumination_factor"], 3)} / ×{QualityText(components["observer_aod_contrast_factor"], 3)}");
-        CapRow(L10n.T("观测回程光学量"),
-            $"τ {QualityText(components["observer_return_optical_depth_mean"], 3)} · T {QualityText(components["observer_return_transmission_mean"], 3)}");
-        panel.Children.Add(new TextBlock
-        {
-            Text = L10n.T("几何遮挡已包含在可烧云量中，不再重复扣分；持续时间和 AOD 各修正一次。低 AOD 小幅加分，高 AOD 有符号扣分。可烧量只包含既受太阳入射照亮、又能被地面观测者看到的云底面积。摄影焦段、Top-K、代表云和云边界不进入主评分。"),
-            FontSize = 9, Opacity = .6, TextWrapping = TextWrapping.Wrap,
-        });
-        return new Border
-        {
-            Child = panel,
-            Padding = new Thickness(12),
-            CornerRadius = new CornerRadius(12),
-            Background = ThemeBrush("FireSkyGroupedCardBrush"),
-            BorderBrush = ThemeBrush("FireSkyGroupedBorderBrush"),
-            BorderThickness = new Thickness(1),
-        };
-    }
-
     // ---------- 对比曲线（缺测断线 + 悬停读数） ----------
 
     private void BuildChartPoints()
     {
         var points = new List<ChartPoint>();
+        if (resultKind == "nowcast")
+        {
+            var report = SelectedReport();
+            if (report != null)
+            {
+                var segment = 0;
+                foreach (var step in report["steps"] as JsonArray ?? [])
+                {
+                    if (step is not JsonObject row || !IsStepValid(row)
+                        || DoubleValue(row["instant_quality_index"]) is not { } quality
+                        || ParseStepTime(row, Timezone.Text) is not { } time)
+                    {
+                        segment++;
+                        continue;
+                    }
+                    points.Add(new ChartPoint("gfs", time, quality, Text(row, "valid_time_local"), segment));
+                }
+            }
+            chartPoints = points.OrderBy(point => point.Time).ToList();
+            return;
+        }
         foreach (var model in new[] { "gfs", "ec" })
         {
             var report = ModelReport(model);
             if (report == null) continue;
+            var segment = 0;
             foreach (var step in report["steps"] as JsonArray ?? [])
             {
-                if (step is not JsonObject row) continue;
-                if (BoolValue(row, "valid") == false) continue;
-                if (DoubleValue(row["instant_quality_index"]) is not { } quality) continue;
-                var local = Text(row, "valid_time_local");
-                var time = ParseStepTime(row, Timezone.Text);
-                if (time == null) continue;
-                points.Add(new ChartPoint(model, time.Value, quality, local));
+                if (step is not JsonObject row || !IsStepValid(row)
+                    || DoubleValue(row["instant_quality_index"]) is not { } quality
+                    || ParseStepTime(row, Timezone.Text) is not { } time)
+                {
+                    segment++;
+                    continue;
+                }
+                points.Add(new ChartPoint(model, time, quality, Text(row, "valid_time_local"), segment));
             }
         }
         chartPoints = points.OrderBy(point => point.Time).ToList();
@@ -1326,11 +1610,41 @@ public sealed partial class MainWindow
         catch (Exception) { return TimeZoneInfo.Local; }
     }
 
-    private void OnResultModelChanged(object sender, SelectionChangedEventArgs args)
+    internal void SelectResultTab(int index)
     {
-        if (!initialized) return;
-        RenderResult();
-        _ = UpdateMap();
+        selectedResultTabIndex = Math.Clamp(index, 0, 2);
+        UpdateSegmentedPills(ResultTabPills, selectedResultTabIndex.ToString(CultureInfo.InvariantCulture));
+        if (OverviewTabPanel != null)
+            OverviewTabPanel.Visibility = selectedResultTabIndex == 0 ? Visibility.Visible : Visibility.Collapsed;
+        if (ProfileTabPanel != null)
+            ProfileTabPanel.Visibility = selectedResultTabIndex == 1 ? Visibility.Visible : Visibility.Collapsed;
+        if (LedgerTabPanel != null)
+            LedgerTabPanel.Visibility = selectedResultTabIndex == 2 ? Visibility.Visible : Visibility.Collapsed;
+        if (selectedResultTabIndex == 1 && initialized)
+        {
+            if (resultKind == "nowcast") RenderNowcastProfileTab();
+            else if (resultKind == "point") RenderPointProfileTab();
+        }
+    }
+
+    internal void SetSelectedResultModel(string model, bool render = true, bool updateMap = true)
+    {
+        selectedResultModel = model == "ec" ? "ec" : "gfs";
+        UpdateSegmentedPills(ResultModelPills, selectedResultModel);
+        UpdateSegmentedPills(RegionalResultModelPills, selectedResultModel);
+        if (page == "regional" && RegionalModel != null)
+        {
+            var targetIdx = selectedResultModel == "ec" ? 1 : 0;
+            if (RegionalModel.SelectedIndex != targetIdx)
+            {
+                suppressDraftEvents = true;
+                try { RegionalModel.SelectedIndex = targetIdx; }
+                finally { suppressDraftEvents = false; }
+                ClearRegionalProfile();
+            }
+        }
+        if (render && initialized) RenderResult();
+        if (updateMap && initialized) _ = UpdateMap(forceFit: page == "regional");
     }
 
     private void OnChartSizeChanged(object sender, SizeChangedEventArgs args) => RenderChart();
@@ -1342,14 +1656,17 @@ public sealed partial class MainWindow
         BuildChartPoints();
         var points = chartPoints ?? [];
         ChartEmpty.Visibility = points.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        ChartLegend.Text = L10n.T("质量轴固定 0–2.5 · 缺测断线不补零    — GFS  - - EC");
+        ChartLegend.Text = resultKind == "nowcast"
+            ? L10n.T("质量轴固定 0–2.5 · 缺测断线不补零    — 实况")
+            : L10n.T("质量轴固定 0–2.5 · 缺测断线不补零    — GFS  - - EC");
         if (points.Count == 0) return;
         var width = Math.Max(1, ((FrameworkElement)QualityChart.Parent).ActualWidth);
         var height = 200.0;
         var start = points.Min(point => point.Time).Ticks;
         var endTicks = points.Max(point => point.Time).Ticks;
         var span = Math.Max(1, endTicks - start);
-        double X(DateTimeOffset time) => (time.Ticks - start) / (double)span * width;
+        double X(DateTimeOffset time) => span == 1 && points.Count == 1
+            ? width * 0.5 : (time.Ticks - start) / (double)span * width;
         double Y(double quality) => height * (1 - Math.Clamp(quality / 2.5, 0, 1));
         foreach (var y in new[] { 0.0, height / 2, height })
             QualityChart.Children.Add(new Line
@@ -1364,15 +1681,21 @@ public sealed partial class MainWindow
             if (series.Count == 0) continue;
             Polyline? segment = null;
             DateTimeOffset? previous = null;
+            int? prevSeg = null;
             foreach (var point in series)
             {
-                if (previous is { } last && (point.Time - last).TotalMinutes > 15)
-                {
+                if (prevSeg is { } ps && ps != point.Segment)
+                    segment = null;
+                else if (previous is { } last && (point.Time - last).TotalMinutes > 15)
                     segment = null; // 缺口断线
+                if (segment == null)
+                {
+                    segment = NewSegment(ModelBrush(model), model == "ec");
+                    QualityChart.Children.Add(segment);
                 }
-                segment ??= NewSegment(ModelBrush(model), model == "ec");
                 segment.Points.Add(new Windows.Foundation.Point(X(point.Time), Y(point.Quality)));
                 previous = point.Time;
+                prevSeg = point.Segment;
             }
         }
         // 最佳时刻标记（菱形）。
@@ -1466,38 +1789,38 @@ public sealed partial class MainWindow
         LedgerColumn[] columns =
         [
             new(L10n.T("时间"), 88, item => TimeLabel(Text(item, "valid_time_local"))),
-            new(L10n.T("质量"), 68, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("质量"), 68, item => !IsStepValid(item) ? "—"
                 : QualityText(item["instant_quality_index"], 3)),
-            new(L10n.T("档位"), 92, item => BoolValue(item, "valid") == false ? L10n.T("缺测")
+            new(L10n.T("档位"), 118, item => !IsStepValid(item) ? L10n.T("外推窗外/未判断")
                 : Text(item, "instant_quality_level") is { Length: > 0 } level ? level : "—"),
             new(L10n.T("可烧"), 52, item =>
             {
                 var burnable = BoolValue(item, "physically_burnable");
-                return BoolValue(item, "valid") == false || burnable == null ? "—"
+                return !IsStepValid(item) || burnable == null ? "—"
                     : burnable == true ? "✓" : "×";
             }),
-            new(L10n.T("可烧云量"), 84, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("可烧云量"), 84, item => !IsStepValid(item) ? "—"
                 : RatioText(item["burnable_cloud_coverage"])),
-            new(L10n.T("主导压力族"), 96, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("主导压力族"), 96, item => !IsStepValid(item) ? "—"
                 : FamilyLabel(item["dominant_burnable_pressure_family"]) is { Length: > 0 } family
                     ? family : "—"),
-            new(L10n.T("云底–云顶 ASL"), 120, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("云底–云顶 ASL"), 120, item => !IsStepValid(item) ? "—"
                 : AslRangeLabel(item)),
-            new(L10n.T("云层 AGL"), 112, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("云层 AGL"), 112, item => !IsStepValid(item) ? "—"
                 : CloudLayerAgl(item)),
-            new(L10n.T("亮度颜色"), 68, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("亮度颜色"), 68, item => !IsStepValid(item) ? "—"
                 : RatioText(item["brightness_color"])),
-            new(L10n.T("可烧比例"), 68, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("可烧比例"), 68, item => !IsStepValid(item) ? "—"
                 : RatioText(item["forward_burnable_cloud_ratio"])),
-            new(L10n.T("回程透过率"), 76, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("回程透过率"), 76, item => !IsStepValid(item) ? "—"
                 : RatioText(item["observer_return_transmission"])),
-            new(L10n.T("入射阻挡"), 72, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("入射阻挡"), 72, item => !IsStepValid(item) ? "—"
                 : RatioText(item["solar_incoming_block_risk"])),
-            new("AOD 550", 72, item => BoolValue(item, "valid") == false ? "—"
+            new("AOD 550", 72, item => !IsStepValid(item) ? "—"
                 : QualityText(item["quality_aod550"], 2)),
-            new(L10n.T("太阳仰角"), 78, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("太阳仰角"), 78, item => !IsStepValid(item) ? "—"
                 : QualityText(item["solar_elevation_deg"], 1) + "°"),
-            new(L10n.T("场景"), 138, item => BoolValue(item, "valid") == false ? "—"
+            new(L10n.T("场景"), 138, item => !IsStepValid(item) ? "—"
                 : Text(item, "selected_regime") is { Length: > 0 } scene ? scene : "—"),
         ];
         var header = BuildLedgerRow(null, columns, -1, "", false);
@@ -1508,15 +1831,17 @@ public sealed partial class MainWindow
             Background = (Brush)Application.Current.Resources["DividerStrokeColorDefaultBrush"],
         });
         var allSteps = (report?["steps"] as JsonArray ?? []).OfType<JsonObject>().ToList();
-        var hiddenInvalidCount = allSteps.Count(step => BoolValue(step, "valid") == false);
-        var visibleSteps = showInvalidLedgerSteps
+        var hiddenInvalidCount = allSteps.Count(step => !IsStepValid(step));
+        var hasValidSteps = allSteps.Any(IsStepValid);
+        var showInvalid = showInvalidLedgerSteps || !hasValidSteps;
+        var visibleSteps = showInvalid
             ? allSteps
-            : allSteps.Where(step => BoolValue(step, "valid") != false).ToList();
+            : allSteps.Where(IsStepValid).ToList();
         for (var index = 0; index < visibleSteps.Count; index++)
         {
             var step = visibleSteps[index];
             var local = Text(step, "valid_time_local");
-            var valid = BoolValue(step, "valid") != false;
+            var valid = IsStepValid(step);
             var rowButton = BuildLedgerRow(step, columns, index, bestTime, valid && local.Length > 0);
             if (local.Length > 0 && local == pointSelectedTime)
                 rowButton.Background = (Brush)Application.Current.Resources["SubtleFillColorSecondaryBrush"];
@@ -1552,7 +1877,7 @@ public sealed partial class MainWindow
             FontSize = 9, Opacity = .6, TextWrapping = TextWrapping.Wrap,
             VerticalAlignment = VerticalAlignment.Center,
         });
-        if (hiddenInvalidCount > 0)
+        if (hasValidSteps && hiddenInvalidCount > 0)
         {
             var toggleText = showInvalidLedgerSteps
                 ? L10n.T("隐藏未判断时次")
@@ -1583,30 +1908,35 @@ public sealed partial class MainWindow
         string bestTime, bool clickable)
     {
         var row = new Grid { ColumnSpacing = 0 };
-        foreach (var column in columns)
+        for (var colIndex = 0; colIndex < columns.Length; colIndex++)
         {
+            var column = columns[colIndex];
             var text = item == null ? column.Title
-                : BoolValue(item, "valid") == false && column.WarnInvalid ? column.Render(item)
+                : !IsStepValid(item) && column.WarnInvalid ? column.Render(item)
                 : column.Render(item);
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(column.Width) });
             var cell = new TextBlock
             {
                 Text = text,
                 FontSize = 11,
+                Padding = new Thickness(6, 0, 6, 0),
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                MaxLines = 1,
                 VerticalAlignment = VerticalAlignment.Center,
                 Opacity = item == null ? .7 : 1,
                 FontWeight = item == null ? Microsoft.UI.Text.FontWeights.SemiBold
                     : Microsoft.UI.Text.FontWeights.Normal,
             };
-            if (item != null && column.Title == "时间" && Text(item, "valid_time_local") == bestTime
+            if (item != null && column.Title == L10n.T("时间") && Text(item, "valid_time_local") == bestTime
                 && bestTime.Length > 0)
             {
                 cell.Text = $"{cell.Text} ★";
-                cell.Foreground = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
+                cell.Foreground = ThemeBrush("FireSkyAccentBrush");
             }
+            Grid.SetColumn(cell, colIndex);
             row.Children.Add(cell);
         }
-        if (item != null && BoolValue(item, "valid") == false)
+        if (item != null && !IsStepValid(item))
         {
             foreach (var child in row.Children.OfType<TextBlock>())
                 if (child.Text.Length == 0 || child.Text == "—")
@@ -1621,7 +1951,7 @@ public sealed partial class MainWindow
             BorderThickness = new Thickness(0),
             Background = new SolidColorBrush(Colors.Transparent),
             IsEnabled = clickable,
-            MinWidth = 1284,
+            MinWidth = 1310,
         };
         if (clickable && item != null)
         {
@@ -1844,35 +2174,658 @@ public sealed partial class MainWindow
         if (actions.Children.Count > 0) DiagnosticPanel.Children.Add(actions);
     }
 
-    // ---------- 大气剖面页（点预测冻结剖面查询 + 剖面图层） ----------
+    // ---------- 大气剖面页（v3 平滑剖面 + 冻结剖面查询 + 交互悬停） ----------
+
+    private sealed record CrossSectionParsed(
+        double[] Distances,
+        int[] Levels,
+        double?[][] Heights,
+        double?[][] Temps,
+        double?[][] Rh,
+        double?[][] Amounts,
+        double?[][] Presence,
+        double?[][] Fractions,
+        int[][] FamilyCodes,
+        int[][] Statuses,
+        double?[][] LayerBases,
+        double?[][] LayerTops,
+        double[] Terrain,
+        double[] RequiredAsl,
+        List<JsonObject> Targets);
+
+    private sealed record ColumnStratum(double BaseAsl, double TopAsl, double Amount, int Status);
+
+    private sealed record CloudRunPoint(int SampleIndex, double Cx, double TopY, double BottomY, ColumnStratum Stratum);
+
+    private static CrossSectionParsed? ParseCrossSection(JsonObject section)
+    {
+        var distances = (section["distances_km"] as JsonArray ?? [])
+            .Select(DoubleValue)
+            .Where(v => v.HasValue)
+            .Select(v => v!.Value)
+            .ToArray();
+        if (distances.Length == 0) return null;
+        var fields = section["fields"] as JsonObject ?? new JsonObject();
+        double?[][] Grid(string key) =>
+            (fields[key] as JsonArray ?? [])
+                .Select(row => (row as JsonArray ?? [])
+                    .Select(DoubleValue).ToArray()).ToArray();
+        int[][] IntGrid(string key) =>
+            (fields[key] as JsonArray ?? [])
+                .Select(row => (row as JsonArray ?? [])
+                    .Select(cell => (int?)DoubleValue(cell) ?? 0).ToArray()).ToArray();
+        var levels = (section["pressure_levels_hpa"] as JsonArray ?? [])
+            .Select(node => (int?)DoubleValue(node) ?? 0).ToArray();
+        var terrain = (section["terrain_elevation_asl_m"] as JsonArray ?? [])
+            .Select(DoubleValue).Where(v => v.HasValue).Select(v => v!.Value).ToArray();
+        var required = (section["required_illumination_base_asl_m"] as JsonArray ?? [])
+            .Select(DoubleValue).Where(v => v.HasValue).Select(v => v!.Value).ToArray();
+        var targets = (section["theoretical_targets"] as JsonArray ?? [])
+            .OfType<JsonObject>().ToList();
+        return new CrossSectionParsed(
+            distances, levels,
+            Grid("geopotential_height_asl_m"),
+            Grid("temperature_c"),
+            Grid("rh_percent"),
+            Grid("cloud_amount"),
+            Grid("cloud_presence"),
+            Grid("cloud_fraction_percent"),
+            IntGrid("pressure_family_code"),
+            IntGrid("cloud_layer_status"),
+            Grid("cloud_layer_base_asl_m"),
+            Grid("cloud_layer_top_asl_m"),
+            terrain, required, targets);
+    }
+
+    private static double? ScalarAt(double?[][] grid, int sample, int level) =>
+        sample >= 0 && sample < grid.Length && level >= 0 && level < grid[sample].Length
+            ? grid[sample][level] : null;
+
+    private static int IntAt(int[][] grid, int sample, int level) =>
+        sample >= 0 && sample < grid.Length && level >= 0 && level < grid[sample].Length
+            ? grid[sample][level] : 0;
+
+    private static ColumnStratum? ColumnStratumAt(CrossSectionParsed data, int sample, int family)
+    {
+        var cloudyLevels = new List<int>();
+        for (var l = 0; l < data.Levels.Length; l++)
+        {
+            if (IntAt(data.FamilyCodes, sample, l) != family) continue;
+            var amt = ScalarAt(data.Amounts, sample, l)
+                ?? Math.Max(ScalarAt(data.Presence, sample, l) ?? 0, (ScalarAt(data.Fractions, sample, l) ?? 0) / 100.0);
+            if (amt >= 0.06) cloudyLevels.Add(l);
+        }
+        if (cloudyLevels.Count == 0) return null;
+
+        var bases = cloudyLevels.Select(l => ScalarAt(data.LayerBases, sample, l)).Where(v => v.HasValue).Select(v => v!.Value).ToList();
+        var tops = cloudyLevels.Select(l => ScalarAt(data.LayerTops, sample, l)).Where(v => v.HasValue).Select(v => v!.Value).ToList();
+        var heights = cloudyLevels.Select(l => ScalarAt(data.Heights, sample, l)).Where(v => v.HasValue).Select(v => v!.Value).ToList();
+        double? layerBase = bases.Count > 0 ? bases.Min() : (heights.Count > 0 ? heights.Min() - 700.0 : null);
+        double? layerTop = tops.Count > 0 ? tops.Max() : (heights.Count > 0 ? heights.Max() + 700.0 : null);
+        if (layerBase is not { } b || layerTop is not { } t || t <= b) return null;
+
+        var amountMax = cloudyLevels.Select(l =>
+            ScalarAt(data.Amounts, sample, l)
+            ?? Math.Max(ScalarAt(data.Presence, sample, l) ?? 0, (ScalarAt(data.Fractions, sample, l) ?? 0) / 100.0)).Max();
+        var status = cloudyLevels.Select(l => IntAt(data.Statuses, sample, l)).Max();
+        return new ColumnStratum(b, t, Math.Max(0.06, amountMax), status);
+    }
+
+    private void ResetCrossSectionVisuals()
+    {
+        activeCrossSection = null;
+        activeCrossSectionIsNowcast = false;
+        crossSectionZoomScale = 1.0;
+        UpdateCrossSectionZoomControls();
+        if (ProfileTitleText != null) ProfileTitleText.Text = L10n.T("太阳方向大气剖面");
+        if (ProfileStatus != null) ProfileStatus.Text = L10n.T("等待预测");
+        if (FrozenProfileButton != null) FrozenProfileButton.Visibility = Visibility.Collapsed;
+        if (ProfileTakeawayBanner != null) ProfileTakeawayBanner.Visibility = Visibility.Collapsed;
+        if (ProfileControlsBar != null) ProfileControlsBar.Visibility = Visibility.Collapsed;
+        if (PointCrossSection != null)
+        {
+            PointCrossSection.Children.Clear();
+            PointCrossSection.Visibility = Visibility.Collapsed;
+        }
+        if (CrossSectionCrosshair != null) CrossSectionCrosshair.Visibility = Visibility.Collapsed;
+        if (CrossSectionHoverCard != null) CrossSectionHoverCard.Visibility = Visibility.Collapsed;
+        if (PointCrossSectionLegendScroll != null) PointCrossSectionLegendScroll.Visibility = Visibility.Collapsed;
+        if (PointCloudGenusBar != null) PointCloudGenusBar.Visibility = Visibility.Collapsed;
+        if (PointTargetsHost != null)
+        {
+            PointTargetsHost.Children.Clear();
+            PointTargetsHost.Visibility = Visibility.Collapsed;
+        }
+        if (PointProfileNote != null) PointProfileNote.Text = "";
+        if (NowcastFrozenExpander != null) NowcastFrozenExpander.Visibility = Visibility.Collapsed;
+    }
 
     private void RenderPointProfileTab()
     {
+        if (NowcastFrozenExpander != null) NowcastFrozenExpander.Visibility = Visibility.Collapsed;
+        if (ProfileTitleText != null) ProfileTitleText.Text = L10n.T("太阳方向大气剖面");
         var report = SelectedReport();
         ProfileStatus.Text = L10n.T("周期 ") + Text(report, "cycle_time_utc");
         var source = report?["profile_source"] as JsonObject;
         var available = source != null && BoolValue(source, "available") == true;
+        FrozenProfileButton.Content = L10n.T("刷新冻结剖面");
         FrozenProfileButton.Visibility = available && resultKind == "point"
             ? Visibility.Visible : Visibility.Collapsed;
+
+        var section = frozenProfileState == "ready" && frozenProfile != null
+            ? frozenProfile
+            : report?["cross_section"] as JsonObject;
+        if (section != null)
+        {
+            RenderPointCrossSectionChrome(section, report);
+            PointProfileNote.Text = frozenProfileState switch
+            {
+                "loading" => L10n.T("正在读取冻结剖面…"),
+                "error" or "unavailable" or "cancelled" => frozenProfileError,
+                _ => "",
+            };
+            PointProfileNote.Foreground = frozenProfileState is "error" or "unavailable"
+                ? new SolidColorBrush(Colors.Red)
+                : (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+            return;
+        }
+
+        if (ProfileTakeawayBanner != null) ProfileTakeawayBanner.Visibility = Visibility.Collapsed;
+        if (ProfileControlsBar != null) ProfileControlsBar.Visibility = Visibility.Collapsed;
+        if (PointCrossSectionLegendScroll != null) PointCrossSectionLegendScroll.Visibility = Visibility.Collapsed;
+        if (PointCloudGenusBar != null) PointCloudGenusBar.Visibility = Visibility.Collapsed;
+        if (PointTargetsHost != null) PointTargetsHost.Visibility = Visibility.Collapsed;
+        activeCrossSection = null;
+        activeCrossSectionIsNowcast = false;
+        PointCrossSection.Visibility = Visibility.Collapsed;
+
         if (frozenProfileState == "idle")
         {
             PointProfileNote.Text = available
-                ? L10n.T("点击「读取冻结剖面」查看该结果的太阳方向诊断。")
+                ? L10n.T("点击「刷新冻结剖面」查看该结果的太阳方向诊断。")
                 : L10n.T("该结果没有可查询的冻结剖面。");
-            PointCrossSection.Visibility = Visibility.Collapsed;
+            PointProfileNote.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
         }
-        RenderFrozenProfile();
+        else
+        {
+            RenderFrozenProfile();
+        }
     }
 
-    private async void OnQueryPointProfile(object sender, RoutedEventArgs args)
+    private void RenderPointCrossSectionChrome(JsonObject section, JsonObject? report)
     {
-        await QueryPointProfile();
+        activeCrossSection = section;
+        activeCrossSectionIsNowcast = false;
+        var parsed = ParseCrossSection(section);
+        if (parsed == null)
+        {
+            PointCrossSection.Visibility = Visibility.Collapsed;
+            ProfileTakeawayBanner.Visibility = Visibility.Collapsed;
+            ProfileControlsBar.Visibility = Visibility.Collapsed;
+            PointCrossSectionLegendScroll.Visibility = Visibility.Collapsed;
+            PointProfileNote.Text = L10n.T("后端未返回可绘制的剖面字段；可在诊断中查看理论目标与照明基准。");
+            return;
+        }
+
+        // 1. 一图看懂横幅
+        var (takeawayText, takeawayStatus) = BuildCrossSectionTakeaway(section, parsed);
+        var accentColor = takeawayStatus == 3
+            ? ColorFrom(0xF5, 0x6B, 0x2E)
+            : takeawayStatus == 2 ? ColorFrom(0xDB, 0x8F, 0x33) : ColorFrom(0x7A, 0x86, 0x99);
+        var isDark = Root?.ActualTheme == ElementTheme.Dark;
+        ProfileTakeawayBanner.Visibility = Visibility.Visible;
+        ProfileTakeawayBanner.Background = new SolidColorBrush(Windows.UI.Color.FromArgb(
+            (byte)(takeawayStatus == 0 ? 15 : isDark ? 36 : 23), accentColor.R, accentColor.G, accentColor.B));
+        ProfileTakeawayBanner.BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(
+            (byte)(takeawayStatus == 0 ? 46 : 92), accentColor.R, accentColor.G, accentColor.B));
+        ProfileTakeawayIcon.Glyph = takeawayStatus == 3 ? "\uE706" : takeawayStatus == 2 ? "\uE753" : "\uE946";
+        ProfileTakeawayIcon.Foreground = new SolidColorBrush(accentColor);
+        ProfileTakeawayText.Text = takeawayText;
+
+        // 2. 遥测胶囊 + 等压线开关
+        crossSectionShowIsobars = pointShowIsobars;
+        ProfileControlsBar.Visibility = Visibility.Visible;
+        ProfileTelemetryPills.Children.Clear();
+        AddTelemetryPill(ProfileTelemetryPills, L10n.T("仰角"), NumText(section["solar_elevation_deg"], 1, "°"));
+        AddTelemetryPill(ProfileTelemetryPills, L10n.T("方位"), NumText(section["solar_azimuth_deg"], 1, "°"));
+        AddTelemetryPill(ProfileTelemetryPills, L10n.T("范围"), NumText(section["analysis_radius_km"], 1, " km"));
+        AddTelemetryPill(ProfileTelemetryPills, L10n.T("时次"), TimeLabel(Text(section, "valid_time_local")));
+        UpdateCrossSectionZoomControls();
+        if (ProfileIsobarsToggle != null)
+        {
+            ProfileIsobarsToggle.Visibility = parsed.Levels.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+            ProfileIsobarsToggle.IsChecked = crossSectionShowIsobars;
+        }
+
+        // 3. 主画布
+        PointCrossSection.Visibility = Visibility.Visible;
+        ResizePointCrossSectionChart();
+        DrawCrossSection(PointCrossSection, section, crossSectionShowIsobars);
+
+        // 4. 单行图例
+        RenderCrossSectionLegend();
+
+        // 5. 云属代理单行条
+        var genusProxy = report?["cloud_genus_proxy"] as JsonObject;
+        if (genusProxy != null)
+        {
+            var label = Text(genusProxy, "label");
+            if (label.Length == 0) label = "unknown";
+            var conf = DoubleValue(genusProxy["confidence"]) is { } c ? $" {(int)Math.Round(c * 100)}%" : "";
+            string mainText;
+            if (label != "unknown")
+                mainText = $"{GenusLabel(label)}{conf}";
+            else
+            {
+                var compat = string.Join("、", (genusProxy["compatible_genera"] as JsonArray ?? [])
+                    .Select(StringOrNull).Where(s => !string.IsNullOrEmpty(s)).Select(s => GenusLabel(s!)));
+                mainText = compat.Length > 0 ? $"{L10n.T("兼容")}：{compat}" : L10n.T("未定");
+            }
+            var candidates = "";
+            if (genusProxy["candidate_scores"] is JsonObject scores)
+            {
+                var top3 = scores
+                    .Select(kv => (Key: kv.Key, Score: DoubleValue(kv.Value)))
+                    .Where(item => item.Score.HasValue)
+                    .OrderByDescending(item => item.Score!.Value)
+                    .Take(3)
+                    .Select(item => $"{GenusLabel(item.Key)} {(int)Math.Round(item.Score!.Value * 100)}%")
+                    .ToList();
+                if (top3.Count > 0) candidates = $" · {L10n.T("候选")}：{string.Join(" · ", top3)}";
+            }
+            PointCloudGenusText.Text = $"{L10n.T("云属代理")}  {mainText}{candidates}";
+            PointCloudGenusBar.Visibility = Visibility.Visible;
+            ToolTipService.SetToolTip(PointCloudGenusBar,
+                L10n.T("依据压力层、相态与云层几何的模型云属代理，不代表卫星或人工云属观测。"));
+        }
+        else
+        {
+            PointCloudGenusBar.Visibility = Visibility.Collapsed;
+        }
+
+        // 6. 理论候选云层（精简胶囊）
+        RenderTargetsStrip(parsed.Targets);
     }
+
+    private void AddTelemetryPill(StackPanel host, string label, string value)
+    {
+        var pill = new Border
+        {
+            Padding = new Thickness(8, 3, 8, 3),
+            CornerRadius = new CornerRadius(12),
+            Background = ThemeBrush("FireSkyGroupedCardBrush"),
+            BorderBrush = ThemeBrush("FireSkyGroupedBorderBrush"),
+            BorderThickness = new Thickness(1),
+            Child = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                Spacing = 4,
+                Children =
+                {
+                    new TextBlock { Text = label, FontSize = 10, Opacity = .65 },
+                    new TextBlock { Text = value, FontSize = 10.5, FontWeight = Microsoft.UI.Text.FontWeights.Medium },
+                },
+            },
+        };
+        host.Children.Add(pill);
+    }
+
+    private static (string Text, int Status) BuildCrossSectionTakeaway(JsonObject section, CrossSectionParsed data)
+    {
+        var az = DoubleValue(section["solar_azimuth_deg"]) is { } a ? $"{a:0}°" : "—";
+        var el = DoubleValue(section["solar_elevation_deg"]) is { } e ? $"{e:0.0}°" : "—";
+        var prefix = L10n.IsEnglish ? $"Sun Az {az} · El {el}" : $"太阳方位 {az} · 仰角 {el}";
+
+        var litDistances = new List<double>();
+        var litBases = new List<double>();
+        var litFamilies = new HashSet<int>();
+        var hasOccluded = false;
+        for (var i = 0; i < data.Distances.Length; i++)
+        {
+            for (var fam = 1; fam <= 3; fam++)
+            {
+                if (ColumnStratumAt(data, i, fam) is not { } stratum) continue;
+                if (stratum.Status == 3)
+                {
+                    litDistances.Add(data.Distances[i]);
+                    litBases.Add(stratum.BaseAsl);
+                    litFamilies.Add(fam);
+                }
+                else if (stratum.Status == 2)
+                {
+                    hasOccluded = true;
+                }
+            }
+        }
+        if (litDistances.Count > 0)
+        {
+            var minD = litDistances.Min(); var maxD = litDistances.Max();
+            var minB = litBases.Min(); var maxB = litBases.Max();
+            string FamName(int f) => L10n.IsEnglish
+                ? (f == 1 ? "High" : f == 2 ? "Mid" : "Low")
+                : (f == 1 ? "高" : f == 2 ? "中" : "低");
+            var fams = string.Join("/", new[] { 3, 2, 1 }.Where(litFamilies.Contains).Select(FamName));
+            var distText = Math.Abs(maxD - minD) < 1 ? $"{minD:0}" : $"{minD:0}–{maxD:0}";
+            var baseText = Math.Abs(maxB - minB) < 150 ? $"{minB / 1000:0.0}" : $"{minB / 1000:0.0}–{maxB / 1000:0.0}";
+            var detail = L10n.IsEnglish
+                ? $"{fams} cloud base at ~{distText} km ({baseText} km ASL) is sunlit & visible"
+                : $"约 {distText} km 处{fams}云底（{baseText} km）进入受光区且通视";
+            return ($"{prefix} · {detail}", 3);
+        }
+        if (hasOccluded)
+        {
+            var detail = L10n.IsEnglish
+                ? "Far-field clouds reach sunlit altitude, but sightline is occluded by foreground clouds or terrain"
+                : "远场云层达到受光高度，但观测视线受前段云层或地形遮挡";
+            return ($"{prefix} · {detail}", 2);
+        }
+        var noneDetail = L10n.IsEnglish
+            ? "No cloud layers along the solar path meet both sunlit and line-of-sight criteria"
+            : "沿太阳光路暂无同时满足受光高度与通视条件的云层";
+        return ($"{prefix} · {noneDetail}", 0);
+    }
+
+    private void RenderCrossSectionLegend()
+    {
+        if (PointCrossSectionLegend == null || PointCrossSectionLegendScroll == null) return;
+        PointCrossSectionLegend.Children.Clear();
+        PointCrossSectionLegendScroll.Visibility = Visibility.Visible;
+
+        void AddItem(FrameworkElement swatch, string label)
+        {
+            var item = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5, VerticalAlignment = VerticalAlignment.Center };
+            item.Children.Add(swatch);
+            item.Children.Add(new TextBlock { Text = label, FontSize = 10, Opacity = .75 });
+            PointCrossSectionLegend.Children.Add(item);
+        }
+
+        // 火烧云受光云底
+        var fireGrad = new LinearGradientBrush
+        {
+            StartPoint = new Windows.Foundation.Point(0, 0),
+            EndPoint = new Windows.Foundation.Point(0, 1),
+        };
+        fireGrad.GradientStops.Add(new GradientStop { Color = ColorFrom(0xB8, 0xD6, 0xF0), Offset = 0 });
+        fireGrad.GradientStops.Add(new GradientStop { Color = ColorFrom(0xF5, 0x5D, 0x28), Offset = 1 });
+        AddItem(new Border { Width = 14, Height = 8, CornerRadius = new CornerRadius(2), Background = fireGrad },
+            L10n.T("火烧云受光云底"));
+
+        // 高/中/低云层
+        var strataSwatch = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 2 };
+        strataSwatch.Children.Add(new Border { Width = 5, Height = 7, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(ColorFrom(0xB8, 0xD9, 0xF5)) });
+        strataSwatch.Children.Add(new Border { Width = 5, Height = 7, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(ColorFrom(0x7A, 0xBD, 0xC7)) });
+        strataSwatch.Children.Add(new Border { Width = 5, Height = 7, CornerRadius = new CornerRadius(2), Background = new SolidColorBrush(ColorFrom(0x75, 0x82, 0x91)) });
+        AddItem(strataSwatch, L10n.T("高/中/低云层"));
+
+        // 受光区/地影区
+        var corrGrad = new LinearGradientBrush
+        {
+            StartPoint = new Windows.Foundation.Point(0, 0),
+            EndPoint = new Windows.Foundation.Point(0, 1),
+        };
+        corrGrad.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb(110, 250, 166, 66), Offset = 0 });
+        corrGrad.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb(120, 31, 46, 77), Offset = 1 });
+        AddItem(new Border { Width = 14, Height = 8, CornerRadius = new CornerRadius(2), Background = corrGrad },
+            L10n.T("受光区/地影区"));
+
+        // 受光高度线 / 受光被遮挡
+        AddItem(new Line { X1 = 0, X2 = 14, Y1 = 4, Y2 = 4, Width = 14, Height = 8, StrokeThickness = 1.6, Stroke = new SolidColorBrush(ColorFrom(0xEB, 0x96, 0x30)), StrokeDashArray = [3.5, 2.5] },
+            L10n.T("受光高度线"));
+        AddItem(new Line { X1 = 0, X2 = 14, Y1 = 4, Y2 = 4, Width = 14, Height = 8, StrokeThickness = 1.4, Stroke = new SolidColorBrush(ColorFrom(0xE0, 0x94, 0x33)), StrokeDashArray = [2.5, 2] },
+            L10n.T("受光被遮挡"));
+
+        // 地形与视线
+        var terrainSwatch = new Grid { Width = 14, Height = 8 };
+        terrainSwatch.Children.Add(new Border { Height = 4, VerticalAlignment = VerticalAlignment.Bottom, Background = new SolidColorBrush(ColorFrom(0x69, 0x75, 0x73)) });
+        terrainSwatch.Children.Add(new Line { X1 = 1, Y1 = 6, X2 = 13, Y2 = 1, StrokeThickness = 1.2, Stroke = new SolidColorBrush(ColorFrom(0xFC, 0x9E, 0x47)), StrokeDashArray = [2, 2] });
+        AddItem(terrainSwatch, L10n.T("地形与视线"));
+    }
+
+    private void RenderTargetsStrip(List<JsonObject> targets)
+    {
+        if (PointTargetsHost == null) return;
+        PointTargetsHost.Children.Clear();
+        if (targets.Count == 0)
+        {
+            PointTargetsHost.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var burnable = targets.Where(t => Text(t, "status") == "burnable").ToList();
+        PointTargetsHost.Visibility = Visibility.Visible;
+        PointTargetsHost.Children.Add(new TextBlock
+        {
+            Text = L10n.IsEnglish
+                ? "Sunlit & terrain-visible candidates (cloud occlusion not evaluated)"
+                : "受光与几何/地形可见候选（未评估云遮挡）",
+            FontSize = 10.5,
+            FontWeight = Microsoft.UI.Text.FontWeights.Medium,
+        });
+        if (burnable.Count > 0)
+        {
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 6 };
+            foreach (var target in burnable.Take(6))
+            {
+                var fam = Text(target, "pressure_family") switch
+                {
+                    "high" => L10n.T("高云族"), "middle" => L10n.T("中云族"), "low" => L10n.T("低云族"),
+                    _ => Text(target, "pressure_family_label") is { Length: > 0 } l ? l : L10n.T("云层"),
+                };
+                var dist = NumText(target["distance_km"], 0, " km");
+                var baseKm = DoubleValue(target["cloud_base_asl_m"]) is { } b ? $"{b / 1000:0.0}" : "—";
+                var topKm = DoubleValue(target["cloud_top_asl_m"]) is { } t ? $"{t / 1000:0.0}" : "—";
+                row.Children.Add(new Border
+                {
+                    Padding = new Thickness(7, 3, 7, 3),
+                    CornerRadius = new CornerRadius(5),
+                    Background = new SolidColorBrush(Windows.UI.Color.FromArgb(20, 240, 107, 54)),
+                    BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(105, 240, 107, 54)),
+                    BorderThickness = new Thickness(1),
+                    Child = new TextBlock { Text = $"{fam} · {dist} · ASL {baseKm}–{topKm} km", FontSize = 10 },
+                });
+            }
+            PointTargetsHost.Children.Add(new ScrollViewer
+            {
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Auto,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                Content = row,
+            });
+        }
+        else if (targets.FirstOrDefault(t => Text(t, "status") != "burnable") is { } diag)
+        {
+            var reason = Text(diag, "status_reason") is { Length: > 0 } r ? r : L10n.T("状态原因未提供");
+            PointTargetsHost.Children.Add(new TextBlock
+            {
+                Text = $"当前太阳方向没有可烧目标云：{reason}",
+                FontSize = 10, Opacity = .7, TextWrapping = TextWrapping.Wrap,
+            });
+        }
+    }
+
+    private void OnProfileIsobarsToggled(object sender, RoutedEventArgs args)
+    {
+        crossSectionShowIsobars = ProfileIsobarsToggle?.IsChecked == true;
+        if (activeCrossSectionIsNowcast) nowcastShowIsobars = crossSectionShowIsobars;
+        else pointShowIsobars = crossSectionShowIsobars;
+        if (activeCrossSection == null || PointCrossSection == null) return;
+        if (activeCrossSectionIsNowcast)
+            DrawNowcastProfileHeatmap(activeCrossSection, crossSectionShowIsobars);
+        else
+            DrawCrossSection(PointCrossSection, activeCrossSection, crossSectionShowIsobars);
+    }
+
+    private void OnProfileZoomOut(object sender, RoutedEventArgs args) =>
+        SetCrossSectionZoom(crossSectionZoomScale - 0.25);
+
+    private void OnProfileZoomIn(object sender, RoutedEventArgs args) =>
+        SetCrossSectionZoom(crossSectionZoomScale + 0.25);
+
+    private void OnProfileZoomReset(object sender, RoutedEventArgs args) =>
+        SetCrossSectionZoom(1.0, resetScroll: true);
+
+    private void SetCrossSectionZoom(double scale, bool resetScroll = false)
+    {
+        crossSectionZoomScale = Math.Clamp(Math.Round(scale * 4) / 4, 1.0, 2.5);
+        UpdateCrossSectionZoomControls();
+        ResizePointCrossSectionChart(resetScroll || crossSectionZoomScale == 1.0);
+        if (CrossSectionCrosshair != null) CrossSectionCrosshair.Visibility = Visibility.Collapsed;
+        if (CrossSectionHoverCard != null) CrossSectionHoverCard.Visibility = Visibility.Collapsed;
+        if (activeCrossSection == null || PointCrossSection?.Visibility != Visibility.Visible) return;
+        if (activeCrossSectionIsNowcast)
+            DrawNowcastProfileHeatmap(activeCrossSection, crossSectionShowIsobars);
+        else
+            DrawCrossSection(PointCrossSection, activeCrossSection, crossSectionShowIsobars);
+    }
+
+    private void UpdateCrossSectionZoomControls()
+    {
+        if (ProfileZoomText == null) return;
+        ProfileZoomText.Text = $"{(int)Math.Round(crossSectionZoomScale * 100)}%";
+        ProfileZoomOutButton.IsEnabled = crossSectionZoomScale > 1.0;
+        ProfileZoomInButton.IsEnabled = crossSectionZoomScale < 2.5;
+        ProfileZoomResetButton.IsEnabled = crossSectionZoomScale > 1.0;
+    }
+
+    private void ResizePointCrossSectionChart(bool resetScroll = false)
+    {
+        if (PointCrossSectionScrollViewer == null || PointCrossSection == null) return;
+        var viewportWidth = PointCrossSectionScrollViewer.ActualWidth;
+        var viewportHeight = PointCrossSectionScrollViewer.ActualHeight;
+        if (viewportWidth <= 120 || viewportHeight <= 120) return;
+
+        PointCrossSection.Width = Math.Max(220, viewportWidth * crossSectionZoomScale);
+        PointCrossSection.Height = Math.Max(180, viewportHeight);
+        if (resetScroll) PointCrossSectionScrollViewer.ChangeView(0, null, null, true);
+    }
+
+    private void OnCrossSectionSizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        if (activeCrossSection == null || PointCrossSection == null || PointCrossSection.Visibility != Visibility.Visible)
+            return;
+        ResizePointCrossSectionChart();
+        if (activeCrossSectionIsNowcast)
+            DrawNowcastProfileHeatmap(activeCrossSection, crossSectionShowIsobars);
+        else
+            DrawCrossSection(PointCrossSection, activeCrossSection, crossSectionShowIsobars);
+    }
+
+    private void OnCrossSectionPointerMoved(object sender, PointerRoutedEventArgs args)
+    {
+        if (activeCrossSection == null || PointCrossSectionContainer == null
+            || PointCrossSection.Visibility != Visibility.Visible)
+        {
+            if (CrossSectionCrosshair != null) CrossSectionCrosshair.Visibility = Visibility.Collapsed;
+            if (CrossSectionHoverCard != null) CrossSectionHoverCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+        var viewportPos = args.GetCurrentPoint(PointCrossSectionContainer).Position;
+        var contentPos = new Windows.Foundation.Point(
+            viewportPos.X + PointCrossSectionScrollViewer.HorizontalOffset, viewportPos.Y);
+        var viewportWidth = Math.Max(120, PointCrossSectionScrollViewer.ActualWidth);
+        var width = Math.Max(120, PointCrossSection.Width is > 120 and var canvasWidth
+            ? canvasWidth : PointCrossSection.ActualWidth);
+        var height = Math.Max(120, PointCrossSectionContainer.ActualHeight);
+        double left = 44;
+        double right = width - (crossSectionShowIsobars ? 48.0 : 16.0);
+        double top = 14;
+        double bottom = height - 24;
+        if (right <= left + 10 || bottom <= top + 10
+            || viewportPos.X < 0 || viewportPos.X > viewportWidth
+            || contentPos.X < left || contentPos.X > right
+            || contentPos.Y < top || contentPos.Y > bottom)
+        {
+            CrossSectionCrosshair.Visibility = Visibility.Collapsed;
+            CrossSectionHoverCard.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        CrossSectionCrosshair.X1 = viewportPos.X;
+        CrossSectionCrosshair.X2 = viewportPos.X;
+        CrossSectionCrosshair.Y1 = top;
+        CrossSectionCrosshair.Y2 = bottom;
+        CrossSectionCrosshair.Visibility = Visibility.Visible;
+
+        CrossSectionHoverHost.Children.Clear();
+        if (activeCrossSectionIsNowcast)
+        {
+            PopulateNowcastHoverCard(activeCrossSection, contentPos, left, right, top, bottom);
+        }
+        else
+        {
+            PopulatePointHoverCard(activeCrossSection, (contentPos.X - left) / (right - left));
+        }
+        CrossSectionHoverCard.Visibility = CrossSectionHoverHost.Children.Count > 0
+            ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    private void OnCrossSectionPointerExited(object sender, PointerRoutedEventArgs args)
+    {
+        if (CrossSectionCrosshair != null) CrossSectionCrosshair.Visibility = Visibility.Collapsed;
+        if (CrossSectionHoverCard != null) CrossSectionHoverCard.Visibility = Visibility.Collapsed;
+    }
+
+    private void PopulatePointHoverCard(JsonObject section, double xRatio)
+    {
+        var data = ParseCrossSection(section);
+        if (data == null || data.Distances.Length == 0) return;
+        var maxDist = Math.Max(1.0, data.Distances[^1]);
+        var targetDist = Math.Clamp(xRatio, 0, 1) * maxDist;
+        var nearestIdx = 0;
+        var bestDelta = double.MaxValue;
+        for (var i = 0; i < data.Distances.Length; i++)
+        {
+            var d = Math.Abs(data.Distances[i] - targetDist);
+            if (d < bestDelta) { bestDelta = d; nearestIdx = i; }
+        }
+        var sampleDist = data.Distances[nearestIdx];
+        var terrainText = nearestIdx < data.Terrain.Length ? $"{data.Terrain[nearestIdx]:0} m" : "—";
+        var reqText = nearestIdx < data.RequiredAsl.Length ? $"{data.RequiredAsl[nearestIdx] / 1000:0.0} km" : "—";
+        CrossSectionHoverHost.Children.Add(new TextBlock
+        {
+            Text = L10n.IsEnglish
+                ? $"{sampleDist:0} km · Terrain {terrainText} · Sunlit base {reqText}"
+                : $"{sampleDist:0} km · 地形 {terrainText} · 受光基准 {reqText}",
+            FontSize = 10.5,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        });
+
+        var hasStrata = false;
+        foreach (var fam in new[] { 1, 2, 3 })
+        {
+            if (ColumnStratumAt(data, nearestIdx, fam) is not { } stratum) continue;
+            hasStrata = true;
+            var famName = L10n.IsEnglish
+                ? (fam == 1 ? "High" : fam == 2 ? "Mid" : "Low")
+                : (fam == 1 ? "高" : fam == 2 ? "中" : "低");
+            var stText = stratum.Status == 3
+                ? L10n.T("受光可烧")
+                : stratum.Status == 2 ? L10n.T("达到受光但被遮挡") : L10n.T("地影区内");
+            var stColor = stratum.Status == 3
+                ? ColorFrom(0xF5, 0x6B, 0x2E)
+                : stratum.Status == 2 ? ColorFrom(0xE0, 0x94, 0x33) : ColorFrom(0x8A, 0x94, 0xA6);
+            var row = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 5 };
+            row.Children.Add(new Ellipse { Width = 6, Height = 6, Fill = new SolidColorBrush(stColor), VerticalAlignment = VerticalAlignment.Center });
+            row.Children.Add(new TextBlock
+            {
+                Text = $"{famName} {stratum.BaseAsl / 1000:0.0}–{stratum.TopAsl / 1000:0.0} km · {stText}",
+                FontSize = 10,
+            });
+            CrossSectionHoverHost.Children.Add(row);
+        }
+        if (!hasStrata)
+        {
+            CrossSectionHoverHost.Children.Add(new TextBlock
+            {
+                Text = L10n.T("该列无显著模式云层（缺测或低于阈值）"),
+                FontSize = 10, Opacity = .7,
+            });
+        }
+    }
+
+    private async void OnQueryPointProfile(object sender, RoutedEventArgs args) => await QueryPointProfile();
 
     private async Task QueryPointProfile()
     {
-        var selectedModel = TagOf(ResultModel.SelectedItem);
-        if (selectedModel is not ("gfs" or "ec")) selectedModel = "gfs";
+        var selectedModel = selectedResultModel is "gfs" or "ec" ? selectedResultModel : "gfs";
         if (resultKind != "point" || ModelReport(selectedModel) is not { } report)
         {
             frozenProfileState = "unavailable";
@@ -1907,7 +2860,7 @@ public sealed partial class MainWindow
     {
         var request = point
             ? BuildPointProfileQuery(report, model, lat, lon, validTimeLocal)
-            : BuildProfileQuery(report, model, lat, lon, validTimeLocal);
+            : BuildProfileQuery(report, model, lat, lon, localTime: validTimeLocal);
         frozenProfile = null;
         frozenProfileModel = model;
         frozenProfileTime = validTimeLocal;
@@ -1961,267 +2914,718 @@ public sealed partial class MainWindow
 
     private void RenderFrozenProfile()
     {
-        if (frozenProfileState != "ready" || frozenProfile == null)
+        if (resultKind == "nowcast")
         {
-            var message = frozenProfileState switch
+            if (NowcastFrozenStatus != null)
             {
-                "loading" => L10n.T("正在读取冻结剖面…"),
-                "idle" => L10n.T("点击「读取冻结剖面」查看该结果的太阳方向诊断。"),
-                "cancelled" => frozenProfileError,
-                "unavailable" => frozenProfileError,
-                _ => frozenProfileError.Length > 0 ? frozenProfileError : L10n.T("该结果没有可用剖面。"),
-            };
-            PointProfileNote.Text = message;
-            PointProfileNote.Foreground = frozenProfileState is "error" or "unavailable"
-                ? new SolidColorBrush(Colors.Red)
-                : (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
-            PointCrossSection.Visibility = Visibility.Collapsed;
+                NowcastFrozenStatus.Text = frozenProfileState switch
+                {
+                    "loading" => L10n.T("正在读取冻结剖面…"),
+                    "ready" when frozenProfile != null =>
+                        $"{Text(frozenProfile, "valid_time_local").Replace("T", " ")} · {L10n.T("读取完成")}",
+                    "idle" => "",
+                    _ => frozenProfileError.Length > 0 ? frozenProfileError : L10n.T("该结果没有可用剖面。"),
+                };
+                NowcastFrozenStatus.Foreground = frozenProfileState is "error" or "unavailable"
+                    ? new SolidColorBrush(Colors.Red)
+                    : (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+            }
             return;
         }
-        var fields = frozenProfile["fields"] as JsonObject;
-        var distanceCount = (frozenProfile["distances_km"] as JsonArray)?.Count ?? 0;
-        PointProfileNote.Text =
-            $"{Text(frozenProfile, "valid_time_local")}".Replace("T", " ")
-            + $" · 太阳高度 {Number(frozenProfile, "solar_elevation_deg"):0.0}°"
-            + $" · 太阳方位 {Number(frozenProfile, "solar_azimuth_deg"):0.0}°"
-            + $" · {distanceCount} 个距离样本"
-            + $" · 云量样本 {NestedArrayCount(fields?["cloud_fraction_percent"])}"
-            + $" · 温度样本 {NestedArrayCount(fields?["temperature_c"])}";
-        PointProfileNote.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
-        PointCrossSection.Visibility = Visibility.Visible;
-        DrawCrossSection(PointCrossSection, frozenProfile);
+        if (frozenProfileState == "ready" && frozenProfile != null)
+        {
+            RenderPointCrossSectionChrome(frozenProfile, SelectedReport());
+            var fields = frozenProfile["fields"] as JsonObject;
+            var distanceCount = (frozenProfile["distances_km"] as JsonArray)?.Count ?? 0;
+            PointProfileNote.Text =
+                $"{Text(frozenProfile, "valid_time_local")}".Replace("T", " ")
+                + $" · 太阳高度 {Number(frozenProfile, "solar_elevation_deg"):0.0}°"
+                + $" · 太阳方位 {Number(frozenProfile, "solar_azimuth_deg"):0.0}°"
+                + $" · {distanceCount} 个距离样本"
+                + $" · 云量样本 {NestedArrayCount(fields?["cloud_fraction_percent"])}"
+                + $" · 温度样本 {NestedArrayCount(fields?["temperature_c"])}";
+            PointProfileNote.Foreground = (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
+            return;
+        }
+        var message = frozenProfileState switch
+        {
+            "loading" => L10n.T("正在读取冻结剖面…"),
+            "idle" => SelectedReport()?["cross_section"] is JsonObject ? "" : L10n.T("点击「刷新冻结剖面」查看该结果的太阳方向诊断。"),
+            "cancelled" => frozenProfileError,
+            "unavailable" => frozenProfileError,
+            _ => frozenProfileError.Length > 0 ? frozenProfileError : L10n.T("该结果没有可用剖面。"),
+        };
+        PointProfileNote.Text = message;
+        PointProfileNote.Foreground = frozenProfileState is "error" or "unavailable"
+            ? new SolidColorBrush(Colors.Red)
+            : (Brush)Application.Current.Resources["TextFillColorSecondaryBrush"];
     }
 
     internal static int NestedArrayCount(JsonNode? node) =>
         (node as JsonArray)?.OfType<JsonArray>().Sum(row => row.Count)
         ?? (node as JsonArray)?.Count ?? 0;
 
-    // ---------- 剖面图层绘制（距离×高度，缺测层不绘制） ----------
+    // ---------- v3 平滑曲线路径构造器 ----------
 
-    internal static void DrawCrossSection(Canvas canvas, JsonObject section)
+    private static Windows.Foundation.Point Midpoint(Windows.Foundation.Point a, Windows.Foundation.Point b) =>
+        new((a.X + b.X) * 0.5, (a.Y + b.Y) * 0.5);
+
+    private static void AppendSmoothSegment(PathFigure figure, IReadOnlyList<Windows.Foundation.Point> points)
+    {
+        if (points.Count <= 1) return;
+        if (points.Count == 2)
+        {
+            figure.Segments.Add(new LineSegment { Point = points[1] });
+            return;
+        }
+        figure.Segments.Add(new LineSegment { Point = Midpoint(points[0], points[1]) });
+        for (var i = 1; i < points.Count - 1; i++)
+        {
+            figure.Segments.Add(new QuadraticBezierSegment
+            {
+                Point1 = points[i],
+                Point2 = Midpoint(points[i], points[i + 1]),
+            });
+        }
+        figure.Segments.Add(new LineSegment { Point = points[^1] });
+    }
+
+    private static PathGeometry SmoothOpenGeometry(IReadOnlyList<Windows.Foundation.Point> points)
+    {
+        var geometry = new PathGeometry();
+        if (points.Count == 0) return geometry;
+        var figure = new PathFigure { StartPoint = points[0], IsClosed = false };
+        AppendSmoothSegment(figure, points);
+        geometry.Figures.Add(figure);
+        return geometry;
+    }
+
+    private static PathGeometry SmoothClosedBandGeometry(
+        IReadOnlyList<Windows.Foundation.Point> topPoints,
+        IReadOnlyList<Windows.Foundation.Point> bottomPointsReversed)
+    {
+        var geometry = new PathGeometry();
+        if (topPoints.Count == 0 || bottomPointsReversed.Count == 0) return geometry;
+        var figure = new PathFigure { StartPoint = topPoints[0], IsClosed = true, IsFilled = true };
+        AppendSmoothSegment(figure, topPoints);
+        figure.Segments.Add(new LineSegment { Point = bottomPointsReversed[0] });
+        AppendSmoothSegment(figure, bottomPointsReversed);
+        geometry.Figures.Add(figure);
+        return geometry;
+    }
+
+    // ---------- v3 剖面图层绘制（暮光天空渐变 + 地影 + 平滑云层 + 受光辉光 + 地形视线） ----------
+
+    internal static void DrawCrossSection(Canvas canvas, JsonObject section, bool showIsobars = false)
     {
         canvas.Children.Clear();
-        var distances = (section["distances_km"] as JsonArray ?? [])
-            .Select(node => Number(node, "x")).Where(value => double.IsFinite(value)).ToList();
-        if (distances.Count == 0) return;
-        var fields = section["fields"] as JsonObject ?? new JsonObject();
-        double?[][] Grid(string key) =>
-            (fields[key] as JsonArray ?? [])
-                .Select(row => (row as JsonArray ?? [])
-                    .Select(cell => DoubleValue(cell)).ToArray()).ToArray();
-        var heights = Grid("geopotential_height_asl_m");
-        var temps = Grid("temperature_c");
-        var rh = Grid("rh_percent");
-        var amounts = Grid("cloud_amount");
-        var presence = Grid("cloud_presence");
-        var fractions = Grid("cloud_fraction_percent");
-        var familyCodes = Grid("pressure_family_code");
-        var statuses = Grid("cloud_layer_status");
-        var terrain = (section["terrain_elevation_asl_m"] as JsonArray ?? [])
-            .Select(node => Number(node, "x")).Where(value => double.IsFinite(value)).ToList();
-        var required = (section["required_illumination_base_asl_m"] as JsonArray ?? [])
-            .Select(node => Number(node, "x")).Where(value => double.IsFinite(value)).ToList();
-        var levels = (section["pressure_levels_hpa"] as JsonArray ?? [])
-            .Select(node => (int?)DoubleValue(node) ?? 0).ToList();
+        var data = ParseCrossSection(section);
+        if (data == null) return;
 
-        var width = Math.Max(120, canvas.ActualWidth is > 120 and var w ? w : 640);
-        var height = Math.Max(120, canvas.ActualHeight);
-        double left = 40, right = width - 12, top = 10, bottom = height - 24;
-        var maxDistance = Math.Max(1, distances[^1]);
+        var isDark = canvas.ActualTheme == ElementTheme.Dark;
+        var width = Math.Max(220, canvas.Width is > 120 and var w
+            ? w : canvas.ActualWidth is > 120 and var actualWidth ? actualWidth : 680);
+        var height = Math.Max(180, canvas.Height is > 120 and var h
+            ? h : canvas.ActualHeight is > 120 and var actualHeight ? actualHeight : 340);
+        double left = 44;
+        double right = width - (showIsobars ? 48.0 : 16.0);
+        double top = 14;
+        double bottom = height - 24;
+        if (right <= left + 24 || bottom <= top + 24) return;
+
+        var plotW = right - left;
+        var plotH = bottom - top;
+        var maxDistance = Math.Max(1.0, data.Distances[^1]);
         const double maxHeight = 18_000.0;
-        double X(double distance) => left + distance / maxDistance * (right - left);
-        double Y(double altitude) => top + (1 - Math.Clamp(altitude, 0, maxHeight) / maxHeight) * (bottom - top);
+        double X(double dist) => left + Math.Clamp(dist, 0, maxDistance) / maxDistance * plotW;
+        double Y(double alt) => top + (1.0 - Math.Clamp(alt, 0, maxHeight) / maxHeight) * plotH;
 
-        // 高度网格与标签
-        for (var altitude = 0; altitude <= maxHeight; altitude += 3000)
+        var plotLayer = new Canvas
         {
-            canvas.Children.Add(new Line
-            {
-                X1 = left, X2 = right, Y1 = Y(altitude), Y2 = Y(altitude),
-                StrokeThickness = .6, Opacity = .22, Stroke = new SolidColorBrush(Colors.Gray),
-            });
-            canvas.Children.Add(new TextBlock
-            {
-                Text = $"{altitude / 1000:0}km", FontSize = 8, Opacity = .6,
-                RenderTransform = new TranslateTransform
-                {
-                    X = 2, Y = Y(altitude) - 6,
-                },
-            });
+            Width = width,
+            Height = height,
+            Clip = new RectangleGeometry { Rect = new Windows.Foundation.Rect(left, top, plotW, plotH) },
+        };
+        canvas.Children.Add(plotLayer);
+
+        // Layer 1 — Twilight sky backdrop
+        var skyGrad = new LinearGradientBrush
+        {
+            StartPoint = new Windows.Foundation.Point(0, 0),
+            EndPoint = new Windows.Foundation.Point(0, 1),
+        };
+        if (isDark)
+        {
+            skyGrad.GradientStops.Add(new GradientStop { Color = ColorFrom(0x0F, 0x1A, 0x30), Offset = 0.0 });
+            skyGrad.GradientStops.Add(new GradientStop { Color = ColorFrom(0x1F, 0x2B, 0x45), Offset = 0.55 });
+            skyGrad.GradientStops.Add(new GradientStop { Color = ColorFrom(0x38, 0x30, 0x38), Offset = 1.0 });
         }
-        // 距离网格
-        for (var index = 0; index < distances.Count; index += 4)
+        else
         {
-            canvas.Children.Add(new Line
-            {
-                X1 = X(distances[index]), X2 = X(distances[index]), Y1 = top, Y2 = bottom,
-                StrokeThickness = .6, Opacity = .15, Stroke = new SolidColorBrush(Colors.Gray),
-            });
-            canvas.Children.Add(new TextBlock
-            {
-                Text = $"{(int)distances[index]}km", FontSize = 8, Opacity = .6,
-                RenderTransform = new TranslateTransform
-                {
-                    X = X(distances[index]) - 12, Y = bottom + 2,
-                },
-            });
+            skyGrad.GradientStops.Add(new GradientStop { Color = ColorFrom(0xCC, 0xE0, 0xF5), Offset = 0.0 });
+            skyGrad.GradientStops.Add(new GradientStop { Color = ColorFrom(0xE8, 0xF0, 0xFA), Offset = 0.55 });
+            skyGrad.GradientStops.Add(new GradientStop { Color = ColorFrom(0xFA, 0xEA, 0xDB), Offset = 1.0 });
         }
-        // 地形填充与观测点
-        if (terrain.Count == distances.Count)
+        var skyRect = new Rectangle { Width = plotW, Height = plotH, Fill = skyGrad };
+        Canvas.SetLeft(skyRect, left);
+        Canvas.SetTop(skyRect, top);
+        plotLayer.Children.Add(skyRect);
+
+        var horizonWash = new LinearGradientBrush
         {
-            var polygon = new Polygon
+            StartPoint = new Windows.Foundation.Point(0.38, 0.25),
+            EndPoint = new Windows.Foundation.Point(1.0, 1.0),
+        };
+        horizonWash.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb(0, 250, 160, 87), Offset = 0.0 });
+        horizonWash.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb((byte)(isDark ? 46 : 52), 250, 160, 87), Offset = 1.0 });
+        var washRect = new Rectangle { Width = plotW, Height = plotH, Fill = horizonWash };
+        Canvas.SetLeft(washRect, left);
+        Canvas.SetTop(washRect, top);
+        plotLayer.Children.Add(washRect);
+
+        // Layer 2 — Earth Shadow (below requiredASL) & Sunlit Corridor (above requiredASL)
+        var hasRequired = data.RequiredAsl.Length == data.Distances.Length;
+        var reqPoints = hasRequired
+            ? Enumerable.Range(0, data.Distances.Length)
+                .Select(i => new Windows.Foundation.Point(X(data.Distances[i]), Y(data.RequiredAsl[i])))
+                .ToList()
+            : [];
+        if (reqPoints.Count > 1)
+        {
+            var shadowFig = new PathFigure { StartPoint = reqPoints[0], IsClosed = true, IsFilled = true };
+            AppendSmoothSegment(shadowFig, reqPoints);
+            shadowFig.Segments.Add(new LineSegment { Point = new Windows.Foundation.Point(right, bottom) });
+            shadowFig.Segments.Add(new LineSegment { Point = new Windows.Foundation.Point(left, bottom) });
+            var shadowGeo = new PathGeometry();
+            shadowGeo.Figures.Add(shadowFig);
+            plotLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
             {
-                Fill = new SolidColorBrush(ColorFrom(0x69, 0x73, 0x70)) { Opacity = .18 },
-                StrokeThickness = 0,
+                Data = shadowGeo,
+                Fill = new SolidColorBrush(isDark
+                    ? Windows.UI.Color.FromArgb(72, 8, 15, 33)
+                    : Windows.UI.Color.FromArgb(30, 61, 82, 115)),
+            });
+
+            var sunlitFig = new PathFigure { StartPoint = new Windows.Foundation.Point(left, top), IsClosed = true, IsFilled = true };
+            sunlitFig.Segments.Add(new LineSegment { Point = new Windows.Foundation.Point(right, top) });
+            sunlitFig.Segments.Add(new LineSegment { Point = reqPoints[^1] });
+            var revReq = reqPoints.AsEnumerable().Reverse().ToList();
+            AppendSmoothSegment(sunlitFig, revReq);
+            var sunlitGeo = new PathGeometry();
+            sunlitGeo.Figures.Add(sunlitFig);
+            var sunlitGrad = new LinearGradientBrush
+            {
+                StartPoint = new Windows.Foundation.Point(0, 0),
+                EndPoint = new Windows.Foundation.Point(1, 1),
             };
-            polygon.Points.Add(new Windows.Foundation.Point(X(distances[0]), Y(terrain[0])));
-            for (var index = 1; index < distances.Count; index++)
-                polygon.Points.Add(new Windows.Foundation.Point(X(distances[index]), Y(terrain[index])));
-            polygon.Points.Add(new Windows.Foundation.Point(right, bottom));
-            polygon.Points.Add(new Windows.Foundation.Point(left, bottom));
-            canvas.Children.Add(polygon);
-            var line = new Polyline
+            sunlitGrad.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb(6, 250, 173, 76), Offset = 0.0 });
+            sunlitGrad.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb((byte)(isDark ? 42 : 38), 250, 153, 61), Offset = 1.0 });
+            plotLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path { Data = sunlitGeo, Fill = sunlitGrad });
+        }
+
+        // Layer 3 — Altitude & dashed distance gridlines (+ optional Isobars)
+        for (var alt = 0.0; alt <= maxHeight; alt += 3000.0)
+        {
+            plotLayer.Children.Add(new Line
             {
-                Stroke = new SolidColorBrush(ColorFrom(0x69, 0x73, 0x70)),
-                StrokeThickness = 1.6,
-            };
-            for (var index = 0; index < distances.Count; index++)
-                line.Points.Add(new Windows.Foundation.Point(X(distances[index]), Y(terrain[index])));
-            canvas.Children.Add(line);
-            canvas.Children.Add(new Ellipse
-            {
-                Width = 10, Height = 10,
-                Fill = new SolidColorBrush(ColorFrom(0xF2, 0x7D, 0x42)),
-                RenderTransform = new TranslateTransform
-                {
-                    X = X(distances[0]) - 5, Y = Y(terrain[0]) - 5,
-                },
-            });
-            canvas.Children.Add(new TextBlock
-            {
-                Text = L10n.T("观测点"), FontSize = 8, Opacity = .7,
-                RenderTransform = new TranslateTransform
-                {
-                    X = X(distances[0]) + 10, Y = Y(terrain[0]) - 16,
-                },
+                X1 = left, X2 = right, Y1 = Y(alt), Y2 = Y(alt),
+                StrokeThickness = 0.6,
+                Stroke = new SolidColorBrush(Windows.UI.Color.FromArgb((byte)(alt == 0 ? 20 : 38), 140, 150, 165)),
             });
         }
-        // 云量/湿度色块 + 云层状态描边（缺测层不绘制，不解释成晴空）
-        var sampleCount = Math.Max(1, distances.Count - 1);
-        var columnSpan = (right - left) / sampleCount;
-        var cellWidth = Math.Max(6, columnSpan * 0.72);
-        for (var i = 0; i < distances.Count; i++)
+        var distStep = maxDistance <= 120 ? 25.0 : maxDistance <= 250 ? 50.0 : 100.0;
+        for (var dist = distStep; dist <= maxDistance + 0.01; dist += distStep)
         {
-            for (var l = 0; l < levels.Count && l < heights[i].Length; l++)
+            var lx = X(dist);
+            plotLayer.Children.Add(new Line
             {
-                if (heights[i][l] is not { } altitude) continue;
-                var centerX = X(distances[i]);
-                var topY = Y(altitude + 700);
-                var cellHeight = Math.Max(5, Y(altitude - 700) - topY);
-                var fill = CloudCellFill(amounts[i].Length > l ? amounts[i][l] : null,
-                    presence[i].Length > l ? presence[i][l] : null,
-                    rh[i].Length > l ? rh[i][l] : null,
-                    fractions[i].Length > l ? fractions[i][l] : null,
-                    (int)(familyCodes[i].Length > l ? familyCodes[i][l] ?? 0 : 0));
-                if (fill != null)
-                    canvas.Children.Add(new Rectangle
-                    {
-                        Width = cellWidth, Height = cellHeight,
-                        Fill = fill,
-                        RenderTransform = new TranslateTransform
-                        {
-                            X = centerX - cellWidth / 2, Y = topY,
-                        },
-                    });
-                var status = (int)(statuses[i].Length > l ? statuses[i][l] ?? 0 : 0);
-                if (status == 3 || status == 2)
+                X1 = lx, X2 = lx, Y1 = top, Y2 = bottom,
+                StrokeThickness = 0.6,
+                StrokeDashArray = [3, 4],
+                Stroke = new SolidColorBrush(Windows.UI.Color.FromArgb(30, 140, 150, 165)),
+            });
+        }
+        if (showIsobars)
+        {
+            for (var l = 0; l < data.Levels.Length; l++)
+            {
+                var pts = new List<Windows.Foundation.Point>();
+                var temps = new List<double>();
+                for (var i = 0; i < data.Distances.Length; i++)
                 {
-                    var stroke = new Rectangle
-                    {
-                        Width = cellWidth, Height = cellHeight,
-                        StrokeThickness = status == 3 ? 1.8 : 1.4,
-                        Stroke = status == 3
-                            ? new SolidColorBrush(ColorFrom(0xF0, 0x6B, 0x36))
-                            : new SolidColorBrush(ColorFrom(0xD4, 0x8C, 0x38)),
-                        StrokeDashArray = status == 2 ? [4, 3] : null,
-                        Fill = null,
-                        RenderTransform = new TranslateTransform
-                        {
-                            X = centerX - cellWidth / 2, Y = topY,
-                        },
-                    };
-                    canvas.Children.Add(stroke);
+                    if (ScalarAt(data.Heights, i, l) is not { } hAlt) continue;
+                    pts.Add(new Windows.Foundation.Point(X(data.Distances[i]), Y(hAlt)));
+                    if (ScalarAt(data.Temps, i, l) is { } temp) temps.Add(temp);
                 }
-            }
-        }
-        // 温度层线（按层平均温度着色）
-        for (var l = 0; l < levels.Count; l++)
-        {
-            var line = new Polyline
-            {
-                StrokeThickness = 1.1, Opacity = .62,
-            };
-            var tempsSeen = new List<double>();
-            for (var i = 0; i < distances.Count && i < heights.Length; i++)
-            {
-                if (heights[i].Length <= l || heights[i][l] is not { } altitude) continue;
-                line.Points.Add(new Windows.Foundation.Point(X(distances[i]), Y(altitude)));
-                if (i < temps.Length && l < temps[i].Length && temps[i][l] is { } temp)
-                    tempsSeen.Add(temp);
-            }
-            if (line.Points.Count <= 1) continue;
-            var average = tempsSeen.Count == 0 ? 0 : tempsSeen.Average();
-            line.Stroke = new SolidColorBrush(average < -30 ? ColorFrom(0x8C, 0x66, 0x73)
-                : average < 0 ? ColorFrom(0xB0, 0x6B, 0x5C) : ColorFrom(0xC7, 0x4F, 0x38));
-            canvas.Children.Add(line);
-            if (l % 2 == 0 && line.Points.Count > 0)
-            {
-                var last = line.Points[^1];
-                canvas.Children.Add(new TextBlock
+                if (pts.Count <= 1) continue;
+                var avg = temps.Count == 0 ? 0 : temps.Average();
+                var isoColor = avg < -30 ? ColorFrom(0x7A, 0x8F, 0xB8)
+                    : avg < 0 ? ColorFrom(0xAD, 0x80, 0x75) : ColorFrom(0xCC, 0x6B, 0x4D);
+                plotLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
                 {
-                    Text = $"{levels[l]}hPa", FontSize = 8, Opacity = .6,
-                    RenderTransform = new TranslateTransform
-                    {
-                        X = Math.Max(0, last.X - 34), Y = last.Y - 12,
-                    },
+                    Data = SmoothOpenGeometry(pts),
+                    Stroke = new SolidColorBrush(Windows.UI.Color.FromArgb(95, isoColor.R, isoColor.G, isoColor.B)),
+                    StrokeThickness = 1.0,
                 });
             }
         }
-        // 理论照明基准（ASL，琥珀虚线）
-        if (required.Count == distances.Count)
+
+        // Layer 4 — Continuous organic cloud strata (low 3 -> mid 2 -> high 1)
+        var sampleCount = Math.Max(1, data.Distances.Length - 1);
+        var columnSpan = plotW / sampleCount;
+        var taper = Math.Min(columnSpan * 0.45, plotW * 0.06);
+
+        foreach (var family in new[] { 3, 2, 1 })
         {
-            var line = new Polyline
+            var runs = new List<List<CloudRunPoint>>();
+            var currentRun = new List<CloudRunPoint>();
+            for (var i = 0; i < data.Distances.Length; i++)
             {
-                Stroke = new SolidColorBrush(ColorFrom(0xD4, 0x8C, 0x38)),
-                StrokeThickness = 1.2,
-                StrokeDashArray = [4, 3],
+                if (ColumnStratumAt(data, i, family) is { } stratum)
+                {
+                    var cx = X(data.Distances[i]);
+                    var terrainY = i < data.Terrain.Length ? Y(data.Terrain[i]) : bottom;
+                    var botY = Math.Min(terrainY - 1, Y(stratum.BaseAsl));
+                    var topY = Math.Max(top + 2, Y(stratum.TopAsl));
+                    if (topY > botY - 2)
+                    {
+                        var mid = Math.Clamp((topY + botY) * 0.5, top + 3, bottom - 3);
+                        topY = mid - 1.5;
+                        botY = mid + 1.5;
+                    }
+                    currentRun.Add(new CloudRunPoint(i, cx, topY, botY, stratum));
+                }
+                else if (currentRun.Count > 0)
+                {
+                    runs.Add(currentRun);
+                    currentRun = [];
+                }
+            }
+            if (currentRun.Count > 0) runs.Add(currentRun);
+
+            foreach (var run in runs)
+            {
+                var first = run[0];
+                var last = run[^1];
+                var leftX = Math.Max(left, first.Cx - taper);
+                var rightX = Math.Min(right, last.Cx + taper);
+                var leftMidY = (first.TopY + first.BottomY) * 0.5;
+                var rightMidY = (last.TopY + last.BottomY) * 0.5;
+
+                var topPts = new List<Windows.Foundation.Point> { new(leftX, leftMidY) };
+                foreach (var p in run) topPts.Add(new(p.Cx, p.TopY));
+                topPts.Add(new(rightX, rightMidY));
+
+                var botPtsRev = new List<Windows.Foundation.Point> { new(rightX, rightMidY) };
+                for (var r = run.Count - 1; r >= 0; r--) botPtsRev.Add(new(run[r].Cx, run[r].BottomY));
+                botPtsRev.Add(new(leftX, leftMidY));
+
+                var avgAmount = run.Average(p => p.Stratum.Amount);
+                var alpha = Math.Min(0.86, 0.42 + avgAmount * 0.48);
+                var aTop = (byte)Math.Clamp(alpha * 255, 0, 255);
+                var aBot = (byte)Math.Clamp(alpha * 0.94 * 255, 0, 255);
+                Windows.UI.Color topColor, botColor;
+                switch (family)
+                {
+                    case 1:
+                        topColor = isDark ? Windows.UI.Color.FromArgb(aTop, 199, 224, 247) : Windows.UI.Color.FromArgb(aTop, 235, 245, 255);
+                        botColor = isDark ? Windows.UI.Color.FromArgb(aBot, 138, 178, 222) : Windows.UI.Color.FromArgb(aBot, 163, 199, 235);
+                        break;
+                    case 2:
+                        topColor = isDark ? Windows.UI.Color.FromArgb(aTop, 143, 201, 209) : Windows.UI.Color.FromArgb(aTop, 173, 219, 224);
+                        botColor = isDark ? Windows.UI.Color.FromArgb(aBot, 92, 153, 166) : Windows.UI.Color.FromArgb(aBot, 112, 171, 184);
+                        break;
+                    default:
+                        topColor = isDark ? Windows.UI.Color.FromArgb(aTop, 128, 140, 156) : Windows.UI.Color.FromArgb(aTop, 158, 171, 184);
+                        botColor = isDark ? Windows.UI.Color.FromArgb(aBot, 84, 97, 112) : Windows.UI.Color.FromArgb(aBot, 112, 125, 138);
+                        break;
+                }
+                var cloudGrad = new LinearGradientBrush
+                {
+                    StartPoint = new Windows.Foundation.Point(0, 0),
+                    EndPoint = new Windows.Foundation.Point(0, 1),
+                };
+                cloudGrad.GradientStops.Add(new GradientStop { Color = topColor, Offset = 0.0 });
+                cloudGrad.GradientStops.Add(new GradientStop { Color = botColor, Offset = 1.0 });
+
+                plotLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
+                {
+                    Data = SmoothClosedBandGeometry(topPts, botPtsRev),
+                    Fill = cloudGrad,
+                });
+                plotLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
+                {
+                    Data = SmoothOpenGeometry(topPts),
+                    Stroke = new SolidColorBrush(Windows.UI.Color.FromArgb((byte)(isDark ? 64 : 115), 255, 255, 255)),
+                    StrokeThickness = 1.0,
+                });
+
+                // Fire-sky illuminated base underglow (status == 3) & lit-but-occluded (status == 2)
+                var subStart = 0;
+                while (subStart < run.Count)
+                {
+                    var st = run[subStart].Stratum.Status;
+                    var subEnd = subStart;
+                    while (subEnd + 1 < run.Count && run[subEnd + 1].Stratum.Status == st)
+                        subEnd++;
+                    if (st == 3 || st == 2)
+                    {
+                        var subLeft = subStart == 0 ? leftX : (run[subStart - 1].Cx + run[subStart].Cx) * 0.5;
+                        var subRight = subEnd == run.Count - 1 ? rightX : (run[subEnd].Cx + run[subEnd + 1].Cx) * 0.5;
+
+                        var subTopPts = new List<Windows.Foundation.Point>();
+                        var subBotPts = new List<Windows.Foundation.Point>();
+                        if (subStart == 0)
+                        {
+                            var my = (run[0].TopY + run[0].BottomY) * 0.5;
+                            subTopPts.Add(new(leftX, my));
+                            subBotPts.Add(new(leftX, my));
+                        }
+                        else
+                        {
+                            var bMid = (run[subStart - 1].BottomY + run[subStart].BottomY) * 0.5;
+                            var mMid = ((run[subStart - 1].TopY + run[subStart - 1].BottomY) * 0.5
+                                + (run[subStart].TopY + run[subStart].BottomY) * 0.5) * 0.5;
+                            subTopPts.Add(new(subLeft, mMid));
+                            subBotPts.Add(new(subLeft, bMid));
+                        }
+                        for (var si = subStart; si <= subEnd; si++)
+                        {
+                            var p = run[si];
+                            subTopPts.Add(new(p.Cx, p.TopY + (p.BottomY - p.TopY) * 0.42));
+                            subBotPts.Add(new(p.Cx, p.BottomY));
+                        }
+                        if (subEnd == run.Count - 1)
+                        {
+                            var my = (run[subEnd].TopY + run[subEnd].BottomY) * 0.5;
+                            subTopPts.Add(new(rightX, my));
+                            subBotPts.Add(new(rightX, my));
+                        }
+                        else
+                        {
+                            var bMid = (run[subEnd].BottomY + run[subEnd + 1].BottomY) * 0.5;
+                            var mMid = ((run[subEnd].TopY + run[subEnd].BottomY) * 0.5
+                                + (run[subEnd + 1].TopY + run[subEnd + 1].BottomY) * 0.5) * 0.5;
+                            subTopPts.Add(new(subRight, mMid));
+                            subBotPts.Add(new(subRight, bMid));
+                        }
+
+                        var revSubBot = subBotPts.AsEnumerable().Reverse().ToList();
+                        if (st == 3)
+                        {
+                            var glowFill = new LinearGradientBrush
+                            {
+                                StartPoint = new Windows.Foundation.Point(0, 0),
+                                EndPoint = new Windows.Foundation.Point(0, 1),
+                            };
+                            glowFill.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb(0, 255, 158, 68), Offset = 0.0 });
+                            glowFill.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb(115, 255, 158, 68), Offset = 0.45 });
+                            glowFill.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb(220, 245, 93, 40), Offset = 1.0 });
+                            plotLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
+                            {
+                                Data = SmoothClosedBandGeometry(subTopPts, revSubBot),
+                                Fill = glowFill,
+                            });
+                            var subBotCurve = SmoothOpenGeometry(subBotPts);
+                            plotLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
+                            {
+                                Data = subBotCurve,
+                                Stroke = new SolidColorBrush(Windows.UI.Color.FromArgb(76, 250, 115, 46)),
+                                StrokeThickness = 5.0,
+                                StrokeStartLineCap = PenLineCap.Round,
+                                StrokeEndLineCap = PenLineCap.Round,
+                                StrokeLineJoin = PenLineJoin.Round,
+                            });
+                            plotLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
+                            {
+                                Data = SmoothOpenGeometry(subBotPts),
+                                Stroke = new SolidColorBrush(ColorFrom(0xFF, 0x8A, 0x33)),
+                                StrokeThickness = 2.2,
+                                StrokeStartLineCap = PenLineCap.Round,
+                                StrokeEndLineCap = PenLineCap.Round,
+                                StrokeLineJoin = PenLineJoin.Round,
+                            });
+                        }
+                        else
+                        {
+                            plotLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
+                            {
+                                Data = SmoothClosedBandGeometry(subTopPts, revSubBot),
+                                Fill = new SolidColorBrush(Windows.UI.Color.FromArgb(40, 230, 153, 56)),
+                            });
+                            plotLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
+                            {
+                                Data = SmoothOpenGeometry(subBotPts),
+                                Stroke = new SolidColorBrush(Windows.UI.Color.FromArgb(225, 224, 148, 51)),
+                                StrokeThickness = 1.2,
+                                StrokeDashArray = [4, 3],
+                                StrokeStartLineCap = PenLineCap.Round,
+                                StrokeEndLineCap = PenLineCap.Round,
+                            });
+                        }
+                    }
+                    subStart = subEnd + 1;
+                }
+            }
+        }
+
+        // Layer 5 — Smooth requiredASL curve + inline pill
+        if (reqPoints.Count > 1)
+        {
+            plotLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
+            {
+                Data = SmoothOpenGeometry(reqPoints),
+                Stroke = new SolidColorBrush(Windows.UI.Color.FromArgb(52, 245, 168, 61)),
+                StrokeThickness = 5.0,
+            });
+            plotLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
+            {
+                Data = SmoothOpenGeometry(reqPoints),
+                Stroke = new SolidColorBrush(ColorFrom(0xEB, 0x96, 0x30)),
+                StrokeThickness = 1.8,
+                StrokeDashArray = [7, 4],
+                StrokeStartLineCap = PenLineCap.Round,
+                StrokeEndLineCap = PenLineCap.Round,
+            });
+
+            var pillIdx = Math.Clamp((int)(reqPoints.Count * 0.72), 0, reqPoints.Count - 1);
+            var anchorPt = reqPoints[pillIdx];
+            var pill = new Border
+            {
+                Padding = new Thickness(6, 2, 6, 2),
+                CornerRadius = new CornerRadius(9),
+                Background = new SolidColorBrush(isDark
+                    ? Windows.UI.Color.FromArgb(145, 12, 18, 30)
+                    : Windows.UI.Color.FromArgb(170, 255, 255, 255)),
+                BorderBrush = new SolidColorBrush(Windows.UI.Color.FromArgb(120, 235, 150, 48)),
+                BorderThickness = new Thickness(0.8),
+                Child = new TextBlock
+                {
+                    Text = L10n.T("受光高度线"),
+                    FontSize = 9,
+                    FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                    Foreground = new SolidColorBrush(ColorFrom(0xF5, 0xB8, 0x57)),
+                },
             };
-            for (var index = 0; index < distances.Count; index++)
-                line.Points.Add(new Windows.Foundation.Point(X(distances[index]), Y(required[index])));
-            canvas.Children.Add(line);
+            Canvas.SetLeft(pill, Math.Clamp(anchorPt.X - 36, left + 6, right - 78));
+            Canvas.SetTop(pill, Math.Clamp(anchorPt.Y - 22, top + 6, bottom - 24));
+            plotLayer.Children.Add(pill);
+        }
+
+        // Layer 6 — Smooth mountain/terrain silhouette
+        if (data.Terrain.Length == data.Distances.Length)
+        {
+            var terrainPts = Enumerable.Range(0, data.Distances.Length)
+                .Select(i => new Windows.Foundation.Point(X(data.Distances[i]), Y(data.Terrain[i])))
+                .ToList();
+            var tFig = new PathFigure { StartPoint = terrainPts[0], IsClosed = true, IsFilled = true };
+            AppendSmoothSegment(tFig, terrainPts);
+            tFig.Segments.Add(new LineSegment { Point = new Windows.Foundation.Point(right, bottom) });
+            tFig.Segments.Add(new LineSegment { Point = new Windows.Foundation.Point(left, bottom) });
+            var tGeo = new PathGeometry();
+            tGeo.Figures.Add(tFig);
+            var tGrad = new LinearGradientBrush
+            {
+                StartPoint = new Windows.Foundation.Point(0, 0),
+                EndPoint = new Windows.Foundation.Point(0, 1),
+            };
+            if (isDark)
+            {
+                tGrad.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb(194, 87, 102, 107), Offset = 0.0 });
+                tGrad.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb(235, 38, 46, 56), Offset = 1.0 });
+            }
+            else
+            {
+                tGrad.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb(122, 112, 125, 117), Offset = 0.0 });
+                tGrad.GradientStops.Add(new GradientStop { Color = Windows.UI.Color.FromArgb(174, 71, 84, 82), Offset = 1.0 });
+            }
+            plotLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path { Data = tGeo, Fill = tGrad });
+            plotLayer.Children.Add(new Microsoft.UI.Xaml.Shapes.Path
+            {
+                Data = SmoothOpenGeometry(terrainPts),
+                Stroke = new SolidColorBrush(ColorFrom(0x73, 0x82, 0x7D)),
+                StrokeThickness = 1.6,
+            });
+        }
+
+        // Layer 7 — Observer beacon, dashed sightline to primary burnable base, top-right sun cue
+        var observerY = data.Terrain.Length > 0 ? Y(data.Terrain[0]) : bottom;
+        var observer = new Windows.Foundation.Point(X(0), Math.Clamp(observerY, top + 10, bottom - 5));
+        if (PrimaryBurnableFocus(data) is { } focus)
+        {
+            var targetPt = new Windows.Foundation.Point(X(focus.DistanceKm), Y(focus.BaseAsl));
+            plotLayer.Children.Add(new Line
+            {
+                X1 = observer.X, Y1 = observer.Y, X2 = targetPt.X, Y2 = targetPt.Y,
+                Stroke = new SolidColorBrush(Windows.UI.Color.FromArgb(158, 252, 158, 71)),
+                StrokeThickness = 1.3,
+                StrokeDashArray = [5, 4],
+            });
+            var ringOuter = new Ellipse
+            {
+                Width = 16, Height = 16,
+                Fill = new SolidColorBrush(Windows.UI.Color.FromArgb(72, 250, 115, 46)),
+            };
+            Canvas.SetLeft(ringOuter, targetPt.X - 8);
+            Canvas.SetTop(ringOuter, targetPt.Y - 8);
+            plotLayer.Children.Add(ringOuter);
+
+            var ringInner = new Ellipse
+            {
+                Width = 9, Height = 9,
+                Fill = new SolidColorBrush(ColorFrom(0xFF, 0x8F, 0x38)),
+                Stroke = new SolidColorBrush(Colors.White),
+                StrokeThickness = 1.3,
+            };
+            Canvas.SetLeft(ringInner, targetPt.X - 4.5);
+            Canvas.SetTop(ringInner, targetPt.Y - 4.5);
+            plotLayer.Children.Add(ringInner);
+
+            var baseKm = focus.BaseAsl / 1000.0;
+            var targetPill = new Border
+            {
+                Padding = new Thickness(7, 2, 7, 2),
+                CornerRadius = new CornerRadius(10),
+                Background = new SolidColorBrush(Windows.UI.Color.FromArgb(224, 235, 92, 41)),
+                Child = new TextBlock
+                {
+                    Text = L10n.IsEnglish ? $"Lit base {baseKm:0.0}km" : $"可烧云底 {baseKm:0.0}km",
+                    FontSize = 9.5,
+                    FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+                    Foreground = new SolidColorBrush(Colors.White),
+                },
+            };
+            var pX = Math.Clamp(targetPt.X - 46, left + 6, right - 102);
+            var pY = targetPt.Y - 28 >= top + 6 ? targetPt.Y - 28 : Math.Min(bottom - 24, targetPt.Y + 10);
+            Canvas.SetLeft(targetPill, pX);
+            Canvas.SetTop(targetPill, pY);
+            plotLayer.Children.Add(targetPill);
+        }
+
+        var obsHalo = new Ellipse
+        {
+            Width = 16, Height = 16,
+            Fill = new SolidColorBrush(Windows.UI.Color.FromArgb(72, 245, 122, 61)),
+        };
+        Canvas.SetLeft(obsHalo, observer.X - 8);
+        Canvas.SetTop(obsHalo, observer.Y - 8);
+        plotLayer.Children.Add(obsHalo);
+        var obsDot = new Ellipse
+        {
+            Width = 9, Height = 9,
+            Fill = new SolidColorBrush(ColorFrom(0xF5, 0x7A, 0x3D)),
+            Stroke = new SolidColorBrush(Colors.White),
+            StrokeThickness = 1.4,
+        };
+        Canvas.SetLeft(obsDot, observer.X - 4.5);
+        Canvas.SetTop(obsDot, observer.Y - 4.5);
+        plotLayer.Children.Add(obsDot);
+
+        var obsLabel = new TextBlock
+        {
+            Text = L10n.T("观测点"),
+            FontSize = 10,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+        };
+        Canvas.SetLeft(obsLabel, observer.X + 10);
+        Canvas.SetTop(obsLabel, Math.Max(top + 6, observer.Y - 16));
+        plotLayer.Children.Add(obsLabel);
+
+        var sunText = DoubleValue(section["solar_azimuth_deg"]) is { } azDeg
+            ? (L10n.IsEnglish ? $"☀ Sun {azDeg:0}°" : $"☀ 太阳方向 {azDeg:0}°")
+            : (L10n.IsEnglish ? "☀ Sun" : "☀ 太阳方向");
+        var sunCue = new TextBlock
+        {
+            Text = sunText,
+            FontSize = 10,
+            FontWeight = Microsoft.UI.Text.FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(ColorFrom(0xFA, 0xB8, 0x57)),
+        };
+        Canvas.SetLeft(sunCue, Math.Max(left + 8, right - 108));
+        Canvas.SetTop(sunCue, top + 6);
+        plotLayer.Children.Add(sunCue);
+
+        // Crisp rounded plot border
+        var borderRect = new Rectangle
+        {
+            Width = plotW,
+            Height = plotH,
+            RadiusX = 10,
+            RadiusY = 10,
+            Stroke = new SolidColorBrush(Windows.UI.Color.FromArgb((byte)(isDark ? 72 : 56), 140, 150, 165)),
+            StrokeThickness = 1.0,
+        };
+        Canvas.SetLeft(borderRect, left);
+        Canvas.SetTop(borderRect, top);
+        canvas.Children.Add(borderRect);
+
+        // Outside axis labels: Altitude (left)
+        for (var alt = 0.0; alt <= maxHeight; alt += 3000.0)
+        {
+            var lbl = new TextBlock
+            {
+                Text = $"{alt / 1000:0}km",
+                FontSize = 9.5,
+                Opacity = .68,
+                Width = left - 8,
+                TextAlignment = TextAlignment.Right,
+            };
+            Canvas.SetLeft(lbl, 2);
+            Canvas.SetTop(lbl, Y(alt) - 7);
+            canvas.Children.Add(lbl);
+        }
+
+        // Outside axis labels: Distance (bottom, skip 0km)
+        for (var dist = distStep; dist <= maxDistance + 0.01; dist += distStep)
+        {
+            var lbl = new TextBlock { Text = $"{dist:0}km", FontSize = 9.5, Opacity = .68 };
+            Canvas.SetLeft(lbl, Math.Min(right - 28, X(dist) - 12));
+            Canvas.SetTop(lbl, bottom + 4);
+            canvas.Children.Add(lbl);
+        }
+
+        // Outside axis labels: Isobars (right)
+        if (showIsobars)
+        {
+            var lastLabelY = double.NegativeInfinity;
+            for (var l = 0; l < data.Levels.Length; l++)
+            {
+                double? lastH = null;
+                for (var i = data.Distances.Length - 1; i >= 0; i--)
+                {
+                    if (ScalarAt(data.Heights, i, l) is { } hv) { lastH = hv; break; }
+                }
+                if (lastH is not { } lh) continue;
+                var ly = Y(lh);
+                if (ly < top + 4 || ly > bottom - 4 || Math.Abs(ly - lastLabelY) < 13) continue;
+                lastLabelY = ly;
+                var lbl = new TextBlock { Text = $"{data.Levels[l]}hPa", FontSize = 8.5, Opacity = .72 };
+                Canvas.SetLeft(lbl, right + 5);
+                Canvas.SetTop(lbl, ly - 6);
+                canvas.Children.Add(lbl);
+            }
         }
     }
 
-    private static Brush? CloudCellFill(double? amount, double? presence, double? rh,
-        double? fraction, int family)
+    private static (double DistanceKm, double BaseAsl)? PrimaryBurnableFocus(CrossSectionParsed data)
     {
-        var cloudAmount = amount ?? Math.Max(presence ?? 0, (fraction ?? 0) / 100);
-        var humidity = Math.Max(0, (rh ?? 0) - 55) / 45;
-        if (cloudAmount < 0.18)
+        foreach (var target in data.Targets)
         {
-            if (fraction is { } f && f <= 0) return null;
-            if (humidity < 0.06) return null;
-            return new SolidColorBrush(ColorFrom(0x70, 0x97, 0x7E))
-            {
-                Opacity = Math.Min(0.34, 0.04 + humidity * 0.26),
-            };
+            if (Text(target, "status") != "burnable") continue;
+            if (DoubleValue(target["distance_km"]) is { } dist && DoubleValue(target["cloud_base_asl_m"]) is { } b)
+                return (dist, b);
         }
-        var alpha = Math.Min(0.82, 0.10 + cloudAmount * 0.68);
-        return family switch
+        var lit = new List<(double Dist, double Base)>();
+        for (var i = 0; i < data.Distances.Length; i++)
         {
-            1 => new SolidColorBrush(ColorFrom(0x74, 0x9D, 0xC2)) { Opacity = alpha },
-            2 => new SolidColorBrush(ColorFrom(0x69, 0x9A, 0x8E)) { Opacity = alpha },
-            _ => new SolidColorBrush(ColorFrom(0x7E, 0x88, 0x91)) { Opacity = alpha },
-        };
+            for (var fam = 1; fam <= 3; fam++)
+            {
+                if (ColumnStratumAt(data, i, fam) is { Status: 3 } s)
+                    lit.Add((data.Distances[i], s.BaseAsl));
+            }
+        }
+        if (lit.Count == 0) return null;
+        lit.Sort((a, b) => a.Dist.CompareTo(b.Dist));
+        return lit[lit.Count / 2];
     }
 }

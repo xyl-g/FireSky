@@ -13,6 +13,7 @@ pub use national::{
     assess_batch_with_cancel, assess_batch_with_status, BatchCancel, NationalAssessmentError,
     OUTPUT_FIELDS as NATIONAL_OUTPUT_FIELDS,
 };
+pub(crate) use national::{cloud_optical_depth_increment, cloud_transmission_from_path};
 pub mod astronomy;
 pub mod cams;
 pub mod cloud;
@@ -200,7 +201,7 @@ fn condensate_presence(feature: &[f64]) -> Option<f64> {
     if total <= 0.0 {
         Some(0.0)
     } else {
-        Some(clamp01((total.log10() + 8.0) / 3.0))
+        Some(clamp01((total.log10() + 7.0) / 3.5))
     }
 }
 
@@ -208,7 +209,7 @@ pub fn condensate_component(value: f64) -> f64 {
     if value.is_nan() || value <= 0.0 {
         0.0
     } else {
-        clamp01((value.log10() + 8.0) / 3.0)
+        clamp01((value.log10() + 7.0) / 3.5)
     }
 }
 
@@ -459,7 +460,7 @@ fn sightline_height_from_observer(
         + curvature_drop_m(sample_distance_km)
 }
 
-fn solar_ray_height(
+pub(crate) fn solar_ray_height(
     target_distance_km: f64,
     target_height_m: f64,
     sample_distance_km: f64,

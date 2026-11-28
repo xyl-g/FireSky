@@ -356,6 +356,7 @@ pub(crate) fn web_payload(report: &Value, quality: &Value, elevation: f64) -> Va
         let mut row = json!({});
         for key in [
             "valid_time_local",
+            "valid_time_utc",
             "cloud_source_times_utc",
             "solar_elevation_deg",
             "intensity_score",
@@ -375,9 +376,30 @@ pub(crate) fn web_payload(report: &Value, quality: &Value, elevation: f64) -> Va
         row.as_object_mut()
             .unwrap()
             .extend(q.as_object().unwrap().clone());
-        // Match the owning web serializer's explicit override for invalid rows;
-        // native_quality retains the authoritative core validity.
-        row["valid"] = json!(true);
+        let has_family = !row["dominant_burnable_pressure_family"].is_null();
+        let base_asl = row["dominant_burnable_cloud_base_asl_mean_m"].as_f64();
+        let top_asl = row["dominant_burnable_cloud_top_asl_mean_m"].as_f64();
+        let terrain_asl = row["dominant_burnable_target_terrain_asl_mean_m"]
+            .as_f64()
+            .unwrap_or(0.0);
+        if has_family {
+            if let (Some(base), Some(top)) = (base_asl, top_asl) {
+                row["dominant_burnable_cloud_base_agl_mean_m"] =
+                    json!((base - terrain_asl).max(0.0));
+                row["dominant_burnable_cloud_top_agl_mean_m"] = json!((top - terrain_asl).max(0.0));
+                row["dominant_burnable_cloud_base_above_observer_mean_m"] = json!(base - elevation);
+                row["dominant_burnable_cloud_top_above_observer_mean_m"] = json!(top - elevation);
+            }
+        } else {
+            for key in [
+                "dominant_burnable_cloud_base_agl_mean_m",
+                "dominant_burnable_cloud_top_agl_mean_m",
+                "dominant_burnable_cloud_base_above_observer_mean_m",
+                "dominant_burnable_cloud_top_above_observer_mean_m",
+            ] {
+                row[key] = Value::Null;
+            }
+        }
         row["burn_score"] =
             json!((q["instant_quality_index"].as_f64().unwrap() / 2.5).clamp(0.0, 1.0));
         rows.push(row);
@@ -418,4 +440,140 @@ fn dominant(core: &Value, best: Option<usize>) -> Result<Value, String> {
         "cloud_top_above_observer_mean_m":top.zip(elevation).map(|(a,b)|a-b),
         "genus_proxy":step.get("cloud_genus_proxy"),"phase_proxy":phase,
         "genus_diagnosis":diagnosis,"convective_risk":risk}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::web_payload;
+    use serde_json::json;
+
+    #[test]
+    fn web_payload_preserves_step_validity_and_derives_agl_geometry() {
+        let report = json!({
+            "observer_name": "Test",
+            "phenomenon": "dusk",
+            "model_source": "ec",
+            "forecast_mode": "model",
+            "compute_backend_requested": "cpu",
+            "compute_backend": "cpu",
+            "target_date": "2026-11-27",
+            "timezone_name": "Asia/Shanghai",
+            "anchor_local": "2026-11-27T17:00:00+08:00",
+            "cycle_time_utc": "2026-11-27T00:00:00Z",
+            "model_cycles": {"ec": "2026-11-27T00:00:00Z"},
+            "best_time_local": "2026-11-27T17:10:00+08:00",
+            "overall_score": 0.4,
+            "burn_score": 0.5,
+            "intensity_score": 0.5,
+            "extent_score": 0.5,
+            "vividness_score": 0.5,
+            "confidence_score": 0.42,
+            "model_disagreement_score": 0.0,
+            "duration_minutes": 15,
+            "potential_duration_minutes": 15,
+            "model_weights": {"ec": 1.0},
+            "geometry_window": null,
+            "boundary_uncertainty": null,
+            "selected_regime": "forward_cloud_field",
+            "scene_scores": {},
+            "local_sky_score": 0.8,
+            "remote_sky_score": 0.5,
+            "convective_risk": 0.1,
+            "color_diagnosis": {},
+            "cloud_evolution": {},
+            "timing_window": {},
+            "summary": [],
+            "nowcast": null,
+            "html_report_path": null,
+            "aerosol": {"aod550": 0.2, "source": "cams", "quality": "cams", "pm2_5_ug_m3": null, "pm10_ug_m3": null, "particulate_source": null},
+            "steps": [
+                {
+                    "valid_time_local": "2026-11-27T17:05:00+08:00",
+                    "valid_time_utc": "2026-11-27T09:05:00Z",
+                    "cloud_source_times_utc": ["2026-11-27T09:00:00Z"],
+                    "solar_elevation_deg": -1.0,
+                    "intensity_score": 0.5,
+                    "extent_score": 0.5,
+                    "vividness_score": 0.5,
+                    "visibility_score": 0.8,
+                    "selected_regime": "forward_cloud_field",
+                    "scene_scores": {},
+                    "local_sky_score": 0.8,
+                    "remote_sky_score": 0.5,
+                    "convective_risk": 0.1,
+                    "color_diagnosis": {},
+                    "top_candidate": null
+                },
+                {
+                    "valid_time_local": "2026-11-27T17:45:00+08:00",
+                    "valid_time_utc": "2026-11-27T09:45:00Z",
+                    "cloud_source_times_utc": ["2026-11-27T09:00:00Z"],
+                    "solar_elevation_deg": -9.0,
+                    "intensity_score": 0.0,
+                    "extent_score": 0.0,
+                    "vividness_score": 0.0,
+                    "visibility_score": 0.0,
+                    "selected_regime": "invalid",
+                    "scene_scores": {},
+                    "local_sky_score": 0.0,
+                    "remote_sky_score": 0.0,
+                    "convective_risk": 0.0,
+                    "color_diagnosis": {},
+                    "top_candidate": null
+                }
+            ]
+        });
+        let quality = json!({
+            "quality_index": 1.25,
+            "quality_level": "中等烧",
+            "quality_components": {"forward_field_radius_km": 1000.0},
+            "duration_status": "estimated",
+            "best_index": 0,
+            "steps": [
+                {
+                    "valid": true,
+                    "instant_quality_index": 1.25,
+                    "instant_quality_level": "中等烧",
+                    "dominant_burnable_pressure_family": "high",
+                    "dominant_burnable_cloud_base_asl_mean_m": 8200.0,
+                    "dominant_burnable_cloud_top_asl_mean_m": 10200.0,
+                    "dominant_burnable_target_terrain_asl_mean_m": 200.0
+                },
+                {
+                    "valid": false,
+                    "instant_quality_index": 0.0,
+                    "instant_quality_level": "无明显火烧云",
+                    "dominant_burnable_pressure_family": null,
+                    "dominant_burnable_cloud_base_asl_mean_m": null,
+                    "dominant_burnable_cloud_top_asl_mean_m": null,
+                    "dominant_burnable_target_terrain_asl_mean_m": null
+                }
+            ]
+        });
+        let payload = web_payload(&report, &quality, 50.0);
+        let rows = payload["steps"].as_array().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["valid"], json!(true));
+        assert_eq!(rows[0]["valid_time_utc"], json!("2026-11-27T09:05:00Z"));
+        assert_eq!(
+            rows[0]["dominant_burnable_cloud_base_agl_mean_m"],
+            json!(8000.0)
+        );
+        assert_eq!(
+            rows[0]["dominant_burnable_cloud_top_agl_mean_m"],
+            json!(10000.0)
+        );
+        assert_eq!(
+            rows[0]["dominant_burnable_cloud_base_above_observer_mean_m"],
+            json!(8150.0)
+        );
+        assert_eq!(
+            rows[0]["dominant_burnable_cloud_top_above_observer_mean_m"],
+            json!(10150.0)
+        );
+        assert_eq!(rows[1]["valid"], json!(false));
+        assert_eq!(rows[1]["valid_time_utc"], json!("2026-11-27T09:45:00Z"));
+        assert!(rows[1]["dominant_burnable_cloud_base_agl_mean_m"].is_null());
+        assert!(rows[1]["dominant_burnable_cloud_top_agl_mean_m"].is_null());
+    }
 }

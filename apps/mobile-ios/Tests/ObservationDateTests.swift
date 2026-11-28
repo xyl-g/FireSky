@@ -73,13 +73,18 @@ final class ObservationDateTests: XCTestCase {
             ["valid_time_local": "2026-11-24T17:30:00", "valid": false],
             ["valid_time_local": "2026-11-24T17:40:00", "valid": true, "instant_quality_index": 1.2],
             ["valid_time_local": "2026-11-24T17:50:00", "instant_quality_index": 1.5],
-            ["valid_time_local": "2026-11-24T18:00:00", "valid": false],
+            ["valid_time_local": "2026-11-24T18:00:00", "valid": true, "selected_regime": "invalid"],
+            ["valid_time_local": "2026-11-24T18:10:00", "valid": false],
         ]
-        XCTAssertEqual(WorkLedgerView.hiddenCount(in: steps), 2)
+        XCTAssertFalse(ForecastComparison.isStepValid(steps[0]))
+        XCTAssertTrue(ForecastComparison.isStepValid(steps[1]))
+        XCTAssertTrue(ForecastComparison.isStepValid(steps[2]))
+        XCTAssertFalse(ForecastComparison.isStepValid(steps[3]))
+        XCTAssertEqual(WorkLedgerView.hiddenCount(in: steps), 3)
         XCTAssertEqual(WorkLedgerView.filteredSteps(from: steps, showInvalid: false).count, 2)
-        XCTAssertEqual(WorkLedgerView.filteredSteps(from: steps, showInvalid: true).count, 4)
-        XCTAssertEqual(WorkLedgerView.toggleButtonTitle(hiddenCount: 2, showInvalid: false), "显示 2 个未判断时次")
-        XCTAssertEqual(WorkLedgerView.toggleButtonTitle(hiddenCount: 2, showInvalid: true), "隐藏未判断时次")
+        XCTAssertEqual(WorkLedgerView.filteredSteps(from: steps, showInvalid: true).count, 5)
+        XCTAssertEqual(WorkLedgerView.toggleButtonTitle(hiddenCount: 3, showInvalid: false), "显示 3 个未判断时次")
+        XCTAssertEqual(WorkLedgerView.toggleButtonTitle(hiddenCount: 3, showInvalid: true), "隐藏未判断时次")
     }
 
     func testFriendlyEngineMessageSuppressesInternalNowcastReason() {

@@ -577,7 +577,7 @@ fn condensate_presence_opt(feature: &Feature<'_>) -> Option<f64> {
     if total <= 0.0 {
         return Some(0.0);
     }
-    Some(clamp((total.log10() + 8.0) / 3.0))
+    Some(crate::native::condensate_component(total))
 }
 
 // ---------------------------------------------------------------------------
@@ -2444,8 +2444,12 @@ fn build_result(request: AssessmentRequest) -> Result<AssessmentOutput, String> 
         let burn_load = py_clamp(load_override.unwrap_or(material_load), 0.0, 2.5);
         let incoming_aerosol_load = py_clamp(incoming_override.unwrap_or(material_load), 0.0, 2.5);
         let ceiling = match &steps[index].observation_score_ceiling {
-            Some(value) => *value,
-            None => 2.5,
+            Some(value) => py_clamp(
+                *value * crate::native::empirical::MAX_SCORE,
+                0.0,
+                crate::native::empirical::MAX_SCORE,
+            ),
+            None => crate::native::empirical::MAX_SCORE,
         };
         // Python stores every cell through float32 before the ledger reads it.
         let quantize = |value: f64| -> f64 { value as f32 as f64 };
@@ -2481,7 +2485,7 @@ fn build_result(request: AssessmentRequest) -> Result<AssessmentOutput, String> 
         serde_json::from_value(serde_json::json!({
             "rows": quality_rows,
             "apply_duration": request.apply_duration,
-            "local_columns": true,
+            "local_columns": false,
             "score_ceiling": any_ceiling,
             "radius_km": MAX_ANALYSIS_RADIUS_KM,
             "parallel_instants": true,
@@ -6575,30 +6579,23 @@ fn build_map_cloud_cells(
     max_distance_km: f64,
 ) -> Vec<MapCloudCellOutput> {
     // First-best signal per rounded grid point (Python `>` keeps the first max).
-    let mut signal_by_point: Vec<((u64, u64), usize)> = Vec::new();
-    let mut signal_index: HashMap<(u64, u64), usize> = HashMap::new();
+    let mut lookup: HashMap<(u64, u64), usize> = HashMap::new();
     for (position, signal) in signals.iter().enumerate() {
         let key = (
             python_round(signal.lat, 4).to_bits(),
             python_round(signal.lon, 4).to_bits(),
         );
-        match signal_index.get(&key) {
+        match lookup.get(&key) {
             Some(&current) => {
                 if signal.score > signals[current].score {
-                    signal_by_point[current] = (key, position);
-                    signal_index.insert(key, position);
+                    lookup.insert(key, position);
                 }
             }
             None => {
-                signal_index.insert(key, position);
-                signal_by_point.push((key, position));
+                lookup.insert(key, position);
             }
         }
     }
-    let lookup: HashMap<(u64, u64), usize> = signal_by_point
-        .iter()
-        .map(|(key, position)| (*key, *position))
-        .collect();
     let mut cells: Vec<MapCloudCellOutput> = Vec::new();
     for (_, column) in columns {
         if column.distance_km > max_distance_km {

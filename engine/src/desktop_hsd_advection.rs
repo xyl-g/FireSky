@@ -486,8 +486,9 @@ pub fn execute(params: Params) -> Result<Value, String> {
         &params.reason,
         params.horizon_hours,
     )?;
-    let dx = params.motion_dx_px_per_hour * params.horizon_hours;
-    let dy = params.motion_dy_px_per_hour * params.horizon_hours;
+    let effective_horizon = params.horizon_hours * params.scale;
+    let dx = params.motion_dx_px_per_hour * effective_horizon;
+    let dy = params.motion_dy_px_per_hour * effective_horizon;
     let root = params.output_dir.join(format!(
         "advection-{}",
         output_key(
@@ -517,7 +518,7 @@ pub fn execute(params: Params) -> Result<Value, String> {
     let bands: [Vec<f32>; 3] = if let Some(field) = &params.motion_field {
         let (disp_x, disp_y) = field_displacements(
             frame.shape,
-            params.horizon_hours,
+            effective_horizon,
             params.motion_dx_px_per_hour,
             params.motion_dy_px_per_hour,
             field,

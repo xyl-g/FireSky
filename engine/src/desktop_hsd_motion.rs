@@ -588,14 +588,52 @@ fn field_grid_dim(size: usize) -> usize {
     size.div_ceil(FIELD_TARGET_BLOCK).clamp(1, FIELD_MAX_GRID)
 }
 
+fn sample_frame_bilinear(
+    values: &[f64],
+    height: usize,
+    width: usize,
+    source_y: f64,
+    source_x: f64,
+) -> f64 {
+    if height == 0
+        || width == 0
+        || !source_y.is_finite()
+        || !source_x.is_finite()
+        || source_y < 0.0
+        || source_x < 0.0
+        || source_y > (height - 1) as f64
+        || source_x > (width - 1) as f64
+    {
+        return f64::NAN;
+    }
+    let y0 = (source_y.floor() as usize).min(height - 1);
+    let y1 = (y0 + 1).min(height - 1);
+    let x0 = (source_x.floor() as usize).min(width - 1);
+    let x1 = (x0 + 1).min(width - 1);
+    let wy = source_y - y0 as f64;
+    let wx = source_x - x0 as f64;
+    let v00 = values[y0 * width + x0];
+    let v01 = values[y0 * width + x1];
+    let v10 = values[y1 * width + x0];
+    let v11 = values[y1 * width + x1];
+    if !v00.is_finite() || !v01.is_finite() || !v10.is_finite() || !v11.is_finite() {
+        return f64::NAN;
+    }
+    (1.0 - wy) * (1.0 - wx) * v00
+        + (1.0 - wy) * wx * v01
+        + wy * (1.0 - wx) * v10
+        + wy * wx * v11
+}
+
 /// Local sub-pixel shift for one block, estimated as a residual around the
-/// global displacement. The previous block is first aligned by the global
-/// shift, then cross-correlated with the latest block; the residual peak is
-/// refined to sub-pixel precision. Estimating the residual (rather than the
-/// absolute shift) keeps uniform motion unbiased, because the Hann-windowed
-/// correlation no longer has to locate a large peak away from zero. Returns
-/// `None` when the block is too flat, the residual exceeds the block's motion
-/// bound, or the match correlation is below the gate.
+/// global displacement. `previous` must already be globally aligned from the
+/// full previous frame by `(global_shift_x, global_shift_y)` (non-wrapping),
+/// then cross-correlated with the latest block; the residual peak is refined
+/// to sub-pixel precision. Estimating the residual (rather than the absolute
+/// shift) keeps uniform motion unbiased, because the Hann-windowed correlation
+/// no longer has to locate a large peak away from zero. Returns `None` when
+/// the block is too flat, the residual exceeds the block's motion bound, or
+/// the match correlation is below the gate.
 fn block_shift(
     previous: &[f64],
     latest: &[f64],
@@ -639,12 +677,6 @@ fn block_shift(
     if previous_std < 1e-4 || latest_std < 1e-4 {
         return None;
     }
-    let aligned = shifted_bilinear(
-        &previous_work,
-        [height, width],
-        global_shift_x,
-        global_shift_y,
-    );
     let mut planner = FftPlanner::<f64>::new();
     let row_forward = planner.plan_fft_forward(width);
     let column_forward = planner.plan_fft_forward(height);
@@ -656,7 +688,7 @@ fn block_shift(
         let wy = hann_weight(y, height);
         for x in 0..width {
             let window = wy * hann_weight(x, width);
-            aligned_fft.push(Complex::new(aligned[y * width + x] * window, 0.0));
+            aligned_fft.push(Complex::new(previous_work[y * width + x] * window, 0.0));
             latest_fft.push(Complex::new(latest_work[y * width + x] * window, 0.0));
         }
     }
@@ -712,7 +744,7 @@ fn block_shift(
     if residual_x.abs() > max_shift || residual_y.abs() > max_shift {
         return None;
     }
-    let shifted = shifted_bilinear(&aligned, [height, width], residual_x, residual_y);
+    let shifted = shifted_bilinear(&previous_work, [height, width], residual_x, residual_y);
     let selected_count = finite_count as f64;
     let previous_mean = shifted
         .iter()
@@ -939,11 +971,19 @@ fn estimate_block_field(
                     if !hours.is_finite() || hours <= 0.0 {
                         continue;
                     }
+                    let global_shift_x = global_dx * hours;
+                    let global_shift_y = global_dy * hours;
                     previous_block.clear();
                     latest_block.clear();
                     for y in row0..row1 {
                         for x in col0..col1 {
-                            previous_block.push(prev_frame.values[y * width + x]);
+                            previous_block.push(sample_frame_bilinear(
+                                &prev_frame.values,
+                                height,
+                                width,
+                                y as f64 - global_shift_y,
+                                x as f64 - global_shift_x,
+                            ));
                             latest_block.push(next_frame.values[y * width + x]);
                         }
                     }
@@ -953,8 +993,8 @@ fn estimate_block_field(
                         block_height,
                         block_width,
                         min_correlation,
-                        global_dx * hours,
-                        global_dy * hours,
+                        global_shift_x,
+                        global_shift_y,
                     ) {
                         let vx = shift_x / hours;
                         let vy = shift_y / hours;

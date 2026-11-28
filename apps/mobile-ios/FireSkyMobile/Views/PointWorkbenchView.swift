@@ -942,7 +942,22 @@ struct WorkResultsView: View {
             firstRunEmptyCanvas
         } else {
             VStack(spacing: 12) {
-                WorkAnalysisTabs()
+                HStack(alignment: .center, spacing: 8) {
+                    WorkAnalysisTabs()
+                    Spacer(minLength: 4)
+                    Button {
+                        store.showPointDiagnostics = true
+                    } label: {
+                        Label(L10n.t("诊断"), systemImage: "info.circle")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.primary.opacity(scheme == .dark ? 0.07 : 0.05), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("point-diagnostics-button")
+                }
                 if store.resultTab != "概览" {
                     HStack {
                         WorkSegments(options: ForecastComparison.models, titles: ["GFS", "EC"], selection: $store.selectedModel)
@@ -958,6 +973,34 @@ struct WorkResultsView: View {
                     resultsContent
                 }
             }
+            .sheet(isPresented: $store.showPointDiagnostics) {
+                NavigationStack {
+                    ScrollView {
+                        VStack(spacing: 12) {
+                            WorkSegments(options: ForecastComparison.models, titles: ["GFS", "EC"], selection: $store.selectedModel)
+                                .frame(width: 160)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            if let message = comparison.error(store.selectedModel) {
+                                Text(L10n.tf("%@ 未完成：%@", store.selectedModel.uppercased(), message))
+                                    .font(.callout).foregroundStyle(.red).textSelection(.enabled)
+                                    .padding(16).frame(maxWidth: .infinity, alignment: .leading).workSurface()
+                            } else {
+                                WorkDiagnosticView(report: report, profile: false, showHeader: false)
+                            }
+                        }
+                        .padding(16)
+                    }
+                    .workPageBackground()
+                    .navigationTitle(L10n.t("诊断与时间窗"))
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) {
+                            Button(L10n.close) { store.showPointDiagnostics = false }
+                        }
+                    }
+                }
+                .tint(warm)
+            }
         }
     }
 
@@ -967,13 +1010,14 @@ struct WorkResultsView: View {
                 ForEach(groupKeys, id: \.0) { key, range in
                     VStack(alignment: .leading, spacing: 7) {
                         Text(groupTitle(key)).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                        LazyVGrid(columns: columns, spacing: 10) {
+                        LazyVGrid(columns: columnsForGroup(key), spacing: 10) {
                             ForEach(Array(metricSpec[range]), id: \.0) { spec in
                                 metricCard(spec)
                             }
                         }
                     }
                 }
+                WorkQualityBreakdownView(comparison: comparison)
                 WorkComparisonCurveView(comparison: comparison, timezone: store.timezone)
                 if let radarEntry = overviewRadarReport {
                     AzimuthRadarCard(
@@ -990,12 +1034,14 @@ struct WorkResultsView: View {
             } else if report == nil, comparison.result != nil {
                 Text(L10n.tf("%@ 暂无结果", store.selectedModel.uppercased()))
                     .foregroundStyle(.secondary).padding(30)
+            } else if store.resultTab == "大气剖面" {
+                WorkProfileTabView(report: report)
             } else if store.resultTab == "逐时台账" {
                 WorkLedgerView(report: report,
                                bestTime: report?["best_time_local"] as? String,
                                selectedTime: $store.pointSelectedTime)
             } else {
-                WorkDiagnosticView(report: report, profile: store.resultTab == "大气剖面")
+                WorkDiagnosticView(report: report, profile: false)
             }
         }
     }
@@ -1060,6 +1106,20 @@ struct WorkResultsView: View {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(FSDesign.surfaceBorder(role: .grouped, dark: dark, emphasized: false), lineWidth: 1)
         }
+    }
+
+    private func columnsForGroup(_ key: String) -> [GridItem] {
+        if typeSize.isAccessibilitySize {
+            return [GridItem(.flexible())]
+        }
+        if sizeClass == .regular {
+            // "cloud" has 4 cards -> 2x2 balanced grid; "optics"/"reliability" have 3 cards -> 3x1.
+            if key == "cloud" {
+                return [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+            }
+            return [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
+        }
+        return [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)]
     }
 
     private var columns: [GridItem] {
@@ -1130,7 +1190,7 @@ private struct WorkAnalysisTabs: View {
     var body: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
-                ForEach(["概览", "大气剖面", "诊断与时间窗", "逐时台账"], id: \.self) { tab in
+                ForEach(["概览", "大气剖面", "逐时台账"], id: \.self) { tab in
                     let selected = store.resultTab == tab
                     Button {
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { store.resultTab = tab }
@@ -1168,6 +1228,340 @@ private struct WorkAnalysisTabs: View {
                 Capsule().strokeBorder(FSDesign.surfaceBorder(role: .grouped, dark: scheme == .dark, emphasized: false), lineWidth: 1)
             }
         }
+    }
+}
+
+/// 专用大气剖面标签页卡：仅展示太阳方向大气剖面与可选冻结剖面刷新（不含诊断分组）。
+private struct WorkProfileTabView: View {
+    let report: JSONObject?
+    @EnvironmentObject private var store: Store
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let report {
+                let section = report["cross_section"] as? JSONObject
+                let source = report["profile_source"] as? JSONObject
+                let sourceAvailable = source?["available"] as? Bool == true
+                let model = source?["model_source"] as? String ?? store.selectedModel
+                HStack(alignment: .center, spacing: 8) {
+                    Text(L10n.t("太阳方向大气剖面"))
+                        .font(.subheadline.weight(.semibold))
+                    Spacer(minLength: 8)
+                    if sourceAvailable {
+                        Button {
+                            store.queryPointProfile()
+                        } label: {
+                            Label(L10n.t("刷新冻结剖面"), systemImage: "waveform.path.ecg")
+                                .font(.caption.weight(.medium))
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(store.busy)
+                    }
+                }
+                WorkCrossSectionView(
+                    section: section,
+                    genusProxy: report["cloud_genus_proxy"] as? JSONObject
+                )
+                if sourceAvailable && ((store.frozenProfileModel == model && store.frozenProfileState != "idle") || section == nil) {
+                    FrozenProfileView(model: model) { store.queryPointProfile() }
+                }
+            } else {
+                Text(L10n.t("等待预测"))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 160)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .workSurface()
+    }
+}
+
+/// 统一三栏「评分组成」（评分项 | GFS | EC）：只读展示后端 `quality_components`。
+private struct WorkQualityBreakdownView: View {
+    let comparison: ForecastComparison
+    @State private var detailsExpanded = false
+    @Environment(\.horizontalSizeClass) private var sizeClass
+
+    private struct CellContent {
+        let primary: String
+        let detail: String
+        let primaryColor: Color
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            headerBar
+            Divider().opacity(0.45)
+            comparisonTable
+            if let limitSummary = limitingFactorSummary {
+                Text(limitSummary)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .padding(.top, 1)
+            }
+            Divider().opacity(0.45)
+            DisclosureGroup(isExpanded: $detailsExpanded) {
+                expandedDetails
+                    .padding(.top, 6)
+            } label: {
+                Text(L10n.t("详情与口径"))
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .workSurface()
+    }
+
+    private var headerBar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .center, spacing: 8) {
+                Text(L10n.t("评分组成")).font(.subheadline.weight(.semibold))
+                Spacer(minLength: 4)
+                if sizeClass == .regular {
+                    HStack(spacing: 12) {
+                        ForEach(ForecastComparison.models, id: \.self) { model in
+                            modelSummaryBadge(model)
+                        }
+                    }
+                }
+            }
+            if sizeClass != .regular {
+                HStack(spacing: 10) {
+                    ForEach(ForecastComparison.models, id: \.self) { model in
+                        modelSummaryBadge(model)
+                    }
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func modelSummaryBadge(_ model: String) -> some View {
+        if let report = comparison.report(model) {
+            HStack(spacing: 4) {
+                Circle().fill(modelColor(model)).frame(width: 6, height: 6)
+                Text(model.uppercased()).font(.caption2.weight(.semibold))
+                Text("\(format(report["quality_index"] ?? report["peak_quality_index"], digits: 3)) / 2.5")
+                    .font(.caption.weight(.semibold)).monospacedDigit()
+                    .foregroundStyle(modelColor(model))
+                if let level = report["quality_level"] as? String ?? report["peak_quality_level"] as? String, !level.isEmpty {
+                    Text(L10n.qualityLevel(level))
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        } else if comparison.error(model) != nil {
+            HStack(spacing: 4) {
+                Circle().fill(Color.red.opacity(0.8)).frame(width: 6, height: 6)
+                Text(L10n.tf("%@ 未完成", model.uppercased()))
+                    .font(.caption2).foregroundStyle(.red)
+            }
+        } else {
+            HStack(spacing: 4) {
+                Circle().fill(Color.secondary.opacity(0.5)).frame(width: 6, height: 6)
+                Text(L10n.tf("%@ 暂无结果", model.uppercased()))
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var comparisonTable: some View {
+        let labelWidth: CGFloat = sizeClass == .regular ? 104 : 78
+        return VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text(L10n.t("评分项"))
+                    .frame(width: labelWidth, alignment: .leading)
+                ForEach(ForecastComparison.models, id: \.self) { model in
+                    HStack(spacing: 4) {
+                        Circle().fill(modelColor(model)).frame(width: 5, height: 5)
+                        Text(model.uppercased())
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .font(.caption2.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.bottom, 5)
+
+            ForEach(0..<6, id: \.self) { idx in
+                Divider().opacity(0.38)
+                metricRow(idx, labelWidth: labelWidth)
+            }
+        }
+    }
+
+    private func rowTitle(_ idx: Int) -> String {
+        switch idx {
+        case 0: return L10n.t("云量基础分")
+        case 1: return L10n.t("可烧云占比")
+        case 2: return L10n.t("入射遮挡")
+        case 3: return L10n.t("持续时间修正")
+        case 4: return L10n.t("入射 AOD 修正")
+        default: return L10n.t("观测 AOD 修正")
+        }
+    }
+
+    private func metricRow(_ idx: Int, labelWidth: CGFloat) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(rowTitle(idx))
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(width: labelWidth, alignment: .leading)
+                .lineLimit(2)
+            ForEach(ForecastComparison.models, id: \.self) { model in
+                modelMetricCell(idx: idx, report: comparison.report(model))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.vertical, 6)
+    }
+
+    @ViewBuilder
+    private func modelMetricCell(idx: Int, report: JSONObject?) -> some View {
+        if let report {
+            let content = cellContent(idx: idx, report: report)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Text(content.primary)
+                        .font(.caption.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(content.primaryColor)
+                    Text(content.detail)
+                        .font(.caption2)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+                VStack(alignment: .leading, spacing: 1.5) {
+                    Text(content.primary)
+                        .font(.caption.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(content.primaryColor)
+                    Text(content.detail)
+                        .font(.system(size: 10))
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+            }
+        } else {
+            Text("—")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func cellContent(idx: Int, report: JSONObject) -> CellContent {
+        let c = report["quality_components"] as? JSONObject ?? [:]
+        switch idx {
+        case 0:
+            let delta = signedDelta(c["coverage_base_score"] ?? c["coverage_score"])
+            let load = format(c["forward_burnable_cloud_load_effective"] ?? c["forward_burnable_cloud_load_peak"], digits: 2)
+            return CellContent(
+                primary: delta ?? "—",
+                detail: "有效 \(ratioText(c["burnable_cloud_coverage_effective"])) · 载荷 \(load)",
+                primaryColor: deltaColor(delta)
+            )
+        case 1:
+            return CellContent(
+                primary: ratioText(c["forward_burnable_cloud_ratio_peak"]),
+                detail: "前方 \(ratioText(c["forward_burnable_cloud_field_amount_peak"])) / 总 \(ratioText(c["forward_view_cloud_field_amount_peak"]))",
+                primaryColor: .primary
+            )
+        case 2:
+            return CellContent(
+                primary: ratioText(c["solar_incoming_block_risk_at_best_cloud"] ?? c["solar_incoming_block_risk_mean"]),
+                detail: L10n.t("已计入可烧量"),
+                primaryColor: .primary
+            )
+        case 3:
+            let delta = signedDelta(c["duration_adjustment"])
+            let mins = format(report["duration_minutes"] ?? c["duration_minutes"], digits: 0)
+            return CellContent(
+                primary: delta ?? "—",
+                detail: "\(mins) 分 · ×\(format(c["duration_factor"], digits: 3))",
+                primaryColor: deltaColor(delta)
+            )
+        case 4:
+            let delta = signedDelta(c["incoming_aod_adjustment"])
+            return CellContent(
+                primary: delta ?? "—",
+                detail: "AOD \(format(c["quality_aod550"], digits: 3)) · ×\(format(c["incoming_aod_illumination_factor"], digits: 3))",
+                primaryColor: deltaColor(delta)
+            )
+        default:
+            let delta = signedDelta(c["observer_aod_adjustment"])
+            return CellContent(
+                primary: delta ?? "—",
+                detail: "对比 ×\(format(c["observer_aod_contrast_factor"], digits: 3))",
+                primaryColor: deltaColor(delta)
+            )
+        }
+    }
+
+    private var limitingFactorSummary: String? {
+        let gfs = ((comparison.report("gfs")?["quality_components"] as? JSONObject)?["quality_limiting_factor"] as? String)
+            .flatMap { $0.isEmpty ? nil : L10n.qualityLimit($0) }
+        let ec = ((comparison.report("ec")?["quality_components"] as? JSONObject)?["quality_limiting_factor"] as? String)
+            .flatMap { $0.isEmpty ? nil : L10n.qualityLimit($0) }
+        switch (gfs, ec) {
+        case (nil, nil): return nil
+        case let (g?, e?) where g == e: return "当前限制因素：\(g)"
+        case let (g?, e?): return "限制因素 · GFS：\(g) · EC：\(e)"
+        case let (g?, nil): return "GFS 限制因素：\(g)"
+        case let (nil, e?): return "EC 限制因素：\(e)"
+        }
+    }
+
+    private var expandedDetails: some View {
+        let sample = comparison.report("gfs") ?? comparison.report("ec")
+        let sampleComp = sample?["quality_components"] as? JSONObject ?? [:]
+        let radius = valueSuffix(sampleComp["forward_field_radius_km"] ?? sample?["analysis_radius_km"], " km", digits: 0)
+        let sector = valueSuffix(sampleComp["forward_sector_half_angle_deg"], "°", digits: 0, sign: "±")
+        return VStack(alignment: .leading, spacing: 6) {
+            Text("分析范围 \(radius) · 太阳方向扇区 \(sector)")
+                .font(.caption2.weight(.medium)).foregroundStyle(.secondary).monospacedDigit()
+            ForEach(ForecastComparison.models, id: \.self) { model in
+                if let r = comparison.report(model) {
+                    let c = r["quality_components"] as? JSONObject ?? [:]
+                    let src = (r["model_source"] as? String ?? model) == "ec" ? "EC TCC + PL-RH 代理" : "GFS 全量云场"
+                    HStack(spacing: 6) {
+                        Text(model.uppercased())
+                            .font(.caption2.weight(.semibold)).foregroundStyle(modelColor(model))
+                            .frame(width: 28, alignment: .leading)
+                        Text("原始分 \(format(c["raw_quality_index"], digits: 3)) · \(src) · 观测回程 τ \(format(c["observer_return_optical_depth_mean"], digits: 3)) · T \(format(c["observer_return_transmission_mean"], digits: 3))")
+                            .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+            Text("几何遮挡已包含在可烧云量中，不再重复扣分；同一视线由近及远合成（低云遮挡其后中高云）。摄影焦段、Top-K、代表云与云边界不进入主评分。")
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func signedDelta(_ value: Any?) -> String? {
+        guard let number = value as? NSNumber, number.doubleValue.isFinite else { return nil }
+        if abs(number.doubleValue) < 0.0005 { return "0.000" }
+        return String(format: "%+.3f", number.doubleValue)
+    }
+
+    private func deltaColor(_ delta: String?) -> Color {
+        guard let delta, delta != "0.000" else { return Color.secondary }
+        return delta.hasPrefix("-") ? Color.red : Color.green
+    }
+
+    private func valueSuffix(_ value: Any?, _ suffix: String, digits: Int, sign: String = "") -> String {
+        guard let number = value as? NSNumber, number.doubleValue.isFinite else { return "—" }
+        return "\(sign)\(String(format: "%.\(digits)f", number.doubleValue))\(suffix)"
     }
 }
 
@@ -1310,7 +1704,7 @@ struct WorkComparisonCurveView: View {
 
     private func timelineStrip(peakLocal: String?) -> some View {
         let steps = comparison.report(store.selectedModel)?["steps"] as? [JSONObject] ?? []
-        let validSteps = steps.filter { $0["valid"] as? Bool != false }
+        let validSteps = steps.filter(ForecastComparison.isStepValid)
         return Group {
             if !steps.isEmpty {
                 VStack(alignment: .leading, spacing: 5) {
@@ -1318,7 +1712,7 @@ struct WorkComparisonCurveView: View {
                         .font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
                     HStack(alignment: .bottom, spacing: 3) {
                         ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
-                            let valid = step["valid"] as? Bool != false
+                            let valid = ForecastComparison.isStepValid(step)
                             let local = step["valid_time_local"] as? String ?? ""
                             if valid {
                                 let selected = store.pointSelectedTime == local
@@ -1390,11 +1784,11 @@ struct WorkLedgerView: View {
     }
 
     static func filteredSteps(from steps: [JSONObject], showInvalid: Bool) -> [JSONObject] {
-        showInvalid ? steps : steps.filter { $0["valid"] as? Bool != false }
+        showInvalid ? steps : steps.filter(ForecastComparison.isStepValid)
     }
 
     static func hiddenCount(in steps: [JSONObject]) -> Int {
-        steps.filter { $0["valid"] as? Bool == false }.count
+        steps.filter { !ForecastComparison.isStepValid($0) }.count
     }
 
     static func toggleButtonTitle(hiddenCount: Int, showInvalid: Bool) -> String {
@@ -1420,12 +1814,12 @@ struct WorkLedgerView: View {
                             .font(.callout).foregroundStyle(.secondary).padding(28)
                     }
                 }
-                .frame(minWidth: 960, alignment: .leading)
+                .frame(minWidth: 1120, alignment: .leading)
             }
             Divider().opacity(0.45)
             HStack(spacing: 10) {
-                Text(L10n.text("默认仅展示有效判断时次；— 表示缺测。",
-                               "Unevaluated rows are hidden by default; — indicates missing."))
+                Text(L10n.text("云底–云顶为海拔 ASL，云层 AGL 为离地；默认隐藏未判断时次，— 表示缺测。",
+                               "ASL base–top and AGL layer shown; unevaluated rows hidden by default."))
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Spacer(minLength: 8)
@@ -1438,9 +1832,11 @@ struct WorkLedgerView: View {
                             systemImage: filter.showInvalid ? "eye.slash" : "eye"
                         )
                         .font(.caption.weight(.medium))
-                        .frame(minHeight: 36)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 5)
+                        .background(Color.secondary.opacity(0.10), in: Capsule())
                     }
-                    .buttonStyle(.borderless)
+                    .buttonStyle(.plain)
                 }
             }
             .padding(.horizontal, 14).padding(.vertical, 8)
@@ -1451,14 +1847,16 @@ struct WorkLedgerView: View {
         HStack(spacing: 0) {
             Text(L10n.t("时间")).frame(width: 82, alignment: .leading)
             Text(L10n.t("质量")).frame(width: 64, alignment: .leading)
-            Text(L10n.t("档位")).frame(width: 86, alignment: .leading)
+            Text(L10n.t("档位")).frame(width: 96, alignment: .leading)
             Text(L10n.t("可烧")).frame(width: 48, alignment: .leading)
             Text(L10n.t("可烧云量")).frame(width: 78, alignment: .leading)
             Text(L10n.t("主导压力族")).frame(width: 92, alignment: .leading)
+            Text(L10n.t("云底–云顶 ASL")).frame(width: 110, alignment: .leading)
             Text(L10n.t("云层 AGL")).frame(width: 106, alignment: .leading)
             Text(L10n.t("亮度颜色")).frame(width: 68, alignment: .leading)
             Text(L10n.t("可烧比例")).frame(width: 68, alignment: .leading)
             Text(L10n.t("回程透过率")).frame(width: 76, alignment: .leading)
+            Text(L10n.t("入射阻挡")).frame(width: 68, alignment: .leading)
             Text("AOD 550").frame(width: 68, alignment: .leading)
             Text(L10n.t("太阳仰角")).frame(width: 74, alignment: .leading)
             Text(L10n.t("场景")).frame(width: 120, alignment: .leading)
@@ -1469,10 +1867,12 @@ struct WorkLedgerView: View {
     }
 
     private func row(_ item: JSONObject) -> some View {
-        let valid = item["valid"] as? Bool != false
+        let valid = ForecastComparison.isStepValid(item)
         let burnable = item["physically_burnable"] as? Bool
         let base = item["dominant_burnable_cloud_base_agl_mean_m"]
         let top = item["dominant_burnable_cloud_top_agl_mean_m"]
+        let baseASL = item["dominant_burnable_cloud_base_asl_mean_m"]
+        let topASL = item["dominant_burnable_cloud_top_asl_mean_m"]
         let local = item["valid_time_local"] as? String ?? ""
         let selected = !local.isEmpty && selectedTime == local
         let isBest = !local.isEmpty && local == bestTime
@@ -1489,17 +1889,21 @@ struct WorkLedgerView: View {
                 }
                 .frame(width: 82, alignment: .leading)
                 Text(valid ? format(item["instant_quality_index"], digits: 3) : "—").frame(width: 64, alignment: .leading)
-                Text(valid ? item["instant_quality_level"] as? String ?? "—" : L10n.t("缺测")).frame(width: 86, alignment: .leading)
+                Text(valid ? item["instant_quality_level"] as? String ?? "—" : L10n.t("外推窗外/未判断"))
+                    .foregroundStyle(valid ? Color.primary : Color.secondary)
+                    .frame(width: 96, alignment: .leading)
                 Image(systemName: !valid || burnable == nil ? "minus"
                       : burnable == true ? "checkmark" : "xmark")
                     .foregroundStyle(!valid || burnable == nil ? Color.secondary : burnable == true ? coolAccent : Color.orange)
                     .frame(width: 48, alignment: .leading)
                 Text(valid ? percent(item["burnable_cloud_coverage"]) : "—").frame(width: 78, alignment: .leading)
                 Text(valid ? familyLabel(item["dominant_burnable_pressure_family"]) : "—").frame(width: 92, alignment: .leading)
+                Text(valid ? aslRangeLabel(base: baseASL, top: topASL) : "—").frame(width: 110, alignment: .leading)
                 Text(valid ? cloudLayerLabel(base: base, top: top) : "—").frame(width: 106, alignment: .leading)
                 Text(valid ? ratioText(item["brightness_color"]) : "—").frame(width: 68, alignment: .leading)
                 Text(valid ? ratioText(item["forward_burnable_cloud_ratio"]) : "—").frame(width: 68, alignment: .leading)
                 Text(valid ? ratioText(item["observer_return_transmission"]) : "—").frame(width: 76, alignment: .leading)
+                Text(valid ? ratioText(item["solar_incoming_block_risk"]) : "—").frame(width: 68, alignment: .leading)
                 Text(valid ? format(item["quality_aod550"], digits: 2) : "—").frame(width: 68, alignment: .leading)
                 Text(valid ? format(item["solar_elevation_deg"], digits: 1) : "—").frame(width: 74, alignment: .leading)
                 Text(valid ? sceneLabel(item["selected_regime"]) : "—").frame(width: 120, alignment: .leading)
@@ -1513,6 +1917,12 @@ struct WorkLedgerView: View {
         .disabled(!valid || local.isEmpty)
     }
 
+    private func aslRangeLabel(base: Any?, top: Any?) -> String {
+        guard let base = base as? NSNumber, base.doubleValue.isFinite,
+              let top = top as? NSNumber, top.doubleValue.isFinite else { return "—" }
+        return String(format: "%.1f–%.1f km", base.doubleValue / 1000, top.doubleValue / 1000)
+    }
+
     private func cloudLayerLabel(base: Any?, top: Any?) -> String {
         guard let base = base as? NSNumber, let top = top as? NSNumber else { return "—" }
         return "\(Int(base.doubleValue.rounded()))–\(Int(top.doubleValue.rounded())) m"
@@ -1524,12 +1934,15 @@ struct WorkDiagnosticView: View {
     let report: JSONObject?
     let profile: Bool
     var waiting = L10n.t("等待预测")
+    var showHeader = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(profile ? L10n.text("太阳方向大气剖面", "Sun-direction atmospheric profile")
-                 : L10n.text("诊断与时间窗", "Diagnostics & timing"))
-                .font(.subheadline.weight(.semibold))
+            if showHeader {
+                Text(profile ? L10n.text("太阳方向大气剖面", "Sun-direction atmospheric profile")
+                     : L10n.text("诊断与时间窗", "Diagnostics & timing"))
+                    .font(.subheadline.weight(.semibold))
+            }
             if let report {
                 if !profile {
                     Text(summaryText(report))

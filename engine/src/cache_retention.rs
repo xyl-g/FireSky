@@ -528,7 +528,12 @@ fn age_cleanup(
 
 fn referenced_maps(report_roots: &[PathBuf], map_root: &Path) -> Result<BTreeSet<PathBuf>, String> {
     let mut refs = BTreeSet::new();
-    let re = Regex::new(r"map-frame-v25-([0-9a-f]{24})\.json\.gz").map_err(|e| e.to_string())?;
+    static FRAME_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    static TOKEN_RE: std::sync::OnceLock<Regex> = std::sync::OnceLock::new();
+    let frame_re = FRAME_RE
+        .get_or_init(|| Regex::new(r"map-frame-v25-([0-9a-f]{24})\.json\.gz").unwrap());
+    let token_re = TOKEN_RE
+        .get_or_init(|| Regex::new(r#""map_token"\s*:\s*"([0-9a-f]{24})""#).unwrap());
     for root in report_roots {
         for path in walk(root)? {
             if path.extension().and_then(|v| v.to_str()) != Some("json") {
@@ -539,7 +544,7 @@ fn referenced_maps(report_roots: &[PathBuf], map_root: &Path) -> Result<BTreeSet
                 _ => continue,
             };
             let text = String::from_utf8_lossy(&bytes);
-            for captures in re.captures_iter(&text) {
+            for captures in frame_re.captures_iter(&text).chain(token_re.captures_iter(&text)) {
                 refs.insert(
                     map_root
                         .join("native-map-v1")
@@ -747,10 +752,6 @@ pub fn apply(workspace: &Path, payload: &Value) -> Result<Value, String> {
     ));
     if let Some(days) = policy.report_days {
         summary.merge(snapshot_cleanup(&snapshot_root, days, policy.now)?);
-    }
-    let mut preserve = referenced_maps(&report_roots, &map_root)?;
-    preserve.extend(snapshot_map_refs(&snapshot_root, &map_root)?);
-    if let Some(days) = policy.report_days {
         summary.merge(age_cleanup(
             &report_root,
             days,
@@ -758,6 +759,8 @@ pub fn apply(workspace: &Path, payload: &Value) -> Result<Value, String> {
             &BTreeSet::new(),
         )?);
     }
+    let mut preserve = referenced_maps(&report_roots, &map_root)?;
+    preserve.extend(snapshot_map_refs(&snapshot_root, &map_root)?);
     if let Some(days) = policy.map_days {
         summary.merge(age_cleanup(&map_root, days, policy.now, &preserve)?);
     }
@@ -915,13 +918,45 @@ mod tests {
         let maps = root.path().join("maps").join("native-map-v1");
         fs::create_dir_all(&maps).unwrap();
         let token = "a".repeat(24);
+        let token_b = "b".repeat(24);
         let map = maps.join(format!("map-frame-v25-{token}.json.gz"));
+        let map_b = maps.join(format!("map-frame-v25-{token_b}.json.gz"));
         fs::write(&map, b"map").unwrap();
+        fs::write(&map_b, b"map-b").unwrap();
         fs::create_dir_all(&reports).unwrap();
         let mut file = fs::File::create(reports.join("result.json")).unwrap();
         writeln!(file, "map-frame-v25-{token}.json.gz").unwrap();
+        fs::write(
+            reports.join("token_only.json"),
+            json!({"map_token": token_b}).to_string(),
+        )
+        .unwrap();
         let refs = referenced_maps(&[reports], maps.parent().unwrap()).unwrap();
         assert!(refs.contains(&map));
+        assert!(refs.contains(&map_b));
+    }
+
+    #[test]
+    fn apply_releases_maps_from_expired_reports_in_same_pass() {
+        let workspace = tempfile::tempdir().unwrap();
+        let report_root = workspace.path().join("reports/web");
+        let map_root = workspace.path().join(".cache/map-frames");
+        let token = "f".repeat(24);
+        let map = map_root
+            .join("native-map-v1")
+            .join(format!("map-frame-v25-{token}.json.gz"));
+        fs::create_dir_all(map.parent().unwrap()).unwrap();
+        fs::create_dir_all(&report_root).unwrap();
+        fs::write(&map, b"map").unwrap();
+        let report = report_root.join("old.json");
+        fs::write(&report, json!({"map_token": token}).to_string()).unwrap();
+        apply(
+            workspace.path(),
+            &json!({"retention":{"report_days":1,"map_days":1,"now_utc":"2030-01-01T00:00:00Z"}}),
+        )
+        .unwrap();
+        assert!(!report.exists());
+        assert!(!map.exists());
     }
 
     fn future() -> DateTime<Utc> {

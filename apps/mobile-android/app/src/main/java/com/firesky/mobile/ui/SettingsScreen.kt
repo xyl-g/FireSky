@@ -8,6 +8,7 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -30,12 +31,14 @@ import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDownload
 import androidx.compose.material.icons.filled.CloudQueue
+import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.StopCircle
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
@@ -45,6 +48,7 @@ import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -69,8 +73,10 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
@@ -79,6 +85,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.firesky.mobile.R
+import com.firesky.mobile.store.DownloadProbeRow
 import com.firesky.mobile.store.UpdatePhase
 import com.firesky.mobile.store.WorkbenchState
 import com.firesky.mobile.store.WorkbenchStore
@@ -560,6 +567,7 @@ private fun ServerStatusSection(store: WorkbenchStore, state: WorkbenchState) {
         ReadOnlyNoticeBanner(stringResource(R.string.readonly_settings_notice))
         AerosolSourceCard(store, state)
         CamsStatusCard(store, state)
+        DownloadProbeCard(store, state)
         DataSyncReadOnlyCard(state)
         RetentionReadOnlyCard(state)
     }
@@ -621,6 +629,179 @@ private fun CamsStatusCard(store: WorkbenchStore, state: WorkbenchState) {
         )
     }
 }
+
+@Composable
+private fun DownloadProbeCard(store: WorkbenchStore, state: WorkbenchState) {
+    val clipboard = LocalClipboardManager.current
+    Section(
+        title = stringResource(R.string.download_probe_title),
+        icon = Icons.Filled.CloudDownload,
+        iconTint = coolAccentColor(),
+        trailing = {
+            if (state.probingDownloads) {
+                OutlinedButton(
+                    onClick = store::cancelDownloadProbe,
+                    enabled = !state.cancellingDownloadProbe,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 7.dp),
+                ) {
+                    Icon(Icons.Filled.StopCircle, contentDescription = null, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text(stringResource(R.string.download_probe_cancel), fontSize = 11.sp)
+                }
+            } else {
+                Button(
+                    onClick = store::probeDownloads,
+                    enabled = state.online && !state.busy && !state.savingCAMS,
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 7.dp),
+                ) {
+                    Icon(Icons.Filled.CloudDownload, contentDescription = null, modifier = Modifier.size(15.dp))
+                    Spacer(Modifier.width(5.dp))
+                    Text(stringResource(R.string.download_probe_run), fontSize = 11.sp)
+                }
+            }
+        },
+    ) {
+        Text(
+            stringResource(R.string.download_probe_description),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+        )
+        Text(
+            stringResource(
+                R.string.download_probe_route_fmt,
+                state.ecmwfSource.uppercase(),
+                if (state.aerosolSource == "geos-fp") "GEOS-FP" else "CAMS",
+            ),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+        )
+        state.downloadProbeRows.forEachIndexed { index, row ->
+            DownloadProbeResultRow(row)
+            if (index < state.downloadProbeRows.lastIndex) {
+                HorizontalDivider(
+                    modifier = Modifier.padding(start = 30.dp),
+                    thickness = 0.5.dp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.10f),
+                )
+            }
+        }
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            val checkedAt = state.downloadProbeDate
+            val summary = when {
+                state.probingDownloads -> stringResource(
+                    if (state.cancellingDownloadProbe) R.string.download_probe_stopping
+                    else R.string.download_probe_running,
+                )
+                checkedAt != null -> stringResource(
+                    R.string.download_probe_summary_fmt,
+                    formatDownloadProbeDate(checkedAt),
+                    state.downloadProbeRows.count { it.passed },
+                )
+                else -> stringResource(R.string.download_probe_no_result)
+            }
+            Text(
+                summary,
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                modifier = Modifier.weight(1f),
+            )
+            if (checkedAt != null && !state.probingDownloads) {
+                IconButton(
+                    onClick = { clipboard.setText(AnnotatedString(store.downloadProbeReport())) },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.ContentCopy,
+                        contentDescription = stringResource(R.string.cd_copy_probe_report),
+                        modifier = Modifier.size(15.dp),
+                    )
+                }
+            }
+        }
+        if (state.downloadProbeError.isNotEmpty()) {
+            Text(
+                state.downloadProbeError,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DownloadProbeResultRow(row: DownloadProbeRow) {
+    val statusTitle = when (row.state) {
+        "testing" -> stringResource(R.string.download_probe_status_testing)
+        "passed" -> stringResource(R.string.download_probe_status_passed)
+        "not_configured" -> stringResource(R.string.download_probe_status_not_configured)
+        "timeout" -> stringResource(R.string.download_probe_status_timeout)
+        "cancelled" -> stringResource(R.string.download_probe_status_cancelled)
+        "waiting" -> stringResource(R.string.download_probe_status_waiting)
+        else -> stringResource(R.string.download_probe_status_error)
+    }
+    val tint = when (row.state) {
+        "passed" -> Color(0xFF2E8B72)
+        "timeout", "error", "connection_error", "not_configured" -> Color(0xFFD98F24)
+        else -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
+    }
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        if (row.active) {
+            CircularProgressIndicator(Modifier.padding(2.dp).size(15.dp), strokeWidth = 1.7.dp)
+        } else {
+            Icon(
+                if (row.passed) Icons.Filled.CheckCircle else Icons.Filled.Warning,
+                contentDescription = null,
+                modifier = Modifier.padding(top = 2.dp).size(17.dp),
+                tint = tint,
+            )
+        }
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    row.title,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Text(statusTitle, fontSize = 10.sp, color = tint, maxLines = 1)
+            }
+            if (row.host.isNotEmpty()) {
+                Text(row.host, fontSize = 10.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f))
+            }
+            if (row.detail.isNotEmpty()) {
+                Text(
+                    row.detail,
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                )
+            }
+            if (row.bytesReceived > 0 || row.elapsedMs > 0) {
+                Text(row.measurement, fontSize = 10.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f))
+            }
+        }
+    }
+}
+
+private fun formatDownloadProbeDate(value: String): String = runCatching {
+    val instant = java.time.Instant.parse(value)
+    java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss")
+        .withZone(java.time.ZoneId.systemDefault())
+        .format(instant)
+}.getOrDefault(value)
 
 /** 只读后台同步状态卡。 */
 @Composable

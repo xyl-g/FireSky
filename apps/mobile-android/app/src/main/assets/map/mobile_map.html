@@ -48,31 +48,42 @@ body.dark .fs-pin-core {
 }
 #offline-hint {
   position: absolute;
-  inset: 0;
+  inset: 12px auto auto 12px;
   display: none;
+  width: max-content;
+  max-width: calc(100% - 64px);
+  box-sizing: border-box;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   pointer-events: none;
   z-index: 500;
   color: rgba(27, 34, 36, 0.52);
-  font: 500 12px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  text-align: center;
-  padding: 16px;
+  font: 500 11px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  text-align: left;
+  padding: 6px 8px;
+  border: 1px solid rgba(120, 139, 160, 0.2);
+  border-radius: 6px;
+  background: rgba(248, 250, 252, 0.9);
 }
 body.dark #offline-hint {
   color: rgba(230, 237, 240, 0.56);
+  border-color: rgba(151, 168, 187, 0.2);
+  background: rgba(14, 23, 40, 0.9);
 }
 </style>
 <title>FireSky Map</title>
 </head>
 <body>
 <div id="map"></div>
-<div id="offline-hint">底图暂不可用（离线或网络受限）· 仍可点按或缩放</div>
+<div id="offline-hint">Map unavailable · tap or zoom</div>
 <script src="leaflet/leaflet.js"></script>
 <script>
 window.onerror = function(msg, src, line, col) {
   console.error('map error:', msg, src, line, col);
 };
+if (navigator.language.toLowerCase().startsWith('zh')) {
+  document.getElementById('offline-hint').textContent = '底图不可用，仍可点按或缩放';
+}
 const STOPS = [
   [0.00, [253, 230, 220]],
   [0.20, [251, 176, 122]],
@@ -101,18 +112,29 @@ function normalizeLon(lon) {
   return x === -180 ? 180 : x;
 }
 
+const INITIAL_MODE = new URLSearchParams(window.location.search).get('mode') === 'regional' ? 'regional' : 'point';
+const DEFAULT_CHINA_BOUNDS = [[18.0, 73.0], [54.0, 136.0]];
+
 const map = L.map('map', {
   preferCanvas: true,
   attributionControl: false,
   zoomControl: false,
   worldCopyJump: true
-}).setView([30.25, 120.25], 10);
+});
+
+if (INITIAL_MODE === 'regional') {
+  map.fitBounds(DEFAULT_CHINA_BOUNDS, { padding: [14, 14], animate: false });
+} else {
+  map.setView([30.25, 120.25], 10);
+}
 
 let isDark = false;
-let mapMode = 'point';
+let mapMode = INITIAL_MODE;
 let activeTileLayer = null;
 let lastPointKey = '';
 let lastBoundsKey = '';
+let activeRegionalBounds = INITIAL_MODE === 'regional' ? DEFAULT_CHINA_BOUNDS : null;
+let regionalUserInteracted = false;
 
 function makeLightAutoNavi() {
   return L.tileLayer(
@@ -195,8 +217,17 @@ const pinIcon = L.divIcon({
   iconAnchor: [14, 14]
 });
 
-const pinMarker = L.marker([30.25, 120.25], { icon: pinIcon, interactive: false }).addTo(map);
+const pinMarker = L.marker([30.25, 120.25], { icon: pinIcon, interactive: false });
+if (INITIAL_MODE !== 'regional') {
+  pinMarker.addTo(map);
+}
 const regionalLayer = L.layerGroup().addTo(map);
+
+map.on('dragstart zoomstart', () => {
+  if (mapMode === 'regional') {
+    regionalUserInteracted = true;
+  }
+});
 
 applyTileLayer(false);
 
@@ -230,6 +261,8 @@ window.fireSkyMap = {
   },
   setPoint(lat, lon, zoom, recenter) {
     mapMode = 'point';
+    activeRegionalBounds = null;
+    lastBoundsKey = '';
     map.invalidateSize(false);
     regionalLayer.clearLayers();
     if (!map.hasLayer(pinMarker)) pinMarker.addTo(map);
@@ -248,6 +281,7 @@ window.fireSkyMap = {
   setRegional(payloadJson) {
     const state = typeof payloadJson === 'string' ? JSON.parse(payloadJson) : payloadJson;
     mapMode = 'regional';
+    lastPointKey = '';
     map.invalidateSize(false);
     if (map.hasLayer(pinMarker)) map.removeLayer(pinMarker);
     regionalLayer.clearLayers();
@@ -256,8 +290,11 @@ window.fireSkyMap = {
       ? state.bounds : [73.0, 18.0, 136.0, 54.0];
     const [west, south, east, north] = bounds;
     const boundsKey = bounds.join(',');
+    const leafletBounds = [[south, west], [north, east]];
+    activeRegionalBounds = leafletBounds;
     if (boundsKey !== lastBoundsKey) {
-      map.fitBounds([[south, west], [north, east]], { padding: [14, 14], animate: false });
+      regionalUserInteracted = false;
+      map.fitBounds(leafletBounds, { padding: [14, 14], animate: false });
       lastBoundsKey = boundsKey;
     }
 
@@ -313,10 +350,18 @@ window.fireSkyMap = {
   }
 };
 
-if (typeof ResizeObserver !== 'undefined') {
-  new ResizeObserver(() => map.invalidateSize(false)).observe(document.getElementById('map'));
+function syncSizeAndRegionalBounds() {
+  map.invalidateSize(false);
+  const sz = map.getSize();
+  if (mapMode === 'regional' && activeRegionalBounds && !regionalUserInteracted && sz.x > 0 && sz.y > 0) {
+    map.fitBounds(activeRegionalBounds, { padding: [14, 14], animate: false });
+  }
 }
-setTimeout(() => map.invalidateSize(false), 120);
+
+if (typeof ResizeObserver !== 'undefined') {
+  new ResizeObserver(() => syncSizeAndRegionalBounds()).observe(document.getElementById('map'));
+}
+setTimeout(() => syncSizeAndRegionalBounds(), 120);
 </script>
 </body>
 </html>

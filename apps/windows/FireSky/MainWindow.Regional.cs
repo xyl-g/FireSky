@@ -13,6 +13,8 @@ namespace FireSky;
 /// </summary>
 public sealed partial class MainWindow
 {
+    private double regionalCrossSectionZoomScale = 1.0;
+
     internal sealed class ProfileQuerySpec
     {
         internal required JsonObject Payload { get; init; }
@@ -88,7 +90,7 @@ public sealed partial class MainWindow
         {
             RegionalGridSummary.Text = L10n.T("当前模式没有可用区域结果。");
             RegionalProfileStatus.Text = L10n.T("当前模式没有可读取的冻结剖面。");
-            RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
+            CollapseRegionalCrossSection();
             return;
         }
         var points = (report["points"] as JsonArray ?? [])
@@ -197,13 +199,24 @@ public sealed partial class MainWindow
         if (!double.IsFinite(lat) || !double.IsFinite(lon)) return;
         regionalProfileLat = lat;
         regionalProfileLon = lon;
-        regionalProfileModel = TagOf(ResultModel.SelectedItem) is { Length: > 0 } model
+        regionalProfileModel = TagOf(RegionalModel?.SelectedItem) is { Length: > 0 } model
             && model is "gfs" or "ec" ? model : "gfs";
         RegionalProfileSelection.Text =
             $"{regionalProfileModel.ToUpperInvariant()} · {lat:0.00}°, {lon:0.00}°";
         ShowRegionalCellDetail(row);
         await QueryRegionalProfile(report, regionalProfileModel, lat, lon,
             Text(row, "best_time_local"));
+    }
+
+    private void OnRegionalModelChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (!initialized || restoringSession || suppressDraftEvents) return;
+        var tag = TagOf(RegionalModel?.SelectedItem) is { Length: > 0 } selected ? selected : "gfs";
+        SetSelectedResultModel(tag, render: false, updateMap: false);
+        ClearRegionalProfile();
+        RenderResult();
+        _ = UpdateMap(forceFit: page == "regional");
+        ScheduleSessionSave();
     }
 
     /// <summary>网格/城市详情弹层（regional-5）：峰值/事件窗质量、压力族、AOD 修正、置信度「未提供」语义。</summary>
@@ -332,18 +345,16 @@ public sealed partial class MainWindow
     private void RenderProfileSection()
     {
         RegionalProfileRows.Items.Clear();
-        RegionalCrossSection.Visibility = Visibility.Collapsed;
+        CollapseRegionalCrossSection();
         if (regionalProfileState == "loading")
         {
             RegionalProfileStatus.Text = L10n.T("正在读取所选网格的冻结剖面…");
-            RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
             return;
         }
         if (regionalProfileState != "ready" || regionalProfile == null)
         {
             if (regionalProfileState == "idle")
                 RegionalProfileStatus.Text = L10n.T("未选择网格。");
-            RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
             return;
         }
         var fields = regionalProfile["fields"] as JsonObject;
@@ -361,14 +372,88 @@ public sealed partial class MainWindow
             FontSize = 11, Opacity = .8,
         });
         RegionalProfileRows.Items.Add(summary);
+        UpdateRegionalCrossSectionZoomControls();
         RegionalCrossSectionExpand.Visibility = Visibility.Visible;
-        DrawCrossSection(RegionalCrossSection, regionalProfile);
+        activeRegionalCrossSection = regionalProfile;
+    }
+
+    private void CollapseRegionalCrossSection()
+    {
+        activeRegionalCrossSection = null;
+        if (RegionalCrossSectionScrollViewer != null)
+            RegionalCrossSectionScrollViewer.Visibility = Visibility.Collapsed;
+        if (RegionalCrossSection != null)
+            RegionalCrossSection.Visibility = Visibility.Collapsed;
+        if (RegionalProfileZoomControls != null)
+            RegionalProfileZoomControls.Visibility = Visibility.Collapsed;
+        if (RegionalCrossSectionExpand != null)
+        {
+            RegionalCrossSectionExpand.Content = L10n.T("展开剖面图层");
+            RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void OnToggleRegionalCrossSection(object sender, RoutedEventArgs args)
     {
-        RegionalCrossSection.Visibility = RegionalCrossSection.Visibility == Visibility.Visible
-            ? Visibility.Collapsed : Visibility.Visible;
+        var expanded = RegionalCrossSectionScrollViewer.Visibility != Visibility.Visible;
+        RegionalCrossSectionScrollViewer.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+        RegionalCrossSection.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+        RegionalProfileZoomControls.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+        RegionalCrossSectionExpand.Content = L10n.T(expanded ? "收起剖面图层" : "展开剖面图层");
+        if (expanded && activeRegionalCrossSection != null)
+        {
+            ResizeRegionalCrossSectionChart(resetScroll: true);
+            DrawCrossSection(RegionalCrossSection, activeRegionalCrossSection);
+        }
+    }
+
+    private void OnRegionalCrossSectionSizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        if (RegionalCrossSectionScrollViewer.Visibility == Visibility.Visible && activeRegionalCrossSection != null)
+        {
+            ResizeRegionalCrossSectionChart();
+            DrawCrossSection(RegionalCrossSection, activeRegionalCrossSection);
+        }
+    }
+
+    private void OnRegionalProfileZoomOut(object sender, RoutedEventArgs args) =>
+        SetRegionalCrossSectionZoom(regionalCrossSectionZoomScale - 0.25);
+
+    private void OnRegionalProfileZoomIn(object sender, RoutedEventArgs args) =>
+        SetRegionalCrossSectionZoom(regionalCrossSectionZoomScale + 0.25);
+
+    private void OnRegionalProfileZoomReset(object sender, RoutedEventArgs args) =>
+        SetRegionalCrossSectionZoom(1.0, resetScroll: true);
+
+    private void SetRegionalCrossSectionZoom(double scale, bool resetScroll = false)
+    {
+        regionalCrossSectionZoomScale = Math.Clamp(Math.Round(scale * 4) / 4, 1.0, 2.5);
+        UpdateRegionalCrossSectionZoomControls();
+        ResizeRegionalCrossSectionChart(resetScroll || regionalCrossSectionZoomScale == 1.0);
+        if (activeRegionalCrossSection != null
+            && RegionalCrossSectionScrollViewer.Visibility == Visibility.Visible)
+            DrawCrossSection(RegionalCrossSection, activeRegionalCrossSection);
+    }
+
+    private void UpdateRegionalCrossSectionZoomControls()
+    {
+        if (RegionalProfileZoomText == null) return;
+        RegionalProfileZoomText.Text = $"{(int)Math.Round(regionalCrossSectionZoomScale * 100)}%";
+        RegionalProfileZoomOutButton.IsEnabled = regionalCrossSectionZoomScale > 1.0;
+        RegionalProfileZoomInButton.IsEnabled = regionalCrossSectionZoomScale < 2.5;
+        RegionalProfileZoomResetButton.IsEnabled = regionalCrossSectionZoomScale > 1.0;
+    }
+
+    private void ResizeRegionalCrossSectionChart(bool resetScroll = false)
+    {
+        if (RegionalCrossSectionScrollViewer == null || RegionalCrossSection == null) return;
+        var viewportWidth = RegionalCrossSectionScrollViewer.ActualWidth;
+        var viewportHeight = RegionalCrossSectionScrollViewer.ActualHeight;
+        if (viewportWidth <= 120 || viewportHeight <= 120) return;
+
+        RegionalCrossSection.Width = Math.Max(220, viewportWidth * regionalCrossSectionZoomScale);
+        RegionalCrossSection.Height = Math.Max(180, viewportHeight);
+        if (resetScroll) RegionalCrossSectionScrollViewer.ChangeView(0, null, null, true);
     }
 
     private void ClearRegionalProfile()
@@ -377,6 +462,7 @@ public sealed partial class MainWindow
         profileOperation?.Dispose();
         profileOperation = null;
         regionalProfile = null;
+        activeRegionalCrossSection = null;
         regionalProfileModel = "";
         regionalProfileState = "idle";
         regionalProfileLat = regionalProfileLon = 0;
@@ -386,10 +472,9 @@ public sealed partial class MainWindow
             RegionalProfileStatus.Text = L10n.T("未选择网格");
         if (RegionalProfileRows != null)
             RegionalProfileRows.Items.Clear();
-        if (RegionalCrossSection != null)
-            RegionalCrossSection.Visibility = Visibility.Collapsed;
-        if (RegionalCrossSectionExpand != null)
-            RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
+        regionalCrossSectionZoomScale = 1.0;
+        UpdateRegionalCrossSectionZoomControls();
+        CollapseRegionalCrossSection();
     }
 
     private void OnSetDefaultRegion(object sender, RoutedEventArgs args)
@@ -418,7 +503,6 @@ public sealed partial class MainWindow
             RenderRegionPresetsChecks();
         }
         finally { suppressDraftEvents = false; }
-        PageSubtitle.Text = page == "regional" ? RegionalTitle() : PageSubtitle.Text;
         ClearError("regional");
         RenderResult();
         ScheduleSessionSave();
@@ -442,7 +526,7 @@ public sealed partial class MainWindow
                     areas.Add((west, south, east, north));
             }
         }
-        if (areas.Count == 0 && selectedRegions.Contains("china"))
+        if (areas.Count == 0 && (selectedRegions.Contains("china") || !customRegion))
         {
             // 引擎连接前立即按完整中国边界自动缩放（西 73°E，南 18°N，东 136°E，北 54°N）。
             areas.Add((73.0, 18.0, 136.0, 54.0));
@@ -563,7 +647,16 @@ public sealed partial class MainWindow
             return L.imageOverlay(canvas.toDataURL('image/png'), [[south, west], [north, east]], { interactive: false });
           }
           window.fireSky.update = function(state) {
-            if (typeof map !== 'undefined' && prevRegional !== !!state.regional) {
+            const legend = document.querySelector('.legend');
+            if (legend) legend.style.display = state.regional ? 'block' : 'none';
+            const mapEl = document.getElementById('map');
+            if (mapEl) {
+              mapEl.style.background = state.dark ? '#111826' : '#EEF3F8';
+              const tiles = mapEl.querySelector('.leaflet-tile-pane');
+              if (tiles) tiles.style.filter = state.dark ? 'invert(0.92) hue-rotate(180deg) brightness(0.92) contrast(0.92)' : '';
+            }
+            const switchedToRegional = typeof map !== 'undefined' && prevRegional !== !!state.regional;
+            if (switchedToRegional) {
               prevRegional = !!state.regional;
               map.invalidateSize(false);
               lastKey = '';
@@ -584,6 +677,10 @@ public sealed partial class MainWindow
                     && Number.isFinite(state.south) && Number.isFinite(state.north) && state.north > state.south) {
                   gridLines(state.west, state.south, state.east, state.north).addTo(grid);
                 }
+                if ((switchedToRegional || state.force_fit) && Number.isFinite(state.west) && Number.isFinite(state.east)
+                    && Number.isFinite(state.south) && Number.isFinite(state.north) && state.north > state.south) {
+                  setTimeout(() => { map.invalidateSize(false); fitWrapped(state.south, state.west, state.north, state.east); }, 80);
+                }
                 return;
               }
             }
@@ -591,6 +688,10 @@ public sealed partial class MainWindow
             if (state.regional && state.show_grid !== false && Number.isFinite(state.west) && Number.isFinite(state.east)
                 && Number.isFinite(state.south) && Number.isFinite(state.north) && state.north > state.south) {
               gridLines(state.west, state.south, state.east, state.north).addTo(grid);
+            }
+            if ((switchedToRegional || state.force_fit) && state.regional && Number.isFinite(state.west) && Number.isFinite(state.east)
+                && Number.isFinite(state.south) && Number.isFinite(state.north) && state.north > state.south) {
+              setTimeout(() => { map.invalidateSize(false); fitWrapped(state.south, state.west, state.north, state.east); }, 80);
             }
           };
         })();

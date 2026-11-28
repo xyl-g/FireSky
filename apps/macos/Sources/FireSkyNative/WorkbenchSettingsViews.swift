@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// 设置分类：通用 / 数据 / 位置与海拔 / 高级。
+/// 设置分类：通用 / 数据 / 高级。
 /// 数据相关（下载源、CAMS、连通性、同步、保留、目录）统一归「数据」。
 enum SettingsCategory: String, CaseIterable, Identifiable {
     case general, data, advanced
@@ -90,8 +90,8 @@ struct SettingsView: View {
                 Spacer(minLength: 0)
             }
             .padding(.horizontal, 24)
-            .padding(.top, 14)
-            .padding(.bottom, 10)
+            .padding(.top, 12)
+            .padding(.bottom, 8)
 
             // 切换分类保留各表单草稿：所有分区都常驻在 store，不随视图销毁。
             ScrollView {
@@ -103,9 +103,8 @@ struct SettingsView: View {
                     }
                 }
                 .frame(maxWidth: 820, alignment: .leading)
-                .padding(.horizontal, 28)
-                .padding(.top, 10)
-                .padding(.bottom, 32)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 16)
                 .frame(maxWidth: .infinity, alignment: .top)
             }
             .defaultScrollAnchor(.top)
@@ -122,9 +121,9 @@ struct SettingsView: View {
     // MARK: - 通用
 
     private var generalSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 18) {
             settingsHeader(L10n.text("外观与通用", "Appearance & General"),
-                           subtitle: L10n.text("本机显示偏好、语言与应用更新", "Display preferences, language and updates"))
+                           subtitle: L10n.text("本机显示偏好、语言与局域网服务、应用更新", "Display preferences, language, LAN service and updates"))
             settingsStatusSummary
 
             VStack(alignment: .leading, spacing: 0) {
@@ -145,7 +144,7 @@ struct SettingsView: View {
                         .onChange(of: store.appearance) { _, _ in store.saveAppearance() }
                         .accessibilityLabel(L10n.t("主题"))
                     }
-                    Divider().opacity(0.55).padding(.leading, 48)
+                    Divider().opacity(0.5).padding(.leading, 46)
                     settingsRow(
                         symbol: "globe",
                         title: L10n.text("语言", "Language"),
@@ -162,21 +161,21 @@ struct SettingsView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .fireSkySurface(role: .content, cornerRadius: 14)
+                .glassCard()
             }
 
             VStack(alignment: .leading, spacing: 0) {
                 settingsSectionLabel(L10n.text("局域网与外网映射（Cloudflare Tunnel）", "LAN & Cloudflare Tunnel Access"))
                 localServerBlock
                     .padding(.horizontal, 16)
-                    .fireSkySurface(role: .content, cornerRadius: 14)
+                    .glassCard()
             }
 
             VStack(alignment: .leading, spacing: 0) {
                 settingsSectionLabel(L10n.t("软件更新"))
                 updaterBlock
                     .padding(.horizontal, 16)
-                    .fireSkySurface(role: .content, cornerRadius: 14)
+                    .glassCard()
             }
         }
     }
@@ -205,18 +204,16 @@ struct SettingsView: View {
                         Button(L10n.text("停止服务", "Stop")) {
                             localServer.stop()
                         }
-                        .controlSize(.small)
                     } else {
                         Button(L10n.text("启动服务", "Start")) {
                             localServer.start(workspace: store.workspace, customEngineBinary: store.engineBinary)
                         }
                         .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
                         .disabled(localServer.starting || store.workspace.isEmpty)
                     }
                 }
             }
-            Divider().opacity(0.55).padding(.leading, 48)
+            Divider().opacity(0.5).padding(.leading, 46)
             settingsRow(
                 symbol: "antenna.radiowaves.left.and.right",
                 title: L10n.text("监听模式", "Bind Mode"),
@@ -234,7 +231,7 @@ struct SettingsView: View {
                 .frame(width: 248)
                 .disabled(localServer.running || localServer.starting)
             }
-            Divider().opacity(0.55).padding(.leading, 48)
+            Divider().opacity(0.5).padding(.leading, 46)
             settingsRow(
                 symbol: "number",
                 title: L10n.text("监听端口与自启动", "Port & Auto-Start"),
@@ -249,7 +246,7 @@ struct SettingsView: View {
                         .toggleStyle(.checkbox)
                 }
             }
-            Divider().opacity(0.55).padding(.leading, 48)
+            Divider().opacity(0.5).padding(.leading, 46)
             settingsRow(
                 symbol: "key.fill",
                 title: L10n.text("访问令牌鉴权", "Access Token Auth"),
@@ -263,24 +260,21 @@ struct SettingsView: View {
                     ))
                     .labelsHidden()
                     .toggleStyle(.switch)
-                    .controlSize(.small)
                     .disabled(localServer.bindLAN || localServer.running || localServer.starting)
                     if !localServer.token.isEmpty {
                         Button(L10n.text("复制令牌", "Copy Token")) {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(localServer.token, forType: .string)
                         }
-                        .controlSize(.small)
                     }
                     Button(L10n.text("重置令牌", "Regenerate")) {
                         localServer.regenerateToken(workspace: store.workspace)
                     }
-                    .controlSize(.small)
                     .disabled(localServer.running || localServer.starting)
                 }
             }
 
-            Divider().opacity(0.55).padding(.leading, 48)
+            Divider().opacity(0.5).padding(.leading, 46)
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     Text(L10n.text("本机地址", "Local URL"))
@@ -290,12 +284,12 @@ struct SettingsView: View {
                     Button(L10n.text("打开", "Open")) {
                         if let url = URL(string: localServer.localURL) { NSWorkspace.shared.open(url) }
                     }
-                    .controlSize(.mini).disabled(!localServer.running)
+                    .controlSize(.small).disabled(!localServer.running)
                     Button(L10n.text("复制", "Copy")) {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(localServer.localURL, forType: .string)
                     }
-                    .controlSize(.mini)
+                    .controlSize(.small)
                 }
                 if localServer.bindLAN, let lan = localServer.lanURL {
                     HStack(spacing: 8) {
@@ -307,7 +301,7 @@ struct SettingsView: View {
                             NSPasteboard.general.clearContents()
                             NSPasteboard.general.setString(lan, forType: .string)
                         }
-                        .controlSize(.mini)
+                        .controlSize(.small)
                     }
                 }
                 HStack(spacing: 8) {
@@ -322,7 +316,7 @@ struct SettingsView: View {
                         NSPasteboard.general.clearContents()
                         NSPasteboard.general.setString(localServer.cloudflaredCommand, forType: .string)
                     }
-                    .controlSize(.mini)
+                    .controlSize(.small)
                 }
                 if !localServer.errorMessage.isEmpty {
                     Text(localServer.errorMessage)
@@ -353,7 +347,7 @@ struct SettingsView: View {
                             Image(nsImage: qrImage)
                                 .interpolation(.none)
                                 .resizable()
-                                .frame(width: 112, height: 112)
+                                .frame(width: 108, height: 108)
                                 .padding(6)
                                 .background(Color.white, in: RoundedRectangle(cornerRadius: 8))
                         }
@@ -376,7 +370,7 @@ struct SettingsView: View {
                 }
             }
             .padding(.vertical, 12)
-            .padding(.leading, 48)
+            .padding(.leading, 46)
         }
         .onAppear {
             localServer.refreshTokenPreview(workspace: store.workspace)
@@ -406,7 +400,7 @@ struct SettingsView: View {
                 } label: {
                     Label(L10n.text("管理数据源与同步", "Manage data & sync"),
                           systemImage: "arrow.right.circle")
-                        .fireSkyFont(size: 11, weight: .medium, relativeTo: .caption)
+                        .fireSkyFont(size: 11.5, weight: .medium, relativeTo: .caption)
                 }
                 .buttonStyle(.borderless)
                 .accessibilityLabel(L10n.text("查看数据管理与连接状态", "Open data & connection settings"))
@@ -428,20 +422,20 @@ struct SettingsView: View {
                             healthy: localServer.running)
             }
         }
-        .padding(16)
-        .fireSkySurface(role: .content, cornerRadius: 14)
+        .padding(14)
+        .glassCard()
     }
 
     private func statusBadge(title: String, value: String, healthy: Bool) -> some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text(title).fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
+            Text(title).fireSkyFont(size: 10.5, relativeTo: .caption).foregroundStyle(.secondary)
             HStack(spacing: 6) {
                 Circle().fill(healthy ? Color.green : Color.orange).frame(width: 6, height: 6)
                 Text(value).fireSkyFont(size: 12, weight: .semibold).lineLimit(1)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 12).padding(.vertical, 10)
+        .padding(.horizontal, 12).padding(.vertical, 9)
         .background(Color.primary.opacity(scheme == .dark ? 0.045 : 0.03),
                     in: RoundedRectangle(cornerRadius: 10))
         .overlay {
@@ -470,18 +464,16 @@ struct SettingsView: View {
                             store.showUpdateSheet = true
                         }
                         .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
                     }
                     Button(L10n.t("检查更新")) {
                         updater.checkForUpdates(interactive: true)
                         store.showUpdateSheet = true
                     }
-                    .controlSize(.small)
                     .disabled(updater.phase == .checking || updater.phase == .downloading || updater.phase == .installing)
                 }
             }
             if updater.phase == .downloading {
-                Divider().opacity(0.55).padding(.leading, 48)
+                Divider().opacity(0.5).padding(.leading, 46)
                 VStack(alignment: .leading, spacing: 6) {
                     ProgressView(value: max(Double(updater.receivedBytes), 1),
                                  total: max(Double(updater.totalBytes), 1))
@@ -502,12 +494,12 @@ struct SettingsView: View {
                 }
                 .padding(.vertical, 10)
             }
-            Divider().opacity(0.55).padding(.leading, 48)
+            Divider().opacity(0.5).padding(.leading, 46)
             settingsRow(
                 symbol: "sparkles",
                 title: L10n.t("启动时自动检查更新"),
                 subtitle: L10n.text("启动 8 秒后静默检查 GitHub Releases，失败不打扰",
-                                    "Silently check GitHub Releases after launch")
+                                    "Silently check GitHub Releases 8s after launch without interrupting on error")
             ) {
                 Toggle("", isOn: $updater.autoCheck)
                     .labelsHidden()
@@ -543,12 +535,13 @@ struct SettingsView: View {
     private let dataAnchors: [(String, String)] = [
         ("下载源", "anchor-sources"), ("CAMS", "anchor-cams"),
         ("连通性", "anchor-probe"), ("同步", "anchor-sync"),
-        ("保留", "anchor-retention"), ("目录", "anchor-directory"),
+        ("存储与保留", "anchor-retention"), ("目录", "anchor-directory"),
+        ("海拔", "anchor-elevation"),
     ]
 
     private var dataSection: some View {
         ScrollViewReader { proxy in
-            VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 16) {
                 settingsHeader(L10n.text("数据与同步", "Data & Sync"),
                                subtitle: L10n.text("下载源、Copernicus ADS 凭据、连通性探测、后台同步与保留策略",
                                                    "Sources, ADS credentials, connectivity probes, background sync and retention"))
@@ -577,12 +570,12 @@ struct SettingsView: View {
                 dataSourcesBlock
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(18)
-                    .fireSkySurface(role: .content, cornerRadius: 14)
+                    .glassCard()
                     .id("anchor-sources")
                 camsBlock
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(18)
-                    .fireSkySurface(role: .content, cornerRadius: 14)
+                    .glassCard()
                     .id("anchor-cams")
                 DownloadProbeView()
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -590,39 +583,75 @@ struct SettingsView: View {
                 dataSyncBlock
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(18)
-                    .fireSkySurface(role: .content, cornerRadius: 14)
+                    .glassCard()
                     .id("anchor-sync")
                 retentionBlock
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(18)
-                    .fireSkySurface(role: .content, cornerRadius: 14)
+                    .glassCard()
                     .id("anchor-retention")
                 dataDirectoryBlock
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(18)
-                    .fireSkySurface(role: .content, cornerRadius: 14)
+                    .glassCard()
                     .id("anchor-directory")
+                elevationSourceBlock
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(18)
+                    .glassCard()
+                    .id("anchor-elevation")
             }
         }
     }
 
-    private var dataSourcesBlock: some View {
+    private var elevationSourceBlock: some View {
         VStack(alignment: .leading, spacing: 10) {
+            settingsBlockTitle(L10n.text("海拔与时区来源", "Elevation & Timezone Source"))
+            Picker(L10n.text("海拔来源", "Elevation source"), selection: Binding(
+                get: { store.elevationSource },
+                set: { store.elevationSource = $0 }
+            )) {
+                Text(L10n.text("自动（HTTP 优先，SRTM 兜底）", "Auto (HTTP first, SRTM fallback)")).tag("auto")
+                Text(L10n.text("仅 HTTP（open-meteo）", "HTTP only (open-meteo)")).tag("http")
+                Text(L10n.text("SRTM 离线（本地时区 + 瓦片）", "SRTM offline (local time zone + tiles)")).tag("srtm")
+            }
+            .pickerStyle(.radioGroup)
+            .accessibilityLabel(L10n.text("海拔来源", "Elevation source"))
+            Text(L10n.text("切换后对下一次位置搜索或海拔查询生效；不会清空已显示的预测结果。",
+                           "Takes effect on the next location search or metadata lookup."))
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var dataSourcesBlock: some View {
+        VStack(alignment: .leading, spacing: 12) {
             settingsBlockTitle(L10n.t("下载源"))
-            Picker(L10n.t("EC 下载源"), selection: $store.ecmwfSource) {
-                Text(L10n.t("ECMWF 官方")).tag("ecmwf")
-                Text(L10n.t("AWS 欧洲镜像")).tag("aws")
-                Text(L10n.t("Google Cloud 镜像")).tag("google")
-            }.pickerStyle(.radioGroup).disabled(store.probingDownloads)
+            HStack(alignment: .top, spacing: 24) {
+                Picker(L10n.t("EC 下载源"), selection: $store.ecmwfSource) {
+                    Text(L10n.t("ECMWF 官方")).tag("ecmwf")
+                    Text(L10n.t("AWS 欧洲镜像")).tag("aws")
+                    Text(L10n.t("Google Cloud 镜像")).tag("google")
+                }
+                .pickerStyle(.radioGroup)
+                .disabled(store.probingDownloads)
                 .accessibilityLabel("EC 下载源")
-            Divider().padding(.vertical, 2)
-            Picker(L10n.t("AOD 数据来源"), selection: $store.aerosolSource) {
-                Text("CAMS · Copernicus ADS").tag("cams")
-                Text(L10n.t("NASA GEOS-FP（免密钥直连）")).tag("geos-fp")
-            }.pickerStyle(.radioGroup).disabled(store.probingDownloads)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Divider().opacity(0.5)
+
+                Picker(L10n.t("AOD 数据来源"), selection: $store.aerosolSource) {
+                    Text("CAMS · Copernicus ADS").tag("cams")
+                    Text(L10n.t("NASA GEOS-FP（免密钥直连）")).tag("geos-fp")
+                }
+                .pickerStyle(.radioGroup)
+                .disabled(store.probingDownloads)
                 .accessibilityLabel("AOD 数据来源")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
             Text(L10n.t("EC 下载源与 AOD 数据来源同时用于下载探测、数据准备和预测。GFS 使用 NOAA NOMADS；CAMS 需 ADS Key，GEOS-FP 免密钥直连。"))
                 .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -637,17 +666,21 @@ struct SettingsView: View {
             HStack(alignment: .top, spacing: 10) {
                 Image(systemName: store.camsConfigured ? "checkmark.circle.fill" : "key")
                     .foregroundStyle(store.camsConfigured ? Color.green : Color.secondary)
-                Text(store.camsConfigurationDescription).fixedSize(horizontal: false, vertical: true)
+                Text(store.camsConfigurationDescription)
+                    .fixedSize(horizontal: false, vertical: true)
                 Spacer()
                 Button { Task { await store.refreshCAMSConfiguration() } } label: {
                     Image(systemName: "arrow.clockwise")
-                }.buttonStyle(.borderless).help(L10n.t("重新检查 CAMS 配置"))
-                    .accessibilityLabel(L10n.t("重新检查 CAMS 配置"))
-                    .disabled(!store.online || store.savingCAMS)
+                }
+                .buttonStyle(.borderless)
+                .help(L10n.t("重新检查 CAMS 配置"))
+                .accessibilityLabel(L10n.t("重新检查 CAMS 配置"))
+                .disabled(!store.online || store.savingCAMS)
             }
             HStack(spacing: 10) {
                 SecureField(L10n.t("粘贴 ADS Personal Access Token"), text: $store.camsKeyDraft)
-                    .textFieldStyle(.roundedBorder).onSubmit { store.saveCAMSKey() }
+                    .textFieldStyle(.roundedBorder)
+                    .onSubmit { store.saveCAMSKey() }
                     .disabled(!store.canSaveCAMS || store.savingCAMS || store.probingDownloads)
                 if store.savingCAMS { ProgressView().controlSize(.small) }
                 Button(L10n.t("保存 Key"), systemImage: "key.fill") { store.saveCAMSKey() }
@@ -658,14 +691,14 @@ struct SettingsView: View {
                 .font(.caption).foregroundStyle(.secondary)
             if store.camsConfiguration != nil && !store.canSaveCAMS {
                 Text(L10n.t("环境变量正在覆盖配置。修改 CDSAPI_KEY / CDSAPI_URL 后需重新启动应用。"))
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(.orange)
             }
             if !store.camsMessage.isEmpty {
                 Text(store.camsMessage).font(.callout)
                     .foregroundStyle(store.camsSaveFailed ? Color.red : Color.secondary)
             }
-            DisclosureGroup("配置教程", isExpanded: $store.showCAMSTutorial) {
-                VStack(alignment: .leading, spacing: 14) {
+            DisclosureGroup(L10n.t("配置教程"), isExpanded: $store.showCAMSTutorial) {
+                VStack(alignment: .leading, spacing: 12) {
                     tutorialStep("1", "注册并登录 ADS", detail: "使用 ECMWF 账号登录 Atmosphere Data Store。") {
                         Link("打开 ADS", destination: URL(string: "https://ads.atmosphere.copernicus.eu/")!)
                     }
@@ -680,13 +713,13 @@ struct SettingsView: View {
                     }
                     Text(L10n.t("这里只检查本地配置是否完整；Token 是否有效、数据集是否已授权，在实际下载时验证。"))
                         .font(.caption).foregroundStyle(.secondary)
-                }.padding(.top, 12).padding(.bottom, 6)
+                }.padding(.top, 10).padding(.bottom, 4)
             }
         }
     }
 
     private var dataSyncBlock: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 12) {
             settingsBlockTitle(L10n.t("后台同步"))
             Toggle(L10n.t("启用后台同步"), isOn: $store.dataSyncEnabled)
             if store.dataSyncEnabled && !store.dataSyncRetentionConfigured {
@@ -694,10 +727,13 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            HStack(spacing: 12) {
-                Toggle(store.usesGeosFP ? "AOD (GEOS-FP)" : "AOD (CAMS)", isOn: $store.dataSyncCAMS).disabled(!store.dataSyncEnabled)
-                Toggle("GFS", isOn: $store.dataSyncGFS).disabled(!store.dataSyncEnabled)
-                Toggle("EC", isOn: $store.dataSyncEC).disabled(!store.dataSyncEnabled)
+            HStack(spacing: 14) {
+                Toggle(store.usesGeosFP ? "AOD (GEOS-FP)" : "AOD (CAMS)", isOn: $store.dataSyncCAMS)
+                    .disabled(!store.dataSyncEnabled)
+                Toggle("GFS", isOn: $store.dataSyncGFS)
+                    .disabled(!store.dataSyncEnabled)
+                Toggle("EC", isOn: $store.dataSyncEC)
+                    .disabled(!store.dataSyncEnabled)
             }
             HStack(spacing: 12) {
                 dataSyncField("同步间隔", text: $store.dataSyncInterval, suffix: "分钟")
@@ -717,14 +753,14 @@ struct SettingsView: View {
             ))
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack {
+            HStack(spacing: 10) {
                 if store.savingDataSync { ProgressView().controlSize(.small) }
                 if !store.dataSyncMessage.isEmpty {
                     Text(store.dataSyncMessage).font(.caption)
                         .foregroundStyle(store.dataSyncSaveFailed ? Color.red : Color.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 } else if store.dataSyncConfigured {
-                    Text(store.dataSyncEnabled ? "后台同步已启用" : "已配置，当前关闭")
+                    Text(store.dataSyncEnabled ? L10n.t("后台同步已启用") : L10n.text("已配置，当前关闭", "Configured, disabled"))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
@@ -733,14 +769,15 @@ struct SettingsView: View {
                 }
                 .disabled(!store.online || store.busy || store.dataSyncRunning)
                 .help(store.dataSyncEnabled
-                      ? "立即同步已启用的数据源（可解除失败熔断）"
-                      : "先启用并保存后台同步")
+                      ? L10n.t("立即同步已启用的数据源（可解除失败熔断）")
+                      : L10n.t("先启用并保存后台同步"))
                 Button(L10n.t("保存同步设置"), systemImage: "externaldrive.badge.checkmark") {
                     store.saveDataSyncSettings()
                 }
                 .disabled(!store.online || store.savingDataSync || store.busy)
             }
             if store.dataSyncLoaded {
+                Divider().opacity(0.5)
                 VStack(alignment: .leading, spacing: 8) {
                     settingsBlockTitle(L10n.t("同步状态"))
                     dataSyncSourceRow("cams", store.usesGeosFP ? "AOD (GEOS-FP)" : "AOD (CAMS)")
@@ -748,16 +785,15 @@ struct SettingsView: View {
                     dataSyncSourceRow("ec", "EC")
                 }
             }
-            Divider()
+            Divider().opacity(0.5)
             VStack(alignment: .leading, spacing: 8) {
                 settingsBlockTitle(L10n.t("后台助手（关闭应用后仍同步）"))
-
-                        // v1.9.8 一致性校验：plist 工作区与当前数据目录不一致。
-                        if store.helperWorkspaceMismatch {
-                            Text("后台助手配置的工作区与当前数据目录不一致，请重新安装助手（上次同步可能写入了别的目录）。")
-                                .font(.caption).foregroundStyle(.orange)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
+                // v1.9.8 一致性校验：plist 工作区与当前数据目录不一致。
+                if store.helperWorkspaceMismatch {
+                    Text("后台助手配置的工作区与当前数据目录不一致，请重新安装助手（上次同步可能写入了别的目录）。")
+                        .font(.caption).foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Text(L10n.t("安装为系统 launchd 代理，按同步间隔在后台自动拉齐最新已发布周期。"))
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -769,7 +805,9 @@ struct SettingsView: View {
                                 .font(.caption)
                                 .foregroundStyle(store.helperLoaded ? Color.green : Color.orange)
                         } else {
-                            Label(L10n.t("未安装"), systemImage: "circle").font(.caption).foregroundStyle(.secondary)
+                            Label(L10n.t("未安装"), systemImage: "circle")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                         }
                         Spacer()
                         if store.helperBusy { ProgressView().controlSize(.small) }
@@ -802,7 +840,7 @@ struct SettingsView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Divider()
+            Divider().opacity(0.5)
             alertRulesBlock
         }
     }
@@ -852,7 +890,7 @@ struct SettingsView: View {
                         Button(L10n.text("+ 加入当前位置", "+ Add Current")) {
                             store.toggleAlertSpot(currentCandidate)
                         }
-                        .controlSize(.mini)
+                        .controlSize(.small)
                     }
                 }
                 if store.favorites.isEmpty && store.alertSpots.isEmpty {
@@ -912,7 +950,7 @@ struct SettingsView: View {
                 .frame(width: 96)
             }
 
-            HStack {
+            HStack(spacing: 10) {
                 if store.savingAlertRules || store.testingAlertWebhook {
                     ProgressView().controlSize(.small)
                 }
@@ -952,7 +990,7 @@ struct SettingsView: View {
                 Spacer()
                 if activeRulesCount > 0 {
                     Text(L10n.text("已设 \(activeRulesCount) 项规则", "\(activeRulesCount) rules active"))
-                        .fireSkyFont(size: 10, weight: .medium, relativeTo: .caption)
+                        .fireSkyFont(size: 10.5, weight: .medium, relativeTo: .caption)
                         .foregroundStyle(warm)
                         .padding(.horizontal, 8).padding(.vertical, 3)
                         .background(warm.opacity(0.12), in: Capsule())
@@ -1001,10 +1039,10 @@ struct SettingsView: View {
     /// 数据目录独立分区（v1.8.1 用户裁定）：目录固定在系统默认位置
     /// （Application Support），不再提供选择/编辑；保留迁移入口与重连。
     private var dataDirectoryBlock: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             settingsBlockTitle(L10n.t("数据目录"))
             Text(store.workspace)
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.caption.monospaced()).foregroundStyle(.secondary)
                 .textSelection(.enabled)
                 .lineLimit(2)
                 .truncationMode(.middle)
@@ -1020,7 +1058,7 @@ struct SettingsView: View {
                     .disabled(store.busy || store.probingDownloads)
                     .help(L10n.t("重新连接引擎"))
             }
-            Divider()
+            Divider().opacity(0.5)
             layoutStatusBlock
         }
         .onAppear { store.loadLayout() }
@@ -1068,12 +1106,12 @@ struct SettingsView: View {
                         store.showLayoutConfirm = true
                     }
                     .disabled(!store.online || busy || store.layoutLoading)
-                    .help(busy ? "有任务或同步正在进行，完成后再迁移" : "迁移数据到工作区可见目录并重连引擎")
+                    .help(busy ? L10n.t("有任务或同步正在进行，完成后再迁移") : L10n.t("迁移数据到工作区可见目录并重连引擎"))
                 }
             }
         } else {
             Text(store.layoutMessage.isEmpty
-                 ? "已使用可见目录布局（gfs/、reports/ 等直接位于工作区下）。"
+                 ? L10n.t("已使用可见目录布局（gfs/、reports/ 等直接位于工作区下）。")
                  : store.layoutMessage)
                 .font(.caption).foregroundStyle(
                     store.layoutMessageFailed ? Color.red : Color.secondary)
@@ -1086,7 +1124,7 @@ struct SettingsView: View {
         let items = (store.layout?["items"] as? [JSONObject]) ?? []
         let pending = items.filter { ($0["exists"] as? Bool) == true }
         if pending.isEmpty {
-            return "没有检测到旧布局数据（.cache / .firesky），迁移将只写入布局标记。"
+            return L10n.t("没有检测到旧布局数据（.cache / .firesky），迁移将只写入布局标记。")
         }
         let files = pending.reduce(0) { $0 + (($1["file_count"] as? NSNumber)?.intValue ?? 0) }
         let bytes = pending.reduce(0.0) { $0 + (($1["bytes"] as? NSNumber)?.doubleValue ?? 0) }
@@ -1098,12 +1136,12 @@ struct SettingsView: View {
     // MARK: - 高级
 
     private var advancedSection: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: 18) {
             settingsHeader(L10n.text("高级与调试", "Advanced & Diagnostics"),
                            subtitle: L10n.text("开发调试与底层引擎覆写选项", "Developer overrides and engine diagnostics"))
             VStack(spacing: 0) {
                 VStack(alignment: .leading, spacing: 10) {
-                    HStack(spacing: 12) {
+                    HStack(spacing: 14) {
                         settingsIconBadge("cpu")
                         VStack(alignment: .leading, spacing: 2) {
                             Text(L10n.t("Rust 引擎")).fireSkyFont(size: 13, weight: .semibold)
@@ -1120,10 +1158,11 @@ struct SettingsView: View {
                     }
                     TextField(L10n.t("留空使用内置引擎"), text: $store.engineBinary)
                         .textFieldStyle(.roundedBorder)
+                        .padding(.leading, 46)
                 }
-                .padding(.vertical, 14)
+                .padding(.vertical, 12)
 
-                Divider().opacity(0.55).padding(.leading, 48)
+                Divider().opacity(0.5).padding(.leading, 46)
 
                 settingsRow(
                     symbol: "folder.badge.gearshape",
@@ -1135,11 +1174,10 @@ struct SettingsView: View {
                             NSWorkspace.shared.open(URL(fileURLWithPath: store.workspace))
                         }
                     }
-                    .controlSize(.small)
                     .disabled(store.workspace.isEmpty)
                 }
 
-                Divider().opacity(0.55).padding(.leading, 48)
+                Divider().opacity(0.5).padding(.leading, 46)
 
                 settingsRow(
                     symbol: "bolt.horizontal.circle",
@@ -1151,12 +1189,11 @@ struct SettingsView: View {
                     Button(L10n.t("重新连接")) {
                         Task { await store.connect() }
                     }
-                    .controlSize(.small)
                     .disabled(store.busy || store.probingDownloads)
                 }
             }
             .padding(.horizontal, 16)
-            .fireSkySurface(role: .content, cornerRadius: 14)
+            .glassCard()
         }
     }
 
@@ -1181,9 +1218,9 @@ struct SettingsView: View {
 
     private func settingsIconBadge(_ symbol: String) -> some View {
         Image(systemName: symbol)
-            .font(.system(size: 14, weight: .medium))
+            .font(.system(size: 13.5, weight: .medium))
             .foregroundStyle(Color.primary.opacity(0.82))
-            .frame(width: 34, height: 34)
+            .frame(width: 32, height: 32)
             .background(Color.primary.opacity(scheme == .dark ? 0.07 : 0.05),
                         in: RoundedRectangle(cornerRadius: 8))
     }
@@ -1208,7 +1245,7 @@ struct SettingsView: View {
             Spacer(minLength: 16)
             control()
         }
-        .padding(.vertical, 13)
+        .padding(.vertical, 12)
     }
 
     private func settingsBlockTitle(_ title: String) -> some View {
@@ -1257,11 +1294,11 @@ struct SettingsView: View {
             color = coolAccent
         } else {
             switch status {
-            case "synced": badge = "已同步"; color = .green
-            case "current": badge = "已是最新"; color = .green
-            case "failed": badge = "失败"; color = .red
-            case "cancelled": badge = "已取消"; color = .secondary
-            default: badge = "从未同步"; color = .secondary
+            case "synced": badge = L10n.t("已同步"); color = .green
+            case "current": badge = L10n.t("已是最新"); color = .green
+            case "failed": badge = L10n.t("失败"); color = .red
+            case "cancelled": badge = L10n.t("已取消"); color = .secondary
+            default: badge = L10n.t("从未同步"); color = .secondary
             }
         }
         var details: [String] = []
@@ -1299,12 +1336,12 @@ struct SettingsView: View {
             : nil
         let livePercent = (live?["percent"] as? NSNumber)?.doubleValue ?? 0
         let liveMessage = live?["message"] as? String ?? ""
-        return HStack(alignment: .top, spacing: 10) {
-            Text(label).font(.callout.weight(.medium)).frame(width: 44, alignment: .leading)
-            VStack(alignment: .leading, spacing: 3) {
+        return HStack(alignment: .top, spacing: 12) {
+            Text(label).font(.callout.weight(.medium)).frame(width: 108, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
                 if live != nil {
-                    HStack(spacing: 6) {
-                        ProgressView(value: livePercent, total: 100).frame(width: 90)
+                    HStack(spacing: 8) {
+                        ProgressView(value: livePercent, total: 100).frame(width: 100)
                         Text("\(Int(livePercent))%").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
                     if !liveMessage.isEmpty {
@@ -1317,7 +1354,7 @@ struct SettingsView: View {
                         Text(L10n.t("后台同步中")).font(.callout).foregroundStyle(color)
                     }
                 } else {
-                    Text(badge).font(.callout).foregroundStyle(color)
+                    Text(badge).font(.callout.weight(.medium)).foregroundStyle(color)
                 }
                 if !details.isEmpty {
                     Text(details.joined(separator: " · "))
@@ -1327,6 +1364,7 @@ struct SettingsView: View {
             }
             Spacer()
         }
+        .padding(.vertical, 3)
     }
 
     /// ISO8601 UTC → 本地短时间（月日 时:分），用于「上次同步」展示。

@@ -270,21 +270,39 @@ struct AccentButton: View {
     var disabled = false
     let action: () -> Void
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    private var titleContent: some View {
+        HStack(spacing: 8) {
+            Text(title)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            if staleIndicator {
+                Text("●")
+                    .font(.caption2)
+                    .foregroundStyle(
+                        disabled
+                            ? Color.secondary
+                            : (scheme == .dark ? Color(0x24, 0x18, 0x10) : Color(red: 1.0, green: 0.93, blue: 0.62))
+                    )
+                    .accessibilityLabel(L10n.text("参数已变更", "Parameters changed"))
+            }
+        }
+    }
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                if let systemImage { Image(systemName: systemImage) }
-                Text(title).multilineTextAlignment(.center)
-                if staleIndicator {
-                    Text("●")
-                        .font(.caption2)
-                        .foregroundStyle(
-                            disabled
-                                ? Color.secondary
-                                : (scheme == .dark ? Color(0x24, 0x18, 0x10) : Color(red: 1.0, green: 0.93, blue: 0.62))
-                        )
-                        .accessibilityLabel(L10n.text("参数已变更", "Parameters changed"))
+            Group {
+                if typeSize.isAccessibilitySize {
+                    VStack(spacing: 8) {
+                        if let systemImage { Image(systemName: systemImage) }
+                        titleContent
+                    }
+                } else {
+                    HStack(spacing: 8) {
+                        if let systemImage { Image(systemName: systemImage) }
+                        titleContent
+                    }
                 }
             }
             .font(.body.weight(.semibold))
@@ -303,6 +321,7 @@ struct AccentButton: View {
         }
         .buttonStyle(.plain)
         .disabled(disabled)
+        .fixedSize(horizontal: false, vertical: typeSize.isAccessibilitySize)
     }
 }
 

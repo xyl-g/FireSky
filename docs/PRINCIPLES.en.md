@@ -101,7 +101,7 @@ Single-level opacity is itself a blend of RH and condensate proxies
 
 $$o=\mathrm{clamp}_{01}\left(0.22 u_{\rm rh}+0.78 u_{\rm op}\right),\qquad u_{\rm rh}=\mathrm{clamp}_{01}\left(\frac{{\rm RH}-82}{16}\right)$$
 
-$$u_{\rm op}=\mathrm{clamp}_{01}\left(0.35+0.65 u_{\rm cond}\right),\qquad u_{\rm cond}=\mathrm{clamp}_{01}\left(\frac{\log_{10}q_{c}+8}{3}\right)$$
+$$u_{\rm op}=\mathrm{clamp}_{01}\left(0.35+0.65 u_{\rm cond}\right),\qquad u_{\rm cond}=\mathrm{clamp}_{01}\left(\frac{\log_{10}q_{c}+7}{3.5}\right)$$
 
 $q_c$ is liquid plus ice mixing ratio (kg/kg). Relative humidity always keeps a
 22 % weight (it separates a hazy background from a cloud that can actually
@@ -418,7 +418,7 @@ Level thresholds (`forecast_characteristics.py:12-27`):
 
 | $q$ | Label |
 |---|---|
-| $\lt 0.001$ | no glow (无明显火烧云) |
+| $\lt 0.02$ | no glow (无明显火烧云) |
 | $\lt 0.05$ | faintest burn (微微烧) |
 | $\lt 0.20$ | small burn (小烧) |
 | $\lt 0.40$ | small-to-medium (小烧到中等烧) |
@@ -450,7 +450,7 @@ $$t_{\rm low}=0.55+0.15 \mathrm{clamp}_{01}\left(\frac{z_{\rm terrain}-1500}{200
 
 $$q_{\rm conv}=\mathrm{clamp}\Big(1-0.88 S\left(r_{\rm path}; 0.18, 0.72\right),  {\rm low}=0.12\Big)$$
 
-$$\text{nowcast}=\min\left(q, q_{\rm conv}\right)$$
+$$\text{nowcast}=\min\left(q, 2.5\, q_{\rm conv}\right)$$
 
 A missing satellite source fails closed — there is no fallback to model scoring.
 

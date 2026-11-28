@@ -29,6 +29,7 @@ public sealed partial class MainWindow : Window
     private bool busy, searching, locating, savingCams, savingRetention, savingSync;
     private bool probingDownloads, cancellingProbe, dataSyncRunning;
     private bool initialized, mapReady, online;
+    private bool mapPickerDialogOpen;
     private bool restoringSession, suppressDraftEvents;
     private string page = "point", resultKind = "";
     private string settingsCategory = "data";
@@ -72,7 +73,7 @@ public sealed partial class MainWindow : Window
     private readonly Dictionary<string, JsonObject> dataSyncProgress = new();
     private Microsoft.UI.Dispatching.DispatcherQueueTimer? syncTickTimer, sessionSaveTimer;
     private readonly string settingsFile = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "FireSky", "settings.json");
+        App.LocalDataRoot, "FireSky", "settings.json");
     private int locationRevision;
     private readonly Dictionary<string, TextBlock> metricValues = new();
     private readonly Dictionary<string, StackPanel> heroPanels = new();
@@ -82,12 +83,21 @@ public sealed partial class MainWindow : Window
     private CancellationTokenSource? taskEventsOperation;
     private int taskHistoryTotal, taskHistoryIssues;
     private bool taskHistoryLoaded, taskHistoryLoading;
+    private bool taskHistoryHasMore;
+    private string? taskHistoryCursor;
     private bool taskHistoryEventsLoading, taskHistoryEventsTruncated;
     private string taskHistoryError = "", taskHistoryEventsError = "";
     private string selectedTaskHistoryId = "", restoringTaskHistoryId = "", forgettingTaskHistoryId = "";
     private string historyKindFilter = "all";
-    private sealed record ChartPoint(string Model, DateTimeOffset Time, double Quality, string Local);
+    private string phenomenon = "dusk";
+    private string appearancePref = "system";
+    private string locationViewMode = "map";
+    private bool coordEditorExpanded;
+    private int selectedResultTabIndex;
+    private string selectedResultModel = "gfs";
+    private sealed record ChartPoint(string Model, DateTimeOffset Time, double Quality, string Local, int Segment = 0);
     private List<ChartPoint>? chartPoints;
+    private bool isUiAuditMock;
     private sealed record MetricSpec(string Key, string Title, string Caption);
     private static readonly MetricSpec[] Metrics =
     [
@@ -117,6 +127,7 @@ public sealed partial class MainWindow : Window
             presenter.PreferredMinimumHeight = 720;
         }
         BuildHeroCards();
+        InitializeSegmentedControls();
         AttachUpdater();
         BuildTerrainRegionPicker();
         TargetDate.Date = DateTimeOffset.Now;
@@ -125,21 +136,34 @@ public sealed partial class MainWindow : Window
         RestoreSession();
         Navigation.SelectedItem = Navigation.MenuItems[0];
         initialized = true;
-        LanguageChoice.SelectedIndex = L10n.Preference switch { "zh" => 1, "en" => 2, _ => 0 };
+        SetLanguagePreference(L10n.Preference, apply: false);
         ApplyLocalization();
         UpdateRuntimeSummary();
+        UpdateLocationSummary();
         AddKeyboardAccelerators();
+        ApplyTitleBarTheme();
         Root.ActualThemeChanged += (_, _) =>
         {
             if (!initialized) return;
+            RefreshSegmentedControlThemes();
+            ApplyTitleBarTheme();
+            ApplyMapThemeBackground();
             BuildMetrics();
             RenderResult();
+            _ = UpdateMap();
             if (page == "data") _ = LoadInventory();
             UpdateRuntimeSummary();
         };
         Root.Loaded += async (_, _) =>
         {
-            await InitializeMap();
+            var uiAuditMock = Environment.GetEnvironmentVariable("FIRESKY_UI_AUDIT_MOCK") == "1";
+            // Keep fixture runs deterministic and prevent external map tile requests.
+            if (!uiAuditMock) await InitializeMap();
+            if (uiAuditMock)
+            {
+                await RunUiAuditMockAsync();
+                return;
+            }
             await Connect();
             StartAutoUpdateCheck();
         };
@@ -175,6 +199,8 @@ public sealed partial class MainWindow : Window
     internal static long? Integer(JsonNode? node, string key)
     {
         if (node?[key] is not System.Text.Json.Nodes.JsonValue value) return null;
+        if (value.TryGetValue<long>(out var whole)) return whole;
+        if (value.TryGetValue<int>(out var intVal)) return intVal;
         try
         {
             var number = value.GetValue<double>();
@@ -380,6 +406,9 @@ public sealed partial class MainWindow : Window
 
     // ---------- 连接与启动 ----------
 
+    private static string DefaultWorkspaceDirectory() =>
+        Path.Combine(App.LocalDataRoot, "FireSky", "Data");
+
     private async Task Connect()
     {
         online = false;
@@ -387,6 +416,9 @@ public sealed partial class MainWindow : Window
         Status.Text = L10n.T("正在连接引擎");
         try
         {
+            if (string.IsNullOrWhiteSpace(WorkspacePath.Text))
+                WorkspacePath.Text = DefaultWorkspaceDirectory();
+            Directory.CreateDirectory(WorkspacePath.Text);
             engine.Start(WorkspacePath.Text, EnginePath.Text);
             var hello = await engine.Call("hello");
             if (Number(hello, "protocol") != 1) throw new InvalidOperationException(L10n.T("引擎协议版本不匹配。"));
@@ -438,8 +470,7 @@ public sealed partial class MainWindow : Window
         };
         if (await dialog.ShowAsync() == ContentDialogResult.Primary)
         {
-            Navigation.SelectedItem = Navigation.MenuItems[4] is { } settingsItem
-                ? Navigation.MenuItems[4] : Navigation.SettingsItem;
+            Navigation.SelectedItem = Navigation.SettingsItem;
             settingsCategory = "data";
             ApplySettingsCategory();
             CamTutorial.IsExpanded = true;
@@ -454,18 +485,167 @@ public sealed partial class MainWindow : Window
         catch (Exception) { return []; }
     }
 
+    // ---------- 紧凑分段胶囊控件（对齐 macOS WorkSegments / WorkAnalysisTabs） ----------
+
+    private void InitializeSegmentedControls()
+    {
+        RebuildLocalizedPills();
+    }
+
+    private void RebuildLocalizedPills()
+    {
+        BuildSegmentedPills(LocationViewPills,
+            [("map", L10n.T("地图")), ("favorites", L10n.T("收藏"))],
+            locationViewMode, tag => SetLocationViewMode(tag), compact: true);
+        BuildSegmentedPills(DatePillHost,
+            [("今天", L10n.T("今天")), ("明天", L10n.T("明天")), ("自定义", L10n.T("自定义"))],
+            dateTab, tag => SelectDateTab(tag));
+        BuildSegmentedPills(PhenomenonPillHost,
+            [("dawn", L10n.T("朝霞")), ("dusk", L10n.T("晚霞"))],
+            phenomenon, tag => SetPhenomenon(tag));
+        BuildSegmentedPills(ResultTabPills,
+            [("0", L10n.T("概览")), ("1", L10n.T("大气剖面")), ("2", L10n.T("逐时台账"))],
+            selectedResultTabIndex.ToString(CultureInfo.InvariantCulture),
+            tag => SelectResultTab(int.TryParse(tag, out var idx) ? idx : 0));
+        BuildSegmentedPills(ResultModelPills,
+            [("gfs", "GFS"), ("ec", "EC")],
+            selectedResultModel, tag => SetSelectedResultModel(tag), compact: true);
+        BuildSegmentedPills(RegionalResultModelPills,
+            [("gfs", "GFS"), ("ec", "EC")],
+            selectedResultModel, tag => SetSelectedResultModel(tag), compact: true);
+        BuildSegmentedPills(HistoryFilterPills,
+            [("all", L10n.T("全部")), ("active", L10n.T("主动任务")), ("sync", L10n.T("后台同步"))],
+            historyKindFilter, tag => SelectHistoryFilter(tag));
+        BuildSegmentedPills(SettingsCategoryPills,
+            [("general", L10n.T("通用")), ("data", L10n.T("数据")), ("advanced", L10n.T("高级"))],
+            settingsCategory, tag => SelectSettingsCategory(tag));
+        BuildSegmentedPills(AppearancePills,
+            [("system", L10n.T("跟随系统")), ("light", L10n.T("浅色")), ("dark", L10n.T("深色"))],
+            appearancePref, tag => SetAppearancePreference(tag));
+        BuildSegmentedPills(LanguagePills,
+            [("system", "跟随系统 / System"), ("zh", "中文"), ("en", "English")],
+            L10n.Preference, tag => SetLanguagePreference(tag));
+    }
+
+    private void RefreshSegmentedControlThemes()
+    {
+        UpdateSegmentedPills(LocationViewPills, locationViewMode);
+        UpdateSegmentedPills(DatePillHost, dateTab);
+        UpdateSegmentedPills(PhenomenonPillHost, phenomenon);
+        UpdateSegmentedPills(ResultTabPills, selectedResultTabIndex.ToString(CultureInfo.InvariantCulture));
+        UpdateSegmentedPills(ResultModelPills, selectedResultModel);
+        UpdateSegmentedPills(RegionalResultModelPills, selectedResultModel);
+        UpdateSegmentedPills(HistoryFilterPills, historyKindFilter);
+        UpdateSegmentedPills(SettingsCategoryPills, settingsCategory);
+        UpdateSegmentedPills(AppearancePills, appearancePref);
+        UpdateSegmentedPills(LanguagePills, L10n.Preference);
+    }
+
+    private void BuildSegmentedPills(Panel? host, IReadOnlyList<(string Tag, string Label)> items,
+        string selectedTag, Action<string> onSelect, bool compact = false)
+    {
+        if (host == null) return;
+        host.Children.Clear();
+        if (host is Grid grid)
+        {
+            grid.ColumnDefinitions.Clear();
+            for (var i = 0; i < items.Count; i++)
+                grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        }
+        var pad = compact ? new Thickness(9, 3, 9, 3) : new Thickness(11, 5, 11, 5);
+        for (var i = 0; i < items.Count; i++)
+        {
+            var (tag, label) = items[i];
+            var btn = new Button
+            {
+                Tag = tag,
+                Padding = pad,
+                MinWidth = 0,
+                MinHeight = 0,
+                CornerRadius = new CornerRadius(9),
+                BorderThickness = new Thickness(1),
+                HorizontalAlignment = host is Grid ? HorizontalAlignment.Stretch : HorizontalAlignment.Left,
+                HorizontalContentAlignment = HorizontalAlignment.Center,
+                Content = new TextBlock
+                {
+                    Text = label,
+                    FontSize = compact ? 11 : 12,
+                    TextWrapping = TextWrapping.NoWrap,
+                },
+            };
+            btn.Click += (_, _) => onSelect(tag);
+            if (host is Grid) Grid.SetColumn(btn, i);
+            host.Children.Add(btn);
+        }
+        UpdateSegmentedPills(host, selectedTag);
+    }
+
+    private Brush SecondaryBrush() => new SolidColorBrush(
+        Root?.ActualTheme == ElementTheme.Dark
+            ? Windows.UI.Color.FromArgb(255, 0xA8, 0xB5, 0xC8)
+            : Windows.UI.Color.FromArgb(255, 0x5E, 0x6A, 0x7D));
+
+    private void ApplyTitleBarTheme()
+    {
+        if (AppWindow?.TitleBar is not { } tb) return;
+        var isDark = Root?.ActualTheme == ElementTheme.Dark;
+        var fg = isDark ? Colors.White : Windows.UI.Color.FromArgb(255, 0x1A, 0x1D, 0x24);
+        var hoverBg = isDark ? Windows.UI.Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF) : Windows.UI.Color.FromArgb(0x14, 0x00, 0x00, 0x00);
+        tb.ButtonForegroundColor = fg;
+        tb.ButtonHoverForegroundColor = fg;
+        tb.ButtonHoverBackgroundColor = hoverBg;
+        tb.ButtonPressedForegroundColor = fg;
+        tb.ButtonInactiveForegroundColor = isDark
+            ? Windows.UI.Color.FromArgb(255, 0x99, 0xA4, 0xB6)
+            : Windows.UI.Color.FromArgb(255, 0x6D, 0x77, 0x86);
+    }
+
+    private void UpdateSegmentedPills(Panel? host, string selectedTag)
+    {
+        if (host == null) return;
+        var isDark = Root?.ActualTheme == ElementTheme.Dark;
+        var cardBrush = new SolidColorBrush(isDark
+            ? Windows.UI.Color.FromArgb(255, 0x28, 0x35, 0x4D)
+            : Colors.White);
+        var cardBorder = new SolidColorBrush(isDark
+            ? Windows.UI.Color.FromArgb(255, 0x5B, 0x70, 0x91)
+            : Windows.UI.Color.FromArgb(255, 0xCF, 0xDF, 0xED));
+        var transparentBrush = new SolidColorBrush(Colors.Transparent);
+        var primaryBrush = new SolidColorBrush(isDark
+            ? Colors.White
+            : Windows.UI.Color.FromArgb(255, 0x18, 0x1C, 0x24));
+        var secondaryBrush = new SolidColorBrush(isDark
+            ? Windows.UI.Color.FromArgb(255, 0xB2, 0xBF, 0xD2)
+            : Windows.UI.Color.FromArgb(255, 0x5D, 0x68, 0x78));
+        foreach (var child in host.Children.OfType<Button>())
+        {
+            var active = string.Equals(child.Tag?.ToString(), selectedTag, StringComparison.Ordinal);
+            child.Background = active ? cardBrush : transparentBrush;
+            child.BorderBrush = active ? cardBorder : transparentBrush;
+            if (child.Content is TextBlock tb)
+            {
+                tb.FontWeight = active
+                    ? Microsoft.UI.Text.FontWeights.SemiBold
+                    : Microsoft.UI.Text.FontWeights.Normal;
+                tb.Foreground = active ? primaryBrush : secondaryBrush;
+            }
+        }
+    }
+
     private void LoadSettings()
     {
         var saved = LoadSettingsJson();
         var root = Environment.GetEnvironmentVariable("FIRESKY_WORKSPACE") ?? "";
-        WorkspacePath.Text = root.Length > 0 ? root : Text(saved, "workspace");
+        var savedWorkspace = Text(saved, "workspace").Trim();
+        var workspace = root.Length > 0 ? root
+            : savedWorkspace.Length > 0 ? savedWorkspace
+            : DefaultWorkspaceDirectory();
+        try { Directory.CreateDirectory(workspace); } catch { }
+        WorkspacePath.Text = workspace;
         EnginePath.Text = Environment.GetEnvironmentVariable("FIRESKY_RUST_ENGINE_BIN")
             ?? Text(saved, "engineBinary");
-        Appearance.SelectedIndex = Text(saved, "appearance") switch { "light" => 1, "dark" => 2, _ => 0 };
-        Root.RequestedTheme = Appearance.SelectedIndex switch
-        {
-            1 => ElementTheme.Light, 2 => ElementTheme.Dark, _ => ElementTheme.Default,
-        };
+        appearancePref = Text(saved, "appearance") is { Length: > 0 } app && app is "light" or "dark" ? app : "system";
+        SetAppearancePreference(appearancePref, save: false);
         ecmwfSource = Text(saved, "ecmwfSource") is { Length: > 0 } source && source is "ecmwf" or "aws" or "google"
             ? source : "ecmwf";
         EcmwfSourcePicker.SelectedIndex = ecmwfSource switch { "aws" => 1, "google" => 2, _ => 0 };
@@ -480,11 +660,10 @@ public sealed partial class MainWindow : Window
         RenderFavorites();
         // 草稿随分类切换保留（v1.2.0 设置分类合同）。
         settingsCategory = Text(saved, "settingsCategory") is { Length: > 0 } category
-            && category is "general" or "data" or "location" or "advanced" ? category : "data";
-        SettingsCategories.SelectedIndex = settingsCategory switch
-        {
-            "general" => 0, "data" => 1, "location" => 2, _ => 3,
-        };
+            && category is "general" or "data" or "location" or "advanced"
+                ? category == "location" ? "data" : category
+                : "data";
+        SelectSettingsCategory(settingsCategory, save: false);
         updater.SetAutoCheck(Flag(saved, "autoUpdateCheck") || saved["autoUpdateCheck"] == null);
         var savedDefaults = (saved["defaultRegionalPreset"] as JsonArray ?? [])
             .Select(node => StringOrNull(node))
@@ -508,7 +687,7 @@ public sealed partial class MainWindow : Window
         var saved = LoadSettingsJson();
         saved["workspace"] = WorkspacePath.Text;
         saved["engineBinary"] = EnginePath.Text;
-        saved["appearance"] = TagOf(Appearance.SelectedItem);
+        saved["appearance"] = appearancePref;
         saved["ecmwfSource"] = ecmwfSource;
         saved["aerosolSource"] = aerosolSource;
         saved["elevationSource"] = elevationSource;
@@ -537,7 +716,7 @@ public sealed partial class MainWindow : Window
             ["metadata_ready"] = MetadataReady.IsChecked == true,
             ["date"] = TargetDate.Date?.ToUnixTimeSeconds(),
             ["date_tab"] = dateTab,
-            ["phenomenon"] = TagOf(Phenomenon.SelectedItem),
+            ["phenomenon"] = phenomenon,
             ["page"] = page,
             ["selected_regions"] = new JsonArray(selectedRegions.OrderBy(v => v).Select(v => JsonValue.Create(v)).ToArray<JsonNode>()),
             ["custom_region"] = customRegion,
@@ -578,8 +757,8 @@ public sealed partial class MainWindow : Window
             if (Integer(saved, "date") is { } epoch)
                 TargetDate.Date = DateTimeOffset.FromUnixTimeSeconds(epoch);
             dateTab = Text(saved, "date_tab") is { Length: > 0 } tab && tab is "今天" or "明天" or "自定义" ? tab : "今天";
-            if (Text(saved, "phenomenon") is { Length: > 0 } phenomenon && phenomenon is "dawn" or "dusk")
-                Phenomenon.SelectedIndex = phenomenon == "dawn" ? 0 : 1;
+            if (Text(saved, "phenomenon") is { Length: > 0 } savedPhenomenon && savedPhenomenon is "dawn" or "dusk")
+                SetPhenomenon(savedPhenomenon, save: false);
             selectedRegions.Clear();
             foreach (var region in saved["selected_regions"] as JsonArray ?? [])
                 if (region?.GetValue<string>() is { Length: > 0 } code) selectedRegions.Add(code);
@@ -616,20 +795,13 @@ public sealed partial class MainWindow : Window
         DataPage.Visibility = page == "data" ? Visibility.Visible : Visibility.Collapsed;
         HistoryPage.Visibility = page == "history" ? Visibility.Visible : Visibility.Collapsed;
         SettingsPage.Visibility = page == "settings" ? Visibility.Visible : Visibility.Collapsed;
-        PageTitle.Text = L10n.Translate(page switch
-        {
-            "regional" => L10n.T("预测区域"), "nowcast" => L10n.T("实况观测"), "data" => L10n.T("数据管理"),
-            "history" => L10n.T("任务历史"), "settings" => L10n.T("设置"), _ => L10n.T("观测点"),
-        });
-        PageSubtitle.Text = page switch
-        {
-            "point" or "nowcast" => $"{LocationName.Text} · {LatLonLabel(Latitude.Value, Longitude.Value)}",
-            "regional" => RegionalTitle(),
-            _ => "",
-        };
         PointFields.Visibility = page == "regional" ? Visibility.Collapsed : Visibility.Visible;
         RegionFields.Visibility = page == "regional" ? Visibility.Visible : Visibility.Collapsed;
-        StarButton.Visibility = page == "regional" ? Visibility.Collapsed : Visibility.Visible;
+        if (ExpandMapButton != null)
+            ExpandMapButton.Visibility = page == "regional" || locationViewMode == "favorites"
+                ? Visibility.Collapsed : Visibility.Visible;
+        if (LocationViewPillTrack != null)
+            LocationViewPillTrack.Visibility = page == "regional" ? Visibility.Collapsed : Visibility.Visible;
         SourcesLabel.Text = page == "nowcast" ? L10n.T("GFS · CAMS · 卫星帧") : "GFS + EC";
         PredictButton.Content = page == "nowcast" ? L10n.T("检查并预热") : L10n.T("开始预测");
         if (page == "regional")
@@ -639,7 +811,10 @@ public sealed partial class MainWindow : Window
             RegionalMapHost.Visibility = Visibility.Visible;
             RegionalInspector.Visibility = Visibility.Visible;
             MiniMapHost.Visibility = Visibility.Collapsed;
+            if (FavoritesPanel != null) FavoritesPanel.Visibility = Visibility.Collapsed;
             ResultTabs.Visibility = Visibility.Collapsed;
+            var regionalModelTag = TagOf(RegionalModel?.SelectedItem) is { Length: > 0 } m ? m : selectedResultModel;
+            SetSelectedResultModel(regionalModelTag, render: false, updateMap: false);
         }
         else
         {
@@ -647,22 +822,26 @@ public sealed partial class MainWindow : Window
             MiniMapHost.Child = Map;
             RegionalMapHost.Visibility = Visibility.Collapsed;
             RegionalInspector.Visibility = Visibility.Collapsed;
-            MiniMapHost.Visibility = Visibility.Visible;
+            SetLocationViewMode(locationViewMode, updateMap: false);
             ResultTabs.Visibility = Visibility.Visible;
         }
+        UpdateLocationSummary();
         RenderPageErrors();
         RenderResult();
-        _ = UpdateMap();
-        if (page == "data")
+        _ = UpdateMap(forceFit: page == "regional");
+        if (!isUiAuditMock)
         {
-            _ = LoadInventory();
-            _ = LoadTerrain();
-        }
-        if (page == "history") _ = LoadTaskHistory();
-        if (page == "settings")
-        {
-            _ = LoadRetentionSettings();
-            UpdateRuntimeSummary();
+            if (page == "data")
+            {
+                _ = LoadInventory();
+                _ = LoadTerrain();
+            }
+            if (page == "history") _ = LoadTaskHistory();
+            if (page == "settings")
+            {
+                _ = LoadRetentionSettings();
+                UpdateRuntimeSummary();
+            }
         }
     }
 
@@ -724,10 +903,76 @@ public sealed partial class MainWindow : Window
 
     // ---------- 地图 ----------
 
+    private async void OnOpenMapPicker(object sender, RoutedEventArgs args)
+    {
+        if (mapPickerDialogOpen || Root?.XamlRoot == null || !mapReady
+            || MiniMapHost?.Child != Map)
+            return;
+
+        mapPickerDialogOpen = true;
+        var mapFrame = new Border
+        {
+            Width = 900,
+            Height = 560,
+            CornerRadius = new CornerRadius(8),
+            BorderThickness = new Thickness(1),
+        };
+        ContentDialog? dialog = null;
+        try
+        {
+            MiniMapHost.Child = null;
+            mapFrame.Child = Map;
+            dialog = new ContentDialog
+            {
+                Title = L10n.T("地图选点"),
+                CloseButtonText = L10n.T("完成"),
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = Root.XamlRoot,
+                FullSizeDesired = true,
+                Width = 940,
+                Height = 640,
+                MinWidth = 920,
+                MaxWidth = 960,
+                MaxHeight = 700,
+                Content = mapFrame,
+            };
+            await dialog.ShowAsync();
+        }
+        catch (Exception error)
+        {
+            Fail(error);
+        }
+        finally
+        {
+            if (dialog != null) dialog.Content = null;
+            mapFrame.Child = null;
+            MiniMapHost.Child = Map;
+            mapPickerDialogOpen = false;
+            if (mapReady)
+            {
+                try
+                {
+                    await Map.ExecuteScriptAsync("window.dispatchEvent(new Event('resize'))");
+                    await UpdateMap();
+                }
+                catch (Exception error) { Fail(error); }
+            }
+        }
+    }
+
+    private void ApplyMapThemeBackground()
+    {
+        if (Map == null) return;
+        Map.DefaultBackgroundColor = Root?.ActualTheme == ElementTheme.Dark
+            ? Windows.UI.Color.FromArgb(255, 0x11, 0x18, 0x26)
+            : Windows.UI.Color.FromArgb(255, 0xEE, 0xF3, 0xF8);
+    }
+
     private async Task InitializeMap()
     {
         try
         {
+            ApplyMapThemeBackground();
             await Map.EnsureCoreWebView2Async();
             Map.CoreWebView2.SetVirtualHostNameToFolderMapping("firesky.local",
                 Path.Combine(AppContext.BaseDirectory, "Assets", "Map"),
@@ -824,6 +1069,7 @@ public sealed partial class MainWindow : Window
         var state = new JsonObject
         {
             ["lat"] = Latitude.Value, ["lon"] = Longitude.Value, ["regional"] = page == "regional",
+            ["dark"] = Root?.ActualTheme == ElementTheme.Dark,
             ["west"] = west, ["east"] = east, ["south"] = south, ["north"] = north,
             ["points"] = resultKind == page ? report?["points"]?.DeepClone() : null,
             ["show_grid"] = showRegionalGrid,
@@ -858,6 +1104,7 @@ public sealed partial class MainWindow : Window
             Timezone.Text = Text(point, "timezone_name");
             elevationSourceActual = Text(point, "source");
             MetadataReady.IsChecked = true;
+            UpdateLocationSummary();
             result = null; RenderResult(); await UpdateMap();
             Status.Text = L10n.T("位置已就绪");
         }
@@ -916,10 +1163,79 @@ public sealed partial class MainWindow : Window
             elevationSourceActual = Text(response, "source");
             RenderElevationSourceNote();
             MetadataReady.IsChecked = true; Status.Text = L10n.T("位置已就绪");
+            UpdateLocationSummary();
             result = null; RenderResult(); await UpdateMap();
             ScheduleSessionSave();
         }
         catch (Exception error) { if (revision == locationRevision) Fail(error); }
+    }
+
+    private void OnToggleCoordEditor(object sender, RoutedEventArgs args)
+    {
+        coordEditorExpanded = !coordEditorExpanded;
+        if (PointCoordEditorPanel != null)
+            PointCoordEditorPanel.Visibility = coordEditorExpanded ? Visibility.Visible : Visibility.Collapsed;
+        if (EditCoordsButtonText != null)
+            EditCoordsButtonText.Text = L10n.T(coordEditorExpanded ? "收起坐标" : "编辑坐标");
+    }
+
+    private void SetLocationViewMode(string mode, bool updateMap = true)
+    {
+        locationViewMode = mode == "favorites" ? "favorites" : "map";
+        UpdateSegmentedPills(LocationViewPills, locationViewMode);
+        var showFavs = locationViewMode == "favorites" && page != "regional";
+        if (MiniMapHost != null) MiniMapHost.Visibility = showFavs ? Visibility.Collapsed : Visibility.Visible;
+        if (ExpandMapButton != null)
+            ExpandMapButton.Visibility = showFavs || page == "regional"
+                ? Visibility.Collapsed : Visibility.Visible;
+        if (FavoritesPanel != null) FavoritesPanel.Visibility = showFavs ? Visibility.Visible : Visibility.Collapsed;
+        if (!showFavs && updateMap) _ = UpdateMap();
+    }
+
+    private void UpdateLocationSummary()
+    {
+        if (LocationSummaryName == null) return;
+        var name = LocationName?.Text?.Trim() ?? "";
+        LocationSummaryName.Text = name.Length > 0 ? name : L10n.T("观测点");
+        if (LocationSummaryCoords != null)
+            LocationSummaryCoords.Text = LatLonLabel(Latitude.Value, Longitude.Value);
+        if (LocationSummaryMeta != null)
+        {
+            var ready = MetadataReady?.IsChecked == true ? L10n.T("位置已确认") : L10n.T("未确认海拔/时区");
+            var elev = double.IsFinite(Elevation.Value) ? $"{(int)Math.Round(Elevation.Value)} m" : "--";
+            var tz = string.IsNullOrWhiteSpace(Timezone?.Text) ? "--" : Timezone.Text.Trim();
+            LocationSummaryMeta.Text = $"{ready} · 海拔 {elev} · {tz}";
+        }
+    }
+
+    private void OnLocationNameChanged(object sender, TextChangedEventArgs args)
+    {
+        if (!initialized || restoringSession) return;
+        UpdateLocationSummary();
+        ScheduleSessionSave();
+    }
+
+    private void OnElevationOrZoneChanged(NumberBox sender, NumberBoxValueChangedEventArgs args)
+    {
+        if (!initialized || restoringSession) return;
+        UpdateLocationSummary();
+        result = null; RenderResult();
+        ScheduleSessionSave();
+    }
+
+    private void OnTimezoneChanged(object sender, TextChangedEventArgs args)
+    {
+        if (!initialized || restoringSession) return;
+        UpdateLocationSummary();
+        result = null; RenderResult();
+        ScheduleSessionSave();
+    }
+
+    private void OnMetadataReadyChanged(object sender, RoutedEventArgs args)
+    {
+        if (!initialized || restoringSession) return;
+        UpdateLocationSummary();
+        ScheduleSessionSave();
     }
 
     private async void OnMetadata(object sender, RoutedEventArgs args) => await LookupMetadata();
@@ -930,6 +1246,7 @@ public sealed partial class MainWindow : Window
         MetadataReady.IsChecked = false;
         elevationSourceActual = "";
         RenderElevationSourceNote();
+        UpdateLocationSummary();
         result = null; ClearRegionalProfile(); RenderResult(); _ = UpdateMap();
         ScheduleSessionSave();
     }
@@ -988,7 +1305,8 @@ public sealed partial class MainWindow : Window
     private void RenderFavorites()
     {
         FavoritesHost.Children.Clear();
-        FavoritesExpander.Visibility = favorites.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (FavoritesEmptyHint != null)
+            FavoritesEmptyHint.Visibility = favorites.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         foreach (var favorite in favorites)
         {
             var name = Text(favorite, "name");
@@ -1023,6 +1341,8 @@ public sealed partial class MainWindow : Window
                 finally { suppressDraftEvents = false; }
                 MetadataReady.IsChecked = true;
                 elevationSourceActual = "";
+                UpdateLocationSummary();
+                SetLocationViewMode("map", updateMap: false);
                 result = null; RenderResult(); await UpdateMap();
                 ScheduleSessionSave();
             };
@@ -1049,24 +1369,51 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    // ---------- 日期 ----------
+    // ---------- 日期与观测时段 ----------
 
-    private void OnDateTabChanged(object sender, SelectionChangedEventArgs args)
+    private void SelectDateTab(string tab)
     {
-        if (!initialized || restoringSession) return;
-        dateTab = DateTabs.SelectedIndex switch { 0 => "今天", 1 => "明天", _ => "自定义" };
+        dateTab = tab is "明天" or "自定义" ? tab : "今天";
+        UpdateSegmentedPills(DatePillHost, dateTab);
         TargetDate.Visibility = dateTab == "自定义" ? Visibility.Visible : Visibility.Collapsed;
-        if (dateTab == "今天") TargetDate.Date = DateTimeOffset.Now;
-        if (dateTab == "明天") TargetDate.Date = DateTimeOffset.Now.AddDays(1);
+        if (!initialized || restoringSession) return;
+        suppressDraftEvents = true;
+        try
+        {
+            if (dateTab == "今天") TargetDate.Date = DateTimeOffset.Now;
+            if (dateTab == "明天") TargetDate.Date = DateTimeOffset.Now.AddDays(1);
+        }
+        finally { suppressDraftEvents = false; }
         if (page == "nowcast") UpdateNowcastBanners(resultKind == "nowcast" ? SelectedReport() : null);
+        RenderResult();
+        ScheduleSessionSave();
+    }
+
+    private void SetPhenomenon(string value, bool save = true)
+    {
+        phenomenon = value == "dawn" ? "dawn" : "dusk";
+        UpdateSegmentedPills(PhenomenonPillHost, phenomenon);
+        if (!save || !initialized || restoringSession) return;
+        if (page == "nowcast") UpdateNowcastBanners(resultKind == "nowcast" ? SelectedReport() : null);
+        RenderResult();
         ScheduleSessionSave();
     }
 
     private void OnCustomDateChanged(CalendarDatePicker sender, CalendarDatePickerDateChangedEventArgs args)
     {
-        if (!initialized || restoringSession) return;
-        if (dateTab != "自定义") { dateTab = "自定义"; DateTabs.SelectedIndex = 2; TargetDate.Visibility = Visibility.Visible; }
+        if (!initialized || restoringSession || suppressDraftEvents) return;
+        var picked = args.NewDate?.LocalDateTime.Date;
+        if ((dateTab == "今天" && picked == DateTime.Today)
+            || (dateTab == "明天" && picked == DateTime.Today.AddDays(1)))
+            return;
+        if (dateTab != "自定义")
+        {
+            dateTab = "自定义";
+            UpdateSegmentedPills(DatePillHost, dateTab);
+            TargetDate.Visibility = Visibility.Visible;
+        }
         if (page == "nowcast") UpdateNowcastBanners(resultKind == "nowcast" ? SelectedReport() : null);
+        RenderResult();
         ScheduleSessionSave();
     }
 
@@ -1076,7 +1423,8 @@ public sealed partial class MainWindow : Window
         var date = TargetDate.Date?.LocalDateTime.Date ?? DateTime.Today;
         var today = DateTime.Today;
         var tomorrow = today.AddDays(1);
-        DateTabs.SelectedIndex = date == today ? 0 : date == tomorrow ? 1 : 2;
+        dateTab = date == today ? "今天" : date == tomorrow ? "明天" : "自定义";
+        UpdateSegmentedPills(DatePillHost, dateTab);
         TargetDate.Visibility = dateTab == "自定义" ? Visibility.Visible : Visibility.Collapsed;
     }
 
@@ -1166,7 +1514,7 @@ public sealed partial class MainWindow : Window
             ["name"] = LocationName.Text, ["lat"] = Latitude.Value, ["lon"] = Longitude.Value,
             ["elevation_m"] = Elevation.Value, ["timezone_name"] = Timezone.Text,
             ["target_date"] = TargetDateLabel(),
-            ["phenomenon"] = TagOf(Phenomenon.SelectedItem),
+            ["phenomenon"] = phenomenon,
             ["model_source"] = "both", ["workers"] = 1,
             ["forecast_mode"] = "model", ["satellite_source"] = "off",
             // v1.1.1 契约：EC 下载源与海拔来源随每次请求透传。
@@ -1238,7 +1586,10 @@ public sealed partial class MainWindow : Window
             operation.Token.ThrowIfCancellationRequested();
             AdoptResult(response, kind, payload);
             if (result?["model_results"]?["gfs"] == null && result?["model_results"]?["ec"] != null)
-                ResultModel.SelectedIndex = 1;
+            {
+                SetSelectedResultModel("ec", render: false, updateMap: false);
+                if (kind == "regional" && RegionalModel != null) RegionalModel.SelectedIndex = 1;
+            }
             Status.Text = L10n.T("预测完成");
             RenderResult();
             await UpdateMap();
@@ -1255,6 +1606,11 @@ public sealed partial class MainWindow : Window
         result = response;
         resultKind = kind;
         pointSelectedTime = "";
+        showInvalidLedgerSteps = false;
+        frozenProfile = null;
+        frozenProfileModel = "";
+        frozenProfileState = "idle";
+        frozenProfileError = "";
     }
 
     private void OnRecalculate(object sender, RoutedEventArgs args)
@@ -1278,7 +1634,7 @@ public sealed partial class MainWindow : Window
                 || !value.TryGetValue<double>(out var saved)
                 || Math.Abs(saved - current) < 1e-9;
             if (!SameString("target_date", TargetDateLabel())) return true;
-            if (!SameString("phenomenon", TagOf(Phenomenon.SelectedItem))) return true;
+            if (!SameString("phenomenon", phenomenon)) return true;
             if (!SameString("ecmwf_source", ecmwfSource)) return true;
             if (!SameString("aerosol_source", aerosolSource)) return true;
             if (resultKind == "regional")
@@ -1330,7 +1686,7 @@ public sealed partial class MainWindow : Window
     private string ResultPhenomenonLabel()
     {
         var value = result != null && resultParams != null && resultKind == page
-            ? Text(resultParams, "phenomenon") : TagOf(Phenomenon.SelectedItem);
+            ? Text(resultParams, "phenomenon") : phenomenon;
         return value == "dawn" ? L10n.T("朝霞") : L10n.T("晚霞");
     }
 
@@ -1357,15 +1713,12 @@ public sealed partial class MainWindow : Window
 
     // ---------- 设置分类 ----------
 
-    private void OnSettingsCategoryChanged(object sender, SelectionChangedEventArgs args)
+    private void SelectSettingsCategory(string category, bool save = true)
     {
-        if (!initialized) return;
-        settingsCategory = SettingsCategories.SelectedIndex switch
-        {
-            0 => "general", 1 => "data", 2 => "location", _ => "advanced",
-        };
+        settingsCategory = category is "general" or "data" or "advanced" ? category : "general";
+        UpdateSegmentedPills(SettingsCategoryPills, settingsCategory);
         ApplySettingsCategory();
-        SaveSettings();
+        if (save && initialized && !restoringSession) SaveSettings();
     }
 
     private void ApplySettingsCategory()
@@ -1373,7 +1726,6 @@ public sealed partial class MainWindow : Window
         if (GeneralSettings == null) return;
         GeneralSettings.Visibility = settingsCategory == "general" ? Visibility.Visible : Visibility.Collapsed;
         DataSettings.Visibility = settingsCategory == "data" ? Visibility.Visible : Visibility.Collapsed;
-        LocationSettings.Visibility = settingsCategory == "location" ? Visibility.Visible : Visibility.Collapsed;
         AdvancedSettings.Visibility = settingsCategory == "advanced" ? Visibility.Visible : Visibility.Collapsed;
         if (settingsCategory == "general") UpdateRuntimeSummary();
     }
@@ -1381,9 +1733,23 @@ public sealed partial class MainWindow : Window
     private void OnOpenSyncSettings(object sender, RoutedEventArgs args)
     {
         NavigateTo("settings");
-        settingsCategory = "data";
-        SettingsCategories.SelectedIndex = 1;
-        ApplySettingsCategory();
+        SelectSettingsCategory("data", save: false);
+    }
+
+    private void OnSettingsDataAnchor(object sender, RoutedEventArgs args)
+    {
+        var section = (sender as Button)?.Tag?.ToString() switch
+        {
+            "sources" => DataSourcesSection,
+            "cams" => DataCamsSection,
+            "probe" => DataProbeSection,
+            "sync" => DataSyncSection,
+            "retention" => DataRetentionSection,
+            "directory" => DataDirectorySection,
+            "elevation" => ElevationSettingsSection,
+            _ => null,
+        };
+        section?.StartBringIntoView();
     }
 
     private void OnChooseDirectory(object sender, RoutedEventArgs args)
@@ -1407,20 +1773,27 @@ public sealed partial class MainWindow : Window
         catch (Exception error) { Fail(error, "settings"); }
     }
 
-    private void OnAppearanceChanged(object sender, SelectionChangedEventArgs args)
+    private void SetAppearancePreference(string pref, bool save = true)
     {
-        if (Root == null || !initialized) return;
-        Root.RequestedTheme = Appearance.SelectedIndex switch
+        appearancePref = pref is "light" or "dark" ? pref : "system";
+        UpdateSegmentedPills(AppearancePills, appearancePref);
+        if (Root != null)
         {
-            1 => ElementTheme.Light, 2 => ElementTheme.Dark, _ => ElementTheme.Default,
-        };
-        SaveSettings();
+            Root.RequestedTheme = appearancePref switch
+            {
+                "light" => ElementTheme.Light, "dark" => ElementTheme.Dark, _ => ElementTheme.Default,
+            };
+        }
+        RefreshSegmentedControlThemes();
+        ApplyTitleBarTheme();
+        ApplyMapThemeBackground();
+        if (save && initialized && !restoringSession) SaveSettings();
     }
 
     private void OnEcmwfSourceChanged(object sender, SelectionChangedEventArgs args)
     {
         if (!initialized) return;
-        var next = SettingsCategories.SelectedIndex >= 0
+        var next = EcmwfSourcePicker.SelectedIndex >= 0
             ? TagOf(EcmwfSourcePicker.SelectedItem) : "ecmwf";
         if (next is not ("ecmwf" or "aws" or "google")) next = "ecmwf";
         if (next == ecmwfSource) return;
@@ -1435,7 +1808,7 @@ public sealed partial class MainWindow : Window
     private void OnAerosolSourceChanged(object sender, SelectionChangedEventArgs args)
     {
         if (!initialized) return;
-        var next = SettingsCategories.SelectedIndex >= 0
+        var next = AerosolSourcePicker.SelectedIndex >= 0
             ? TagOf(AerosolSourcePicker.SelectedItem) : "cams";
         if (next is not ("cams" or "geos-fp")) next = "cams";
         if (next == aerosolSource) return;
@@ -1486,12 +1859,18 @@ public sealed partial class MainWindow : Window
     }
     // ---------- 界面多语言（v1.9.7，macOS L10n 同构） ----------
 
-    private void OnLanguageChanged(object sender, SelectionChangedEventArgs e)
+    private void SetLanguagePreference(string pref, bool apply = true)
     {
-        if (!initialized) return;
-        var index = LanguageChoice.SelectedIndex;
-        L10n.Preference = index switch { 1 => "zh", 2 => "en", _ => "system" };
-        ApplyLocalization();
+        var normalized = pref is "zh" or "en" ? pref : "system";
+        L10n.Preference = normalized;
+        UpdateSegmentedPills(LanguagePills, normalized);
+        if (apply && initialized)
+        {
+            RebuildLocalizedPills();
+            ApplyLocalization();
+            BuildMetrics();
+            RenderResult();
+        }
     }
 
     private static IEnumerable<DependencyObject> Descendants(DependencyObject root)
@@ -1511,6 +1890,12 @@ public sealed partial class MainWindow : Window
     {
         foreach (var node in Descendants(Root))
         {
+            if (ToolTipService.GetToolTip(node) is string toolTip && !string.IsNullOrEmpty(toolTip))
+                ToolTipService.SetToolTip(node, L10n.Translate(toolTip));
+            var automationName = Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(node);
+            if (!string.IsNullOrEmpty(automationName))
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(node, L10n.Translate(automationName));
+
             switch (node)
             {
                 case TextBlock text when !string.IsNullOrEmpty(text.Text):
@@ -1548,6 +1933,650 @@ public sealed partial class MainWindow : Window
                     break;
             }
         }
+    }
+
+    // ---------- UI Audit Fixture Hook (inert unless FIRESKY_UI_AUDIT_MOCK=1) ----------
+
+    private async Task RunUiAuditMockAsync()
+    {
+        isUiAuditMock = true;
+        if (AppWindow?.Presenter is Microsoft.UI.Windowing.OverlappedPresenter presenter)
+            presenter.Maximize();
+        Activate();
+        restoringSession = true;
+        try
+        {
+            var theme = Environment.GetEnvironmentVariable("FIRESKY_UI_AUDIT_THEME")?.Trim().ToLowerInvariant();
+            if (theme == "light") SetAppearancePreference("light", save: false);
+            else if (theme == "dark") SetAppearancePreference("dark", save: false);
+
+            regionDefinitions =
+            [
+                new JsonObject
+                {
+                    ["code"] = "china",
+                    ["label"] = "中国",
+                    ["bounds"] = new JsonArray { 73.0, 18.0, 136.0, 54.0 },
+                },
+                new JsonObject
+                {
+                    ["code"] = "east_china",
+                    ["label"] = "华东",
+                    ["bounds"] = new JsonArray { 115.0, 24.0, 124.0, 35.0 },
+                },
+            ];
+            BuildRegionPresets();
+            RebuildSyncAnchorPicker();
+
+            LocationName.Text = "界面测试（非真实预测）";
+            Latitude.Value = 30.25;
+            Longitude.Value = 120.25;
+            Elevation.Value = 20;
+            Timezone.Text = "Asia/Shanghai";
+            MetadataReady.IsChecked = true;
+            dateTab = "自定义";
+            TargetDate.Date = new DateTimeOffset(2026, 11, 9, 12, 0, 0, TimeSpan.FromHours(8));
+            SyncDateTab();
+            SetPhenomenon("dusk", save: false);
+            UpdateLocationSummary();
+            online = true;
+            camsConfigured = true;
+            Status.Text = L10n.T("本地引擎已连接");
+
+            PopulateAuditHistory();
+        }
+        finally
+        {
+            restoringSession = false;
+        }
+
+        var auditPage = Environment.GetEnvironmentVariable("FIRESKY_UI_AUDIT_PAGE")?.Trim().ToLowerInvariant();
+        if (auditPage is not ("point" or "regional" or "nowcast" or "data" or "history" or "settings"))
+            auditPage = "point";
+
+        if (auditPage == "regional")
+        {
+            selectedRegions.Clear();
+            selectedRegions.Add("china");
+            customRegion = false;
+            CustomRegionToggle.IsChecked = false;
+            CustomBoundsFields.Visibility = Visibility.Collapsed;
+            RenderRegionPresetsChecks();
+            AdoptResult(BuildAuditRegionalResult(), "regional", BuildAuditParams("regional"));
+        }
+        else if (auditPage == "nowcast")
+        {
+            AdoptResult(BuildAuditNowcastReport(), "nowcast", BuildAuditParams("nowcast"));
+        }
+        else
+        {
+            AdoptResult(BuildAuditPointResult(), "point", BuildAuditParams("point"));
+        }
+
+        NavigateTo(auditPage);
+        ApplyPage();
+
+        if (auditPage == "history")
+        {
+            RenderTaskHistory();
+            if (taskHistory.FirstOrDefault() is { } firstTask)
+                OnSelectTaskHistory(firstTask.TaskId);
+        }
+        else if (auditPage == "data")
+        {
+            InventoryEmptyCard.Visibility = Visibility.Collapsed;
+            TerrainMessage.Text = "中国区域 SRTM 地形就绪（审计样例 · 1,248 瓦片）";
+            TerrainLocalTiles.Text = "已缓存 1,248 个本地 SRTM 瓦片";
+        }
+        else if (auditPage == "settings")
+        {
+            SelectSettingsCategory("general", save: false);
+            UpdateRuntimeSummary();
+        }
+
+        if (int.TryParse(Environment.GetEnvironmentVariable("FIRESKY_UI_AUDIT_TAB"), out var tabIdx)
+            && ResultTabs != null && ResultTabs.Visibility == Visibility.Visible
+            && tabIdx >= 0 && tabIdx <= 2)
+        {
+            SelectResultTab(tabIdx);
+        }
+
+        await Task.Delay(500);
+        ControlsScrollViewer?.ChangeView(null, 0, null, true);
+        if (resultKind == "point")
+        {
+            RenderChart();
+            RenderPointProfileTab();
+        }
+        else if (resultKind == "nowcast")
+        {
+            RenderChart();
+            RenderNowcastProfileTab();
+        }
+        else if (auditPage == "regional")
+        {
+            if (!isUiAuditMock)
+            {
+                for (var waitMs = 0; !mapReady && waitMs < 3500; waitMs += 50)
+                    await Task.Delay(50);
+                await UpdateMap(forceFit: true);
+                await Task.Delay(450);
+            }
+        }
+        else if (auditPage is "point" or "nowcast")
+        {
+            if (!isUiAuditMock)
+            {
+                for (var waitMs = 0; !mapReady && waitMs < 2500; waitMs += 50)
+                    await Task.Delay(50);
+                await UpdateMap();
+            }
+        }
+
+        RefreshSegmentedControlThemes();
+        ApplyTitleBarTheme();
+        ApplyMapThemeBackground();
+        ControlsScrollViewer?.Focus(FocusState.Programmatic);
+
+        if (string.Equals(Environment.GetEnvironmentVariable("FIRESKY_UI_AUDIT_DIALOG"), "diagnostics",
+                StringComparison.OrdinalIgnoreCase)
+            && auditPage is "point" or "nowcast")
+        {
+            _ = ShowDiagnosticsDialogAsync();
+            await Task.Delay(300);
+        }
+
+        Activate();
+        await Task.Delay(150);
+
+        if (Environment.GetEnvironmentVariable("FIRESKY_UI_AUDIT_OUT_MARKER") is { Length: > 0 } markerPath)
+        {
+            var dir = Path.GetDirectoryName(markerPath);
+            if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+            File.WriteAllText(markerPath, "ready\n");
+        }
+    }
+
+    private void PopulateAuditHistory()
+    {
+        taskHistory.Clear();
+        taskHistoryHasMore = false;
+        taskHistoryCursor = null;
+        string HexId(char c) => new(c, 64);
+        var specs = new (char Id, string Kind, string Name, string Date, string Status)[]
+        {
+            ('a', "point", "杭州 · 单点测试", "2026-11-09", "done"),
+            ('b', "regional", "中国 · 区域测试", "2026-11-09", "done"),
+            ('c', "nowcast", "杭州 · 卫星实况测试", "2026-11-09", "done"),
+        };
+        foreach (var (id, kind, name, date, status) in specs)
+        {
+            var raw = new JsonObject
+            {
+                ["task_id"] = HexId(id),
+                ["method"] = "forecast",
+                ["status"] = status,
+                ["created_at_utc"] = "2026-11-09T08:55:00Z",
+                ["updated_at_utc"] = "2026-11-09T09:00:00Z",
+                ["cancel_requested"] = false,
+                ["event_seq"] = 4,
+                ["retry_request"] = new JsonObject
+                {
+                    ["kind"] = kind,
+                    ["payload"] = new JsonObject
+                    {
+                        ["name"] = name,
+                        ["target_date"] = date,
+                        ["phenomenon"] = "dusk",
+                        ["model_source"] = "gfs",
+                    },
+                },
+                ["result_ref"] = new JsonObject
+                {
+                    ["snapshot"] = new JsonObject
+                    {
+                        ["contract"] = "firesky-result-snapshot-v1",
+                        ["sha256"] = HexId('f'),
+                    },
+                },
+            };
+            if (TaskHistoryItem.Parse(raw) is { } parsed)
+                taskHistory.Add(parsed);
+        }
+        taskHistoryTotal = taskHistory.Count;
+        taskHistoryLoaded = true;
+    }
+
+    private JsonObject BuildAuditParams(string kind) => new()
+    {
+        ["name"] = "界面测试（非真实预测）",
+        ["lat"] = 30.25,
+        ["lon"] = 120.25,
+        ["elevation_m"] = 20.0,
+        ["timezone_name"] = "Asia/Shanghai",
+        ["target_date"] = "2026-11-09",
+        ["phenomenon"] = "dusk",
+        ["ecmwf_source"] = ecmwfSource,
+        ["aerosol_source"] = aerosolSource,
+        ["model_source"] = kind == "nowcast" ? "satellite" : "gfs",
+        ["regions"] = new JsonArray { "china" },
+    };
+
+    private static JsonObject BuildAuditPointResult() => new()
+    {
+        ["model_results"] = new JsonObject
+        {
+            ["gfs"] = BuildAuditModelReport("gfs"),
+            ["ec"] = BuildAuditModelReport("ec"),
+        },
+        ["model_errors"] = new JsonObject(),
+    };
+
+    private static JsonObject BuildAuditRegionalResult() => new()
+    {
+        ["model_results"] = new JsonObject
+        {
+            ["gfs"] = BuildAuditRegionalModel("gfs"),
+            ["ec"] = BuildAuditRegionalModel("ec"),
+        },
+        ["model_errors"] = new JsonObject(),
+    };
+
+    private static JsonObject BuildAuditRegionalModel(string model)
+    {
+        var points = new JsonArray();
+        var errors = new JsonArray();
+        for (var y = 0; y <= 20; y++)
+        {
+            for (var x = 0; x <= 20; x++)
+            {
+                var lat = 28.0 + y * 0.25;
+                var lon = 118.0 + x * 0.25;
+                if ((x + y) % (model == "gfs" ? 19 : 11) == 0)
+                {
+                    errors.Add(new JsonObject { ["lat"] = lat, ["lon"] = lon, ["error"] = "测试缺测" });
+                }
+                else
+                {
+                    var dx = x - (model == "gfs" ? 8.0 : 14.0);
+                    var dy = y - 12.0;
+                    var q = Math.Max(0, 2.3 - Math.Sqrt(dx * dx + dy * dy) / 6.0);
+                    points.Add(new JsonObject
+                    {
+                        ["lat"] = lat,
+                        ["lon"] = lon,
+                        ["peak_quality_index"] = q,
+                        ["peak_quality_level"] = "测试档位",
+                        ["best_time_local"] = "2026-11-09T17:10:00+08:00",
+                    });
+                }
+            }
+        }
+        var cities = new JsonArray
+        {
+            new JsonObject
+            {
+                ["name"] = "杭州", ["lat"] = 30.2741, ["lon"] = 120.1551,
+                ["peak_quality_index"] = model == "gfs" ? 2.08 : 1.86,
+                ["peak_quality_level"] = "绚丽火烧云",
+                ["best_time_local"] = "2026-11-09T17:10:00+08:00", ["timezone_name"] = "Asia/Shanghai",
+            },
+            new JsonObject
+            {
+                ["name"] = "宁波", ["lat"] = 29.8683, ["lon"] = 121.5440,
+                ["peak_quality_index"] = model == "gfs" ? 1.84 : 1.63,
+                ["peak_quality_level"] = "中等晚霞",
+                ["best_time_local"] = "2026-11-09T17:05:00+08:00", ["timezone_name"] = "Asia/Shanghai",
+            },
+            new JsonObject
+            {
+                ["name"] = "绍兴", ["lat"] = 30.0303, ["lon"] = 120.5802,
+                ["peak_quality_index"] = model == "gfs" ? 1.71 : 1.54,
+                ["peak_quality_level"] = "中等晚霞",
+                ["best_time_local"] = "2026-11-09T17:15:00+08:00", ["timezone_name"] = "Asia/Shanghai",
+            },
+        };
+        return new JsonObject
+        {
+            ["points"] = points,
+            ["errors"] = errors,
+            ["point_count"] = 441,
+            ["error_count"] = errors.Count,
+            ["usable_count"] = points.Count,
+            ["spacing_deg"] = 0.25,
+            ["cycle_time_utc"] = model == "gfs" ? "2026-11-09T00:00:00Z" : "2026-11-08T18:00:00Z",
+            ["city_ranking"] = new JsonObject
+            {
+                ["contract"] = "rust-regional-city-ranking-v1",
+                ["status"] = "ready",
+                ["model_source"] = model,
+                ["count"] = cities.Count,
+                ["items"] = cities,
+            },
+        };
+    }
+
+    private static JsonObject BuildAuditNowcastReport()
+    {
+        var report = BuildAuditModelReport("gfs");
+        var samples = new JsonArray();
+        for (var i = 0; i < 12; i++)
+        {
+            var levels = new JsonArray();
+            for (var layer = 0; layer < 8; layer++)
+            {
+                levels.Add(new JsonObject
+                {
+                    ["height_m"] = layer * 1500.0 + 500.0,
+                    ["pressure_hpa"] = new int[] { 925, 850, 700, 600, 500, 400, 300, 200 }[layer],
+                    ["status"] = "retrieved",
+                    ["hsd_posterior_percent"] = (double)((i * 17 + layer * 29) % 100),
+                });
+            }
+            samples.Add(new JsonObject
+            {
+                ["distance_km"] = i * 20.0,
+                ["bearing_deg"] = 240.0,
+                ["status"] = i == 5 ? "unknown" : "retrieved",
+                ["levels"] = levels,
+            });
+        }
+        report["nowcast"] = new JsonObject
+        {
+            ["source"] = "Himawari HSD",
+            ["bands"] = "B07/B13/B15",
+            ["image_channel"] = "HSD-IR",
+            ["image_valid_time_utc"] = "2026-11-09T09:00:00Z",
+            ["near_cloud_ratio"] = 0.42,
+            ["far_cloud_ratio"] = 0.68,
+            ["cloud_blanket_score"] = 0.74,
+            ["cloud_texture_score"] = 0.66,
+            ["horizon_clearance_score"] = 0.81,
+            ["satellite_low_cloud_state"] = "detected",
+            ["satellite_motion_quality"] = "strong",
+            ["geometric_path_blocking_risk"] = 0.17,
+            ["geometric_path_samples"] = 24,
+            ["calibrated_sample_coverage_ratio"] = 0.91,
+            ["confidence"] = 0.76,
+            ["effective_convective_risk"] = 0.12,
+            ["effective_path_blocking_risk"] = 0.17,
+            ["convective_score_ceiling"] = 0.64,
+            ["radar_source"] = "测试雷达（非真实观测）",
+            ["radar_valid_time_utc"] = "2026-11-09T08:54:00Z",
+            ["radar_age_minutes"] = 6,
+            ["radar_max_dbz"] = 12.4,
+            ["radar_reliability_score"] = 0.82,
+            ["satellite_vertical_profile"] = new JsonObject
+            {
+                ["status"] = "partial_unknown",
+                ["sample_count"] = 12,
+                ["usable_sample_count"] = 11,
+                ["unknown_sample_count"] = 1,
+                ["coverage"] = 0.917,
+                ["valid_time_utc"] = "2026-11-09T09:00:00Z",
+                ["pressure_levels_hpa"] = new JsonArray { 925, 850, 700, 600, 500, 400, 300, 200 },
+                ["samples"] = samples,
+            },
+        };
+        report["summary"] = "界面测试数据，非真实实况分析。";
+        return report;
+    }
+
+    private static JsonObject BuildAuditModelReport(string model)
+    {
+        var ec = model == "ec";
+        double[] values = ec ? [0.3, 0.8, 1.36, 1.1] : [0.2, 0.4, 0.72, 0.5];
+        var steps = new JsonArray();
+        for (var idx = 0; idx < values.Length; idx++)
+        {
+            steps.Add(new JsonObject
+            {
+                ["valid_time_utc"] = $"2026-11-09T09:{idx * 5:00}:00Z",
+                ["valid_time_local"] = $"2026-11-09T17:{idx * 5:00}:00+08:00",
+                ["instant_quality_index"] = values[idx],
+                ["instant_quality_level"] = "测试档位",
+                ["physically_burnable"] = idx > 0,
+                ["solar_elevation_deg"] = idx - 3.0,
+                ["solar_azimuth_deg"] = 240.0,
+                ["burnable_cloud_coverage"] = 0.42,
+                ["dominant_burnable_pressure_family"] = ec ? "middle" : "high",
+                ["dominant_burnable_cloud_base_asl_mean_m"] = ec ? 3900.0 : 8200.0,
+                ["dominant_burnable_cloud_top_asl_mean_m"] = ec ? 8800.0 : 13400.0,
+                ["dominant_burnable_cloud_base_agl_mean_m"] = 4200.0,
+                ["dominant_burnable_cloud_top_agl_mean_m"] = 6800.0,
+                ["brightness_color"] = ec ? 0.84 : 0.55,
+                ["forward_burnable_cloud_ratio"] = ec ? 0.66 : 0.42,
+                ["observer_return_transmission"] = ec ? 0.81 : 0.77,
+                ["solar_incoming_block_risk"] = 0.14,
+                ["quality_aod550"] = ec ? 0.23 : 0.21,
+                ["selected_regime"] = "burnable_cloud_field",
+                ["valid"] = true,
+            });
+        }
+        // 附加一条窗外未判断时次，验证台账默认折叠与切换
+        steps.Add(new JsonObject
+        {
+            ["valid_time_utc"] = "2026-11-09T09:25:00Z",
+            ["valid_time_local"] = "2026-11-09T17:25:00+08:00",
+            ["selected_regime"] = "invalid",
+            ["valid"] = false,
+        });
+
+        var hexes = ec
+            ? new[] { "#F6C46A", "#F2A152", "#EC7C43", "#E85D3F", "#D94649", "#B93B5B", "#8F3561" }
+            : new[] { "#F8D17E", "#F5B562", "#F2944B", "#F07A3E", "#E36243", "#C54F54", "#98415C" };
+        var dirs = new (string Zh, string En)[]
+        {
+            ("北", "N"), ("东北偏北", "NNE"), ("东北", "NE"), ("东北偏东", "ENE"),
+            ("东", "E"), ("东南偏东", "ESE"), ("东南", "SE"), ("东南偏南", "SSE"),
+            ("南", "S"), ("西南偏南", "SSW"), ("西南", "SW"), ("西南偏西", "WSW"),
+            ("西", "W"), ("西北偏西", "WNW"), ("西北", "NW"), ("西北偏北", "NNW"),
+        };
+        var peakDeg = ec ? 247.5 : 225.0;
+        var peakScore = ec ? 0.84 : 0.72;
+        var bearings = new JsonArray();
+        for (var i = 0; i < dirs.Length; i++)
+        {
+            var deg = i * 22.5;
+            var diff = Math.Abs(((deg - peakDeg + 540.0) % 360.0) - 180.0);
+            var shape = Math.Max(0.18, Math.Cos(diff * Math.PI / 180.0) * 0.5 + 0.5);
+            var score = Math.Min(1.0, Math.Max(0.14, peakScore * shape));
+            bearings.Add(new JsonObject
+            {
+                ["deg"] = deg,
+                ["label_zh"] = dirs[i].Zh,
+                ["label_en"] = dirs[i].En,
+                ["score"] = Math.Round(score, 3),
+            });
+        }
+
+        return new JsonObject
+        {
+            ["model_source"] = model,
+            ["quality_index"] = ec ? 1.36 : 0.72,
+            ["peak_quality_index"] = ec ? 1.36 : 0.72,
+            ["peak_quality_level"] = ec ? "绚丽晚霞（测试）" : "中等晚霞（测试）",
+            ["quality_level"] = ec ? "绚丽晚霞（测试）" : "中等晚霞（测试）",
+            ["convective_risk_score"] = ec ? 0.12 : 0.18,
+            ["dominant_burnable_pressure_family"] = ec ? "middle" : "high",
+            ["dominant_burnable_cloud_base_agl_mean_m"] = 4200.0,
+            ["dominant_burnable_cloud_top_agl_mean_m"] = 6800.0,
+            ["forecast_mode"] = "point",
+            ["compute_backend"] = "cpu",
+            ["analysis_radius_km"] = 300.0,
+            ["timezone_name"] = "Asia/Shanghai",
+            ["cycle_time_utc"] = "2026-11-09T00:00:00Z",
+            ["anchor_local"] = "2026-11-09T17:00:00+08:00",
+            ["best_time_local"] = "2026-11-09T17:10:00+08:00",
+            ["duration_minutes"] = ec ? 31 : 18,
+            ["confidence_score"] = ec ? 0.79 : 0.61,
+            ["selected_regime"] = "burnable_cloud_field",
+            ["summary"] = "界面测试样例，用于离线 UI 审计验证（非真实气象预测）。",
+            ["timing_window"] = new JsonObject
+            {
+                ["start_time_local"] = "2026-11-09T17:00:00+08:00",
+                ["end_time_local"] = "2026-11-09T17:15:00+08:00",
+            },
+            ["aerosol"] = new JsonObject { ["aod550"] = ec ? 0.23 : 0.21, ["source"] = "cams-ads fixture", ["quality"] = "cams" },
+            ["cloud_genus_proxy"] = new JsonObject
+            {
+                ["label"] = ec ? "altocumulus" : "cirrus",
+                ["compatible_genera"] = ec ? new JsonArray { "altocumulus", "altostratus" } : new JsonArray { "cirrus", "cirrostratus" },
+                ["candidate_scores"] = ec
+                    ? new JsonObject { ["altocumulus"] = 0.68, ["altostratus"] = 0.22, ["nimbostratus"] = 0.10 }
+                    : new JsonObject { ["cirrus"] = 0.72, ["cirrostratus"] = 0.19, ["cirrocumulus"] = 0.09 },
+                ["confidence"] = ec ? 0.68 : 0.72,
+                ["source"] = "pressure-phase-geometry-proxy",
+                ["scoring_effect"] = false,
+            },
+            ["quality_components"] = new JsonObject
+            {
+                ["coverage_base_score"] = ec ? 1.18 : 0.78,
+                ["raw_quality_index"] = ec ? 1.36 : 0.72,
+                ["burnable_cloud_coverage_effective"] = ec ? 0.66 : 0.42,
+                ["forward_burnable_cloud_load_effective"] = ec ? 0.71 : 0.48,
+                ["forward_burnable_cloud_ratio_peak"] = ec ? 0.74 : 0.58,
+                ["forward_burnable_cloud_field_amount_peak"] = ec ? 0.62 : 0.44,
+                ["forward_view_cloud_field_amount_peak"] = ec ? 0.84 : 0.76,
+                ["solar_incoming_block_risk_at_best_cloud"] = ec ? 0.11 : 0.19,
+                ["cloud_material"] = ec ? 0.73 : 0.59,
+                ["brightness_color"] = ec ? 0.84 : 0.55,
+                ["quality_aod550"] = ec ? 0.23 : 0.21,
+                ["duration_adjustment"] = ec ? 0.12 : -0.04,
+                ["duration_factor"] = ec ? 1.092 : 0.945,
+                ["incoming_aod_adjustment"] = ec ? -0.03 : -0.05,
+                ["incoming_aod_illumination_factor"] = ec ? 0.92 : 0.86,
+                ["observer_aod_adjustment"] = ec ? 0.09 : 0.03,
+                ["observer_aod_contrast_factor"] = ec ? 0.81 : 0.77,
+                ["observer_return_optical_depth_mean"] = ec ? 0.21 : 0.26,
+                ["observer_return_transmission_mean"] = ec ? 0.81 : 0.77,
+                ["forward_field_radius_km"] = 300,
+                ["forward_sector_half_angle_deg"] = 25,
+                ["quality_limiting_factor"] = ec ? "低层云轻微遮挡" : "前向有效可烧云量偏少",
+            },
+            ["spectral_color"] = new JsonObject
+            {
+                ["contract"] = "firesky-spectral-color-v1",
+                ["peak_hex"] = hexes[3],
+                ["peak_label_zh"] = ec ? "绯红火烧云" : "金橙火烧云",
+                ["peak_label_en"] = ec ? "Crimson Glow" : "Golden Orange Glow",
+                ["sky_gradient_hex"] = ec
+                    ? new JsonArray { "#1A2D5E", "#6F4E7C", "#E85D3F", "#F7A05E" }
+                    : new JsonArray { "#1E3468", "#7A5B7A", "#F07A3E", "#F8BC73" },
+                ["solar_elevation_deg"] = ec ? -1.4 : -0.9,
+                ["solar_azimuth_deg"] = 240.0,
+            },
+            ["azimuth_radar"] = new JsonObject
+            {
+                ["contract"] = "firesky-azimuth-radar-v1",
+                ["solar_azimuth_deg"] = 240.0,
+                ["best_azimuth_deg"] = peakDeg,
+                ["best_direction_zh"] = ec ? "西南偏西" : "西南",
+                ["best_direction_en"] = ec ? "WSW" : "SW",
+                ["best_score"] = peakScore,
+                ["recommendation_zh"] = ec
+                    ? "建议面向西南偏西（248°）拍摄，中高云画布条件最佳，近处低云遮挡少"
+                    : "建议面向西南（225°）拍摄，中高云画布条件最佳，近处低云遮挡少",
+                ["recommendation_en"] = ec
+                    ? "Best view toward WSW (248°): optimal mid/high canvas with low near-field blocking"
+                    : "Best view toward SW (225°): optimal mid/high canvas with low near-field blocking",
+                ["bearings"] = bearings,
+            },
+            ["cross_section"] = BuildAuditCrossSection(model),
+            ["steps"] = steps,
+        };
+    }
+
+    private static JsonObject BuildAuditCrossSection(string model)
+    {
+        var distances = new JsonArray();
+        for (var i = 0; i <= 24; i++) distances.Add(i * 12.5);
+        int[] levels = [1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150];
+        double[] levelHeights = [180, 760, 1450, 3050, 4400, 5800, 7600, 9200, 10500, 11900, 13400];
+        double[] levelTemps = [15, 9, 3, -6, -14, -24, -35, -44, -50, -55, -60];
+        var terrain = new double[25];
+        for (var s = 0; s <= 24; s++)
+        {
+            var westRidge = 620.0 * Math.Exp(-Math.Pow((s - 10.0) / 3.8, 2));
+            var eastRidge = 390.0 * Math.Exp(-Math.Pow((s - 20.0) / 2.6, 2));
+            terrain[s] = 120.0 + westRidge + eastRidge;
+        }
+        int Family(int l) => l >= 7 ? 1 : l >= 4 ? 2 : 3;
+        bool Cloudy(int s, int l)
+        {
+            var shift = model == "ec" ? 3 : 0;
+            return Family(l) switch
+            {
+                1 => l >= 7 && s >= 5 + shift && s <= 19 + shift,
+                2 => s >= 2 + shift && s <= 14 + shift,
+                _ => l <= 2 && s >= 14 - shift && s <= 24,
+            };
+        }
+        double BaseFor(int f) => f == 1 ? 8200 : f == 2 ? 3900 : 700;
+        double TopFor(int f) => f == 1 ? 14600 : f == 2 ? 8800 : 3400;
+
+        JsonArray Grid(Func<int, int, double> fn)
+        {
+            var outer = new JsonArray();
+            for (var s = 0; s <= 24; s++)
+            {
+                var row = new JsonArray();
+                for (var l = 0; l < levels.Length; l++) row.Add(fn(s, l));
+                outer.Add(row);
+            }
+            return outer;
+        }
+        JsonArray IntGrid(Func<int, int, int> fn)
+        {
+            var outer = new JsonArray();
+            for (var s = 0; s <= 24; s++)
+            {
+                var row = new JsonArray();
+                for (var l = 0; l < levels.Length; l++) row.Add(fn(s, l));
+                outer.Add(row);
+            }
+            return outer;
+        }
+
+        var terrainArr = new JsonArray();
+        var reqArr = new JsonArray();
+        for (var s = 0; s <= 24; s++)
+        {
+            terrainArr.Add(terrain[s]);
+            reqArr.Add(5200.0 + s * 115.0);
+        }
+        var levelsArr = new JsonArray();
+        foreach (var p in levels) levelsArr.Add(p);
+
+        return new JsonObject
+        {
+            ["valid_time_local"] = "2026-11-09T17:10:00+08:00",
+            ["solar_azimuth_deg"] = 240.0,
+            ["solar_elevation_deg"] = -2.0,
+            ["analysis_radius_km"] = 300.0,
+            ["distances_km"] = distances,
+            ["pressure_levels_hpa"] = levelsArr,
+            ["terrain_elevation_asl_m"] = terrainArr,
+            ["required_illumination_base_asl_m"] = reqArr,
+            ["theoretical_targets"] = new JsonArray
+            {
+                new JsonObject { ["status"] = "burnable", ["pressure_family"] = "high", ["distance_km"] = 75.0, ["cloud_base_asl_m"] = 8200.0, ["cloud_top_asl_m"] = 14600.0 },
+                new JsonObject { ["status"] = "burnable", ["pressure_family"] = "middle", ["distance_km"] = 175.0, ["cloud_base_asl_m"] = 3900.0, ["cloud_top_asl_m"] = 8800.0 },
+            },
+            ["fields"] = new JsonObject
+            {
+                ["geopotential_height_asl_m"] = Grid((s, l) => levelHeights[l] + terrain[s] + 70 * Math.Sin((s + l) * 0.4)),
+                ["temperature_c"] = Grid((s, l) => levelTemps[l] + 1.2 * Math.Sin(s * 0.35)),
+                ["rh_percent"] = Grid((s, l) => Cloudy(s, l) ? 78 + ((s * 7 + l * 11) % 20) : 28 + ((s * 5 + l * 3) % 34)),
+                ["cloud_amount"] = Grid((s, l) => Cloudy(s, l) ? 0.32 + ((s + l * 3) % 5) * 0.12 : 0),
+                ["cloud_presence"] = Grid((s, l) => Cloudy(s, l) ? 1 : 0),
+                ["cloud_fraction_percent"] = Grid((s, l) => Cloudy(s, l) ? 38 + ((s * 3 + l) % 6) * 10 : 0),
+                ["pressure_family_code"] = IntGrid((_, l) => Family(l)),
+                ["cloud_layer_status"] = IntGrid((s, l) => !Cloudy(s, l) ? 0 : (s >= 10 && s <= 13 ? 3 : (s >= 14 && s <= 16 ? 2 : 0))),
+                ["cloud_layer_base_asl_m"] = Grid((s, l) => Cloudy(s, l) ? BaseFor(Family(l)) : 0),
+                ["cloud_layer_top_asl_m"] = Grid((s, l) => Cloudy(s, l) ? TopFor(Family(l)) : 0),
+            },
+        };
     }
 
 }

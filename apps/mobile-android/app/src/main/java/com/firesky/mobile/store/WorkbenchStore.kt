@@ -64,6 +64,15 @@ fun parsePairingUri(raw: String): Pair<String, String?>? {
     return normalizedUrl to token
 }
 
+data class AuditLaunchOptions(
+    val mockMode: Boolean = false,
+    val initialPage: String? = null,
+    val initialMode: String? = null,
+    val initialTab: String? = null,
+    val openDiagnostics: Boolean = false,
+    val appearance: String? = null,
+)
+
 /**
  * FireSky 远程薄客户端 ViewModel —— 负责远程服务器连接/配对、单点/区域/卫星实况
  * 三模式工作台（check→publications→prepare→forecast）、任务历史与恢复、数据清单与地形管理。
@@ -71,9 +80,10 @@ fun parsePairingUri(raw: String): Pair<String, String?>? {
 class WorkbenchStore private constructor(
     application: Application,
     private val injectedTransport: EngineTransport?,
+    private val auditOptions: AuditLaunchOptions? = null,
 ) : AndroidViewModel(application) {
 
-    constructor(application: Application) : this(application, null)
+    constructor(application: Application) : this(application, null, null)
 
     private val prefs = application.getSharedPreferences("firesky", Application.MODE_PRIVATE)
 
@@ -86,8 +96,10 @@ class WorkbenchStore private constructor(
     private var publicationJob: Job? = null
     private var updateCheckJob: Job? = null
     private var updateDownloadJob: Job? = null
+    private var downloadProbeJob: Job? = null
     private var metadataGeneration = UUID.randomUUID()
     private var generation = UUID.randomUUID()
+    private var workbenchModeSelectionRevision = 0L
     private var requestKind: String = "point"
     private var requestPayload: JSONObject = JSONObject()
     private val taskResultCache = mutableMapOf<String, JSONObject>()
@@ -112,9 +124,17 @@ class WorkbenchStore private constructor(
         }.getOrDefault(emptyList())
         val hasMock = injectedTransport != null
         val configured = hasMock || remoteServerUrl.isNotBlank()
+        val auditPage = auditOptions?.initialPage?.takeIf { it in listOf("workbench", "data", "history", "settings") }
+        val auditMode = auditOptions?.initialMode?.takeIf { it in listOf("point", "regional", "nowcast") }
+        val auditTab = auditOptions?.initialTab?.takeIf { it in listOf("概览", "大气剖面", "逐时台账") }
+        val auditAppearance = auditOptions?.appearance?.takeIf { it in listOf("light", "dark", "system") }
 
         _state.value = _state.value.copy(
-            appearance = appearance,
+            page = auditPage ?: _state.value.page,
+            workbenchMode = auditMode ?: _state.value.workbenchMode,
+            resultTab = auditTab ?: _state.value.resultTab,
+            openDiagnostics = auditOptions?.openDiagnostics ?: false,
+            appearance = auditAppearance ?: appearance,
             ecmwfSource = ecmwfSource,
             aerosolSource = aerosolSource,
             elevationSource = elevationSource,
@@ -220,10 +240,40 @@ class WorkbenchStore private constructor(
                 }
                 loadRetentionSettings()
                 loadInventory()
+                if ("terrain_inventory" in capabilities) {
+                    loadTerrain()
+                }
                 if ("task_history" in capabilities) {
                     loadTaskHistory()
                 }
-                if ("task_history" in capabilities && "result_restore" in capabilities) {
+                if (auditOptions?.mockMode == true && injectedTransport is com.firesky.mobile.engine.MockTransport) {
+                    val mode = _state.value.workbenchMode
+                    val cur = _state.value
+                    val payload = buildForecastPayload(cur, mode)
+                    val sample = injectedTransport.auditForecast(
+                        kind = mode,
+                        date = cur.targetDate.toString(),
+                        name = cur.location.name,
+                        phenomenon = cur.phenomenon,
+                        regionalModel = cur.regionalModel,
+                        regionCode = cur.selectedRegionCode,
+                    )
+                    val selected = when (mode) {
+                        "nowcast" -> "gfs"
+                        "regional" -> cur.regionalModel
+                        else -> pickSelectedModel(sample, payload)
+                    }
+                    _state.update { state ->
+                        state.copy(
+                            result = sample,
+                            resultParams = payload,
+                            resultKind = mode,
+                            selectedModel = selected,
+                            regionalModel = if (mode == "regional") selected else state.regionalModel,
+                            status = "预测完成",
+                        )
+                    }
+                } else if ("task_history" in capabilities && "result_restore" in capabilities) {
                     restoreLatestResult()
                 }
             } catch (error: CancellationException) {
@@ -249,6 +299,7 @@ class WorkbenchStore private constructor(
         val snapshot = _state.value
         if (snapshot.busy || snapshot.result != null) return
         val revision = generation
+        val modeSelectionRevision = workbenchModeSelectionRevision
         try {
             val history = activeEngine.call("task_history", JSONObject().put("limit", 20))
             if (history.optString("schema") != "firesky-task-history-v1") return
@@ -262,7 +313,9 @@ class WorkbenchStore private constructor(
                 if (kind !in listOf("point", "nowcast")) continue
                 val response = activeEngine.call("result_restore", JSONObject().put("task_id", item.taskId))
                 val current = _state.value
-                if (current.busy || current.result != null || generation != revision) return
+                if (current.busy || current.result != null || generation != revision ||
+                    workbenchModeSelectionRevision != modeSelectionRevision
+                ) return
                 if (kind != "nowcast" && response.optJSONObject("model_results") == null) continue
                 applyHistoryPayload(retry, kind)
                 val selected = if (kind == "nowcast") "gfs" else pickSelectedModel(response, retry)
@@ -293,10 +346,15 @@ class WorkbenchStore private constructor(
 
     fun setWorkbenchMode(mode: String) {
         if (mode !in listOf("point", "regional", "nowcast")) return
+        workbenchModeSelectionRevision++
         _state.update {
             it.copy(
                 workbenchMode = mode,
                 resultTab = "概览",
+                openDiagnostics = false,
+                frozenProfileState = "idle",
+                frozenProfile = null,
+                frozenProfileError = "",
                 error = if (it.errorPage == "workbench") "" else it.error,
                 errorPage = if (it.errorPage == "workbench") null else it.errorPage,
             )
@@ -524,6 +582,91 @@ class WorkbenchStore private constructor(
 
     fun selectResultTab(value: String) {
         _state.update { it.copy(resultTab = value) }
+    }
+
+    fun setOpenDiagnostics(open: Boolean) {
+        _state.update { it.copy(openDiagnostics = open) }
+    }
+
+    fun setNowcastProfileStep(step: String) {
+        _state.update { it.copy(nowcastProfileStep = step) }
+    }
+
+    fun queryNowcastProfile(validTimeLocal: String) {
+        val activeEngine = engine ?: return
+        val current = _state.value
+        val report = if (current.resultKind == "nowcast") current.result else null
+        val source = report?.optJSONObject("profile_source")
+        if (report == null || source == null || !source.optBoolean("available", false) || validTimeLocal.isBlank()) {
+            _state.update {
+                it.copy(
+                    frozenProfileModel = "satellite",
+                    frozenProfileTime = validTimeLocal,
+                    frozenProfileState = "unavailable",
+                    frozenProfile = null,
+                    frozenProfileError = "该结果没有可查询的冻结卫星剖面。",
+                )
+            }
+            return
+        }
+        val params = JSONObject()
+            .put("result_id", source.optString("result_id"))
+            .put("source_identity", source.optJSONObject("source_identity") ?: JSONObject())
+            .put("model_source", "satellite")
+            .put("lat", current.location.lat)
+            .put("lon", current.location.lon)
+            .put("valid_time_utc", validTimeLocal)
+        _state.update {
+            it.copy(
+                frozenProfileModel = "satellite",
+                frozenProfileTime = validTimeLocal,
+                frozenProfileState = "loading",
+                frozenProfile = null,
+                frozenProfileError = "",
+            )
+        }
+        viewModelScope.launch {
+            try {
+                val response = activeEngine.call("profile_query", params)
+                val status = response.optString("status", "unavailable")
+                val section = response.optJSONObject("cross_section")
+                if (status != "ready" || section == null) {
+                    val reason = if (status == "expired") {
+                        "冻结源已过期，请重新运行实况分析以获取新剖面。"
+                    } else {
+                        response.optString("reason", "").ifEmpty { "所选时次没有可用剖面。" }
+                    }
+                    _state.update {
+                        it.copy(
+                            frozenProfileState = status,
+                            frozenProfile = null,
+                            frozenProfileError = reason,
+                        )
+                    }
+                    return@launch
+                }
+                response.optJSONArray("source_times_utc")?.let { times ->
+                    section.put("source_times_utc", times)
+                }
+                _state.update {
+                    it.copy(
+                        frozenProfileState = "ready",
+                        frozenProfile = section,
+                        frozenProfileError = "",
+                    )
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                _state.update {
+                    it.copy(
+                        frozenProfileState = "error",
+                        frozenProfile = null,
+                        frozenProfileError = friendlyEngineMessage(error.message ?: "读取冻结剖面失败"),
+                    )
+                }
+            }
+        }
     }
 
     // ---------------------------------------------------------------- 数据会话
@@ -910,13 +1053,27 @@ class WorkbenchStore private constructor(
 
     fun setEcmwfSource(value: String) {
         prefs.edit().putString(PREF_ECMWF_SOURCE, value).apply()
-        _state.update { it.copy(ecmwfSource = value) }
+        _state.update {
+            it.copy(
+                ecmwfSource = value,
+                downloadProbeRows = DownloadProbeRow.initial(it.aerosolSource),
+                downloadProbeDate = null,
+                downloadProbeError = "",
+            )
+        }
     }
 
     fun setAerosolSource(value: String) {
         val normalized = if (value == "geos-fp") "geos-fp" else "cams"
         prefs.edit().putString(PREF_AEROSOL_SOURCE, normalized).apply()
-        _state.update { it.copy(aerosolSource = normalized) }
+        _state.update {
+            it.copy(
+                aerosolSource = normalized,
+                downloadProbeRows = DownloadProbeRow.initial(normalized),
+                downloadProbeDate = null,
+                downloadProbeError = "",
+            )
+        }
     }
 
     fun setElevationSource(value: String) {
@@ -1164,7 +1321,7 @@ class WorkbenchStore private constructor(
             return
         }
         val key = current.camsKeyDraft.trim()
-        if (!current.online || current.busy || current.savingCAMS || !canSaveCAMS || key.isEmpty()) return
+        if (!current.online || current.busy || current.savingCAMS || current.probingDownloads || !canSaveCAMS || key.isEmpty()) return
         _state.update { it.copy(savingCAMS = true, camsMessage = "", camsKeyDraft = "") }
         viewModelScope.launch {
             try {
@@ -1186,6 +1343,93 @@ class WorkbenchStore private constructor(
                     )
                 }
             }
+        }
+    }
+
+    fun probeDownloads() {
+        val activeEngine = engine ?: return
+        val current = _state.value
+        if (!current.online || current.busy || current.savingCAMS || current.probingDownloads) return
+        _state.update {
+            it.copy(
+                downloadProbeRows = DownloadProbeRow.initial(current.aerosolSource),
+                probingDownloads = true,
+                cancellingDownloadProbe = false,
+                downloadProbeDate = null,
+                downloadProbeError = "",
+            )
+        }
+        downloadProbeJob = viewModelScope.launch {
+            try {
+                val response = activeEngine.call(
+                    "network_probe",
+                    JSONObject()
+                        .put("ecmwf_source", current.ecmwfSource)
+                        .put("aerosol_source", current.aerosolSource),
+                ) { event ->
+                    val row = DownloadProbeRow.fromJson(event.optJSONObject("probe")) ?: return@call
+                    _state.update { state ->
+                        if (state.cancellingDownloadProbe) state
+                        else state.copy(downloadProbeRows = state.downloadProbeRows.replaceProbeRow(row))
+                    }
+                }
+                val rows = response.optJSONArray("datasets")?.let { array ->
+                    (0 until array.length()).mapNotNull { index ->
+                        DownloadProbeRow.fromJson(array.optJSONObject(index))
+                    }
+                }.orEmpty()
+                if (rows.size != 3 || rows.map { it.source }.toSet() != setOf("gfs", "ec", "cams")) {
+                    throw EngineError("探测结果不完整，请重新探测。")
+                }
+                _state.update {
+                    it.copy(
+                        downloadProbeRows = rows,
+                        downloadProbeDate = java.time.Instant.now().toString(),
+                        downloadProbeError = "",
+                    )
+                }
+            } catch (_: CancellationException) {
+                finishDownloadProbe(cancelled = true)
+            } catch (error: Exception) {
+                finishDownloadProbe(cancelled = false)
+                _state.update {
+                    it.copy(downloadProbeError = friendlyEngineMessage(error.message ?: "探测中断，尚未验证下载。"))
+                }
+            } finally {
+                _state.update { it.copy(probingDownloads = false, cancellingDownloadProbe = false) }
+                downloadProbeJob = null
+            }
+        }
+    }
+
+    fun cancelDownloadProbe() {
+        if (!_state.value.probingDownloads) return
+        _state.update { it.copy(cancellingDownloadProbe = true) }
+        downloadProbeJob?.cancel()
+    }
+
+    fun downloadProbeReport(): String {
+        val current = _state.value
+        val checked = current.downloadProbeDate ?: "未完成"
+        return (listOf("FireSky 数据源下载探测 · $checked") + current.downloadProbeRows.map { row ->
+            "${row.title} [${row.host}] · ${row.state}\n${row.detail}\n${row.measurement}"
+        }).joinToString("\n\n")
+    }
+
+    private fun finishDownloadProbe(cancelled: Boolean) {
+        _state.update { state ->
+            state.copy(
+                downloadProbeRows = state.downloadProbeRows.map { row ->
+                    if (row.active || row.state == "waiting") {
+                        row.copy(
+                            state = if (cancelled) "cancelled" else "error",
+                            detail = if (cancelled) "已停止，尚未验证下载。" else "探测中断，尚未验证下载。",
+                        )
+                    } else row
+                },
+                downloadProbeDate = java.time.Instant.now().toString(),
+                downloadProbeError = if (cancelled) "探测已取消；已完成的结果保留。" else state.downloadProbeError,
+            )
         }
     }
 
@@ -2190,6 +2434,12 @@ class WorkbenchStore private constructor(
 
         @VisibleForTesting
         fun forTesting(application: Application, transport: EngineTransport): WorkbenchStore =
-            WorkbenchStore(application, transport)
+            WorkbenchStore(application, transport, null)
+
+        fun forAudit(
+            application: Application,
+            transport: EngineTransport,
+            options: AuditLaunchOptions,
+        ): WorkbenchStore = WorkbenchStore(application, transport, options)
     }
 }

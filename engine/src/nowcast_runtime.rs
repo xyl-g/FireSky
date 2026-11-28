@@ -301,6 +301,34 @@ fn corridor_source<'a>(optics_source: &str, paths: impl Iterator<Item = &'a Path
     )
 }
 
+fn blend_corridor_samples(left: &[Value], right: &[Value], weight: f64) -> Vec<Value> {
+    let key = |sample: &Value| -> Option<(i64, i64)> {
+        let lat = sample["lat"].as_f64()?;
+        let lon = sample["lon"].as_f64()?;
+        Some(((lat * 10_000.0).round() as i64, (lon * 10_000.0).round() as i64))
+    };
+    let mut right_aod = BTreeMap::new();
+    for sample in right {
+        if let (Some(k), Some(aod)) = (key(sample), sample["aod550"].as_f64().filter(|v| v.is_finite())) {
+            right_aod.insert(k, aod);
+        }
+    }
+    left.iter()
+        .map(|sample| {
+            let mut blended = sample.clone();
+            if let (Some(k), Some(aod_left)) = (
+                key(sample),
+                sample["aod550"].as_f64().filter(|v| v.is_finite()),
+            ) {
+                if let Some(&aod_right) = right_aod.get(&k) {
+                    blended["aod550"] = json!(aod_left + (aod_right - aod_left) * weight);
+                }
+            }
+            blended
+        })
+        .collect()
+}
+
 fn aerosol_reading(
     payload: &Value,
     context: &Value,
@@ -351,11 +379,13 @@ fn aerosol_reading(
             }
             let left_optics = crate::cams::decode_many_paths(codes.as_ref(), &left_paths)?;
             let right_optics = crate::cams::decode_many_paths(codes.as_ref(), &right_paths)?;
-            if let (Some((aod_left, samples)), Some((aod_right, _))) = (
+            if let (Some((aod_left, left_samples)), Some((aod_right, right_samples))) = (
                 corridor_aod(&left_optics, lat, lon, radius, azimuth),
                 corridor_aod(&right_optics, lat, lon, radius, azimuth),
             ) {
-                let aod = aod_left + (aod_right - aod_left) * f64::from(weight);
+                let w = f64::from(weight);
+                let aod = aod_left + (aod_right - aod_left) * w;
+                let samples = blend_corridor_samples(&left_samples, &right_samples, w);
                 let source = corridor_source(&left_optics.source, left_paths.iter().chain(&right_paths));
                 interpolated = Some((aod, samples, source, left_optics.source));
             }
@@ -1504,5 +1534,26 @@ mod tests {
             .0;
         let blended = left + (right - left) * f64::from(weight);
         assert!((blended - 0.4).abs() < 1e-12);
+        let (_, left_samples) = corridor_aod(
+            &optics(&[(30.0, 120.0, 0.2), (30.5, 120.5, 0.4)]),
+            30.0,
+            120.0,
+            900.0,
+            25.0,
+        )
+        .unwrap();
+        let (_, right_samples) = corridor_aod(
+            &optics(&[(30.0, 120.0, 0.6), (30.5, 120.5, 0.8)]),
+            30.0,
+            120.0,
+            900.0,
+            25.0,
+        )
+        .unwrap();
+        let blended_samples =
+            blend_corridor_samples(&left_samples, &right_samples, f64::from(weight));
+        assert_eq!(blended_samples.len(), 2);
+        assert!((blended_samples[0]["aod550"].as_f64().unwrap() - 0.4).abs() < 1e-12);
+        assert!((blended_samples[1]["aod550"].as_f64().unwrap() - 0.6).abs() < 1e-12);
     }
 }

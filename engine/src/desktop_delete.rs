@@ -144,20 +144,13 @@ fn root_for_scope(workspace: &Path, scope: &Scope) -> Result<PathBuf, String> {
 }
 
 fn root_for_model(workspace: &Path, source: &str) -> Result<PathBuf, String> {
-    let (key, default) = match source {
-        "gfs" => ("FIRESKY_GFS_CACHE_DIR", ".cache/gfs"),
-        "ecmwf" => ("FIRESKY_ECMWF_CACHE_DIR", ".cache/ecmwf"),
-        "cams" => ("FIRESKY_CAMS_CACHE_DIR", ".cache/cams"),
+    let (key, legacy, visible) = match source {
+        "gfs" => ("FIRESKY_GFS_CACHE_DIR", ".cache/gfs", "gfs"),
+        "ecmwf" => ("FIRESKY_ECMWF_CACHE_DIR", ".cache/ecmwf", "ecmwf"),
+        "cams" => ("FIRESKY_CAMS_CACHE_DIR", ".cache/cams", "cams"),
         _ => return Err("unknown data source".into()),
     };
-    let value = std::env::var_os(key)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| default.into());
-    Ok(if value.is_absolute() {
-        value
-    } else {
-        workspace.join(value)
-    })
+    Ok(crate::paths::resolve(workspace, key, legacy, visible))
 }
 
 fn check(cancel: &AtomicBool) -> Result<(), String> {
@@ -843,5 +836,28 @@ mod tests {
         )
         .unwrap_err()
         .contains("nothing to delete"));
+    }
+
+    #[test]
+    fn visible_layout_deletes_model_cycles_under_visible_root() {
+        let workspace = tempfile::tempdir().unwrap();
+        let gfs = workspace.path().join("gfs");
+        let file = gfs_cycle(&gfs, "2026-11-26T00:00:00Z", "visible");
+        let scope = json!({"source": "gfs", "cycle": "2026-11-26T00:00:00Z"});
+        let preview_value = preview(
+            workspace.path(),
+            &json!({"scope": scope}),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(preview_value["data_file_count"], 1);
+        let result = execute(
+            workspace.path(),
+            &json!({"scope": scope, "preview_id": preview_value["preview_id"], "confirm": true}),
+            &AtomicBool::new(false),
+        )
+        .unwrap();
+        assert_eq!(result["deleted"], 1);
+        assert!(!file.exists());
     }
 }

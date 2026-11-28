@@ -7,6 +7,14 @@ pub const OPTICS_OUTPUT_FIELDS: usize = 2;
 pub const PROFILE_FIELDS: usize = 24;
 pub const EFFECTIVE_FIELDS: usize = 5;
 
+pub fn condensate_component(value: f32) -> f32 {
+    if !value.is_finite() || value <= 0.0 {
+        0.0
+    } else {
+        ((value.max(1e-12).log10() + 7.0) / 3.5).clamp(0.0, 1.0)
+    }
+}
+
 fn nan_to_num(value: f32) -> f32 {
     if value.is_nan() {
         0.0
@@ -17,11 +25,7 @@ fn nan_to_num(value: f32) -> f32 {
 
 pub fn optics(rh: f32, fraction: f32, liquid: f32, ice: f32) -> [f32; 2] {
     let total = nan_to_num(liquid).max(0.0) + nan_to_num(ice).max(0.0);
-    let condensate = if total > 0.0 {
-        ((total.max(1e-12).log10() + 8.0) / 3.0).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
+    let condensate = condensate_component(total);
     let has_condensate = liquid.is_finite() || ice.is_finite();
     let rh_opacity = ((nan_to_num(rh) - 82.0) / 16.0).clamp(0.0, 1.0);
     if fraction.is_finite() {
@@ -134,6 +138,15 @@ mod tests {
         let full = optics(90.0, 100.0, 1e-6, 0.0);
         assert_eq!(thin[1], full[1]);
         assert_eq!(full[0], 1.0);
+    }
+
+    #[test]
+    fn condensate_mapping_is_continuous_across_thin_cloud_amounts() {
+        let low = optics(100.0, f32::NAN, 1e-5, 0.0);
+        let higher = optics(100.0, f32::NAN, 1e-4, 0.0);
+        assert!((low[0] - (2.0 / 3.5)).abs() < 1e-6);
+        assert!((higher[0] - (3.0 / 3.5)).abs() < 1e-6);
+        assert!(higher[0] > low[0]);
     }
 
     #[test]

@@ -242,6 +242,7 @@ enum PreparationActionsChecks {
                 "steps": [
                     ["valid_time_utc": "2026-11-09T09:00:00Z", "instant_quality_index": 0.4],
                     ["valid_time_utc": "2026-11-09T09:05:00Z", "instant_quality_index": 0.8, "valid": false],
+                    ["valid_time_utc": "2026-11-09T09:07:00Z", "instant_quality_index": 0.0, "valid": true, "selected_regime": "invalid"],
                     ["valid_time_utc": "2026-11-09T09:10:00Z", "instant_quality_index": 1.2],
                     ["valid_time_utc": "2026-11-09T09:10:00Z", "instant_quality_index": 1.2],
                     ["valid_time_utc": "2026-11-09T09:15:00Z", "instant_quality_index": Double.infinity],
@@ -252,6 +253,7 @@ enum PreparationActionsChecks {
             precondition(model.peak("gfs") == nil && curve.count == 2)
             precondition(curve[0].series != curve[1].series)
             precondition(curve.allSatisfy { $0.model == "gfs" && $0.quality.isFinite })
+            precondition(!ForecastComparison.isStepValid(["valid": true, "selected_regime": "invalid"]))
         case "aod-shared":
             let pair = ForecastComparison(result: ["model_results": [
                 "gfs": ["aerosol": ["aod550": 0.21, "source": "cams-ads corridor"], "quality_components": ["quality_aod550": 9]],

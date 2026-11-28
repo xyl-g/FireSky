@@ -17,6 +17,8 @@
   const axes = $derived(Array.from({ length: 5 }, (_, index) => index / 4));
   const fill = (cell: ProfileCell) => cell.probability === null ? `url(#${patternId})`
     : `color-mix(in srgb, var(--profile-color) ${8 + cell.probability * .85}%, var(--fs-surface-strong))`;
+  const cloudAttenuated = (cell: ProfileCell) => cell.sunlitFraction !== null && cell.sunlitFraction > 0
+    && cell.pathTransmission !== null && cell.pathTransmission < .995;
   const temperatureColor = (value: number | null) => value === null ? "var(--fs-ink2)" : value < -30 ? "#9b7299" : value < 0 ? "#ba7468" : "#c45142";
   const kilometers = (value: number | null) => value === null ? "--" : (value / 1000).toFixed(1);
   function inspectKey(event: KeyboardEvent, index: number) {
@@ -48,6 +50,9 @@
             <rect width="6" height="6" fill="var(--fs-hover)" />
             <path d="M-1,1 L1,-1 M0,6 L6,0 M5,7 L7,5" stroke="var(--fs-ink2)" stroke-opacity=".32" stroke-width=".8" />
           </pattern>
+          <pattern id={`${patternId}-attenuated`} width="7" height="7" patternUnits="userSpaceOnUse">
+            <path d="M-2,7 L7,-2 M2,9 L9,2" stroke="var(--fs-accent)" stroke-opacity=".30" stroke-width="1" />
+          </pattern>
         </defs>
         <rect x={left} y={top} width={right - left} height={bottom - top} class="plot-background" />
         {#each axes as ratio}
@@ -69,6 +74,12 @@
             onfocus={() => { focused = cell; activeIndex = index; }} onblur={() => { focused = null; }}>
             <title>{profileCellLabel(cell, satellite)}</title>
           </rect>
+          {#if cloudAttenuated(cell)}
+            <rect class="attenuation-hatch" x={x(cell.start)} y={y(cell.top)}
+              width={Math.max(.2, x(cell.end) - x(cell.start))}
+              height={Math.max(.2, y(cell.bottom) - y(cell.top))}
+              fill={`url(#${patternId}-attenuated)`} aria-hidden="true" />
+          {/if}
         {/each}
         {#each data.pressureLines as pressureLine, index}
           {#each pressureLine.segments as points}<path d={line(points)} class="pressure-line" stroke={temperatureColor(pressureLine.temperature)} />{/each}
@@ -91,6 +102,7 @@
       <span><i class="missing-key"></i>缺测</span>
       <span>{satellite ? "云层后验概率" : "模式云量"}</span><span>0%</span><i class="scale"></i><span>100%</span>
       {#if data.illumination.length}<span><i class="illumination-key"></i>理论受光阈值</span>{/if}
+      {#if data.cells.some(cloudAttenuated)}<span><i class="attenuation-key"></i>路径透射 T_c</span>{/if}
       {#if data.terrain.length}<span title={data.terrainSource}><i class="terrain-key"></i>地形</span>{/if}
       <span><i class="temperature-key"></i>压力 / 温度层线</span>
       {#if data.cells.some((cell) => cell.status === 3 || cell.status === 2)}
@@ -124,6 +136,7 @@
   .guide { stroke: var(--fs-border); stroke-width: .8; }
   .profile-cell { outline: none; }
   .profile-cell:focus-visible { stroke: var(--fs-ink); stroke-width: 2; }
+  .attenuation-hatch { pointer-events: none; }
   .terrain-fill { fill: color-mix(in srgb, var(--fs-ink2) 20%, transparent); pointer-events: none; }
   .terrain-line { fill: none; stroke: var(--fs-ink2); stroke-width: 1.4; pointer-events: none; }
   .illumination { fill: none; stroke: var(--fs-accent); stroke-width: 1.6; stroke-dasharray: 6 4; pointer-events: none; }
@@ -136,6 +149,7 @@
   .missing-key { border: 1px solid var(--fs-border); background: repeating-linear-gradient(135deg, var(--fs-hover), var(--fs-hover) 2px, var(--fs-ink2) 2px, var(--fs-ink2) 3px); }
   footer .scale { width: 72px; height: 5px; background: linear-gradient(to right, color-mix(in srgb, var(--profile-color) 8%, var(--fs-surface-strong)), color-mix(in srgb, var(--profile-color) 93%, var(--fs-surface-strong))); }
   .illumination-key { border-top: 2px dashed var(--fs-accent); height: 0; margin-left: 8px; }
+  .attenuation-key { border: 1px solid color-mix(in srgb, var(--fs-accent) 55%, var(--fs-border)); background: repeating-linear-gradient(135deg, transparent, transparent 3px, color-mix(in srgb, var(--fs-accent) 45%, transparent) 3px, color-mix(in srgb, var(--fs-accent) 45%, transparent) 4px); }
   .terrain-key { border-top: 2px solid var(--fs-ink2); height: 0; margin-left: 8px; }
   .temperature-key { border-top: 2px solid #ba7468; height: 0; margin-left: 8px; }
   .candidate-key { border: 1.5px solid var(--fs-accent); margin-left: 8px; }

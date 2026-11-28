@@ -12,6 +12,13 @@ import kotlin.math.roundToInt
  * 纯函数 JSON 解析、参数构造与格式化辅助集（从 WorkbenchStore 拆出以保持 Store 精简）。
  */
 
+/** 判断逐时步骤是否有效（同 macOS ForecastComparison.isStepValid）。 */
+fun isStepValid(step: JSONObject): Boolean {
+    if (step.opt("valid") == false) return false
+    if (step.optString("selected_regime") == "invalid") return false
+    return true
+}
+
 internal fun parseTaskHistoryItem(value: JSONObject): TaskHistoryItem? {
     val taskId = value.optString("task_id")
     if (taskId.length != 64 || taskId.any { !it.isDigit() && it !in 'a'..'f' }) return null
@@ -43,6 +50,16 @@ internal fun parseTaskHistoryItem(value: JSONObject): TaskHistoryItem? {
         canRestoreResult = canRestore,
     )
 }
+
+fun filterTaskHistory(items: List<TaskHistoryItem>, filter: TaskHistoryFilter): List<TaskHistoryItem> =
+    when (filter) {
+        TaskHistoryFilter.ALL -> items
+        TaskHistoryFilter.ACTIVE -> items.filterNot { it.isBackgroundSync }
+        TaskHistoryFilter.SYNC -> items.filter { it.isBackgroundSync }
+    }
+
+internal fun List<DownloadProbeRow>.replaceProbeRow(row: DownloadProbeRow): List<DownloadProbeRow> =
+    map { if (it.source == row.source) row else it }
 
 internal fun parseTaskEvents(response: JSONObject): List<TaskEventRow> {
     val array = response.optJSONArray("events") ?: return emptyList()
@@ -478,6 +495,16 @@ fun parseNowcastProfileCells(report: JSONObject?): List<NowcastProfileCell> {
     return cells
 }
 
+fun resolveNowcastProfileBearing(report: JSONObject?): Double? {
+    if (report == null) return null
+    val obs = report.optJSONObject("nowcast") ?: return null
+    val profile = obs.optJSONObject("satellite_vertical_profile") ?: return null
+    val samplesArr = profile.optJSONArray("samples") ?: return null
+    val rawSamples = (0 until samplesArr.length()).mapNotNull { samplesArr.optJSONObject(it) }
+    val bearings = rawSamples.mapNotNull { it.optNum("bearing_deg") }.distinct().sorted()
+    return resolveNowcastBearing(report, bearings)
+}
+
 private fun resolveNowcastBearing(report: JSONObject, bearings: List<Double>): Double? {
     val section = report.optJSONObject("cross_section")
     val stepsArr = report.optJSONArray("steps") ?: JSONArray()
@@ -485,7 +512,7 @@ private fun resolveNowcastBearing(report: JSONObject, bearings: List<Double>): D
     val bestTime = report.optString("best_time_local", "").ifEmpty { null }
     val best = bestTime?.let { t -> steps.firstOrNull { it.optString("valid_time_local") == t } }
     val diagnostic = steps.firstOrNull {
-        it.optBoolean("valid", true) && it.optNum("solar_azimuth_deg") != null
+        isStepValid(it) && it.optNum("solar_azimuth_deg") != null
     }
     val target = section?.optNum("solar_azimuth_deg")
         ?: best?.optNum("solar_azimuth_deg")

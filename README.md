@@ -7,9 +7,9 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 
 > English documentation: [README.en.md](README.en.md)
 
-> 当前版本 **v2.1.1**（见[下载安装](#下载安装releases)）：macOS DMG（双架构）、
+> 当前版本 **v2.2.0**（见[下载安装](#下载安装releases)）：macOS DMG（双架构）、
 > Windows zip + 安装器（x64/ARM64）、Android 通用 APK 与 iOS 未签名 IPA
-> 全部随 CI `v*` tag 自动直发 Release（移动端亦支持 `mobile-v*` 独立热修）。v2.1.1 修复区域预测
+> 全部随 CI `v*` tag 自动直发 Release（移动端亦支持 `mobile-v*` 独立热修）。v2.2.0 以 macOS/iOS 为桌面与移动基准，完成 Windows/Android 原生 UI 对齐，并扩展大气剖面诊断展示；v2.1.1 修复区域预测
 > （GEOS-FP）预检与准备时间窗对齐、准备阶段周期升级与核验保留，并启用 GitHub Actions Android
 > 正式固定签名；v2.1.0 新增
 > **NASA GEOS-FP OPeNDAP 免密钥 AOD 数据源**（与 CAMS ADS 隔离切换）与
@@ -86,7 +86,7 @@ A burning-sunset prediction stack: **native Rust prediction engine and HTTP serv
 ## 下载安装（Releases）
 
 正式版统一从 [GitHub Releases](https://github.com/xyl-g/FireSky/releases) 下载
-（当前 **v2.1.1**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
+（当前 **v2.2.0**）。下载后先校验完整性（`SHA256SUMS.txt` 为裸文件名格式，
 与各资产放在同一目录执行）：
 
 ```bash

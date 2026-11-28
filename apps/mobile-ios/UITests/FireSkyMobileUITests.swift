@@ -51,12 +51,37 @@ final class FireSkyMobileUITests: XCTestCase {
         start.tap()
         let download = app.buttons["Download missing data"]
         XCTAssertTrue(download.waitForExistence(timeout: 10))
+        let gfsTitle = app.staticTexts["preflight-row-title-gfs"]
+        let gfsStatus = app.descendants(matching: .any)["preflight-row-status-gfs"]
+        let cancel = app.buttons["Cancel"]
+        XCTAssertTrue(gfsTitle.waitForExistence(timeout: 5))
+        XCTAssertTrue(gfsStatus.waitForExistence(timeout: 5))
+        for _ in 0..<5 {
+            if gfsTitle.isHittable && gfsStatus.isHittable { break }
+            app.swipeUp()
+        }
+        XCTAssertTrue(gfsTitle.isHittable)
+        XCTAssertTrue(gfsStatus.isHittable)
+        XCTAssertFalse(gfsTitle.frame.intersects(gfsStatus.frame), "数据集名称与状态徽标不能重叠")
+        let dataAttachment = XCTAttachment(screenshot: app.screenshot())
+        dataAttachment.name = "preparation-large-text-data-row-en"
+        dataAttachment.lifetime = .keepAlways
+        add(dataAttachment)
+
+        XCTAssertTrue(cancel.waitForExistence(timeout: 5))
+        for _ in 0..<8 {
+            if download.isHittable && cancel.isHittable { break }
+            app.swipeUp()
+        }
         XCTAssertTrue(download.isHittable)
+        XCTAssertTrue(cancel.isHittable)
+        XCTAssertGreaterThan(download.frame.width, app.frame.width * 0.75, "大字下载按钮应保留足够的点击宽度")
+        XCTAssertLessThanOrEqual(download.frame.maxY, cancel.frame.minY, "下载与取消操作不能重叠")
         let attachment = XCTAttachment(screenshot: app.screenshot())
-        attachment.name = "preparation-large-text-en"
+        attachment.name = "preparation-large-text-actions-en"
         attachment.lifetime = .keepAlways
         add(attachment)
-        app.buttons["Cancel"].tap()
+        cancel.tap()
         assertDisappears(download, timeout: 5, message: "取消后预检弹层未关闭")
     }
 
@@ -148,5 +173,19 @@ final class FireSkyMobileUITests: XCTestCase {
         serverShot.name = "ios-settings-server-readonly"
         serverShot.lifetime = .keepAlways
         add(serverShot)
+    }
+
+    func testAuditLaunchArguments() throws {
+        let app = XCUIApplication()
+        app.launchArguments = [
+            "-UITestMockMode",
+            "-appLanguage", "zh",
+            "-UITestTheme", "dark",
+            "-UITestMode", "point",
+            "-UITestTab", "大气剖面",
+        ]
+        app.launch()
+        XCTAssertTrue(app.staticTexts["太阳方向大气剖面"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["point-diagnostics-button"].exists)
     }
 }

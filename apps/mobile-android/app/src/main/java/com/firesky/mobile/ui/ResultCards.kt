@@ -1,10 +1,14 @@
 package com.firesky.mobile.ui
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGesturesAfterLongPress
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -25,20 +29,31 @@ import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Cloud
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material.icons.filled.SatelliteAlt
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
+import androidx.compose.material.icons.filled.WbSunny
 import androidx.compose.material.icons.filled.WbTwilight
 import androidx.compose.material.icons.filled.ZoomIn
 import androidx.compose.material.icons.filled.ZoomOut
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -62,9 +77,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -80,6 +98,7 @@ import androidx.compose.ui.unit.sp
 import com.firesky.mobile.R
 import com.firesky.mobile.store.WorkbenchState
 import com.firesky.mobile.store.WorkbenchStore
+import com.firesky.mobile.store.isStepValid
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.LocalDateTime
@@ -88,7 +107,6 @@ import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import kotlin.math.abs
-import kotlin.math.ceil
 import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
@@ -97,8 +115,9 @@ import kotlin.math.sin
 
 /**
  * 结果卡片 —— WorkHeroView / WorkResultsView（point 作用域）同构：
- * 双模型 hero 卡 + 分析页签（概览/大气剖面/诊断与时间窗/逐时台账）。
+ * 双模型 hero 卡 + 三页签（概览/大气剖面/逐时台账）+ ⓘ 诊断 ModalBottomSheet。
  */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ResultSection(store: WorkbenchStore, state: WorkbenchState) {
     val activeResult = if (state.resultKind == null || state.resultKind == "point") state.result else null
@@ -183,7 +202,11 @@ fun ResultSection(store: WorkbenchStore, state: WorkbenchState) {
 
     WorkSurface(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            AnalysisTabs(store, state)
+            StreamlinedAnalysisTabs(
+                selectedTab = state.resultTab,
+                onSelectTab = { store.selectResultTab(it) },
+                onOpenDiagnostics = { store.setOpenDiagnostics(true) },
+            )
             if (state.resultTab != "概览") {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Segmented(
@@ -202,10 +225,66 @@ fun ResultSection(store: WorkbenchStore, state: WorkbenchState) {
                 }
             }
             when (state.resultTab) {
-                "概览" -> OverviewContent(activeResult, state.selectedModel)
                 "大气剖面" -> ProfileSection(activeResult, state.selectedModel)
                 "逐时台账" -> LedgerContent(activeResult, state.selectedModel)
-                else -> DiagnosticContent(activeResult, state.selectedModel)
+                else -> OverviewContent(activeResult, state.selectedModel)
+            }
+        }
+    }
+
+    if (state.openDiagnostics) {
+        val dark = LocalFireSkyDark.current
+        ModalBottomSheet(
+            onDismissRequest = { store.setOpenDiagnostics(false) },
+            containerColor = if (dark) Color(0xFF182132) else Color(0xFFFCFDFF),
+        ) {
+            val maxHeight = LocalConfiguration.current.screenHeightDp.dp * 0.85f
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = maxHeight)
+                    .padding(horizontal = 18.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        stringResource(R.string.diag_sheet_title),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Segmented(
+                        options = COMPARISON_MODELS,
+                        titles = listOf("GFS", "EC"),
+                        selection = state.selectedModel,
+                        onSelect = { store.selectModel(it) },
+                        modifier = Modifier.width(116.dp),
+                    )
+                    IconButton(
+                        onClick = { store.setOpenDiagnostics(false) },
+                        modifier = Modifier.size(32.dp),
+                    ) {
+                        Icon(
+                            Icons.Filled.Close,
+                            contentDescription = stringResource(R.string.dismiss),
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+                HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
+                Column(
+                    Modifier
+                        .weight(1f, fill = false)
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    DiagnosticContent(activeResult, state.selectedModel, showHeader = false)
+                }
             }
         }
     }
@@ -386,84 +465,131 @@ private fun HeroSummary(result: JSONObject, model: String, modifier: Modifier = 
 private fun tabTitle(tab: String): String = when (tab) {
     "概览" -> stringResource(R.string.tab_overview)
     "大气剖面" -> stringResource(R.string.tab_profile)
-    "诊断与时间窗" -> stringResource(R.string.tab_diagnostic)
     else -> stringResource(R.string.tab_ledger)
 }
 
+/** 3 主页签（概览 / 大气剖面 / 逐时台账）+ 尾随 ⓘ 诊断按钮（单点与卫星实况共用）。 */
 @Composable
-private fun AnalysisTabs(store: WorkbenchStore, state: WorkbenchState) {
+internal fun StreamlinedAnalysisTabs(
+    selectedTab: String,
+    onSelectTab: (String) -> Unit,
+    onOpenDiagnostics: () -> Unit,
+) {
     val dark = LocalFireSkyDark.current
     val trackFill = if (dark) Color(0xFF161E2E) else Color(0xFFEAF0F6)
     val trackBorder = if (dark) Color(0xFF50617B).copy(alpha = 0.45f) else Color(0xFFD8E1EA).copy(alpha = 0.85f)
     val warm = MaterialTheme.colorScheme.primary
+    val activeTab = if (selectedTab in listOf("概览", "大气剖面", "逐时台账")) selectedTab else "概览"
 
-    Box(
-        Modifier
-            .fillMaxWidth()
-            .background(trackFill, CircleShape)
-            .border(0.75.dp, trackBorder, CircleShape)
-            .padding(4.dp),
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Row(
+        Box(
             Modifier
-                .fillMaxWidth()
-                .selectableGroup()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                .weight(1f)
+                .background(trackFill, CircleShape)
+                .border(0.75.dp, trackBorder, CircleShape)
+                .padding(3.dp),
         ) {
-            for (tab in listOf("概览", "大气剖面", "诊断与时间窗", "逐时台账")) {
-                val selected = state.resultTab == tab
-                val pillFill = when {
-                    selected && dark -> Color.White.copy(alpha = 0.11f)
-                    selected -> Color.White.copy(alpha = 0.95f)
-                    else -> Color.Transparent
-                }
-                val pillShadow = if (selected && !dark) {
-                    Modifier.shadow(
-                        elevation = 1.dp,
-                        shape = CircleShape,
-                        clip = false,
-                        ambientColor = Color(0xFF2A3C58).copy(alpha = 0.16f),
-                        spotColor = Color(0xFF2A3C58).copy(alpha = 0.12f),
-                    )
-                } else {
-                    Modifier
-                }
-                Box(
-                    Modifier
-                        .heightIn(min = 36.dp)
-                        .then(pillShadow)
-                        .clip(CircleShape)
-                        .background(pillFill, CircleShape)
-                        .selectable(selected = selected, role = Role.Tab, onClick = { store.selectResultTab(tab) }),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Text(
-                        tabTitle(tab),
-                        fontSize = 12.sp,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                        color = if (selected) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
-                        maxLines = 1,
-                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
-                    )
-                    if (selected) {
-                        Box(
-                            Modifier
-                                .align(Alignment.BottomCenter)
-                                .padding(bottom = 2.dp)
-                                .width(20.dp)
-                                .height(2.5.dp)
-                                .background(warm, CircleShape),
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .selectableGroup(),
+                horizontalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                for (tab in listOf("概览", "大气剖面", "逐时台账")) {
+                    val selected = activeTab == tab
+                    val tabWeight = when (tab) {
+                        "逐时台账" -> 1.26f
+                        "概览" -> 0.90f
+                        else -> 0.84f
+                    }
+                    val pillFill = when {
+                        selected && dark -> Color.White.copy(alpha = 0.11f)
+                        selected -> Color.White.copy(alpha = 0.95f)
+                        else -> Color.Transparent
+                    }
+                    val pillShadow = if (selected && !dark) {
+                        Modifier.shadow(
+                            elevation = 1.dp,
+                            shape = CircleShape,
+                            clip = false,
+                            ambientColor = Color(0xFF2A3C58).copy(alpha = 0.16f),
+                            spotColor = Color(0xFF2A3C58).copy(alpha = 0.12f),
                         )
+                    } else {
+                        Modifier
+                    }
+                    Box(
+                        Modifier
+                            .weight(tabWeight)
+                            .heightIn(min = 34.dp)
+                            .then(pillShadow)
+                            .clip(CircleShape)
+                            .background(pillFill, CircleShape)
+                            .selectable(selected = selected, role = Role.Tab, onClick = { onSelectTab(tab) }),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            tabTitle(tab),
+                            fontSize = 11.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            color = if (selected) MaterialTheme.colorScheme.onSurface
+                            else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 7.dp),
+                        )
+                        if (selected) {
+                            Box(
+                                Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(bottom = 2.dp)
+                                    .width(18.dp)
+                                    .height(2.dp)
+                                    .background(warm, CircleShape),
+                            )
+                        }
                     }
                 }
+            }
+        }
+
+        Surface(
+            onClick = onOpenDiagnostics,
+            shape = CircleShape,
+            color = trackFill,
+            border = BorderStroke(0.75.dp, trackBorder),
+            modifier = Modifier.heightIn(min = 38.dp),
+        ) {
+            Row(
+                Modifier.padding(horizontal = 9.dp, vertical = 7.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(3.dp),
+            ) {
+                Icon(
+                    Icons.Filled.Info,
+                    contentDescription = stringResource(R.string.cd_open_diagnostics),
+                    modifier = Modifier.size(12.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.80f),
+                )
+                Text(
+                    stringResource(R.string.diag_chip_label),
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    softWrap = false,
+                )
             }
         }
     }
 }
 
-/** 概览：光谱色彩预览 + 16 方位雷达 + 三组指标卡（2 列自适应网格）+ 质量曲线。 */
+/** 概览：光谱色彩预览 + 16 方位雷达 + 三组指标卡 + 评分组成（GFS vs EC）+ 质量曲线。 */
 @Composable
 private fun OverviewContent(result: JSONObject, selectedModel: String = MODEL_GFS) {
     val spectral = findReportObject(result, selectedModel, "spectral_color")
@@ -487,14 +613,353 @@ private fun OverviewContent(result: JSONObject, selectedModel: String = MODEL_GF
                         for (spec in rowSpecs) {
                             MetricCard(spec, result, Modifier.weight(1f))
                         }
-                        if (rowSpecs.size == 1) {
-                            Spacer(Modifier.weight(1f))
-                        }
                     }
                 }
             }
         }
+        QualityBreakdownCard(result)
         CurveCard(result)
+    }
+}
+
+private data class BreakdownCellContent(
+    val primary: String,
+    val detail: String,
+    val primaryColor: Color,
+)
+
+private fun signedDeltaText(value: Double?): String? {
+    if (value == null || !value.isFinite()) return null
+    if (abs(value) < 0.0005) return "0.000"
+    return "%+.3f".format(value)
+}
+
+/** 统一 3 列「评分组成」（评分项 | GFS | EC）对比卡 + 单行限制因素 + 可展开「详情与口径」。 */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun QualityBreakdownCard(result: JSONObject) {
+    var expanded by remember(result) { mutableStateOf(false) }
+    val dark = LocalFireSkyDark.current
+    val warm = MaterialTheme.colorScheme.primary
+    val cool = coolAccentColor()
+    val secondary = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.60f)
+    val positiveColor = if (dark) Color(0xFF63D6AB) else Color(0xFF1F6E5A)
+    val negativeColor = MaterialTheme.colorScheme.error
+    val tnumStyle = TextStyle(fontFeatureSettings = "tnum")
+
+    val gfsReport = modelReport(result, MODEL_GFS)
+    val ecReport = modelReport(result, MODEL_EC)
+
+    @Composable
+    fun deltaColor(delta: String?): Color = when {
+        delta == null || delta == "0.000" -> secondary
+        delta.startsWith("-") -> negativeColor
+        else -> positiveColor
+    }
+
+    @Composable
+    fun cellContent(idx: Int, report: JSONObject): BreakdownCellContent {
+        val c = report.optJSONObject("quality_components") ?: JSONObject()
+        return when (idx) {
+            0 -> {
+                val delta = signedDeltaText(c.optNum("coverage_base_score") ?: c.optNum("coverage_score"))
+                val eff = percent(c.optNum("burnable_cloud_coverage_effective"))
+                val load = fmt(c.optNum("forward_burnable_cloud_load_effective") ?: c.optNum("forward_burnable_cloud_load_peak"), 2)
+                BreakdownCellContent(
+                    primary = delta ?: "—",
+                    detail = stringResource(R.string.breakdown_effective_load_fmt, eff, load),
+                    primaryColor = deltaColor(delta),
+                )
+            }
+            1 -> {
+                val ratio = percent(c.optNum("forward_burnable_cloud_ratio_peak"))
+                val fwd = percent(c.optNum("forward_burnable_cloud_field_amount_peak"))
+                val total = percent(c.optNum("forward_view_cloud_field_amount_peak"))
+                BreakdownCellContent(
+                    primary = ratio,
+                    detail = stringResource(R.string.breakdown_forward_total_fmt, fwd, total),
+                    primaryColor = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+            2 -> {
+                val risk = percent(c.optNum("solar_incoming_block_risk_at_best_cloud") ?: c.optNum("solar_incoming_block_risk_mean"))
+                BreakdownCellContent(
+                    primary = risk,
+                    detail = stringResource(R.string.breakdown_included_in_burnable),
+                    primaryColor = MaterialTheme.colorScheme.onBackground,
+                )
+            }
+            3 -> {
+                val delta = signedDeltaText(c.optNum("duration_adjustment"))
+                val mins = fmt(report.optNum("duration_minutes") ?: c.optNum("duration_minutes"), 0)
+                val factor = fmt(c.optNum("duration_factor"), 3)
+                BreakdownCellContent(
+                    primary = delta ?: "—",
+                    detail = stringResource(R.string.breakdown_duration_fmt, mins, factor),
+                    primaryColor = deltaColor(delta),
+                )
+            }
+            4 -> {
+                val delta = signedDeltaText(c.optNum("incoming_aod_adjustment"))
+                val aod = fmt(c.optNum("quality_aod550"), 3)
+                val factor = fmt(c.optNum("incoming_aod_illumination_factor"), 3)
+                BreakdownCellContent(
+                    primary = delta ?: "—",
+                    detail = stringResource(R.string.breakdown_aod_factor_fmt, aod, factor),
+                    primaryColor = deltaColor(delta),
+                )
+            }
+            else -> {
+                val delta = signedDeltaText(c.optNum("observer_aod_adjustment"))
+                val factor = fmt(c.optNum("observer_aod_contrast_factor"), 3)
+                BreakdownCellContent(
+                    primary = delta ?: "—",
+                    detail = stringResource(R.string.breakdown_contrast_factor_fmt, factor),
+                    primaryColor = deltaColor(delta),
+                )
+            }
+        }
+    }
+
+    val rowTitles = listOf(
+        R.string.breakdown_row_coverage,
+        R.string.breakdown_row_ratio,
+        R.string.breakdown_row_incoming_block,
+        R.string.breakdown_row_duration,
+        R.string.breakdown_row_incoming_aod,
+        R.string.breakdown_row_observer_aod,
+    )
+
+    val gfsLimit = gfsReport?.optJSONObject("quality_components")?.optString("quality_limiting_factor")?.ifEmpty { null }
+    val ecLimit = ecReport?.optJSONObject("quality_components")?.optString("quality_limiting_factor")?.ifEmpty { null }
+    val limitingSummary = when {
+        gfsLimit == null && ecLimit == null -> null
+        gfsLimit != null && ecLimit != null && gfsLimit == ecLimit ->
+            stringResource(R.string.breakdown_limit_same_fmt, gfsLimit)
+        gfsLimit != null && ecLimit != null ->
+            stringResource(R.string.breakdown_limit_both_fmt, gfsLimit, ecLimit)
+        gfsLimit != null ->
+            stringResource(R.string.breakdown_limit_model_fmt, "GFS", gfsLimit)
+        else ->
+            stringResource(R.string.breakdown_limit_model_fmt, "EC", ecLimit!!)
+    }
+
+    WorkSurface(Modifier.fillMaxWidth(), grouped = true, cornerRadius = 14.dp) {
+        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    stringResource(R.string.breakdown_title),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier.weight(1f),
+                )
+                Row(
+                    Modifier
+                        .clip(CircleShape)
+                        .clickable { expanded = !expanded }
+                        .padding(horizontal = 6.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Text(
+                        stringResource(R.string.breakdown_details_toggle),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = secondary,
+                    )
+                    Icon(
+                        if (expanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
+                        contentDescription = null,
+                        modifier = Modifier.size(14.dp),
+                        tint = secondary,
+                    )
+                }
+            }
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                for (model in COMPARISON_MODELS) {
+                    val mReport = modelReport(result, model)
+                    val mError = modelError(result, model)
+                    val mColor = if (model == MODEL_EC) cool else warm
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Box(
+                            Modifier
+                                .size(6.dp)
+                                .background(
+                                    if (mReport != null) mColor else if (mError != null) negativeColor else secondary,
+                                    CircleShape,
+                                ),
+                        )
+                        if (mReport != null) {
+                            Text(model.uppercase(), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                "${fmt(mReport.optNum("quality_index"), 3)} / 2.5",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = mColor,
+                                style = tnumStyle,
+                            )
+                            val lvl = mReport.optString("quality_level", "")
+                            if (lvl.isNotEmpty()) {
+                                Text(lvl, fontSize = 10.sp, color = secondary)
+                            }
+                        } else if (mError != null) {
+                            Text("${model.uppercase()} ${stringResource(R.string.status_incomplete)}", fontSize = 10.sp, color = negativeColor)
+                        } else {
+                            Text("${model.uppercase()} ${stringResource(R.string.status_no_result)}", fontSize = 10.sp, color = secondary)
+                        }
+                    }
+                }
+            }
+
+            HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    stringResource(R.string.breakdown_col_item),
+                    Modifier.weight(0.9f),
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = secondary,
+                )
+                for (model in COMPARISON_MODELS) {
+                    val mColor = if (model == MODEL_EC) cool else warm
+                    Row(
+                        Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Box(Modifier.size(5.dp).background(mColor, CircleShape))
+                        Text(model.uppercase(), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = secondary)
+                    }
+                }
+            }
+
+            for (idx in rowTitles.indices) {
+                HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
+                Row(
+                    Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.Top,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        stringResource(rowTitles[idx]),
+                        Modifier.weight(0.9f),
+                        fontSize = 10.5.sp,
+                        color = secondary,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    for (model in COMPARISON_MODELS) {
+                        val mReport = if (model == MODEL_GFS) gfsReport else ecReport
+                        if (mReport != null) {
+                            val cell = cellContent(idx, mReport)
+                            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+                                Text(
+                                    cell.primary,
+                                    fontSize = 11.5.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = cell.primaryColor,
+                                    style = tnumStyle,
+                                    maxLines = 1,
+                                )
+                                Text(
+                                    cell.detail,
+                                    fontSize = 9.5.sp,
+                                    color = secondary,
+                                    style = tnumStyle,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        } else {
+                            Text("—", Modifier.weight(1f), fontSize = 11.sp, color = secondary)
+                        }
+                    }
+                }
+            }
+
+            if (limitingSummary != null) {
+                Text(
+                    limitingSummary,
+                    fontSize = 10.sp,
+                    color = secondary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+
+            AnimatedVisibility(visible = expanded) {
+                val sample = gfsReport ?: ecReport
+                val sampleComp = sample?.optJSONObject("quality_components") ?: JSONObject()
+                val radiusVal = sampleComp.optNum("forward_field_radius_km") ?: sample?.optNum("analysis_radius_km")
+                val radiusText = radiusVal?.let { "%.0f km".format(it) } ?: "—"
+                val sectorText = sampleComp.optNum("forward_sector_half_angle_deg")?.let { "±%.0f°".format(it) } ?: "—"
+                Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                    HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
+                    Text(
+                        stringResource(R.string.breakdown_scope_fmt, radiusText, sectorText),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = secondary,
+                        style = tnumStyle,
+                    )
+                    for (model in COMPARISON_MODELS) {
+                        val r = if (model == MODEL_GFS) gfsReport else ecReport
+                        if (r != null) {
+                            val c = r.optJSONObject("quality_components") ?: JSONObject()
+                            val srcLabel = if ((r.optString("model_source", model)) == "ec") {
+                                stringResource(R.string.breakdown_src_ec)
+                            } else {
+                                stringResource(R.string.breakdown_src_gfs)
+                            }
+                            val mColor = if (model == MODEL_EC) cool else warm
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Text(model.uppercase(), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = mColor)
+                                Text(
+                                    stringResource(
+                                        R.string.breakdown_model_detail_fmt,
+                                        fmt(c.optNum("raw_quality_index"), 3),
+                                        srcLabel,
+                                        fmt(c.optNum("observer_return_optical_depth_mean"), 3),
+                                        fmt(c.optNum("observer_return_transmission_mean"), 3),
+                                    ),
+                                    fontSize = 10.sp,
+                                    color = secondary,
+                                    style = tnumStyle,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+                    }
+                    Text(
+                        stringResource(R.string.breakdown_footnote),
+                        fontSize = 9.5.sp,
+                        color = secondary,
+                        lineHeight = 13.sp,
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -557,11 +1022,6 @@ internal fun SpectralColorCard(spectral: JSONObject) {
     val labelZh = spectral.optString("peak_label_zh", "").trim()
     val labelEn = spectral.optString("peak_label_en", "").trim()
     val primaryLabel = if (isEnglish) labelEn.ifEmpty { labelZh } else labelZh.ifEmpty { labelEn }
-    val secondaryLabel = if (isEnglish) {
-        labelZh.takeIf { it.isNotEmpty() && it != primaryLabel }
-    } else {
-        labelEn.takeIf { it.isNotEmpty() && it != primaryLabel }
-    }
     val azim = spectral.optNum("solar_azimuth_deg")
     val elev = spectral.optNum("solar_elevation_deg")
 
@@ -579,13 +1039,34 @@ internal fun SpectralColorCard(spectral: JSONObject) {
                     .background(Brush.verticalGradient(stripColors))
                     .border(0.75.dp, Color.White.copy(alpha = 0.28f), RoundedCornerShape(10.dp)),
             )
-            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    stringResource(R.string.spectral_color_title),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
-                )
+            Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Row(
+                    Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        stringResource(R.string.spectral_color_title),
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (peakHex.isNotEmpty()) {
+                        Text(
+                            peakHex.uppercase(),
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                            modifier = Modifier
+                                .background(
+                                    MaterialTheme.colorScheme.onBackground.copy(alpha = 0.06f),
+                                    RoundedCornerShape(6.dp),
+                                )
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(7.dp),
@@ -600,23 +1081,14 @@ internal fun SpectralColorCard(spectral: JSONObject) {
                         primaryLabel.ifEmpty { peakHex.ifEmpty { "—" } },
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    if (!secondaryLabel.isNullOrEmpty()) {
-                        Text(
-                            secondaryLabel,
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.58f),
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
                 }
                 val caption = if (azim != null && elev != null) {
                     stringResource(R.string.spectral_solar_caption_fmt, azim, elev)
                 } else {
-                    peakHex
+                    ""
                 }
                 if (caption.isNotEmpty()) {
                     Text(
@@ -626,14 +1098,6 @@ internal fun SpectralColorCard(spectral: JSONObject) {
                         color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f),
                     )
                 }
-            }
-            if (peakHex.isNotEmpty()) {
-                Text(
-                    peakHex.uppercase(),
-                    fontSize = 10.sp,
-                    fontFamily = FontFamily.Monospace,
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
-                )
             }
         }
     }
@@ -964,7 +1428,7 @@ private fun DrawScope.drawSeries(
     }
 }
 
-/** 逐时台账（WorkLedgerView 同构：默认隐藏 valid == false 未判断时次，支持行内切换）。 */
+/** 逐时台账（WorkLedgerView 同构：默认隐藏 isStepValid == false 未判断时次，支持行内切换）。 */
 @Composable
 private fun LedgerContent(result: JSONObject, model: String) {
     val report = modelReport(result, model)
@@ -987,64 +1451,96 @@ private fun LedgerContent(result: JSONObject, model: String) {
     }
     var showInvalid by remember(result, model) { mutableStateOf(false) }
     val allSteps = stepsOf(report)
-    val hiddenInvalidCount = allSteps.count { !it.optBoolean("valid", true) }
-    val visibleSteps = if (showInvalid) allSteps else allSteps.filter { it.optBoolean("valid", true) }
+    val hiddenInvalidCount = allSteps.count { !isStepValid(it) }
+    val visibleSteps = if (showInvalid) allSteps else allSteps.filter { isStepValid(it) }
+    val secondary = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
+    val warm = MaterialTheme.colorScheme.primary
+    val cool = coolAccentColor()
+    val tnum = TextStyle(fontFeatureSettings = "tnum")
 
     Column {
-        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-            Text(
-                stringResource(R.string.col_time),
-                Modifier.weight(1f),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-            )
-            Text(
-                stringResource(R.string.col_quality),
-                Modifier.weight(1f),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-            )
-            Text(
-                stringResource(R.string.col_solar),
-                Modifier.weight(1f),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
-            )
-        }
-        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
-        visibleSteps.forEach { step ->
-            val isValid = step.optBoolean("valid", true)
-            val rowAlpha = if (isValid) 1f else 0.55f
-            Row(
-                Modifier.fillMaxWidth().padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(
-                    timeLabel(step.optString("valid_time_local")),
-                    Modifier.weight(1f),
-                    fontSize = 11.sp,
-                    style = TextStyle(fontFeatureSettings = "tnum"),
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = rowAlpha),
-                )
-                Text(
-                    if (isValid) fmt(step.optNum("instant_quality_index"), 3) else "—",
-                    Modifier.weight(1f),
-                    fontSize = 11.sp,
-                    style = TextStyle(fontFeatureSettings = "tnum"),
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = rowAlpha),
-                )
-                Text(
-                    fmt(step.optNum("solar_elevation_deg")),
-                    Modifier.weight(1f),
-                    fontSize = 11.sp,
-                    style = TextStyle(fontFeatureSettings = "tnum"),
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = rowAlpha),
-                )
+        Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            Column(Modifier.width(500.dp)) {
+                Row(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                    Text(stringResource(R.string.col_time), Modifier.width(64.dp), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = secondary)
+                    Text(stringResource(R.string.col_quality), Modifier.width(64.dp), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = secondary)
+                    Text(stringResource(R.string.col_level), Modifier.width(104.dp), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = secondary)
+                    Text(stringResource(R.string.col_burnable), Modifier.width(44.dp), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = secondary)
+                    Text(stringResource(R.string.col_coverage), Modifier.width(72.dp), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = secondary)
+                    Text(stringResource(R.string.col_family), Modifier.width(86.dp), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = secondary)
+                    Text(stringResource(R.string.col_solar), Modifier.width(66.dp), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = secondary)
+                }
+                HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
+                visibleSteps.forEach { step ->
+                    val isValid = isStepValid(step)
+                    val rowAlpha = if (isValid) 1f else 0.55f
+                    val burnable = if (step.has("physically_burnable") && !step.isNull("physically_burnable")) {
+                        step.optBoolean("physically_burnable")
+                    } else null
+                    val levelText = if (isValid) {
+                        step.optString("instant_quality_level", "").ifEmpty { "—" }
+                    } else {
+                        stringResource(R.string.ledger_unevaluated)
+                    }
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            timeLabel(step.optString("valid_time_local")),
+                            Modifier.width(64.dp),
+                            fontSize = 11.sp,
+                            style = tnum,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = rowAlpha),
+                        )
+                        Text(
+                            if (isValid) fmt(step.optNum("instant_quality_index"), 3) else "—",
+                            Modifier.width(64.dp),
+                            fontSize = 11.sp,
+                            style = tnum,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = rowAlpha),
+                        )
+                        Text(
+                            levelText,
+                            Modifier.width(104.dp),
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = if (isValid) MaterialTheme.colorScheme.onBackground else secondary,
+                        )
+                        Box(Modifier.width(44.dp), contentAlignment = Alignment.CenterStart) {
+                            when {
+                                !isValid || burnable == null -> Icon(Icons.Filled.Remove, contentDescription = null, modifier = Modifier.size(13.dp), tint = secondary)
+                                burnable -> Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(13.dp), tint = cool)
+                                else -> Icon(Icons.Filled.Close, contentDescription = null, modifier = Modifier.size(13.dp), tint = warm)
+                            }
+                        }
+                        Text(
+                            if (isValid) percent(step.optNum("burnable_cloud_coverage")) else "—",
+                            Modifier.width(72.dp),
+                            fontSize = 11.sp,
+                            style = tnum,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = rowAlpha),
+                        )
+                        Text(
+                            if (isValid) familyDisplayName(step.optString("dominant_burnable_pressure_family", "").ifEmpty { null }) else "—",
+                            Modifier.width(86.dp),
+                            fontSize = 11.sp,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = rowAlpha),
+                        )
+                        Text(
+                            if (isValid) fmt(step.optNum("solar_elevation_deg"), 1) else "—",
+                            Modifier.width(66.dp),
+                            fontSize = 11.sp,
+                            style = tnum,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = rowAlpha),
+                        )
+                    }
+                    HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
+                }
             }
-            HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.08f))
         }
         if (allSteps.isEmpty()) {
             Text(
@@ -1109,11 +1605,13 @@ private fun LedgerContent(result: JSONObject, model: String) {
 
 /** 诊断与时间窗（WorkDiagnosticView 同构：含云属/相态模型代理与内部码抑制）。 */
 @Composable
-private fun DiagnosticContent(result: JSONObject, model: String) {
+private fun DiagnosticContent(result: JSONObject, model: String, showHeader: Boolean = true) {
     val report = modelReport(result, model)
     val err = modelError(result, model)
     Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Text(stringResource(R.string.tab_diagnostic), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        if (showHeader) {
+            Text(stringResource(R.string.tab_diagnostic), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+        }
         if (report == null) {
             Text(
                 if (err != null) stringResource(R.string.model_incomplete, model.uppercase(), err)
@@ -1254,6 +1752,207 @@ private fun ProfileSection(result: JSONObject, model: String) {
     }
 }
 
+private fun midpoint(a: Offset, b: Offset): Offset = Offset((a.x + b.x) * 0.5f, (a.y + b.y) * 0.5f)
+
+internal fun Path.appendSmoothSegment(points: List<Offset>) {
+    if (points.size <= 1) return
+    if (points.size == 2) {
+        lineTo(points[1].x, points[1].y)
+        return
+    }
+    val m0 = midpoint(points[0], points[1])
+    lineTo(m0.x, m0.y)
+    for (idx in 1 until points.size - 1) {
+        val mid = midpoint(points[idx], points[idx + 1])
+        quadraticBezierTo(points[idx].x, points[idx].y, mid.x, mid.y)
+    }
+    val last = points.last()
+    lineTo(last.x, last.y)
+}
+
+internal fun smoothOpenCurvePath(points: List<Offset>): Path {
+    val path = Path()
+    val first = points.firstOrNull() ?: return path
+    path.moveTo(first.x, first.y)
+    path.appendSmoothSegment(points)
+    return path
+}
+
+private data class ColumnStratum(
+    val baseASL: Double,
+    val topASL: Double,
+    val amount: Double,
+    val status: Int,
+)
+
+private data class CloudRunPoint(
+    val sampleIndex: Int,
+    val cx: Float,
+    val topY: Float,
+    val bottomY: Float,
+    val stratum: ColumnStratum,
+)
+
+private data class BurnableTargetFocus(
+    val distanceKM: Double,
+    val baseASL: Double,
+)
+
+private data class CrossSectionTakeaway(
+    val text: String,
+    val status: Int,
+)
+
+private fun gridScalar(grid: List<List<Double?>>, sample: Int, level: Int): Double? =
+    grid.getOrNull(sample)?.getOrNull(level)
+
+private fun gridInt(grid: List<List<Int>>, sample: Int, level: Int): Int? =
+    grid.getOrNull(sample)?.getOrNull(level)
+
+private fun columnStratum(data: CrossSectionData, sample: Int, family: Int): ColumnStratum? {
+    val cloudyLevels = data.levels.indices.filter { level ->
+        if (gridInt(data.familyCodes, sample, level) != family) return@filter false
+        val amount = gridScalar(data.amounts, sample, level)
+            ?: max(gridScalar(data.presence, sample, level) ?: 0.0, (gridScalar(data.fractions, sample, level) ?: 0.0) / 100.0)
+        amount >= 0.06
+    }
+    if (cloudyLevels.isEmpty()) return null
+    val layerBase = cloudyLevels.mapNotNull { gridScalar(data.layerBases, sample, it) }.minOrNull()
+        ?: cloudyLevels.mapNotNull { gridScalar(data.heights, sample, it) }.minOrNull()?.minus(700.0)
+    val layerTop = cloudyLevels.mapNotNull { gridScalar(data.layerTops, sample, it) }.maxOrNull()
+        ?: cloudyLevels.mapNotNull { gridScalar(data.heights, sample, it) }.maxOrNull()?.plus(700.0)
+    if (layerBase == null || layerTop == null || layerTop <= layerBase) return null
+
+    val amountMax = cloudyLevels.mapNotNull {
+        gridScalar(data.amounts, sample, it)
+            ?: max(gridScalar(data.presence, sample, it) ?: 0.0, (gridScalar(data.fractions, sample, it) ?: 0.0) / 100.0)
+    }.maxOrNull() ?: 0.2
+    val status = cloudyLevels.mapNotNull { gridInt(data.statuses, sample, it) }.maxOrNull() ?: 0
+    return ColumnStratum(baseASL = layerBase, topASL = layerTop, amount = amountMax, status = status)
+}
+
+private fun primaryBurnableFocus(data: CrossSectionData): BurnableTargetFocus? {
+    for (target in data.targets) {
+        if (target.optString("status") == "burnable") {
+            val dist = target.optNum("distance_km")
+            val base = target.optNum("cloud_base_asl_m")
+            if (dist != null && base != null) {
+                return BurnableTargetFocus(distanceKM = dist, baseASL = base)
+            }
+        }
+    }
+    val litPoints = mutableListOf<Triple<Double, Double, Double>>()
+    for (i in data.distances.indices) {
+        for (family in 1..3) {
+            val s = columnStratum(data, i, family)
+            if (s != null && s.status == 3) {
+                litPoints.add(Triple(data.distances[i], s.baseASL, s.amount))
+            }
+        }
+    }
+    if (litPoints.isEmpty()) return null
+    val sorted = litPoints.sortedBy { it.first }
+    val mid = sorted[sorted.size / 2]
+    return BurnableTargetFocus(distanceKM = mid.first, baseASL = mid.second)
+}
+
+private data class CloudSilhouette(
+    val closed: Path,
+    val topEdge: Path,
+    val leftX: Float,
+    val rightX: Float,
+)
+
+private fun buildCloudSilhouette(
+    run: List<CloudRunPoint>,
+    left: Float,
+    right: Float,
+    columnSpan: Float,
+): CloudSilhouette {
+    val taper = min(columnSpan * 0.45f, (right - left) * 0.06f)
+    val first = run.first()
+    val last = run.last()
+    val leftX = max(left, first.cx - taper)
+    val rightX = min(right, last.cx + taper)
+    val leftMidY = (first.topY + first.bottomY) * 0.5f
+    val rightMidY = (last.topY + last.bottomY) * 0.5f
+
+    val topPts = buildList {
+        add(Offset(leftX, leftMidY))
+        run.forEach { add(Offset(it.cx, it.topY)) }
+        add(Offset(rightX, rightMidY))
+    }
+    val botPts = buildList {
+        add(Offset(rightX, rightMidY))
+        run.asReversed().forEach { add(Offset(it.cx, it.bottomY)) }
+        add(Offset(leftX, leftMidY))
+    }
+    val closed = Path().apply {
+        moveTo(topPts[0].x, topPts[0].y)
+        appendSmoothSegment(topPts)
+        appendSmoothSegment(botPts)
+        close()
+    }
+    val topEdge = smoothOpenCurvePath(topPts)
+    return CloudSilhouette(closed = closed, topEdge = topEdge, leftX = leftX, rightX = rightX)
+}
+
+@Composable
+private fun buildTakeaway(section: JSONObject, data: CrossSectionData): CrossSectionTakeaway {
+    val azText = section.optNum("solar_azimuth_deg")?.let { "%.0f°".format(it) } ?: "—"
+    val elText = section.optNum("solar_elevation_deg")?.let { "%.1f°".format(it) } ?: "—"
+    val solarPrefix = stringResource(R.string.profile_takeaway_solar_fmt, azText, elText)
+
+    val litDistances = mutableListOf<Double>()
+    val litBasesM = mutableListOf<Double>()
+    val litFamilies = linkedSetOf<Int>()
+    var hasOccluded = false
+
+    for (i in data.distances.indices) {
+        for (family in 1..3) {
+            val s = columnStratum(data, i, family) ?: continue
+            if (s.status == 3) {
+                litDistances.add(data.distances[i])
+                litBasesM.add(s.baseASL)
+                litFamilies.add(family)
+            } else if (s.status == 2) {
+                hasOccluded = true
+            }
+        }
+    }
+
+    return if (litDistances.isNotEmpty()) {
+        val minDist = litDistances.min()
+        val maxDist = litDistances.max()
+        val minBase = litBasesM.min()
+        val maxBase = litBasesM.max()
+        val isEn = LocalConfiguration.current.locales[0]?.language == "en"
+        val familyNames = listOf(3, 2, 1).filter { it in litFamilies }.joinToString("/") { fam ->
+            if (isEn) {
+                when (fam) {
+                    1 -> "High"
+                    2 -> "Mid"
+                    else -> "Low"
+                }
+            } else {
+                when (fam) {
+                    1 -> "高"
+                    2 -> "中"
+                    else -> "低"
+                }
+            }
+        }
+        val distText = if (abs(maxDist - minDist) < 1.0) "%.0f".format(minDist) else "%.0f–%.0f".format(minDist, maxDist)
+        val baseText = if (abs(maxBase - minBase) < 150.0) "%.1f".format(minBase / 1000.0) else "%.1f–%.1f".format(minBase / 1000.0, maxBase / 1000.0)
+        val detail = stringResource(R.string.profile_takeaway_lit_fmt, distText, familyNames, baseText)
+        CrossSectionTakeaway("$solarPrefix · $detail", status = 3)
+    } else if (hasOccluded) {
+        CrossSectionTakeaway("$solarPrefix · ${stringResource(R.string.profile_takeaway_occluded)}", status = 2)
+    } else {
+        CrossSectionTakeaway("$solarPrefix · ${stringResource(R.string.profile_takeaway_none)}", status = 0)
+    }
+}
+
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun CrossSectionFigure(section: JSONObject, genusProxy: JSONObject?) {
@@ -1268,468 +1967,947 @@ private fun CrossSectionFigure(section: JSONObject, genusProxy: JSONObject?) {
         return
     }
     var zoomScale by remember(section) { mutableFloatStateOf(1.0f) }
+    var showIsobars by remember(section) { mutableStateOf(false) }
+    var scrubDistanceKM by remember(section) { mutableStateOf<Double?>(null) }
+
     val dark = LocalFireSkyDark.current
-    val warm = MaterialTheme.colorScheme.primary
     val cool = coolAccentColor()
     val secondaryText = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f)
     val primaryText = MaterialTheme.colorScheme.onBackground
     val observerLabel = stringResource(R.string.profile_observer_label)
+    val sunlitLineLabel = stringResource(R.string.profile_sunlit_line)
+    val sunAz = section.optNum("solar_azimuth_deg")
+    val sunCueText = if (sunAz != null) {
+        stringResource(R.string.profile_sun_dir_fmt, sunAz)
+    } else {
+        stringResource(R.string.profile_sun_dir_no_az)
+    }
     val textMeasurer = rememberTextMeasurer()
+    val takeaway = buildTakeaway(section, data)
+    val litBaseText = stringResource(R.string.profile_lit_base_fmt, 0.0)
+    val litBasePrefix = litBaseText.substringBefore("0.0")
+    val litBaseSuffix = litBaseText.substringAfter("0.0")
+    val litBaseTextBuilder: (Double) -> String = { km -> "$litBasePrefix%.1f$litBaseSuffix".format(km) }
 
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        // 缩放控制栏
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(
-                stringResource(R.string.profile_axis_label),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Medium,
-                color = secondaryText,
-                modifier = Modifier.weight(1f),
-            )
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        // 1. 1-line 一图看懂 takeaway banner
+        val bannerAccent = when (takeaway.status) {
+            3 -> Color(0xFFF56B2E)
+            2 -> Color(0xFFDB8F33)
+            else -> secondaryText
+        }
+        val bannerIcon = when (takeaway.status) {
+            3 -> Icons.Filled.WbTwilight
+            2 -> Icons.Filled.Cloud
+            else -> Icons.Filled.WbSunny
+        }
+        Surface(
+            Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(9.dp),
+            color = bannerAccent.copy(alpha = if (takeaway.status == 0) 0.06f else if (dark) 0.14f else 0.09f),
+            border = BorderStroke(0.85.dp, bannerAccent.copy(alpha = if (takeaway.status == 0) 0.18f else 0.36f)),
+        ) {
+            Row(
+                Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Icon(bannerIcon, contentDescription = null, modifier = Modifier.size(13.dp), tint = bannerAccent)
+                Text(
+                    takeaway.text,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = primaryText,
+                    maxLines = 2,
+                    lineHeight = 14.sp,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+
+        // 2. Telemetry chips + 等压线 toggle + 缩放控制
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            TelemetryPill(stringResource(R.string.profile_tel_el), fmt(section.optNum("solar_elevation_deg"), 1) + "°")
+            TelemetryPill(stringResource(R.string.profile_tel_az), fmt(section.optNum("solar_azimuth_deg"), 1) + "°")
+            TelemetryPill(stringResource(R.string.profile_tel_range), fmt(section.optNum("analysis_radius_km"), 0) + " km")
+            TelemetryPill(stringResource(R.string.profile_tel_time), timeLabel(section.optString("valid_time_local", "")))
+        }
+
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Surface(
+                onClick = { showIsobars = !showIsobars },
+                shape = CircleShape,
+                color = if (showIsobars) cool.copy(alpha = if (dark) 0.22f else 0.14f) else secondaryText.copy(alpha = 0.08f),
+                border = BorderStroke(0.85.dp, if (showIsobars) cool.copy(alpha = 0.50f) else secondaryText.copy(alpha = 0.22f)),
+            ) {
+                Row(
+                    Modifier.padding(horizontal = 9.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Icon(
+                        Icons.Filled.Layers,
+                        contentDescription = null,
+                        modifier = Modifier.size(12.dp),
+                        tint = if (showIsobars) cool else secondaryText,
+                    )
+                    Text(
+                        stringResource(R.string.profile_isobars),
+                        fontSize = 10.5.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = if (showIsobars) cool else secondaryText,
+                    )
+                }
+            }
+            Spacer(Modifier.weight(1f))
             Text(
                 "${(zoomScale * 100f).roundToInt()}%",
-                fontSize = 11.sp,
+                fontSize = 10.5.sp,
                 fontFamily = FontFamily.Monospace,
                 color = secondaryText,
             )
             IconButton(
                 onClick = { zoomScale = max(1f, zoomScale - 0.25f) },
                 enabled = zoomScale > 1f,
-                modifier = Modifier.size(32.dp),
+                modifier = Modifier.size(28.dp),
             ) {
-                Icon(Icons.Filled.ZoomOut, contentDescription = stringResource(R.string.profile_zoom_out), modifier = Modifier.size(16.dp))
+                Icon(Icons.Filled.ZoomOut, contentDescription = stringResource(R.string.profile_zoom_out), modifier = Modifier.size(15.dp))
             }
             IconButton(
                 onClick = { zoomScale = min(2.5f, zoomScale + 0.25f) },
                 enabled = zoomScale < 2.5f,
-                modifier = Modifier.size(32.dp),
+                modifier = Modifier.size(28.dp),
             ) {
-                Icon(Icons.Filled.ZoomIn, contentDescription = stringResource(R.string.profile_zoom_in), modifier = Modifier.size(16.dp))
+                Icon(Icons.Filled.ZoomIn, contentDescription = stringResource(R.string.profile_zoom_in), modifier = Modifier.size(15.dp))
             }
             IconButton(
                 onClick = { zoomScale = 1f },
                 enabled = zoomScale > 1f,
-                modifier = Modifier.size(32.dp),
+                modifier = Modifier.size(28.dp),
             ) {
-                Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.profile_zoom_reset), modifier = Modifier.size(15.dp))
+                Icon(Icons.Filled.Refresh, contentDescription = stringResource(R.string.profile_zoom_reset), modifier = Modifier.size(14.dp))
             }
         }
 
-        // 横向可滚动的剖面画布
+        // 3. 横向可滚动的 v3 大气剖面画布 + 点按/拖动探测十字线
+        val maxDistance = max(1.0, data.distances.last())
         BoxWithConstraints(Modifier.fillMaxWidth()) {
             val baseWidth = maxWidth
             val canvasWidth = baseWidth * zoomScale
-            val canvasHeight = 200.dp
-            Box(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
-                Canvas(Modifier.width(canvasWidth).height(canvasHeight)) {
-                    drawCrossSection(
-                        data = data,
-                        dark = dark,
-                        warm = warm,
-                        coolAccent = cool,
-                        secondaryText = secondaryText,
-                        primaryText = primaryText,
-                        observerLabel = observerLabel,
-                        scale = zoomScale,
-                        textMeasurer = textMeasurer,
+            val canvasHeight = 230.dp
+            val scrollState = rememberScrollState()
+            Box(Modifier.fillMaxWidth()) {
+                Box(Modifier.fillMaxWidth().horizontalScroll(scrollState)) {
+                    Canvas(
+                        Modifier
+                            .width(canvasWidth)
+                            .height(canvasHeight)
+                            .pointerInput(data, showIsobars, zoomScale) {
+                                val leftPx = 40.dp.toPx()
+                                val rightPx = size.width - (if (showIsobars) 46.dp.toPx() else 14.dp.toPx())
+                                val topPx = 12.dp.toPx()
+                                val bottomPx = size.height - 22.dp.toPx()
+                                fun updateScrub(pos: Offset) {
+                                    if (rightPx <= leftPx + 10f ||
+                                        pos.x < leftPx || pos.x > rightPx ||
+                                        pos.y < topPx || pos.y > bottomPx
+                                    ) {
+                                        scrubDistanceKM = null
+                                        return
+                                    }
+                                    val ratio = ((pos.x - leftPx) / (rightPx - leftPx)).coerceIn(0f, 1f)
+                                    scrubDistanceKM = ratio * maxDistance
+                                }
+                                detectTapGestures(onTap = { updateScrub(it) })
+                            }
+                            .pointerInput(data, showIsobars, zoomScale) {
+                                val leftPx = 40.dp.toPx()
+                                val rightPx = size.width - (if (showIsobars) 46.dp.toPx() else 14.dp.toPx())
+                                fun scrubAtX(xPos: Float) {
+                                    if (rightPx <= leftPx + 10f) return
+                                    val ratio = ((xPos - leftPx) / (rightPx - leftPx)).coerceIn(0f, 1f)
+                                    scrubDistanceKM = ratio * maxDistance
+                                }
+                                if (zoomScale <= 1.01f) {
+                                    detectHorizontalDragGestures(
+                                        onDragStart = { scrubAtX(it.x) },
+                                        onHorizontalDrag = { change, _ ->
+                                            change.consume()
+                                            scrubAtX(change.position.x)
+                                        },
+                                    )
+                                } else {
+                                    detectDragGesturesAfterLongPress(
+                                        onDragStart = { scrubAtX(it.x) },
+                                        onDrag = { change, _ ->
+                                            change.consume()
+                                            scrubAtX(change.position.x)
+                                        },
+                                    )
+                                }
+                            },
+                    ) {
+                        drawCrossSectionV3(
+                            data = data,
+                            dark = dark,
+                            secondaryText = secondaryText,
+                            primaryText = primaryText,
+                            observerLabel = observerLabel,
+                            sunlitLineLabel = sunlitLineLabel,
+                            sunCueText = sunCueText,
+                            litBaseFormatter = litBaseTextBuilder,
+                            scale = zoomScale,
+                            showIsobars = showIsobars,
+                            scrubDistanceKM = scrubDistanceKM,
+                            textMeasurer = textMeasurer,
+                        )
+                    }
+                }
+                scrubDistanceKM?.let { dist ->
+                    Box(
+                        Modifier
+                            .align(Alignment.TopStart)
+                            .padding(start = 46.dp, top = 16.dp),
+                    ) {
+                        CrossSectionScrubCard(
+                            data = data,
+                            distanceKM = dist,
+                            onDismiss = { scrubDistanceKM = null },
+                        )
+                    }
+                }
+            }
+        }
+
+        // 4. 紧凑单行图例
+        CrossSectionLegendV3()
+
+        // 5. 单行云属代理条
+        if (genusProxy != null) {
+            CompactGenusSummaryStrip(genusProxy)
+        }
+
+        // 6. 理论候选条带
+        TargetStrip(data.targets)
+    }
+}
+
+@Composable
+private fun TelemetryPill(label: String, value: String) {
+    val dark = LocalFireSkyDark.current
+    val secondary = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.60f)
+    Surface(
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.onBackground.copy(alpha = if (dark) 0.08f else 0.05f),
+        border = BorderStroke(0.65.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.14f)),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(label, fontSize = 9.5.sp, color = secondary)
+            Text(
+                value,
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Medium,
+                style = TextStyle(fontFeatureSettings = "tnum"),
+            )
+        }
+    }
+}
+
+@Composable
+private fun CrossSectionScrubCard(
+    data: CrossSectionData,
+    distanceKM: Double,
+    onDismiss: () -> Unit,
+) {
+    val nearestIndex = data.distances.indices.minByOrNull { abs(data.distances[it] - distanceKM) } ?: return
+    val sampleDist = data.distances[nearestIndex]
+    val terrainText = data.terrain.getOrNull(nearestIndex)?.let { "%.0f m".format(it) } ?: "—"
+    val reqText = data.requiredASL.getOrNull(nearestIndex)?.let { "%.1f km".format(it / 1000.0) } ?: "—"
+    val presentStrata = listOf(1, 2, 3).mapNotNull { fam ->
+        columnStratum(data, nearestIndex, fam)?.let { fam to it }
+    }
+    val dark = LocalFireSkyDark.current
+    val tnum = TextStyle(fontFeatureSettings = "tnum")
+    val isEn = LocalConfiguration.current.locales[0]?.language == "en"
+
+    Surface(
+        onClick = onDismiss,
+        shape = RoundedCornerShape(9.dp),
+        color = if (dark) Color(0xFF141C2B).copy(alpha = 0.92f) else Color.White.copy(alpha = 0.94f),
+        border = BorderStroke(0.75.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.55f)),
+    ) {
+        Column(Modifier.padding(horizontal = 9.dp, vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(7.dp)) {
+                Text("%.0f km".format(sampleDist), fontSize = 10.5.sp, fontWeight = FontWeight.SemiBold, style = tnum)
+                Text(
+                    stringResource(R.string.profile_scrub_terrain_fmt, terrainText),
+                    fontSize = 9.5.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                    style = tnum,
+                )
+                Text(
+                    stringResource(R.string.profile_scrub_req_fmt, reqText),
+                    fontSize = 9.5.sp,
+                    color = Color(0xFFE69433),
+                    style = tnum,
+                )
+                Icon(
+                    Icons.Filled.Close,
+                    contentDescription = stringResource(R.string.dismiss),
+                    modifier = Modifier.size(11.dp),
+                    tint = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
+                )
+            }
+            if (presentStrata.isEmpty()) {
+                Text(
+                    stringResource(R.string.profile_scrub_empty),
+                    fontSize = 9.5.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.60f),
+                )
+            } else {
+                for ((fam, stratum) in presentStrata) {
+                    val famName = if (isEn) {
+                        when (fam) {
+                            1 -> "High"
+                            2 -> "Mid"
+                            else -> "Low"
+                        }
+                    } else {
+                        when (fam) {
+                            1 -> "高"
+                            2 -> "中"
+                            else -> "低"
+                        }
+                    }
+                    val statusText = when (stratum.status) {
+                        3 -> stringResource(R.string.profile_status_lit)
+                        2 -> stringResource(R.string.profile_status_occluded)
+                        else -> stringResource(R.string.profile_status_shadow)
+                    }
+                    val statusColor = when (stratum.status) {
+                        3 -> Color(0xFFF56B2E)
+                        2 -> Color(0xFFE09433)
+                        else -> MaterialTheme.colorScheme.onBackground.copy(alpha = 0.58f)
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                        Box(Modifier.size(5.5.dp).background(statusColor, CircleShape))
+                        Text(
+                            "$famName %.1f–%.1f km".format(stratum.baseASL / 1000.0, stratum.topASL / 1000.0),
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Medium,
+                            style = tnum,
+                        )
+                        Text("· $statusText", fontSize = 9.5.sp, color = statusColor)
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun DrawScope.drawCrossSectionV3(
+    data: CrossSectionData,
+    dark: Boolean,
+    secondaryText: Color,
+    primaryText: Color,
+    observerLabel: String,
+    sunlitLineLabel: String,
+    sunCueText: String,
+    litBaseFormatter: (Double) -> String,
+    scale: Float,
+    showIsobars: Boolean,
+    scrubDistanceKM: Double?,
+    textMeasurer: TextMeasurer,
+) {
+    val left = 40.dp.toPx()
+    val right = size.width - (if (showIsobars) 46.dp.toPx() else 14.dp.toPx())
+    val top = 12.dp.toPx()
+    val bottom = size.height - 22.dp.toPx()
+    if (bottom <= top + 20f || right <= left + 20f) return
+
+    val maxHeight = 18_000.0
+    val strokeScale = scale.coerceIn(1f, 1.35f)
+    val labelSp = min(12f, max(9f, 9.2f * scale)).sp
+    val labelStyle = TextStyle(fontSize = labelSp, color = secondaryText, fontFamily = FontFamily.Monospace)
+    val maxDistance = max(1.0, data.distances.last())
+    fun x(distance: Double): Float = (left + (distance.coerceIn(0.0, maxDistance) / maxDistance) * (right - left)).toFloat()
+    fun y(height: Double): Float = (top + (1.0 - height.coerceIn(0.0, maxHeight) / maxHeight) * (bottom - top)).toFloat()
+
+    val plotCorner = 10.dp.toPx()
+    val plotRect = Rect(left, top, right, bottom)
+    val plotPath = Path().apply {
+        addRoundRect(RoundRect(plotRect, CornerRadius(plotCorner, plotCorner)))
+    }
+    val hasRequired = data.requiredASL.size == data.distances.size
+    val reqPoints = if (hasRequired) {
+        data.distances.indices.map { Offset(x(data.distances[it]), y(data.requiredASL[it])) }
+    } else emptyList()
+
+    clipPath(plotPath) {
+        // Layer 1 — Twilight sky backdrop + horizon warm glow on right
+        val skyColors = if (dark) {
+            listOf(Color(0xFF0F1A30), Color(0xFF1F2B45), Color(0xFF383038))
+        } else {
+            listOf(Color(0xFFCCE0F5), Color(0xFFE8F0FA), Color(0xFFFAEBD9))
+        }
+        drawPath(plotPath, Brush.verticalGradient(skyColors, startY = top, endY = bottom))
+        drawPath(
+            plotPath,
+            Brush.linearGradient(
+                colors = listOf(Color.Transparent, Color(0xFFFA9E57).copy(alpha = if (dark) 0.18f else 0.20f)),
+                start = Offset(left + (right - left) * 0.38f, top + (bottom - top) * 0.25f),
+                end = Offset(right, bottom),
+            ),
+        )
+
+        // Layer 2 — Earth Shadow (below requiredASL) & Sunlit Corridor (above requiredASL) + subtle rays
+        if (reqPoints.size > 1) {
+            val shadowPath = Path().apply {
+                moveTo(reqPoints[0].x, reqPoints[0].y)
+                appendSmoothSegment(reqPoints)
+                lineTo(right, bottom)
+                lineTo(left, bottom)
+                close()
+            }
+            val shadowColor = if (dark) Color(0xFF080F21).copy(alpha = 0.28f) else Color(0xFF3D5273).copy(alpha = 0.12f)
+            drawPath(shadowPath, shadowColor)
+
+            val sunlitPath = Path().apply {
+                moveTo(left, top)
+                lineTo(right, top)
+                lineTo(reqPoints.last().x, reqPoints.last().y)
+                appendSmoothSegment(reqPoints.asReversed())
+                close()
+            }
+            drawPath(
+                sunlitPath,
+                Brush.linearGradient(
+                    colors = listOf(
+                        Color(0xFFFAAD4D).copy(alpha = 0.02f),
+                        Color(0xFFFA993D).copy(alpha = if (dark) 0.16f else 0.15f),
+                    ),
+                    start = Offset(left, top),
+                    end = Offset(right, bottom),
+                ),
+            )
+
+            clipPath(sunlitPath) {
+                val width = right - left
+                val height = bottom - top
+                for (idx in 0 until 4) {
+                    val offsetFrac = idx * 0.19f
+                    val xTop = right - width * (0.04f + offsetFrac)
+                    val rayW = width * 0.065f
+                    val slant = width * 0.34f
+                    val ray = Path().apply {
+                        moveTo(xTop, top - 4f)
+                        lineTo(xTop + rayW, top - 4f)
+                        lineTo(xTop + rayW - slant, bottom + 4f)
+                        lineTo(xTop - slant, bottom + 4f)
+                        close()
+                    }
+                    drawPath(
+                        ray,
+                        Brush.linearGradient(
+                            colors = listOf(
+                                Color(0xFFFFD68F).copy(alpha = 0.07f),
+                                Color(0xFFFFB861).copy(alpha = 0f),
+                            ),
+                            start = Offset(right, top),
+                            end = Offset(left, top + height * 0.85f),
+                        ),
                     )
                 }
             }
         }
 
-        CrossSectionLegend(warm, cool)
-
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            ProfileMetaChip(stringResource(R.string.meta_solar_elev), fmt(section.optNum("solar_elevation_deg"), 1) + "°")
-            ProfileMetaChip(stringResource(R.string.meta_solar_azim), fmt(section.optNum("solar_azimuth_deg"), 1) + "°")
-            ProfileMetaChip(stringResource(R.string.meta_range), fmt(section.optNum("analysis_radius_km"), 0) + " km")
-            val offsetMin = section.optNum("offset_minutes")?.roundToInt()
-            ProfileMetaChip(
-                stringResource(R.string.meta_offset),
-                offsetMin?.let { "${if (it > 0) "+" else ""}$it min" } ?: "—",
-            )
-            ProfileMetaChip(stringResource(R.string.meta_valid_time), timeLabel(section.optString("valid_time_local", "")))
-            ProfileMetaChip(stringResource(R.string.meta_sampling), section.optString("spatial_sampling", "—").ifEmpty { "—" })
-        }
-
-        if (genusProxy != null) {
-            CloudGenusProxyCard(genusProxy)
-        }
-
-        TargetStrip(data.targets)
-    }
-}
-
-private fun DrawScope.drawCrossSection(
-    data: CrossSectionData,
-    dark: Boolean,
-    warm: Color,
-    coolAccent: Color,
-    secondaryText: Color,
-    primaryText: Color,
-    observerLabel: String,
-    scale: Float,
-    textMeasurer: TextMeasurer,
-) {
-    val top = 8.dp.toPx()
-    val bottom = size.height - 22.dp.toPx()
-    if (bottom <= top + 20f) return
-    val maxHeight = 18_000.0
-    val labelSp = min(13f, max(9f, 9.5f * scale)).sp
-    val labelStyle = TextStyle(fontSize = labelSp, color = secondaryText, fontFamily = FontFamily.Monospace)
-    val left = 38.dp.toPx()
-    val right = size.width - 10.dp.toPx()
-    if (right <= left + 20f) return
-    val maxDistance = max(1.0, data.distances.last())
-    fun x(distance: Double): Float = (left + (distance / maxDistance) * (right - left)).toFloat()
-    fun y(height: Double): Float = (top + (1.0 - height.coerceIn(0.0, maxHeight) / maxHeight) * (bottom - top)).toFloat()
-
-    // 1. Twilight-to-warm-horizon sky gradient backdrop inside rounded plot frame
-    val plotCorner = 8.dp.toPx()
-    val plotPath = Path().apply {
-        addRoundRect(RoundRect(Rect(left, top, right, bottom), CornerRadius(plotCorner, plotCorner)))
-    }
-    val skyColors = if (dark) {
-        listOf(
-            Color(0.09f, 0.13f, 0.22f, 0.78f),
-            Color(0.14f, 0.19f, 0.28f, 0.48f),
-            Color(0.28f, 0.20f, 0.19f, 0.35f),
-        )
-    } else {
-        listOf(
-            Color(0.85f, 0.91f, 0.97f, 0.72f),
-            Color(0.94f, 0.95f, 0.98f, 0.52f),
-            Color(0.99f, 0.93f, 0.87f, 0.55f),
-        )
-    }
-    drawPath(plotPath, Brush.verticalGradient(skyColors, startY = top, endY = bottom))
-    drawPath(plotPath, secondaryText.copy(alpha = if (dark) 0.35f else 0.28f), style = Stroke(width = 1.dp.toPx()))
-
-    // 2. Soft golden solar illumination corridor above requiredASL
-    if (data.requiredASL.size == data.distances.size) {
-        val sunlit = Path().apply {
-            moveTo(left, top)
-            lineTo(right, top)
-            for (index in data.distances.indices.reversed()) {
-                lineTo(x(data.distances[index]), y(data.requiredASL[index]))
-            }
-            close()
-        }
-        drawPath(
-            sunlit,
-            Brush.verticalGradient(
-                listOf(
-                    Color(0.98f, 0.69f, 0.30f, if (dark) 0.04f else 0.05f),
-                    Color(0.96f, 0.57f, 0.22f, if (dark) 0.16f else 0.15f),
-                ),
-                startY = top,
-                endY = bottom,
-            ),
-        )
-    }
-
-    // 3. Altitude & distance grids
-    val targetAltStep = maxHeight * 34.dp.toPx() / (bottom - top)
-    val altStep = listOf(1000.0, 1500.0, 2000.0, 3000.0, 5000.0, 7500.0, 10_000.0).firstOrNull { it >= targetAltStep }
-        ?: maxHeight
-    var alt = 0.0
-    while (alt <= maxHeight + 1.0) {
-        val ly = y(alt)
-        drawLine(secondaryText.copy(alpha = 0.18f), Offset(left, ly), Offset(right, ly), strokeWidth = 0.6.dp.toPx())
-        val label = if (alt % 1000.0 == 0.0) "${(alt / 1000).roundToInt()}km" else "%.1fkm".format(alt / 1000)
-        val measured = textMeasurer.measure(label, labelStyle)
-        drawText(
-            measured,
-            topLeft = Offset((left - measured.size.width - 4.dp.toPx()).coerceAtLeast(0f), ly - measured.size.height / 2f),
-        )
-        alt += altStep
-    }
-    data.distances.forEachIndexed { index, distance ->
-        if (index % 4 == 0) {
-            val lx = x(distance)
+        // Layer 3 — Altitude & dashed distance gridlines (+ optional Isobars)
+        var alt = 0.0
+        while (alt <= maxHeight + 1.0) {
+            val ly = y(alt)
             drawLine(
-                secondaryText.copy(alpha = 0.14f),
+                secondaryText.copy(alpha = if (alt == 0.0) 0.08f else 0.15f),
+                Offset(left, ly),
+                Offset(right, ly),
+                strokeWidth = 0.6.dp.toPx(),
+            )
+            alt += 3000.0
+        }
+        val distStep = when {
+            maxDistance <= 120.0 -> 25.0
+            maxDistance <= 250.0 -> 50.0
+            else -> 100.0
+        }
+        var d = distStep
+        while (d <= maxDistance + 0.1) {
+            val lx = x(d)
+            drawLine(
+                secondaryText.copy(alpha = 0.12f),
                 Offset(lx, top),
                 Offset(lx, bottom),
                 strokeWidth = 0.6.dp.toPx(),
                 pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 4.dp.toPx())),
             )
-            val measured = textMeasurer.measure("${distance.roundToInt()}km", labelStyle)
-            val textX = if (distance == maxDistance) {
-                (lx - measured.size.width).coerceAtLeast(left)
-            } else {
-                (lx - measured.size.width / 2f).coerceIn(left, right - measured.size.width)
-            }
-            drawText(measured, topLeft = Offset(textX, bottom + 4.dp.toPx()))
+            d += distStep
         }
-    }
 
-    // 4. Gradient mountain terrain silhouette + observer halo dot
-    if (data.terrain.size == data.distances.size) {
-        val fill = Path().apply {
-            moveTo(x(data.distances[0]), y(data.terrain[0]))
-            for (i in 1 until data.distances.size) {
-                lineTo(x(data.distances[i]), y(data.terrain[i]))
-            }
-            lineTo(right, bottom)
-            lineTo(left, bottom)
-            close()
-        }
-        val terrainMinY = data.terrain.minOfOrNull { y(it) } ?: bottom
-        val terrainColors = if (dark) {
-            listOf(Color(0.36f, 0.42f, 0.44f, 0.65f), Color(0.20f, 0.24f, 0.28f, 0.88f))
-        } else {
-            listOf(Color(0.46f, 0.51f, 0.49f, 0.40f), Color(0.32f, 0.37f, 0.36f, 0.60f))
-        }
-        drawPath(fill, Brush.verticalGradient(terrainColors, startY = terrainMinY, endY = bottom))
-        val ridge = Path().apply {
-            moveTo(x(data.distances[0]), y(data.terrain[0]))
-            for (i in 1 until data.distances.size) {
-                lineTo(x(data.distances[i]), y(data.terrain[i]))
+        if (showIsobars) {
+            for (l in data.levels.indices) {
+                val pts = mutableListOf<Offset>()
+                val temps = mutableListOf<Double>()
+                for (i in data.distances.indices) {
+                    val h = gridScalar(data.heights, i, l) ?: continue
+                    pts.add(Offset(x(data.distances[i]), y(h)))
+                    gridScalar(data.temps, i, l)?.let { temps.add(it) }
+                }
+                if (pts.size <= 1) continue
+                val avg = if (temps.isEmpty()) 0.0 else temps.average()
+                val isoColor = when {
+                    avg < -30.0 -> Color(0xFF7A8FB8)
+                    avg < 0.0 -> Color(0xFFAD8075)
+                    else -> Color(0xFFCC6B4D)
+                }
+                drawPath(smoothOpenCurvePath(pts), isoColor.copy(alpha = 0.38f), style = Stroke(width = 1.dp.toPx()))
             }
         }
-        drawPath(ridge, Color(0.41f, 0.46f, 0.45f), style = Stroke(width = 1.6.dp.toPx()))
-    }
 
-    // 5. Rounded layered cloud envelopes per pressure family (1..3) with lit burnable undersides
-    val sampleCount = max(1, data.distances.size - 1)
-    val columnSpan = (right - left) / sampleCount.toFloat()
-    val cellWidth = max(5.dp.toPx(), columnSpan * 0.92f)
-    fun scalar(grid: List<List<Double?>>, sample: Int, level: Int): Double? =
-        grid.getOrNull(sample)?.getOrNull(level)
-    fun integer(grid: List<List<Int>>, sample: Int, level: Int): Int? =
-        grid.getOrNull(sample)?.getOrNull(level)
+        // Layer 4 — Continuous organic cloud strata (low 3 -> mid 2 -> high 1)
+        val sampleCount = max(1, data.distances.size - 1)
+        val columnSpan = (right - left) / sampleCount.toFloat()
 
-    for (i in data.distances.indices) {
-        for (family in 1..3) {
-            val cloudyLevels = data.levels.indices.filter { level ->
-                if (integer(data.familyCodes, i, level) != family) return@filter false
-                val amount = scalar(data.amounts, i, level)
-                    ?: max(scalar(data.presence, i, level) ?: 0.0, (scalar(data.fractions, i, level) ?: 0.0) / 100.0)
-                amount >= 0.06
+        for (family in listOf(3, 2, 1)) {
+            val runs = mutableListOf<List<CloudRunPoint>>()
+            var currentRun = mutableListOf<CloudRunPoint>()
+            for (i in data.distances.indices) {
+                val stratum = columnStratum(data, i, family)
+                if (stratum != null) {
+                    val cx = x(data.distances[i])
+                    val terrainY = data.terrain.getOrNull(i)?.let { y(it) } ?: bottom
+                    var botY = min(terrainY - 1f, y(stratum.baseASL))
+                    var topY = max(top + 2f, y(stratum.topASL))
+                    if (topY > botY - 2f) {
+                        val mid = ((topY + botY) * 0.5f).coerceIn(top + 3f, bottom - 3f)
+                        topY = mid - 1.5f
+                        botY = mid + 1.5f
+                    }
+                    currentRun.add(CloudRunPoint(i, cx, topY, botY, stratum))
+                } else if (currentRun.isNotEmpty()) {
+                    runs.add(currentRun)
+                    currentRun = mutableListOf()
+                }
             }
-            if (cloudyLevels.isEmpty()) continue
+            if (currentRun.isNotEmpty()) runs.add(currentRun)
 
-            val layerBase = cloudyLevels.mapNotNull { scalar(data.layerBases, i, it) }.minOrNull()
-                ?: cloudyLevels.mapNotNull { scalar(data.heights, i, it) }.minOrNull()?.minus(700.0)
-            val layerTop = cloudyLevels.mapNotNull { scalar(data.layerTops, i, it) }.maxOrNull()
-                ?: cloudyLevels.mapNotNull { scalar(data.heights, i, it) }.maxOrNull()?.plus(700.0)
-            if (layerBase == null || layerTop == null || layerTop <= layerBase) continue
-
-            val maxAmount = cloudyLevels.mapNotNull {
-                scalar(data.amounts, i, it)
-                    ?: max(scalar(data.presence, i, it) ?: 0.0, (scalar(data.fractions, i, it) ?: 0.0) / 100.0)
-            }.maxOrNull()
-            val maxPresence = cloudyLevels.mapNotNull { scalar(data.presence, i, it) }.maxOrNull()
-            val maxRh = cloudyLevels.mapNotNull { scalar(data.rh, i, it) }.maxOrNull()
-            val maxFraction = cloudyLevels.mapNotNull { scalar(data.fractions, i, it) }.maxOrNull()
-            val status = cloudyLevels.mapNotNull { integer(data.statuses, i, it) }.maxOrNull() ?: 0
-
-            val centerX = x(data.distances[i])
-            val rectLeft = max(left, centerX - cellWidth / 2f)
-            val rectRight = min(right, centerX + cellWidth / 2f)
-            val terrainY = data.terrain.getOrNull(i)?.let { y(it) } ?: bottom
-            val rectTop = max(top, y(layerTop))
-            val rectBottom = min(terrainY, y(layerBase))
-            if (rectRight <= rectLeft || rectBottom <= rectTop) continue
-
-            val w = rectRight - rectLeft
-            val h = rectBottom - rectTop
-            val r = min(4.5.dp.toPx(), min(w, h) * 0.35f)
-            val cloudShape = Path().apply {
-                addRoundRect(RoundRect(Rect(rectLeft, rectTop, rectRight, rectBottom), CornerRadius(r, r)))
-            }
-            val fill = cloudCellFillColor(maxAmount, maxPresence, maxRh, maxFraction, family)
-            if (fill != null) {
-                val topColor = fill.copy(alpha = fill.alpha * 0.82f)
-                val bottomColor = if (status == 3) Color(0.97f, 0.52f, 0.28f, 0.62f) else fill
-                drawPath(cloudShape, Brush.verticalGradient(listOf(topColor, bottomColor), startY = rectTop, endY = rectBottom))
-            }
-            if (status == 3) {
-                drawPath(cloudShape, Color(0.96f, 0.43f, 0.20f), style = Stroke(width = 1.6.dp.toPx()))
-            } else if (status == 2) {
+            for (run in runs) {
+                val shape = buildCloudSilhouette(run, left, right, columnSpan)
+                val avgAmount = run.map { it.stratum.amount }.average()
+                val alpha = min(0.86f, (0.42 + avgAmount * 0.48).toFloat())
+                val (topColor, botColor) = when (family) {
+                    1 -> {
+                        val t = (if (dark) Color(0xFFC7E0F7) else Color(0xFFEBF5FF)).copy(alpha = alpha)
+                        val b = (if (dark) Color(0xFF8AB3DE) else Color(0xFFA3C7EB)).copy(alpha = alpha * 0.92f)
+                        t to b
+                    }
+                    2 -> {
+                        val t = (if (dark) Color(0xFF8FC9D1) else Color(0xFFADDBE0)).copy(alpha = alpha)
+                        val b = (if (dark) Color(0xFF5C99A6) else Color(0xFF70ABB8)).copy(alpha = alpha * 0.94f)
+                        t to b
+                    }
+                    else -> {
+                        val t = (if (dark) Color(0xFF808C9C) else Color(0xFF9EABB8)).copy(alpha = alpha)
+                        val b = (if (dark) Color(0xFF546170) else Color(0xFF707D8A)).copy(alpha = alpha * 0.96f)
+                        t to b
+                    }
+                }
+                val minTopY = run.minOf { it.topY }
+                val maxBotY = run.maxOf { it.bottomY }
                 drawPath(
-                    cloudShape,
-                    Color(0.85f, 0.56f, 0.22f),
-                    style = Stroke(
-                        width = 1.2.dp.toPx(),
-                        pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx())),
-                    ),
+                    shape.closed,
+                    Brush.verticalGradient(listOf(topColor, botColor), startY = minTopY, endY = maxBotY),
                 )
+                drawPath(
+                    shape.topEdge,
+                    Color.White.copy(alpha = if (dark) 0.25f else 0.45f),
+                    style = Stroke(width = 1.dp.toPx()),
+                )
+
+                // Status 3 fire-sky underside glow & status 2 occluded dashed underside
+                var subStart = 0
+                while (subStart < run.size) {
+                    val st = run[subStart].stratum.status
+                    var subEnd = subStart
+                    while (subEnd + 1 < run.size && run[subEnd + 1].stratum.status == st) {
+                        subEnd += 1
+                    }
+                    if (st == 3 || st == 2) {
+                        val subLeft = if (subStart == 0) shape.leftX else (run[subStart - 1].cx + run[subStart].cx) * 0.5f
+                        val subRight = if (subEnd == run.size - 1) shape.rightX else (run[subEnd].cx + run[subEnd + 1].cx) * 0.5f
+                        val subRun = run.subList(subStart, subEnd + 1)
+                        val subMinTop = subRun.minOf { it.topY }
+                        val subMaxBot = subRun.maxOf { it.bottomY }
+
+                        val subBotPts = buildList {
+                            if (subStart == 0) {
+                                add(Offset(shape.leftX, (run[0].topY + run[0].bottomY) * 0.5f))
+                            } else {
+                                add(Offset(subLeft, (run[subStart - 1].bottomY + run[subStart].bottomY) * 0.5f))
+                            }
+                            subRun.forEach { add(Offset(it.cx, it.bottomY)) }
+                            if (subEnd == run.size - 1) {
+                                add(Offset(shape.rightX, (run[subEnd].topY + run[subEnd].bottomY) * 0.5f))
+                            } else {
+                                add(Offset(subRight, (run[subEnd].bottomY + run[subEnd + 1].bottomY) * 0.5f))
+                            }
+                        }
+                        val subBotCurve = smoothOpenCurvePath(subBotPts)
+
+                        clipPath(shape.closed) {
+                            val bandW = max(1f, subRight - subLeft)
+                            if (st == 3) {
+                                drawRect(
+                                    brush = Brush.verticalGradient(
+                                        0.0f to Color.Transparent,
+                                        0.55f to Color(0xFFFF9E44).copy(alpha = 0.42f),
+                                        1.0f to Color(0xFFF55D28).copy(alpha = 0.86f),
+                                        startY = subMinTop,
+                                        endY = subMaxBot,
+                                    ),
+                                    topLeft = Offset(subLeft, top),
+                                    size = Size(bandW, bottom - top),
+                                )
+                            } else {
+                                drawRect(
+                                    color = Color(0xFFE69938).copy(alpha = 0.16f),
+                                    topLeft = Offset(subLeft, top),
+                                    size = Size(bandW, bottom - top),
+                                )
+                            }
+                        }
+
+                        if (st == 3) {
+                            drawPath(
+                                subBotCurve,
+                                Color(0xFFFA732E).copy(alpha = 0.30f),
+                                style = Stroke(width = 4.5.dp.toPx() * strokeScale, cap = StrokeCap.Round, join = StrokeJoin.Round),
+                            )
+                            drawPath(
+                                subBotCurve,
+                                Color(0xFFFF8A33),
+                                style = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round),
+                            )
+                        } else {
+                            drawPath(
+                                subBotCurve,
+                                Color(0xFFE09433).copy(alpha = 0.88f),
+                                style = Stroke(
+                                    width = 1.2.dp.toPx(),
+                                    cap = StrokeCap.Round,
+                                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(4.dp.toPx(), 3.dp.toPx())),
+                                ),
+                            )
+                        }
+                    }
+                    subStart = subEnd + 1
+                }
             }
         }
-    }
 
-    // 6. Temperature layer lines
-    for (l in data.levels.indices) {
-        val points = mutableListOf<Offset>()
-        val temps = mutableListOf<Double>()
-        for (i in data.distances.indices) {
-            val h = scalar(data.heights, i, l) ?: continue
-            points.add(Offset(x(data.distances[i]), y(h)))
-            scalar(data.temps, i, l)?.let { temps.add(it) }
-        }
-        if (points.size <= 1) continue
-        val line = Path().apply {
-            moveTo(points[0].x, points[0].y)
-            for (k in 1 until points.size) lineTo(points[k].x, points[k].y)
-        }
-        val avg = if (temps.isEmpty()) 0.0 else temps.average()
-        val color = when {
-            avg < -30.0 -> Color(0.55f, 0.40f, 0.45f, 0.62f)
-            avg < 0.0 -> Color(0.69f, 0.42f, 0.36f, 0.62f)
-            else -> Color(0.78f, 0.31f, 0.22f, 0.62f)
-        }
-        drawPath(line, color, style = Stroke(width = 1.dp.toPx()))
-        if (l % 2 == 0) {
-            val last = points.last()
-            val measured = textMeasurer.measure("${data.levels[l]}hPa", labelStyle)
-            drawText(
-                measured,
-                topLeft = Offset(last.x - measured.size.width - 4.dp.toPx(), (last.y - measured.size.height - 2f).coerceAtLeast(top)),
+        // Layer 5 — Smooth requiredASL illumination threshold curve + inline pill
+        if (reqPoints.size > 1) {
+            val reqCurve = smoothOpenCurvePath(reqPoints)
+            drawPath(reqCurve, Color(0xFFF5A83D).copy(alpha = 0.20f), style = Stroke(width = 4.8.dp.toPx()))
+            drawPath(
+                reqCurve,
+                Color(0xFFEB9630),
+                style = Stroke(
+                    width = 1.8.dp.toPx(),
+                    cap = StrokeCap.Round,
+                    pathEffect = PathEffect.dashPathEffect(floatArrayOf(7.dp.toPx(), 4.dp.toPx())),
+                ),
             )
-        }
-    }
-
-    // 7. Required illumination threshold (ASL), dashed amber
-    if (data.requiredASL.size == data.distances.size) {
-        val reqLine = Path().apply {
-            moveTo(x(data.distances[0]), y(data.requiredASL[0]))
-            for (i in 1 until data.distances.size) {
-                lineTo(x(data.distances[i]), y(data.requiredASL[i]))
+            val pillIdx = ((reqPoints.size - 1) * 0.72).roundToInt().coerceIn(0, reqPoints.lastIndex)
+            val anchorPt = reqPoints[pillIdx]
+            val pillMeasured = textMeasurer.measure(
+                sunlitLineLabel,
+                TextStyle(fontSize = 8.5.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFF5B857)),
+            )
+            val pillW = pillMeasured.size.width + 10.dp.toPx()
+            val pillH = pillMeasured.size.height + 4.dp.toPx()
+            val pillX = (anchorPt.x - pillW * 0.5f).coerceIn(left + 6.dp.toPx(), max(left + 6.dp.toPx(), right - pillW - 6.dp.toPx()))
+            val pillY = (anchorPt.y - pillH - 6.dp.toPx()).coerceIn(top + 6.dp.toPx(), max(top + 6.dp.toPx(), bottom - pillH - 6.dp.toPx()))
+            val pillRect = Rect(pillX, pillY, pillX + pillW, pillY + pillH)
+            val pillShape = Path().apply {
+                addRoundRect(RoundRect(pillRect, CornerRadius(pillH * 0.5f, pillH * 0.5f)))
             }
+            drawPath(pillShape, (if (dark) Color.Black else Color.White).copy(alpha = 0.55f))
+            drawPath(pillShape, Color(0xFFEB9630).copy(alpha = 0.45f), style = Stroke(width = 0.7.dp.toPx()))
+            drawText(pillMeasured, topLeft = Offset(pillX + 5.dp.toPx(), pillY + 2.dp.toPx()))
         }
-        drawPath(
-            reqLine,
-            Color(0.83f, 0.55f, 0.22f),
-            style = Stroke(
-                width = 1.8.dp.toPx(),
-                pathEffect = PathEffect.dashPathEffect(floatArrayOf(6.dp.toPx(), 4.dp.toPx())),
-            ),
-        )
-    }
 
-    // 8. Theoretical target cloud base/top markers
-    for (target in data.targets) {
-        val distance = target.optNum("distance_km") ?: continue
-        val base = target.optNum("cloud_base_asl_m") ?: continue
-        val radius = 3.5.dp.toPx()
-        drawCircle(warm, radius = radius, center = Offset(x(distance), y(base)))
-        target.optNum("cloud_top_asl_m")?.let { topM ->
-            drawCircle(coolAccent, radius = radius, center = Offset(x(distance), y(topM)))
+        // Layer 6 — Smooth mountain/terrain silhouette
+        if (data.terrain.size == data.distances.size && data.terrain.isNotEmpty()) {
+            val terrainPts = data.distances.indices.map { Offset(x(data.distances[it]), y(data.terrain[it])) }
+            val fillPath = Path().apply {
+                moveTo(terrainPts[0].x, terrainPts[0].y)
+                appendSmoothSegment(terrainPts)
+                lineTo(right, bottom)
+                lineTo(left, bottom)
+                close()
+            }
+            val terrainMinY = terrainPts.minOf { it.y }
+            val terrainColors = if (dark) {
+                listOf(Color(0xFF57666B).copy(alpha = 0.76f), Color(0xFF262E38).copy(alpha = 0.92f))
+            } else {
+                listOf(Color(0xFF707D75).copy(alpha = 0.48f), Color(0xFF475452).copy(alpha = 0.68f))
+            }
+            drawPath(fillPath, Brush.verticalGradient(terrainColors, startY = terrainMinY, endY = bottom))
+            drawPath(smoothOpenCurvePath(terrainPts), Color(0xFF73827D), style = Stroke(width = 1.6.dp.toPx()))
         }
-    }
 
-    // 9. Observer halo dot on top of terrain ridge
-    if (data.terrain.isNotEmpty() && data.distances.isNotEmpty()) {
-        val obs = Offset(x(data.distances[0]), y(data.terrain[0]))
-        val haloRadius = 8.dp.toPx()
-        val dotRadius = 4.2.dp.toPx()
-        drawCircle(Color(0.95f, 0.49f, 0.26f, 0.26f), radius = haloRadius, center = obs)
-        drawCircle(Color(0.95f, 0.49f, 0.26f), radius = dotRadius, center = obs)
-        drawCircle(Color.White.copy(alpha = 0.9f), radius = dotRadius, center = obs, style = Stroke(width = 1.2.dp.toPx()))
+        // Layer 7 — Observer beacon, right-edge sun cue, & sightline to primary burnable target
+        val observerY = if (data.terrain.isEmpty()) bottom else y(data.terrain[0])
+        val observer = Offset(x(0.0), observerY.coerceIn(top + 10.dp.toPx(), bottom - 5.dp.toPx()))
+
+        primaryBurnableFocus(data)?.let { focus ->
+            val targetPt = Offset(x(focus.distanceKM), y(focus.baseASL))
+            drawLine(
+                Color(0xFFFC9E47).copy(alpha = 0.65f),
+                observer,
+                targetPt,
+                strokeWidth = 1.3.dp.toPx(),
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(5.dp.toPx(), 4.dp.toPx())),
+            )
+            drawCircle(Color(0xFFFA732E).copy(alpha = 0.28f), radius = 8.dp.toPx(), center = targetPt)
+            drawCircle(Color(0xFFFF8F38), radius = 4.2.dp.toPx(), center = targetPt)
+            drawCircle(Color.White.copy(alpha = 0.95f), radius = 4.2.dp.toPx(), center = targetPt, style = Stroke(width = 1.3.dp.toPx()))
+
+            val baseLabel = litBaseFormatter(focus.baseASL / 1000.0)
+            val tMeasured = textMeasurer.measure(
+                baseLabel,
+                TextStyle(fontSize = 8.5.sp, fontWeight = FontWeight.SemiBold, color = Color.White),
+            )
+            val tW = tMeasured.size.width + 10.dp.toPx()
+            val tH = tMeasured.size.height + 4.dp.toPx()
+            val tX = (targetPt.x - tW * 0.5f).coerceIn(left + 6.dp.toPx(), max(left + 6.dp.toPx(), right - tW - 6.dp.toPx()))
+            val tY = if (targetPt.y - tH - 10.dp.toPx() >= top + 6.dp.toPx()) {
+                targetPt.y - tH - 10.dp.toPx()
+            } else {
+                min(bottom - tH - 6.dp.toPx(), targetPt.y + 10.dp.toPx())
+            }
+            val tRect = Rect(tX, tY, tX + tW, tY + tH)
+            val tShape = Path().apply {
+                addRoundRect(RoundRect(tRect, CornerRadius(tH * 0.5f, tH * 0.5f)))
+            }
+            drawPath(tShape, Color(0xFFEB5C29).copy(alpha = 0.90f))
+            drawText(tMeasured, topLeft = Offset(tX + 5.dp.toPx(), tY + 2.dp.toPx()))
+        }
+
+        drawCircle(Color(0xFFF57A3D).copy(alpha = 0.28f), radius = 8.dp.toPx(), center = observer)
+        drawCircle(Color(0xFFF57A3D), radius = 4.2.dp.toPx(), center = observer)
+        drawCircle(Color.White.copy(alpha = 0.92f), radius = 4.2.dp.toPx(), center = observer, style = Stroke(width = 1.3.dp.toPx()))
         val obsMeasured = textMeasurer.measure(
             observerLabel,
             TextStyle(fontSize = labelSp, fontWeight = FontWeight.SemiBold, color = primaryText),
         )
         drawText(
             obsMeasured,
-            topLeft = Offset(obs.x + dotRadius + 5.dp.toPx(), (obs.y - obsMeasured.size.height - 4.dp.toPx()).coerceAtLeast(top)),
+            topLeft = Offset(
+                observer.x + 9.dp.toPx(),
+                (observer.y - obsMeasured.size.height - 4.dp.toPx()).coerceAtLeast(top + 4.dp.toPx()),
+            ),
         )
-    }
-}
 
-private fun cloudCellFillColor(
-    amount: Double?,
-    presence: Double?,
-    rh: Double?,
-    fraction: Double?,
-    family: Int,
-): Color? {
-    val cloudAmount = amount ?: max(presence ?: 0.0, (fraction ?: 0.0) / 100.0)
-    val humidity = max(0.0, (rh ?: 0.0) - 55.0) / 45.0
-    if (cloudAmount < 0.06) {
-        if (fraction != null && fraction <= 0.0) return null
-        if (humidity < 0.06) return null
-        return Color(112, 151, 126).copy(alpha = min(0.34f, (0.04 + humidity * 0.26).toFloat()))
+        val sunMeasured = textMeasurer.measure(
+            sunCueText,
+            TextStyle(fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold, color = Color(0xFFFAB857)),
+        )
+        drawText(
+            sunMeasured,
+            topLeft = Offset(right - sunMeasured.size.width - 8.dp.toPx(), top + 6.dp.toPx()),
+        )
+
+        // Layer 8 — Vertical scrub crosshair
+        if (scrubDistanceKM != null) {
+            val hx = x(scrubDistanceKM)
+            drawLine(
+                primaryText.copy(alpha = 0.45f),
+                Offset(hx, top),
+                Offset(hx, bottom),
+                strokeWidth = 1.dp.toPx(),
+                pathEffect = PathEffect.dashPathEffect(floatArrayOf(3.dp.toPx(), 3.dp.toPx())),
+            )
+        }
     }
-    val alpha = min(0.82f, (0.10 + cloudAmount * 0.68).toFloat())
-    return when (family) {
-        1 -> Color(116, 157, 194).copy(alpha = alpha)
-        2 -> Color(105, 154, 142).copy(alpha = alpha)
-        else -> Color(126, 136, 145).copy(alpha = alpha)
+
+    // Crisp rounded plot border
+    drawPath(
+        plotPath,
+        secondaryText.copy(alpha = if (dark) 0.28f else 0.22f),
+        style = Stroke(width = 0.9.dp.toPx()),
+    )
+
+    // Outside axis labels: Altitude (left)
+    var altLabel = 0.0
+    while (altLabel <= maxHeight + 1.0) {
+        val ly = y(altLabel)
+        val measured = textMeasurer.measure("${(altLabel / 1000.0).roundToInt()}km", labelStyle)
+        drawText(
+            measured,
+            topLeft = Offset((left - measured.size.width - 5.dp.toPx()).coerceAtLeast(0f), ly - measured.size.height / 2f),
+        )
+        altLabel += 3000.0
+    }
+
+    // Outside axis labels: Distance (bottom, skip 0km)
+    val distLabelStep = when {
+        maxDistance <= 120.0 -> 25.0
+        maxDistance <= 250.0 -> 50.0
+        else -> 100.0
+    }
+    var dLabel = distLabelStep
+    while (dLabel <= maxDistance + 0.1) {
+        val lx = x(dLabel)
+        val measured = textMeasurer.measure("${dLabel.roundToInt()}km", labelStyle)
+        val textX = if (dLabel >= maxDistance - distLabelStep * 0.25) {
+            (lx - measured.size.width).coerceAtLeast(left)
+        } else {
+            (lx - measured.size.width / 2f).coerceIn(left, right - measured.size.width)
+        }
+        drawText(measured, topLeft = Offset(textX, bottom + 4.dp.toPx()))
+        dLabel += distLabelStep
+    }
+
+    // Outside axis labels: Isobars (right margin when ON)
+    if (showIsobars) {
+        val isoStyle = labelStyle.copy(fontSize = max(8.5f, labelSp.value - 0.5f).sp)
+        var lastLabelY = Float.NEGATIVE_INFINITY
+        val minSpacing = 13.dp.toPx()
+        for (l in data.levels.indices) {
+            val lastH = data.distances.indices.mapNotNull { gridScalar(data.heights, it, l) }.lastOrNull() ?: continue
+            val lineY = y(lastH)
+            if (lineY < top + 4.dp.toPx() || lineY > bottom - 4.dp.toPx()) continue
+            if (abs(lineY - lastLabelY) < minSpacing) continue
+            lastLabelY = lineY
+            val measured = textMeasurer.measure("${data.levels[l]}hPa", isoStyle)
+            drawText(measured, topLeft = Offset(right + 5.dp.toPx(), lineY - measured.size.height / 2f))
+        }
     }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CrossSectionLegend(warm: Color, cool: Color) {
-    Column(verticalArrangement = Arrangement.spacedBy(5.dp)) {
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            LegendChip(stringResource(R.string.legend_high_cloud), Color(116, 157, 194))
-            LegendChip(stringResource(R.string.legend_mid_cloud), Color(105, 154, 142))
-            LegendChip(stringResource(R.string.legend_low_cloud), Color(126, 136, 145))
-            LegendChip(stringResource(R.string.legend_humid), Color(112, 151, 126))
-            LegendLine(stringResource(R.string.legend_temp), Color(0.69f, 0.42f, 0.36f))
-            LegendLine(stringResource(R.string.legend_terrain), Color(0.41f, 0.45f, 0.44f))
-            LegendDot(stringResource(R.string.legend_cloud_base), warm)
-            LegendDot(stringResource(R.string.legend_cloud_top), cool)
-            LegendLine(stringResource(R.string.legend_required_asl), Color(0.83f, 0.55f, 0.22f))
-            LegendFrame(stringResource(R.string.legend_burnable_candidate), Color(0.94f, 0.42f, 0.21f))
-            LegendFrame(stringResource(R.string.legend_occluded_candidate), Color(0.83f, 0.55f, 0.22f))
+private fun CrossSectionLegendV3() {
+    val secondary = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f)
+    FlowRow(
+        Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Box(
+                Modifier
+                    .size(width = 13.dp, height = 8.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Brush.verticalGradient(listOf(Color(0xFFB8D6F0), Color(0xFFF55D28)))),
+            )
+            Text(stringResource(R.string.legend_v3_fire_base), fontSize = 9.5.sp, color = secondary)
         }
-        Text(
-            stringResource(R.string.legend_footnote),
-            fontSize = 9.sp,
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f),
-            lineHeight = 12.sp,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+            Box(Modifier.size(width = 6.dp, height = 7.dp).background(Color(0xFFB8D9F5), CircleShape))
+            Box(Modifier.size(width = 6.dp, height = 7.dp).background(Color(0xFF7ABDC7), CircleShape))
+            Box(Modifier.size(width = 6.dp, height = 7.dp).background(Color(0xFF758291), CircleShape))
+            Text(stringResource(R.string.legend_v3_cloud_strata), fontSize = 9.5.sp, color = secondary)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Box(
+                Modifier
+                    .size(width = 13.dp, height = 8.dp)
+                    .clip(RoundedCornerShape(2.dp))
+                    .background(Brush.verticalGradient(listOf(Color(0xFFFAA642).copy(alpha = 0.40f), Color(0xFF1F2E4D).copy(alpha = 0.48f)))),
+            )
+            Text(stringResource(R.string.legend_v3_corridor), fontSize = 9.5.sp, color = secondary)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Box(Modifier.size(width = 13.dp, height = 2.dp).background(Color(0xFFEB9630)))
+            Text(stringResource(R.string.legend_v3_sunlit_line), fontSize = 9.5.sp, color = secondary)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Box(Modifier.size(width = 13.dp, height = 2.dp).background(Color(0xFFE09433).copy(alpha = 0.85f)))
+            Text(stringResource(R.string.legend_v3_occluded), fontSize = 9.5.sp, color = secondary)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            Box(Modifier.size(width = 13.dp, height = 5.dp).background(Color(0xFF697573).copy(alpha = 0.72f)))
+            Text(stringResource(R.string.legend_v3_terrain_sight), fontSize = 9.5.sp, color = secondary)
+        }
     }
 }
 
 @Composable
-private fun LegendChip(title: String, color: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        Box(Modifier.size(width = 11.dp, height = 7.dp).background(color, RoundedCornerShape(1.5.dp)))
-        Text(title, fontSize = 9.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f))
+private fun CompactGenusSummaryStrip(proxy: JSONObject) {
+    val label = proxy.optString("label", "unknown")
+    val compatibleArr = proxy.optJSONArray("compatible_genera")
+    val compatibleNames = if (compatibleArr != null) {
+        (0 until compatibleArr.length()).mapNotNull { compatibleArr.optString(it).ifEmpty { null } }
+            .map { genusDisplayName(it) }
+            .joinToString("、")
+    } else ""
+    val scores = proxy.optJSONObject("candidate_scores")
+    val candidateEntries = if (scores != null) {
+        scores.keys().asSequence().mapNotNull { key ->
+            val v = scores.optDouble(key)
+            if (v.isNaN() || !v.isFinite()) null else key to v
+        }.sortedByDescending { it.second }.take(3).toList()
+    } else emptyList()
+    val candidatesText = buildList {
+        for ((k, v) in candidateEntries) {
+            add("${genusDisplayName(k)} ${(v * 100).roundToInt()}%")
+        }
+    }.joinToString(" · ")
+    val confText = proxy.optNum("confidence")?.takeIf { it.isFinite() }?.let { " ${(it * 100).roundToInt()}%" } ?: ""
+    val primaryText = when {
+        label != "unknown" && label.isNotEmpty() -> "${genusDisplayName(label)}$confText"
+        compatibleNames.isNotEmpty() -> stringResource(R.string.cloud_genus_compatible_line_fmt, compatibleNames)
+        else -> stringResource(R.string.cloud_genus_undetermined)
     }
-}
 
-@Composable
-private fun LegendLine(title: String, color: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        Box(Modifier.size(width = 11.dp, height = 2.dp).background(color))
-        Text(title, fontSize = 9.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f))
-    }
-}
-
-@Composable
-private fun LegendDot(title: String, color: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        Box(Modifier.size(7.dp).background(color, CircleShape))
-        Text(title, fontSize = 9.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f))
-    }
-}
-
-@Composable
-private fun LegendFrame(title: String, color: Color) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-        Box(Modifier.size(width = 10.dp, height = 7.dp).border(1.2.dp, color, RoundedCornerShape(1.5.dp)))
-        Text(title, fontSize = 9.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f))
-    }
-}
-
-@Composable
-private fun ProfileMetaChip(title: String, value: String) {
-    Column(verticalArrangement = Arrangement.spacedBy(1.dp)) {
-        Text(title, fontSize = 8.sp, color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.55f))
-        Text(value, fontSize = 10.sp, fontWeight = FontWeight.Medium, fontFamily = FontFamily.Monospace)
+    Surface(
+        Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(7.dp),
+        color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.055f),
+    ) {
+        Row(
+            Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Icon(Icons.Filled.Cloud, contentDescription = null, modifier = Modifier.size(13.dp), tint = coolAccentColor())
+            Text(stringResource(R.string.genus_proxy_label), fontSize = 10.sp, fontWeight = FontWeight.SemiBold)
+            Text(primaryText, fontSize = 10.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            if (candidatesText.isNotEmpty()) {
+                Text(
+                    "· ${stringResource(R.string.cloud_genus_candidates_fmt, candidatesText)}",
+                    fontSize = 9.5.sp,
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.62f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
     }
 }
 
@@ -1856,7 +3034,7 @@ private fun curvePoints(result: JSONObject, model: String): List<Pair<Long, Doub
     val report = modelReport(result, model) ?: return emptyList()
     val points = mutableListOf<Pair<Long, Double>>()
     for (step in stepsOf(report)) {
-        if (!step.optBoolean("valid", true)) continue
+        if (!isStepValid(step)) continue
         val quality = step.optNum("instant_quality_index") ?: continue
         val time = parseLocalTime(step.optString("valid_time_local")) ?: continue
         points.add(time.toEpochSecond(java.time.ZoneOffset.UTC) / 60 to quality)

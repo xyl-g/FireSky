@@ -14,24 +14,37 @@ namespace FireSky;
 /// </summary>
 public sealed partial class MainWindow
 {
-    private async void OnRefreshTaskHistory(object sender, RoutedEventArgs args) => await LoadTaskHistory();
+    private async void OnRefreshTaskHistory(object sender, RoutedEventArgs args) =>
+        await LoadTaskHistory();
 
-    private async Task LoadTaskHistory()
+    private async void OnLoadOlderTaskHistory(object sender, RoutedEventArgs args) =>
+        await LoadTaskHistory(older: true);
+
+    private async Task LoadTaskHistory(bool older = false)
     {
         if (!online || taskHistoryLoading) return;
+        if (older && (!taskHistoryHasMore || taskHistoryCursor == null)) return;
         taskHistoryLoading = true;
         taskHistoryError = "";
         RenderTaskHistory();
         try
         {
-            var response = await engine.Call("task_history", new() { ["limit"] = 100 });
+            var parameters = new JsonObject { ["limit"] = 100 };
+            if (older) parameters["before"] = taskHistoryCursor;
+            var response = await engine.Call("task_history", parameters);
             if (StringOf(response["schema"]) != "firesky-task-history-v1"
                 || BoolValue(response, "automatic_restart") != false
                 || response["tasks"] is not JsonArray values
                 || values.Any(node => node is not JsonObject)
                 || Integer(response, "total") is not { } total
-                || total < values.Count || values.Count > 100)
+                || total < values.Count || total > int.MaxValue || values.Count > 100)
                 throw new InvalidOperationException(L10n.T("任务历史协议不匹配，请重新连接引擎。"));
+            var hasMore = BoolValue(response, "has_more")
+                ?? throw new InvalidOperationException(L10n.T("任务历史分页状态无效，请重新连接引擎。"));
+            var nextCursor = StringOrNull(response["next_cursor"]);
+            if (hasMore != (nextCursor != null)
+                || nextCursor is { } cursor && !IsTaskTimestamp(cursor))
+                throw new InvalidOperationException(L10n.T("任务历史分页游标无效，请重新连接引擎。"));
             var parsed = new List<TaskHistoryItem>();
             foreach (var node in values.OfType<JsonObject>())
             {
@@ -41,13 +54,19 @@ public sealed partial class MainWindow
             }
             if (parsed.Select(row => row.TaskId).Distinct().Count() != parsed.Count)
                 throw new InvalidOperationException(L10n.T("任务历史包含重复记录，请重新连接引擎。"));
+            var combined = older ? taskHistory.Concat(parsed).ToList() : parsed;
+            if (combined.Select(row => row.TaskId).Distinct().Count() != combined.Count
+                || combined.Count > total)
+                throw new InvalidOperationException(L10n.T("任务历史分页包含重复或超出总数的记录。"));
             taskHistory.Clear();
-            taskHistory.AddRange(parsed);
+            taskHistory.AddRange(combined);
             taskHistoryTotal = (int)total;
             taskHistoryIssues = (response["issues"] as JsonArray)?.Count ?? 0;
+            taskHistoryHasMore = hasMore;
+            taskHistoryCursor = nextCursor;
             taskHistoryLoaded = true;
             if (selectedTaskHistoryId.Length > 0
-                && !parsed.Any(row => row.TaskId == selectedTaskHistoryId))
+                && !combined.Any(row => row.TaskId == selectedTaskHistoryId))
                 ClearTaskHistorySelection();
             ClearError("history");
         }
@@ -74,8 +93,14 @@ public sealed partial class MainWindow
     private void OnHistoryFilterChanged(object sender, SelectionChangedEventArgs args)
     {
         if (!initialized) return;
-        historyKindFilter = HistoryFilter.SelectedIndex switch { 1 => "active", 2 => "sync", _ => "all" };
         RenderTaskHistoryRows();
+    }
+
+    private void SelectHistoryFilter(string filter)
+    {
+        historyKindFilter = filter is "active" or "sync" ? filter : "all";
+        UpdateSegmentedPills(HistoryFilterPills, historyKindFilter);
+        RenderTaskHistory();
     }
 
     private void RenderTaskHistory()
@@ -243,6 +268,12 @@ public sealed partial class MainWindow
     {
         if (HistoryRefresh == null) return;
         HistoryRefresh.IsEnabled = online && !taskHistoryLoading;
+        HistoryLoadOlder.Visibility = taskHistoryHasMore && taskHistory.Count > 0
+            ? Visibility.Visible : Visibility.Collapsed;
+        HistoryLoadOlder.IsEnabled = online && !taskHistoryLoading && taskHistoryHasMore;
+        HistoryLoadOlderRing.IsActive = taskHistoryLoading && taskHistory.Count > 0;
+        HistoryLoadOlderText.Text = taskHistoryLoading
+            ? L10n.T("正在加载…") : L10n.T("加载更早任务");
         var restoring = restoringTaskHistoryId.Length > 0;
         var forgetting = forgettingTaskHistoryId.Length > 0;
         foreach (var row in taskHistoryRows)
@@ -293,6 +324,25 @@ public sealed partial class MainWindow
 
     private async Task LoadTaskEvents(string taskId, CancellationToken token)
     {
+        if (isUiAuditMock)
+        {
+            taskHistoryEvents.Clear();
+            taskHistoryEvents.Add(new TaskEvent
+            {
+                Sequence = 1, AtUtc = "2026-11-09T08:55:01Z", Event = "preflight_checked",
+                Data = new JsonObject { ["status"] = "ready" },
+            });
+            taskHistoryEvents.Add(new TaskEvent
+            {
+                Sequence = 2, AtUtc = "2026-11-09T09:00:00Z", Event = "forecast_done",
+                Data = new JsonObject { ["models"] = "gfs+ec" },
+            });
+            taskHistoryEventsTruncated = false;
+            taskHistoryEventsError = "";
+            taskHistoryEventsLoading = false;
+            RenderTaskEvents();
+            return;
+        }
         try
         {
             var response = await engine.Call("task_events",
@@ -507,7 +557,9 @@ public sealed partial class MainWindow
                 var model = StringOrNull(item.RetryPayload?["model_source"]);
                 if (model is not ("gfs" or "ec"))
                     model = (response["model_results"] as JsonObject)?["gfs"] is null ? "ec" : "gfs";
-                ResultModel.SelectedIndex = model == "ec" ? 1 : 0;
+                SetSelectedResultModel(model, render: false, updateMap: false);
+                if (kind == "regional" && RegionalModel != null)
+                    RegionalModel.SelectedIndex = model == "ec" ? 1 : 0;
             }
             RenderResult();
             await UpdateMap();
@@ -549,12 +601,14 @@ public sealed partial class MainWindow
             && DateTimeOffset.TryParseExact(date, "yyyy-MM-dd", CultureInfo.InvariantCulture,
                 DateTimeStyles.None, out var target))
         {
-            TargetDate.Date = target;
+            suppressDraftEvents = true;
+            try { TargetDate.Date = target; }
+            finally { suppressDraftEvents = false; }
             SyncDateTab();
         }
-        if (StringOrNull(payload["phenomenon"]) is { } phenomenon
-            && phenomenon is "dawn" or "dusk")
-            Phenomenon.SelectedIndex = phenomenon == "dawn" ? 0 : 1;
+        if (StringOrNull(payload["phenomenon"]) is { } restoredPhenomenon
+            && restoredPhenomenon is "dawn" or "dusk")
+            SetPhenomenon(restoredPhenomenon);
         if (StringOrNull(payload["ecmwf_source"]) is { } source && source is "ecmwf" or "aws" or "google")
         {
             ecmwfSource = source;

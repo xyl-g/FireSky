@@ -23,45 +23,55 @@ struct PreflightView: View {
             : L10n.tf("数据已齐，可更新 %@", updates)
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(isNowcast ? "实况准备" : "预测准备").font(.title2.weight(.semibold))
-                    Text(store.name).font(.callout).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(isNowcast ? "实况准备" : "预测准备").font(.system(size: 16, weight: .semibold))
+                    Text(store.name).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Button { store.refreshCheck() } label: { Image(systemName: "arrow.clockwise") }
                     .help(L10n.t("重新检查")).accessibilityLabel(L10n.t("重新检查"))
                     .buttonStyle(.borderless).disabled(store.busy)
-            }.padding(.bottom, 16)
+            }
             if store.rows.isEmpty {
-                HStack { ProgressView().controlSize(.small); Text(L10n.t("正在检查本地数据")) }
-                    .frame(maxWidth: .infinity, minHeight: 180)
-            } else {
-                ForEach(store.rows) { row in
-                    HStack(spacing: 12) {
-                        Image(systemName: row.source == "hsd" ? "antenna.radiowaves.left.and.right" : "externaldrive")
-                            .font(.title3).foregroundStyle(.secondary).frame(width: 32)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(row.title).font(.body.weight(.medium))
-                            Text(row.detail).font(.caption).foregroundStyle(.secondary)
-                        }
-                        Spacer()
-                        StatusChip(
-                            status: !row.ready ? "pending" : row.old ? "interrupted" : "done",
-                            title: row.status,
-                        )
-                    }.frame(minHeight: 64, alignment: .leading)
-                    if row.id != store.rows.last?.id { Divider() }
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text(L10n.t("正在检查本地数据")).font(.callout)
                 }
+                .frame(maxWidth: .infinity, minHeight: 88)
+                .fireSkySurface(role: .content, cornerRadius: 10)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(store.rows) { row in
+                        HStack(spacing: 10) {
+                            Image(systemName: row.source == "hsd" ? "antenna.radiowaves.left.and.right" : "externaldrive")
+                                .font(.system(size: 14)).foregroundStyle(.secondary).frame(width: 22)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(row.title).font(.system(size: 12, weight: .semibold))
+                                Text(row.detail).font(.system(size: 10.5)).foregroundStyle(.secondary)
+                                    .lineLimit(2)
+                            }
+                            Spacer(minLength: 8)
+                            StatusChip(
+                                status: !row.ready ? "pending" : row.old ? "interrupted" : "done",
+                                title: row.status,
+                            )
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        if row.id != store.rows.last?.id { Divider().opacity(0.5) }
+                    }
+                }
+                .fireSkySurface(role: .content, cornerRadius: 10)
             }
             if !store.rows.isEmpty {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 3) {
                     Label(L10n.t("下载前先知道"), systemImage: "info.circle")
                         .fireSkyFont(size: 11, weight: .semibold, relativeTo: .caption)
                         .foregroundStyle(.primary)
                     Text(L10n.t("首次下载耗时取决于本机缺失的数据集与网络。上方只列本次预测所需文件；已下载文件不会重复下载，过程中可取消，失败项会保留并提示重试。"))
-                        .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
+                        .fireSkyFont(size: 10.5, relativeTo: .caption).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     if !store.camsConfigured && !store.usesGeosFP {
                         Text(L10n.t("CAMS Key 未配置时仍可使用本地缓存；如需气溶胶数据，可在设置中配置后重新预检。"))
@@ -69,31 +79,34 @@ struct PreflightView: View {
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                .padding(10)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
                 .background(Color.primary.opacity(scheme == .dark ? 0.05 : 0.035),
                             in: RoundedRectangle(cornerRadius: 8))
                 .overlay {
                     RoundedRectangle(cornerRadius: 8)
                         .strokeBorder(warm.opacity(0.18), lineWidth: 1)
                 }
-                .padding(.top, 10)
             }
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
                 if store.checking {
                     ProgressView(value: store.percent, total: 100)
                     Text(store.status).font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(1)
                 } else if !store.error.isEmpty {
                     Text(store.error).font(.callout).foregroundStyle(.red).lineLimit(3).textSelection(.enabled)
                 } else {
-                    HStack {
+                    HStack(spacing: 6) {
                         Label(summary, systemImage: store.ready ? "checkmark.circle" : "arrow.down.circle")
                             .fontWeight(.medium)
                         if store.publicationsPending { ProgressView().controlSize(.mini) }
                     }.font(.callout).foregroundStyle(.primary)
                 }
-            }.frame(minHeight: 38, alignment: .leading).padding(.top, 12)
-            HStack {
-                Button(L10n.t("取消")) { store.closePreflight() }.keyboardShortcut(.cancelAction)
+            }
+            .padding(.top, 2)
+            HStack(spacing: 8) {
+                Button(L10n.t("取消")) { store.closePreflight() }
+                    .keyboardShortcut(.cancelAction)
                 Spacer()
                 if actions.primary == .download {
                     Button(L10n.t("下载缺失数据"), systemImage: "arrow.down.to.line") { store.prepare() }
@@ -111,9 +124,10 @@ struct PreflightView: View {
                         .foregroundStyle(scheme == .dark ? Color.black : Color.white)
                         .keyboardShortcut(.defaultAction)
                 }
-            }.padding(.top, 14)
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.ready)
-        }.padding(26).frame(width: dynamicTypeSize.isAccessibilitySize ? 620 : 490)
+            }
+            .padding(.top, 2)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: store.ready)
+        }.padding(14).frame(width: dynamicTypeSize.isAccessibilitySize ? 600 : 476)
             .background(Color(nsColor: .windowBackgroundColor))
             .sheet(isPresented: $store.showCycleAgeConfirm) {
                 CycleAgeConfirmSheet()
@@ -131,19 +145,19 @@ private struct CycleAgeConfirmSheet: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 12)
+                    RoundedRectangle(cornerRadius: 10)
                         .fill(warm.opacity(scheme == .dark ? 0.18 : 0.12))
-                        .frame(width: 42, height: 42)
+                        .frame(width: 34, height: 34)
                     Image(systemName: "clock.badge.exclamationmark")
-                        .font(.system(size: 19, weight: .semibold))
+                        .font(.system(size: 16, weight: .semibold))
                         .foregroundStyle(warm)
                 }
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: 3) {
                     Text(L10n.t("数据周期确认"))
-                        .font(.title3.weight(.semibold))
+                        .font(.system(size: 15, weight: .semibold))
                     Text(L10n.text(
                         "以下本地数据源尚未核验为最新发布周期；使用旧周期可立即出图，但临近起报切换时结果可能略有偏差。",
                         "The datasets below are unverified or behind the latest published cycle. Continuing now uses local cache and may slightly differ near a cycle switch."
@@ -158,21 +172,21 @@ private struct CycleAgeConfirmSheet: View {
                 ForEach(Array(flaggedRows.enumerated()), id: \.element.id) { index, row in
                     HStack(spacing: 10) {
                         Image(systemName: row.source == "hsd" ? "antenna.radiowaves.left.and.right" : "externaldrive")
-                            .font(.callout).foregroundStyle(.secondary).frame(width: 22)
+                            .font(.callout).foregroundStyle(.secondary).frame(width: 20)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(row.title).font(.callout.weight(.semibold))
-                            Text(row.detail).font(.caption).foregroundStyle(.secondary)
+                            Text(row.title).font(.system(size: 12, weight: .semibold))
+                            Text(row.detail).font(.system(size: 10.5)).foregroundStyle(.secondary)
                         }
-                        Spacer()
+                        Spacer(minLength: 8)
                         StatusChip(status: row.old ? "interrupted" : "pending", title: row.status)
                     }
-                    .padding(.horizontal, 12).padding(.vertical, 10)
+                    .padding(.horizontal, 10).padding(.vertical, 6)
                     if index < flaggedRows.count - 1 { Divider().opacity(0.5) }
                 }
             }
-            .fireSkySurface(role: .content, cornerRadius: 12)
+            .fireSkySurface(role: .content, cornerRadius: 10)
 
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Button(L10n.t("返回")) {
                     store.showCycleAgeConfirm = false
                 }
@@ -191,9 +205,10 @@ private struct CycleAgeConfirmSheet: View {
                 .foregroundStyle(scheme == .dark ? Color.black : Color.white)
                 .keyboardShortcut(.defaultAction)
             }
+            .padding(.top, 2)
         }
-        .padding(24)
-        .frame(width: 470)
+        .padding(14)
+        .frame(width: 460)
         .background(Color(nsColor: .windowBackgroundColor))
     }
 }
@@ -684,26 +699,26 @@ struct UpdateSheetView: View {
     }
 
     var body: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 10) {
             ZStack(alignment: .topTrailing) {
-                VStack(spacing: 12) {
+                VStack(spacing: 7) {
                     ZStack {
-                        RoundedRectangle(cornerRadius: 14)
+                        RoundedRectangle(cornerRadius: 11)
                             .fill(
                                 updater.phase == .available
                                     ? AnyShapeStyle(FSDesign.accentGradient(dark: scheme == .dark))
                                     : AnyShapeStyle(Color.primary.opacity(scheme == .dark ? 0.08 : 0.06))
                             )
-                            .frame(width: 52, height: 52)
+                            .frame(width: 42, height: 42)
                             .overlay {
-                                RoundedRectangle(cornerRadius: 14)
+                                RoundedRectangle(cornerRadius: 11)
                                     .strokeBorder(warm.opacity(updater.phase == .downloading ? 0.4 : 0.16), lineWidth: 1)
                             }
                         if updater.phase == .checking || updater.phase == .installing {
-                            ProgressView().controlSize(.regular)
+                            ProgressView().controlSize(.small)
                         } else {
                             Image(systemName: headerIcon)
-                                .font(.system(size: 20, weight: .semibold))
+                                .font(.system(size: 17, weight: .semibold))
                                 .foregroundStyle(
                                     updater.phase == .available
                                         ? (scheme == .dark ? Color(0x1E, 0x15, 0x10) : Color.white)
@@ -711,24 +726,24 @@ struct UpdateSheetView: View {
                                 )
                         }
                     }
-                    VStack(spacing: 5) {
-                        Text(headerTitle).fireSkyFont(size: 20, weight: .bold, relativeTo: .title2)
+                    VStack(spacing: 3) {
+                        Text(headerTitle).fireSkyFont(size: 16, weight: .bold, relativeTo: .title3)
                         Text(headerSubtitle)
-                            .fireSkyFont(size: 12, relativeTo: .caption)
+                            .fireSkyFont(size: 11, relativeTo: .caption)
                             .foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     }
                 }
                 .frame(maxWidth: .infinity)
-                .padding(.top, 8)
+                .padding(.top, 2)
 
                 Button {
                     store.showUpdateSheet = false
                 } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
-                        .frame(width: 26, height: 26)
+                        .frame(width: 24, height: 24)
                         .background(Color.primary.opacity(scheme == .dark ? 0.07 : 0.05), in: Circle())
                 }
                 .buttonStyle(.plain)
@@ -738,32 +753,32 @@ struct UpdateSheetView: View {
             }
 
             if let info = updater.info {
-                HStack(spacing: 18) {
-                    VStack(spacing: 4) {
+                HStack(spacing: 14) {
+                    VStack(spacing: 2) {
                         Text(L10n.text("当前版本", "Current"))
                             .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
                         Text(currentVersion)
-                            .font(.system(size: 15, weight: .medium, design: .monospaced))
+                            .font(.system(size: 13, weight: .medium, design: .monospaced))
                             .foregroundStyle(.secondary)
                     }
-                    HStack(spacing: 5) {
+                    HStack(spacing: 4) {
                         Circle().fill(warm.opacity(0.45)).frame(width: 4, height: 4)
                         Circle().fill(warm.opacity(0.72)).frame(width: 4, height: 4)
                         Circle().fill(warm).frame(width: 4, height: 4)
                     }
-                    VStack(spacing: 4) {
+                    VStack(spacing: 2) {
                         Text(L10n.text("最新版本", "Latest"))
                             .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
                         Text(info.version)
-                            .font(.system(size: 19, weight: .bold, design: .monospaced))
+                            .font(.system(size: 16, weight: .bold, design: .monospaced))
                             .foregroundStyle(warm)
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, 2)
             }
 
             if updater.phase == .downloading {
-                VStack(spacing: 6) {
+                VStack(spacing: 4) {
                     ProgressView(value: max(Double(updater.receivedBytes), 1),
                                  total: max(Double(updater.totalBytes), 1))
                         .tint(warm)
@@ -784,11 +799,11 @@ struct UpdateSheetView: View {
             }
 
             if let info = updater.info, !info.notes.isEmpty {
-                VStack(alignment: .leading, spacing: 8) {
+                VStack(alignment: .leading, spacing: 6) {
                     HStack(spacing: 6) {
                         Image(systemName: "sparkles").font(.system(size: 11, weight: .semibold)).foregroundStyle(warm)
                         Text(L10n.text("更新说明", "Release Notes"))
-                            .fireSkyFont(size: 12, weight: .semibold)
+                            .fireSkyFont(size: 11.5, weight: .semibold)
                         Spacer()
                         if info.assetBytes > 0 {
                             Text(ByteCountFormatter.string(fromByteCount: info.assetBytes, countStyle: .file))
@@ -797,18 +812,18 @@ struct UpdateSheetView: View {
                     }
                     ScrollView {
                         Text(info.notes)
-                            .fireSkyFont(size: 12)
+                            .fireSkyFont(size: 11.5)
                             .foregroundStyle(.secondary)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxHeight: 190)
+                    .frame(maxHeight: 150)
                 }
-                .padding(14)
+                .padding(10)
                 .background(Color.primary.opacity(scheme == .dark ? 0.04 : 0.03),
-                            in: RoundedRectangle(cornerRadius: 12))
+                            in: RoundedRectangle(cornerRadius: 10))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 12)
+                    RoundedRectangle(cornerRadius: 10)
                         .strokeBorder(FSDesign.surfaceBorder(role: .grouped, dark: scheme == .dark, emphasized: false), lineWidth: 1)
                 }
             }
@@ -819,17 +834,17 @@ struct UpdateSheetView: View {
                     .foregroundStyle(.red)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(12)
-                    .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
+                    .padding(9)
+                    .background(Color.red.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
             }
 
-            HStack(spacing: 10) {
+            HStack(spacing: 8) {
                 Button {
                     updater.checkForUpdates(interactive: true)
                 } label: {
                     Label(L10n.text("重新检查", "Check Again"), systemImage: "arrow.clockwise")
                         .fireSkyFont(size: 12, weight: .medium)
-                        .padding(.horizontal, 16).padding(.vertical, 9)
+                        .padding(.horizontal, 13).padding(.vertical, 7)
                         .background(Color.primary.opacity(scheme == .dark ? 0.08 : 0.06), in: Capsule())
                 }
                 .buttonStyle(.plain)
@@ -841,11 +856,13 @@ struct UpdateSheetView: View {
                     } label: {
                         Label(L10n.text("浏览器下载", "Browser"), systemImage: "safari")
                             .fireSkyFont(size: 12, weight: .medium)
-                            .padding(.horizontal, 14).padding(.vertical, 9)
+                            .padding(.horizontal, 12).padding(.vertical, 7)
                             .background(Color.primary.opacity(scheme == .dark ? 0.08 : 0.06), in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }
+
+                Spacer(minLength: 4)
 
                 if updater.phase == .available {
                     Button {
@@ -854,7 +871,7 @@ struct UpdateSheetView: View {
                         Label(L10n.text("立即下载", "Download & Install"), systemImage: "arrow.down.to.line")
                             .fireSkyFont(size: 12, weight: .semibold)
                             .foregroundStyle(scheme == .dark ? Color(0x1E, 0x15, 0x10) : Color.white)
-                            .padding(.horizontal, 20).padding(.vertical, 9)
+                            .padding(.horizontal, 16).padding(.vertical, 7)
                             .background(FSDesign.accentGradient(dark: scheme == .dark), in: Capsule())
                     }
                     .buttonStyle(.plain)
@@ -865,7 +882,7 @@ struct UpdateSheetView: View {
                     } label: {
                         Text(L10n.text("取消下载 · \(progressPercent)%", "Cancel · \(progressPercent)%"))
                             .fireSkyFont(size: 12, weight: .semibold).monospacedDigit()
-                            .padding(.horizontal, 18).padding(.vertical, 9)
+                            .padding(.horizontal, 15).padding(.vertical, 7)
                             .background(Color.primary.opacity(scheme == .dark ? 0.12 : 0.08), in: Capsule())
                     }
                     .buttonStyle(.plain)
@@ -875,15 +892,15 @@ struct UpdateSheetView: View {
                     } label: {
                         Text(L10n.text("完成", "Done"))
                             .fireSkyFont(size: 12, weight: .semibold)
-                            .padding(.horizontal, 20).padding(.vertical, 9)
+                            .padding(.horizontal, 16).padding(.vertical, 7)
                             .background(Color.primary.opacity(scheme == .dark ? 0.12 : 0.08), in: Capsule())
                     }
                     .buttonStyle(.plain)
                 }
             }
-            .padding(.top, 4)
+            .padding(.top, 2)
         }
-        .padding(24)
+        .padding(14)
         .frame(width: 450)
         .background {
             ZStack {

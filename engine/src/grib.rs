@@ -89,9 +89,51 @@ fn subset_for_message(mut subset: [f64; 4], longitudes: &[f32]) -> [f64; 4] {
     subset
 }
 
+fn subset_area_bounds(
+    lats: &[f64],
+    lons: &[f64],
+    bbox: Option<[f64; 4]>,
+) -> Result<[f64; 4], String> {
+    let wrapped = bbox.is_some_and(|[w, e, _, _]| w > e);
+    let wrap_west = bbox.map_or(0.0, |[w, _, _, _]| w);
+    let mut north = f64::NEG_INFINITY;
+    let mut south = f64::INFINITY;
+    let mut west = f64::INFINITY;
+    let mut east = f64::NEG_INFINITY;
+    for (&lat, &raw_lon) in lats.iter().zip(lons) {
+        let lon = (raw_lon + 180.0).rem_euclid(360.0) - 180.0;
+        if bbox.is_some_and(|[w, e, n, s]| {
+            lat < s || lat > n || if w <= e { lon < w || lon > e } else { lon < w && lon > e }
+        }) {
+            continue;
+        }
+        north = north.max(lat);
+        south = south.min(lat);
+        let adjusted = if wrapped && lon < wrap_west {
+            lon + 360.0
+        } else {
+            lon
+        };
+        west = west.min(adjusted);
+        east = east.max(adjusted);
+    }
+    if !north.is_finite() || !south.is_finite() || !west.is_finite() || !east.is_finite() {
+        return Err("GRIB subset contains no coordinates".into());
+    }
+    if wrapped {
+        if west > 180.0 {
+            west -= 360.0;
+        }
+        if east > 180.0 {
+            east -= 360.0;
+        }
+    }
+    Ok([north, west, south, east])
+}
+
 #[cfg(test)]
 mod subset_tests {
-    use super::subset_for_message;
+    use super::{subset_area_bounds, subset_for_message};
 
     #[test]
     fn wrapped_subset_expands_only_for_0_360_messages() {
@@ -105,6 +147,18 @@ mod subset_tests {
         assert_eq!(subset_for_message(wrapped, &normalized), wrapped);
         let ordinary = [99.25, 141.25, 48.5, 12.25];
         assert_eq!(subset_for_message(ordinary, &served_0_360), ordinary);
+    }
+
+    #[test]
+    fn subset_area_bounds_preserves_narrow_wrapped_dateline_arc() {
+        let lats = [20.0, 30.0, 40.0, 50.0, 35.0];
+        let lons = [171.0, 179.5, 180.0, 189.0, 120.0];
+        let bounds = subset_area_bounds(&lats, &lons, Some([170.0, -170.0, 50.0, 20.0])).unwrap();
+        assert_eq!(bounds, [50.0, 171.0, 20.0, -171.0]);
+        let east_only =
+            subset_area_bounds(&[30.0, 40.0], &[-178.0, -172.0], Some([170.0, -170.0, 50.0, 20.0]))
+                .unwrap();
+        assert_eq!(east_only, [40.0, -178.0, 30.0, -172.0]);
     }
 }
 
@@ -773,29 +827,7 @@ impl EcCodes {
             if lat.iter().chain(&lon).any(|v| !v.is_finite()) {
                 return Err("CAMS header coordinates are nonfinite".into());
             }
-            let lon: Vec<_> = lon
-                .iter()
-                .map(|v| (v + 180.0).rem_euclid(360.0) - 180.0)
-                .collect();
-            let mut bounds = [
-                f64::NEG_INFINITY,
-                f64::INFINITY,
-                f64::INFINITY,
-                f64::NEG_INFINITY,
-            ];
-            for (lat, lon) in lat.into_iter().zip(lon) {
-                if bbox.is_some_and(|[w, e, n, s]| lat < s || lat > n || lon < w || lon > e) {
-                    continue;
-                }
-                bounds[0] = bounds[0].max(lat);
-                bounds[1] = bounds[1].min(lon);
-                bounds[2] = bounds[2].min(lat);
-                bounds[3] = bounds[3].max(lon);
-            }
-            if bounds.iter().any(|v| !v.is_finite()) {
-                return Err("GRIB subset contains no coordinates".into());
-            }
-            area = Some(bounds);
+            area = Some(subset_area_bounds(&lat, &lon, bbox)?);
             Ok(false)
         })?;
         area.ok_or("CAMS file has no GRIB messages".into())

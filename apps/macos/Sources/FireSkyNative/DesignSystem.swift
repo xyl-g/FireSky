@@ -294,6 +294,10 @@ struct FireSkySurface: ViewModifier {
         !reduceTransparency && !highContrast && (role == .navigation || role == .overlay)
     }
 
+    private var usesTranslucentContent: Bool {
+        !reduceTransparency && !highContrast && (role == .content || role == .grouped)
+    }
+
     private var usesShadow: Bool {
         !highContrast && (role == .content || role == .grouped || role == .overlay)
     }
@@ -310,7 +314,7 @@ struct FireSkySurface: ViewModifier {
     @ViewBuilder
     private var surfaceBackground: some View {
         let shadowColor = usesShadow ? FSDesign.cardShadow(dark: scheme == .dark) : Color.clear
-        let shadowRadius: CGFloat = usesShadow ? (role == .content ? 12 : 8) : 0
+        let shadowRadius: CGFloat = usesShadow ? (role == .content ? 14 : 8) : 0
         let shadowY: CGFloat = usesShadow ? (role == .content ? 5 : 3) : 0
         if usesSystemMaterial {
             #if compiler(>=6.2)
@@ -325,6 +329,17 @@ struct FireSkySurface: ViewModifier {
             RoundedRectangle(cornerRadius: radius).fill(.regularMaterial)
                 .shadow(color: shadowColor, radius: shadowRadius, y: shadowY)
             #endif
+        } else if usesTranslucentContent {
+            let tintOpacity: Double = role == .content
+                ? (scheme == .dark ? 0.66 : 0.72)
+                : (scheme == .dark ? 0.56 : 0.64)
+            RoundedRectangle(cornerRadius: radius)
+                .fill(role == .content ? AnyShapeStyle(.regularMaterial) : AnyShapeStyle(.thinMaterial))
+                .overlay {
+                    RoundedRectangle(cornerRadius: radius)
+                        .fill(solidFill.opacity(tintOpacity))
+                }
+                .shadow(color: shadowColor, radius: shadowRadius, y: shadowY)
         } else {
             RoundedRectangle(cornerRadius: radius).fill(solidFill)
                 .shadow(color: shadowColor, radius: shadowRadius, y: shadowY)
@@ -336,9 +351,22 @@ struct FireSkySurface: ViewModifier {
         if radius == 0 {
             Rectangle()
                 .strokeBorder(borderColor, lineWidth: highContrast ? 1 : 0.5)
+        } else if usesTranslucentContent && !emphasized {
+            let topHighlight = scheme == .dark
+                ? Color.white.opacity(0.14)
+                : Color.white.opacity(0.82)
+            let bottomStroke = scheme == .dark
+                ? Color(0x4B, 0x5D, 0x78).opacity(0.38)
+                : Color(0xC9, 0xD5, 0xE1).opacity(0.58)
+            RoundedRectangle(cornerRadius: radius)
+                .strokeBorder(
+                    LinearGradient(colors: [topHighlight, bottomStroke],
+                                   startPoint: .top, endPoint: .bottom),
+                    lineWidth: 0.75
+                )
         } else {
             RoundedRectangle(cornerRadius: radius)
-                .strokeBorder(borderColor, lineWidth: highContrast ? 1.5 : 1)
+                .strokeBorder(borderColor, lineWidth: highContrast ? 1.5 : 0.9)
         }
     }
 

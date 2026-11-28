@@ -312,7 +312,7 @@ fun RegionalLeafletMap(
                             )
                         }
                     }
-                    loadUrl(MAP_ENTRY_URL)
+                    loadUrl("$MAP_ENTRY_URL?mode=regional")
                     webViewRef = this
                 }
             },

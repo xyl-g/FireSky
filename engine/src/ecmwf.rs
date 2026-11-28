@@ -55,6 +55,24 @@ fn normalise_longitude(value: f32) -> f32 {
     (value + 180.0).rem_euclid(360.0) - 180.0
 }
 
+fn basic_proxy_pressure_factor(pressure_hpa: i32) -> f32 {
+    match pressure_hpa {
+        ..=350 => 0.55,
+        351..=400 => 0.55 + (pressure_hpa - 350) as f32 / 50.0 * (0.78 - 0.55),
+        401..=500 => 0.78 + (pressure_hpa - 400) as f32 / 100.0 * (0.95 - 0.78),
+        501..=700 => 0.95,
+        _ => 1.0,
+    }
+}
+
+fn basic_proxy_cloud_fraction(tcc_percent: f32, rh_percent: f32, pressure_hpa: i32) -> f32 {
+    let humidity_support = ((rh_percent - 72.0) / 26.0).clamp(0.0, 1.0);
+    let cover_support = (tcc_percent / 100.0).clamp(0.0, 1.0).powf(0.75);
+    (0.55 * humidity_support + 0.45 * cover_support)
+        * basic_proxy_pressure_factor(pressure_hpa).clamp(0.0, 1.0)
+        * 100.0
+}
+
 fn coordinate_bits(value: f32) -> u32 {
     if value == 0.0 {
         0
@@ -478,7 +496,7 @@ pub fn decode_basic_terrain(
             return Ok(true);
         }
         let units = message.string(b"units\0")?;
-        if !["m**2 s**-2", "m2 s-2", "m^2 s^-2"].contains(&units.as_str()) {
+        if !["m**2 s**-2", "m2 s-2", "m^2 s^-2", "m**2 s^-2"].contains(&units.as_str()) {
             return Err(format!("EC surface z units={units:?}"));
         }
         let cycle = date(message, b"dataDate\0", b"dataTime\0")
@@ -1043,7 +1061,7 @@ impl InputTensor {
                 key("isobaricInhPa", level, "tcc"),
                 order
                     .iter()
-                    .map(|&i| (tcc[i] * ((rh[i] - 45.0) / 45.0).clamp(0.0, 1.0)).clamp(0.0, 100.0))
+                    .map(|&i| basic_proxy_cloud_fraction(tcc[i], rh[i], level))
                     .collect(),
             );
             for name in ["clwmr", "icmr"] {
@@ -1142,6 +1160,20 @@ mod tests {
         assert_eq!(record.raw[..2], [-1.0, 101.0]);
         assert_eq!(record.raw[2].to_bits(), (-0.0_f32).to_bits());
         assert_eq!(record.values()[2].to_bits(), (-0.0_f32).to_bits());
+    }
+
+    #[test]
+    fn ec_basic_cloud_proxy_uses_humidity_cover_and_pressure_support() {
+        assert_eq!(basic_proxy_cloud_fraction(0.0, 72.0, 300), 0.0);
+        assert!((basic_proxy_cloud_fraction(100.0, 98.0, 300) - 55.0).abs() < 1e-5);
+        assert!((basic_proxy_cloud_fraction(100.0, 98.0, 400) - 78.0).abs() < 1e-5);
+        assert!((basic_proxy_cloud_fraction(100.0, 98.0, 500) - 95.0).abs() < 1e-5);
+        assert!((basic_proxy_cloud_fraction(100.0, 98.0, 850) - 100.0).abs() < 1e-5);
+
+        let humidity_only = basic_proxy_cloud_fraction(0.0, 85.0, 500);
+        let cover_only = basic_proxy_cloud_fraction(50.0, 50.0, 500);
+        assert!(humidity_only > 0.0 && humidity_only < 30.0);
+        assert!(cover_only > 0.0 && cover_only < 30.0);
     }
     #[test]
     fn cartesian_proof_and_fallback_accept_all_scan_permutations() {

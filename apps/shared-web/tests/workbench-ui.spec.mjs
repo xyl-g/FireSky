@@ -504,20 +504,18 @@ test("appearance and EC source use Swift settings and survive reload without per
   expect(await page.evaluate(() => JSON.stringify(localStorage).includes("fixture-public-key-kept-only-in-memory"))).toBe(false);
 });
 
-test("elevation source setting passes through search/metadata and the response source is displayed", async ({ page }) => {
+test("automatic elevation source passes through search/metadata and response provenance is displayed", async ({ page }) => {
   await fixture(page);
   await page.getByRole("button", { name: "设置", exact: true }).click();
-  await page.getByLabel("海拔来源", { exact: true }).selectOption("srtm");
-  await expect.poll(() => page.evaluate(() => localStorage.getItem("firesky.elevationSource"))).toBe("srtm");
   await page.getByRole("button", { name: "单点预测", exact: true }).click();
   await page.getByLabel("搜索地名", { exact: true }).fill("杭州");
   await page.getByLabel("搜索地名", { exact: true }).press("Enter");
-  await expect.poll(() => page.evaluate(() => window.__workFixture.requests.findLast((item) => item.method === "search")?.params)).toEqual({ query: "杭州", elevation_source: "srtm" });
+  await expect.poll(() => page.evaluate(() => window.__workFixture.requests.findLast((item) => item.method === "search")?.params)).toEqual({ query: "杭州", elevation_source: "auto" });
   await page.evaluate(() => window.__workFixture.finishLocation("search", 0, { name: "杭州", lat: 30.2741, lon: 120.1551, elevation_m: 8, timezone_name: "Asia/Shanghai", source: "local-timezone+srtm" }));
   await expect(page.locator(".location-meta")).toContainText("海拔来源：本地时区 + SRTM");
   await page.getByRole("button", { name: "编辑坐标", exact: true }).click();
   await page.getByRole("button", { name: "获取海拔与时区", exact: true }).click();
-  await expect.poll(() => page.evaluate(() => window.__workFixture.requests.findLast((item) => item.method === "metadata")?.params)).toEqual({ lat: 30.2741, lon: 120.1551, elevation_source: "srtm" });
+  await expect.poll(() => page.evaluate(() => window.__workFixture.requests.findLast((item) => item.method === "metadata")?.params)).toEqual({ lat: 30.2741, lon: 120.1551, elevation_source: "auto" });
   await page.evaluate(() => window.__workFixture.finishLocation("metadata", 0, { lat: 30.2741, lon: 120.1551, elevation_m: 8, timezone_name: "Asia/Shanghai", source: "open-meteo-point-metadata" }));
   await expect(page.locator(".location-meta")).toContainText("海拔来源：open-meteo 在线");
 });

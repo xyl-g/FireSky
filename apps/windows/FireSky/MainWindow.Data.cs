@@ -458,6 +458,12 @@ public sealed partial class MainWindow
         }
     }
 
+    private void OnDataTerrainAnchor(object sender, RoutedEventArgs args) =>
+        TerrainDataSection.StartBringIntoView();
+
+    private void OnDataInventoryAnchor(object sender, RoutedEventArgs args) =>
+        InventorySection.StartBringIntoView();
+
     private async void OnRefreshInventory(object sender, RoutedEventArgs args) => await LoadInventory();
 
     private void OnOpenDataFolder(object sender, RoutedEventArgs args)

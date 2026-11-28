@@ -255,6 +255,15 @@ fn gate(row: &mut Row, allowed: bool) {
 /// The caller supplies its own observation/visibility gate. Instant scoring
 /// does not infer the event's visibility or validity masks.
 pub fn score_instant(row: &Row, allowed: bool, blocker_cap: bool) -> Instant {
+    score_instant_with_ceiling(row, allowed, blocker_cap, false)
+}
+
+pub fn score_instant_with_ceiling(
+    row: &Row,
+    allowed: bool,
+    blocker_cap: bool,
+    apply_ceiling: bool,
+) -> Instant {
     let mut row = normalized(row);
     if blocker_cap {
         cap(&mut row);
@@ -284,7 +293,10 @@ pub fn score_instant(row: &Row, allowed: bool, blocker_cap: bool) -> Instant {
     };
     let observer_delta = after_incoming * (observer - 1.0);
     let raw = (after_incoming + observer_delta).max(0.0);
-    let pre = if active { clip(raw, 2.5) } else { 0.0 };
+    let mut pre = if active { clip(raw, 2.5) } else { 0.0 };
+    if apply_ceiling && active {
+        pre = pre.min(empirical::inverse_calibrated_quality_response(row[16]));
+    }
     let index = empirical::calibrated_quality_response(pre);
     let aod = if row[9].is_finite() {
         row[9].max(0.0)
@@ -480,6 +492,7 @@ pub fn score(
             .collect();
         (weights, duration)
     };
+    let weight_sum: f64 = weights.iter().sum();
     let weighted = |field: usize| {
         instant
             .iter()
@@ -487,27 +500,41 @@ pub fn score(
             .map(|(v, w)| v[field] * w)
             .sum::<f64>()
     };
+    let weighted_mean = |field: usize| {
+        if weight_sum > 0.0 {
+            weighted(field) / weight_sum
+        } else {
+            0.0
+        }
+    };
     let coverage = clip(weighted(15), 2.5);
-    let material = clip(weighted(8), 1.0);
-    let material_factor = clip(weighted(9), 1.0);
+    let material = clip(weighted_mean(8), 1.0);
+    let material_factor = clip(weighted_mean(9), 1.0);
     let material_delta = weighted(10);
     let after_material = (coverage + material_delta).max(0.0);
-    let incoming_factor = if any_active {
-        clip(weighted(11), 1.0)
+    let incoming_factor = if any_active && weight_sum > 0.0 {
+        clip(weighted_mean(11), 1.0)
     } else {
         1.0
     };
     let incoming_delta = weighted(12);
     let after_incoming = (after_material + incoming_delta).max(0.0);
-    let observer_factor = if any_active {
-        clip(weighted(13), 1.0)
+    let observer_factor = if any_active && weight_sum > 0.0 {
+        clip(weighted_mean(13), 1.0)
     } else {
         1.0
     };
     let observer_delta = weighted(14);
     let after_aerosol = (after_incoming + observer_delta).max(0.0);
-    let ceiling = if options.score_ceiling && any_active {
-        rows.iter().zip(&weights).map(|(r, w)| r[16] * w).sum()
+    let ceiling = if options.score_ceiling && any_active && weight_sum > 0.0 {
+        clip(
+            rows.iter()
+                .zip(&weights)
+                .map(|(r, w)| r[16] * w)
+                .sum::<f64>()
+                / weight_sum,
+            2.5,
+        )
     } else {
         2.5
     };
@@ -955,5 +982,119 @@ mod tests {
                 rows[29 * 20 + 3][17] = 1.0;
             }
         }
+    }
+
+    #[test]
+    fn gapped_event_normalizes_ceiling_and_diagnostic_factors() {
+        // Two 10-minute active bursts separated by a 20-minute inactive gap:
+        // total active duration is 20 min, but any 20-min window covers at most
+        // 10 active minutes (weight_sum = 0.5 < 0.70).
+        let make_row = |offset: f64, burn: f64, ceiling: f64| -> Row {
+            [
+                0.9,
+                burn,
+                burn * 2.5,
+                burn * 2.5,
+                burn * 2.5,
+                0.0,
+                1.0,
+                0.9,
+                offset,
+                0.05,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                ceiling,
+                1.0,
+            ]
+        };
+        // Offsets spaced by 10 min => widths = [5, 10, 10, 10, 5]; active at
+        // offsets 0, 10, 40, 50 => active widths [5, 10, 10, 5] (total 30 min)
+        // with a 20-min inactive gap at offsets 20, 30.
+        let rows = vec![
+            make_row(0.0, 0.9, 2.5),
+            make_row(10.0, 0.9, 2.5),
+            make_row(20.0, 0.0, 2.5),
+            make_row(30.0, 0.0, 2.5),
+            make_row(40.0, 0.9, 2.5),
+            make_row(50.0, 0.9, 2.5),
+        ];
+        // Active widths inside the best 20-min window: 5 + 10 = 15 min => weight_sum = 0.75.
+        // Now make an even narrower burst: offsets 0, 5, 15, 25, 35, 40 with active at 0, 5, 35, 40.
+        let narrow_rows = vec![
+            make_row(0.0, 0.9, 2.5),
+            make_row(5.0, 0.9, 2.5),
+            make_row(15.0, 0.0, 2.5),
+            make_row(25.0, 0.0, 2.5),
+            make_row(35.0, 0.9, 2.5),
+            make_row(40.0, 0.9, 2.5),
+        ];
+        // Widths: [2.5, 7.5, 10.0, 10.0, 7.5, 2.5]; active total = 20.0 min,
+        // best 20-min window covers only one 10-min burst => weight_sum = 0.50 (< 0.70).
+        let options = Options {
+            mode: Mode::Scalar,
+            apply_duration: true,
+            local_columns: false,
+            score_ceiling: true,
+            radius_km: 200.0,
+        };
+        let without_ceiling = score(
+            &narrow_rows,
+            Options {
+                score_ceiling: false,
+                ..options
+            },
+            None,
+        )
+        .unwrap();
+        let with_max_ceiling = score(&narrow_rows, options, None).unwrap();
+        assert!((with_max_ceiling.values[Metric::Ceiling as usize] - 2.5).abs() < 1e-12);
+        assert!((with_max_ceiling.index() - without_ceiling.index()).abs() < 1e-12);
+        assert!((with_max_ceiling.values[Metric::Material as usize] - 1.0).abs() < 1e-12);
+        assert!((with_max_ceiling.values[Metric::MaterialFactor as usize] - 1.0).abs() < 1e-12);
+        assert!((with_max_ceiling.values[Metric::IncomingFactor as usize] - 1.0).abs() < 1e-12);
+        assert!((with_max_ceiling.values[Metric::ObserverFactor as usize] - 1.0).abs() < 1e-12);
+        assert_eq!(with_max_ceiling.limiting, 6);
+
+        // When a real ceiling (1.2) is present on active steps, the reported
+        // event ceiling remains 1.2 rather than being shrunk by weight_sum (0.75).
+        let capped_rows: Vec<Row> = rows
+            .into_iter()
+            .map(|mut r| {
+                r[16] = 1.2;
+                r
+            })
+            .collect();
+        let capped = score(&capped_rows, options, None).unwrap();
+        assert!((capped.values[Metric::Ceiling as usize] - 1.2).abs() < 1e-12);
+        assert!(capped.index() <= 1.2 + 1e-12);
+    }
+
+    #[test]
+    fn instant_scoring_respects_optional_score_ceiling() {
+        let row: Row = [
+            0.9, 0.9, 2.25, 2.25, 2.25, 0.0, 1.0, 0.9, 0.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+            0.85, 1.0,
+        ];
+        let uncapped = score_instant(&row, true, true);
+        let capped = score_instant_with_ceiling(&row, true, true, true);
+        let single_event = score(
+            &[row],
+            Options {
+                mode: Mode::Scalar,
+                apply_duration: false,
+                local_columns: false,
+                score_ceiling: true,
+                radius_km: 200.0,
+            },
+            None,
+        )
+        .unwrap();
+        assert!(uncapped[0] > 1.5);
+        assert!((capped[0] - 0.85).abs() < 1e-12);
+        assert!((capped[0] - single_event.index()).abs() < 1e-12);
     }
 }

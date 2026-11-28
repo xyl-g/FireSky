@@ -137,6 +137,9 @@ struct WorkbenchRootView: View {
             }
         }
         .onChange(of: store.page) { _, page in
+            if page == .regional, store.regionalCamera == nil {
+                store.regionalFitVersion += 1
+            }
             if page == .data {
                 Task {
                     await store.loadInventory()
@@ -152,91 +155,91 @@ struct WorkbenchRootView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                FireSkyMark().frame(width: 32, height: 32)
+            HStack(spacing: 8) {
+                FireSkyMark().frame(width: 28, height: 28)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("FireSky").fireSkyFont(size: 16, weight: .semibold, relativeTo: .title3)
+                    Text("FireSky").fireSkyFont(size: 15, weight: .semibold, relativeTo: .title3)
                     Text(L10n.text("朝晚霞观测台", "Twilight Workbench"))
                         .fireSkyFont(size: 10, relativeTo: .caption)
                         .foregroundStyle(.secondary)
                 }
-            }.padding(.leading, 6).padding(.bottom, 22)
+            }.padding(.leading, 4).padding(.bottom, 14)
             Text(L10n.t("观测工作台")).fireSkyFont(size: 10, weight: .semibold, relativeTo: .caption)
-                .foregroundStyle(.secondary).padding(.leading, 6).padding(.bottom, 8)
+                .foregroundStyle(.secondary).padding(.leading, 4).padding(.bottom, 6)
             ForEach([Page.point, .regional, .nowcast, .data, .history]) { page in
                 let selected = store.page == page
                 Button {
                     // UX #5：切页不再被全局 busy 锁死；运行中的任务继续，顶栏可见进度。
                     store.page = page
                 } label: {
-                    HStack(spacing: 10) {
+                    HStack(spacing: 8) {
                         Image(systemName: page.symbol).symbolRenderingMode(.hierarchical)
-                            .font(.system(size: 15, weight: selected ? .medium : .regular))
+                            .font(.system(size: 14, weight: selected ? .medium : .regular))
                             .foregroundStyle(selected ? warm : Color.primary.opacity(0.68))
-                            .frame(width: 22, height: 22)
+                            .frame(width: 20, height: 20)
                         Text(page.title)
-                            .fireSkyFont(size: 13, weight: selected ? .semibold : .regular)
+                            .fireSkyFont(size: 12.5, weight: selected ? .semibold : .regular)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer(minLength: 0)
                         if selected {
-                            Image(systemName: "chevron.right").font(.system(size: 10, weight: .semibold))
+                            Image(systemName: "chevron.right").font(.system(size: 9.5, weight: .semibold))
                                 .foregroundStyle(warm.opacity(0.85))
                         }
                     }
-                    .padding(.horizontal, 11).frame(minHeight: 40)
+                    .padding(.horizontal, 9).frame(minHeight: 34)
                     .foregroundStyle(selected ? Color.primary : Color.primary.opacity(0.76))
                     .background {
-                        RoundedRectangle(cornerRadius: 9)
+                        RoundedRectangle(cornerRadius: 8)
                             .fill(selected ? warm.opacity(scheme == .dark ? 0.16 : 0.12) : Color.clear)
                     }
                     .overlay(alignment: .leading) {
                         if selected {
                             RoundedRectangle(cornerRadius: 1.5)
                                 .fill(warm)
-                                .frame(width: 3, height: 20)
+                                .frame(width: 3, height: 16)
                                 .padding(.leading, 2)
                         }
                     }
-                    .contentShape(RoundedRectangle(cornerRadius: 9))
+                    .contentShape(RoundedRectangle(cornerRadius: 8))
                 }
                 .buttonStyle(.plain)
-                .padding(.bottom, 3)
+                .padding(.bottom, 2)
                 .accessibilityLabel(selected ? "\(page.title)，当前页面" : page.title)
                 .accessibilityAddTraits(selected ? .isSelected : [])
             }
-            Spacer(minLength: 16)
-            Divider().opacity(0.45).padding(.bottom, 10)
+            Spacer(minLength: 12)
+            Divider().opacity(0.45).padding(.bottom, 8)
             Button {
                 store.page = .settings
             } label: {
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     Image(systemName: "gearshape")
-                        .font(.system(size: 15, weight: store.page == .settings ? .medium : .regular))
+                        .font(.system(size: 14, weight: store.page == .settings ? .medium : .regular))
                         .foregroundStyle(store.page == .settings ? warm : Color.primary.opacity(0.68))
-                        .frame(width: 22, height: 22)
+                        .frame(width: 20, height: 20)
                     Text(L10n.navSettings)
-                        .fireSkyFont(size: 13, weight: store.page == .settings ? .semibold : .regular)
+                        .fireSkyFont(size: 12.5, weight: store.page == .settings ? .semibold : .regular)
                     Spacer(minLength: 0)
                     if updater.phase == .available {
                         Circle().fill(Color.green).frame(width: 7, height: 7)
                             .accessibilityLabel("发现新版本 \(updater.info?.version ?? "")")
                     }
                 }
-                .padding(.horizontal, 11).frame(minHeight: 40)
+                .padding(.horizontal, 9).frame(minHeight: 34)
                 .foregroundStyle(store.page == .settings ? Color.primary : Color.primary.opacity(0.76))
                 .background {
-                    RoundedRectangle(cornerRadius: 9)
+                    RoundedRectangle(cornerRadius: 8)
                         .fill(store.page == .settings ? warm.opacity(scheme == .dark ? 0.16 : 0.12) : Color.clear)
                 }
                 .overlay(alignment: .leading) {
                     if store.page == .settings {
                         RoundedRectangle(cornerRadius: 1.5)
                             .fill(warm)
-                            .frame(width: 3, height: 20)
+                            .frame(width: 3, height: 16)
                             .padding(.leading, 2)
                     }
                 }
-                .contentShape(RoundedRectangle(cornerRadius: 9))
+                .contentShape(RoundedRectangle(cornerRadius: 8))
             }
             .buttonStyle(.plain)
             .accessibilityLabel(store.page == .settings
@@ -244,8 +247,8 @@ struct WorkbenchRootView: View {
                                 : L10n.navSettings)
             .accessibilityAddTraits(store.page == .settings ? .isSelected : [])
         }
-        .padding(.horizontal, 13).padding(.top, 38).padding(.bottom, 14)
-        .frame(width: dynamicTypeSize.isAccessibilitySize ? 244 : 196)
+        .padding(.horizontal, 10).padding(.top, 34).padding(.bottom, 12)
+        .frame(width: dynamicTypeSize.isAccessibilitySize ? 236 : 176)
         .fireSkySurface(role: .navigation)
     }
 
@@ -266,17 +269,17 @@ struct WorkbenchRootView: View {
     }
 
     private var topbar: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .center, spacing: 10) {
             Button {
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.22)) {
                     sidebarState.column = sidebarState.visible ? .detailOnly : .all
                 }
             } label: {
                 Image(systemName: "sidebar.left")
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 28, height: 28)
+                    .font(.system(size: 13, weight: .medium))
+                    .frame(width: 26, height: 26)
                     .background(Color.primary.opacity(scheme == .dark ? 0.06 : 0.045),
-                                in: RoundedRectangle(cornerRadius: 7))
+                                in: RoundedRectangle(cornerRadius: 6))
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -284,13 +287,13 @@ struct WorkbenchRootView: View {
             .help(L10n.t(sidebarState.visible ? "隐藏侧栏" : "显示侧栏"))
             .accessibilityLabel(L10n.t(sidebarState.visible ? "隐藏侧栏" : "显示侧栏"))
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text(store.page.title).fireSkyFont(size: 18, weight: .semibold, relativeTo: .title2)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(store.page.title).fireSkyFont(size: 16, weight: .semibold, relativeTo: .title2)
                 // 副标题只在该页面有地点语义时显示；管理页不借用预测地点上下文。
                 if store.page.showsLocationSubtitle {
                     Text(store.page == .regional ? store.regionalTitle
                          : String(format: "%@ · %.4f° N, %.4f° E", store.name, store.lat, store.lon))
-                        .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary).lineLimit(1)
+                        .fireSkyFont(size: 10.5, relativeTo: .caption).foregroundStyle(.secondary).lineLimit(1)
                 }
             }
             Spacer(minLength: 8)
@@ -344,10 +347,10 @@ struct WorkbenchRootView: View {
                 store.cycleAppearance()
             } label: {
                 Image(systemName: appearanceIcon)
-                    .font(.system(size: 13, weight: .medium))
-                    .frame(width: 28, height: 28)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .frame(width: 26, height: 26)
                     .background(Color.primary.opacity(scheme == .dark ? 0.06 : 0.045),
-                                in: RoundedRectangle(cornerRadius: 7))
+                                in: RoundedRectangle(cornerRadius: 6))
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -355,10 +358,10 @@ struct WorkbenchRootView: View {
             .help(appearanceHelpText)
             .accessibilityLabel(appearanceHelpText)
         }
-        .padding(.leading, sidebarState.visible ? 18 : 76)
-        .padding(.trailing, 18)
-        .padding(.vertical, 9)
-        .frame(minHeight: 56)
+        .padding(.leading, sidebarState.visible ? 14 : 74)
+        .padding(.trailing, 14)
+        .padding(.vertical, 6)
+        .frame(minHeight: 46)
         .fireSkySurface(role: .navigation)
     }
 
@@ -372,24 +375,24 @@ struct WorkbenchRootView: View {
         Group {
             if dynamicTypeSize.isAccessibilitySize {
                 ScrollView {
-                    VStack(alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 10) {
                         WorkLocationView()
                         WorkParametersView()
                         workbenchActions
                         workbenchResults
                     }
                     .frame(maxWidth: .infinity, alignment: .topLeading)
-                    .padding(.horizontal, 18).padding(.vertical, 14)
+                    .padding(.horizontal, 14).padding(.vertical, 10)
                 }
                 .defaultScrollAnchor(.top)
                 .scrollIndicators(.hidden)
             } else {
-                HStack(alignment: .top, spacing: 16) {
+                HStack(alignment: .top, spacing: 12) {
                     workbenchControls
                     workbenchResults
                 }
-                .padding(.leading, 18).padding(.trailing, 20)
-                .padding(.top, 14).padding(.bottom, 18)
+                .padding(.leading, 14).padding(.trailing, 14)
+                .padding(.top, 10).padding(.bottom, 12)
             }
         }
     }
@@ -397,7 +400,7 @@ struct WorkbenchRootView: View {
     private var workbenchControls: some View {
         VStack(spacing: 10) {
             ScrollView {
-                VStack(spacing: 12) {
+                VStack(spacing: 10) {
                     WorkLocationView()
                     WorkParametersView()
                 }.padding(.trailing, 2)
@@ -406,7 +409,7 @@ struct WorkbenchRootView: View {
             .scrollIndicators(.hidden)
             workbenchActions
         }
-        .frame(width: 280)
+        .frame(width: 274)
     }
 
     private var workbenchActions: some View {
@@ -427,7 +430,7 @@ struct WorkbenchRootView: View {
                 }
                 .fireSkyFont(size: 12, weight: .semibold)
                 .foregroundStyle(scheme == .dark ? Color(0x14, 0x14, 0x14) : Color.white)
-                .frame(maxWidth: .infinity).padding(.vertical, 11)
+                .frame(maxWidth: .infinity).padding(.vertical, 9)
                 .background(FSDesign.accentGradient(dark: scheme == .dark),
                             in: RoundedRectangle(cornerRadius: 8))
                 .overlay {
@@ -477,12 +480,10 @@ struct WorkbenchRootView: View {
     }
 
     private var workbenchResults: some View {
-        VStack(spacing: 12) {
+        Group {
             if store.page == .nowcast {
-                WorkNowcastHeroView()
                 WorkNowcastResultsView()
             } else {
-                WorkHeroView()
                 WorkResultsView()
             }
         }
@@ -494,14 +495,14 @@ struct WorkLocationView: View {
     @EnvironmentObject private var store: Store
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack {
                 Text(L10n.t(store.page == .regional ? "预测区域" : "观测点"))
-                    .fireSkyFont(size: 13, weight: .semibold)
+                    .fireSkyFont(size: 12.5, weight: .semibold)
                 Spacer()
                 if store.page != .regional {
                     WorkSegments(options: ["地图", "收藏"], selection: $store.locationTab)
-                        .frame(width: dynamicTypeSize.isAccessibilitySize ? 180 : 112)
+                        .frame(width: dynamicTypeSize.isAccessibilitySize ? 180 : 104)
                     if store.locationTab == "收藏" {
                         Menu {
                             if store.favorites.isEmpty {
@@ -528,23 +529,24 @@ struct WorkLocationView: View {
                     }
                 }
             }
-            HStack(spacing: 6) {
-                TextField(L10n.t("搜索地名，如「西湖」或「杭州」"), text: $store.query).onSubmit { store.search() }
-                    .textFieldStyle(.roundedBorder).controlSize(.large)
+            HStack(spacing: 5) {
+                TextField(L10n.text("搜索地名（如西湖、杭州）", "Search place (e.g. West Lake)"), text: $store.query).onSubmit { store.search() }
+                    .textFieldStyle(.roundedBorder).controlSize(.regular)
+                    .font(.system(size: 11))
                 Button { store.search() } label: {
-                    if store.searching { ProgressView().controlSize(.mini).frame(width: 16, height: 16) }
-                    else { Image(systemName: "magnifyingglass").frame(width: 16, height: 16) }
+                    if store.searching { ProgressView().controlSize(.mini).frame(width: 14, height: 14) }
+                    else { Image(systemName: "magnifyingglass").frame(width: 14, height: 14) }
                 }
                     .help(L10n.t("搜索位置")).accessibilityLabel(L10n.t("搜索位置"))
-                    .controlSize(.large).disabled(store.searching)
+                    .controlSize(.regular).disabled(store.searching)
                 Button { store.locate() } label: {
-                    if store.locating { ProgressView().controlSize(.mini).frame(width: 16, height: 16) }
-                    else { Image(systemName: "location").frame(width: 16, height: 16) }
+                    if store.locating { ProgressView().controlSize(.mini).frame(width: 14, height: 14) }
+                    else { Image(systemName: "location").frame(width: 14, height: 14) }
                 }.help(L10n.t("获取当前位置")).accessibilityLabel(L10n.t("获取当前位置"))
-                    .controlSize(.large).disabled(store.locating)
+                    .controlSize(.regular).disabled(store.locating)
             }
             if store.page == .regional {
-                VStack(spacing: 8) {
+                VStack(spacing: 6) {
                     coordinate("西界", $store.west)
                     coordinate("东界", $store.east)
                     coordinate("南界", $store.south)
@@ -552,7 +554,7 @@ struct WorkLocationView: View {
                     Text("0.25° × 0.25°").foregroundStyle(.secondary).frame(maxWidth: .infinity)
                 }
             } else if store.locationTab == "地图" {
-                ForecastMap(store: store, mini: true).frame(height: 158)
+                ForecastMap(store: store, mini: true).frame(height: 136)
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             } else {
                 // UX #7：收藏可删除（右键菜单），空收藏给出引导而不是空白。
@@ -565,7 +567,7 @@ struct WorkLocationView: View {
                             Text(L10n.t("搜索或在地图上选好地点后，点击下方「收藏当前点」。"))
                                 .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
                                 .multilineTextAlignment(.center)
-                        }.frame(maxWidth: .infinity, minHeight: 160)
+                        }.frame(maxWidth: .infinity, minHeight: 130)
                     } else {
                         VStack(spacing: 6) {
                             ForEach(Array(store.favorites.enumerated()), id: \.offset) { _, item in
@@ -592,25 +594,26 @@ struct WorkLocationView: View {
                                 }
                                 .help(L10n.t("点击切换到此位置；右键可删除收藏"))
                             }
-                        }.padding(8)
+                        }.padding(6)
                     }
-                }.frame(height: 176)
+                }.frame(height: 144)
             }
-            HStack(spacing: 9) {
-                Circle().fill(store.metadataReady ? warm : Color.orange).frame(width: 8, height: 8)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(store.name).fireSkyFont(size: 13, weight: .semibold)
+            HStack(spacing: 7) {
+                Circle().fill(store.metadataReady ? warm : Color.orange).frame(width: 7, height: 7)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(store.name).fireSkyFont(size: 12.5, weight: .semibold)
                     Text(String(format: "%.4f° N, %.4f° E", store.lat, store.lon))
-                        .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
+                        .fireSkyFont(size: 10.5, relativeTo: .caption).foregroundStyle(.secondary)
                 }
             }
             TextField(L10n.text("机位备注（可选，如：屋顶西南视角）", "Spot note (optional, e.g. rooftop SW view)"), text: $store.spotNote)
                 .textFieldStyle(.roundedBorder)
+                .controlSize(.small)
                 .font(.system(size: 11))
             Text(store.metadataReady
                  ? L10n.tf("位置已确认 · 海拔 %d m · %@", Int(store.elevation), store.timezone)
                  : L10n.t("位置待确认 · 展开「编辑坐标」获取海拔与时区"))
-                .fireSkyFont(size: 11, relativeTo: .caption)
+                .fireSkyFont(size: 10.5, relativeTo: .caption)
                 .foregroundStyle(store.metadataReady ? Color.secondary : Color.orange)
                 .lineLimit(2)
                 .fixedSize(horizontal: false, vertical: true)
@@ -625,7 +628,7 @@ struct WorkLocationView: View {
                 Spacer()
                 Button(L10n.t("大地图"), systemImage: "arrow.up.left.and.arrow.down.right") { store.showMapPicker = true }
             }.buttonStyle(.borderless).fireSkyFont(size: 11, relativeTo: .caption)
-        }.padding(13).workSurface()
+        }.padding(12).workSurface()
     }
     private func coordinate(_ title: String, _ value: Binding<Double>) -> some View {
         HStack {
@@ -640,29 +643,33 @@ struct WorkLocationView: View {
 struct WorkParametersView: View {
     @EnvironmentObject private var store: Store
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 7) {
             HStack {
-                Text(L10n.t("观测参数")).fireSkyFont(size: 13, weight: .semibold)
+                Text(L10n.t("观测参数")).fireSkyFont(size: 12.5, weight: .semibold)
                 Spacer()
                 Button(L10n.t("重置")) { store.chooseDate("今天"); store.phenomenon = "dusk" }
                     .buttonStyle(.borderless).fireSkyFont(size: 11, relativeTo: .caption)
             }
-            Text(L10n.t("目标日期")).fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
-            WorkSegments(options: ["今天", "明天", "自定义"],
-                         selection: Binding(get: { store.dateTab }, set: { store.chooseDate($0) }))
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L10n.t("目标日期")).fireSkyFont(size: 10.5, relativeTo: .caption).foregroundStyle(.secondary)
+                WorkSegments(options: ["今天", "明天", "自定义"],
+                             selection: Binding(get: { store.dateTab }, set: { store.chooseDate($0) }))
+            }
             if store.dateTab == "自定义" {
                 WorkDateButton()
             }
-            Text(L10n.t("观测现象")).fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
-            WorkSegments(options: ["dawn", "dusk"], titles: ["朝霞", "晚霞"],
-                         selection: $store.phenomenon, accented: true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(L10n.t("观测现象")).fireSkyFont(size: 10.5, relativeTo: .caption).foregroundStyle(.secondary)
+                WorkSegments(options: ["dawn", "dusk"], titles: ["朝霞", "晚霞"],
+                             selection: $store.phenomenon, accented: true)
+            }
             Button(L10n.t("编辑坐标"), systemImage: "slider.horizontal.3") {
                 store.editingCoordinates.toggle()
             }
             .buttonStyle(.borderless).fireSkyFont(size: 11, relativeTo: .caption)
-            .frame(maxWidth: .infinity).padding(.vertical, 4)
+            .frame(maxWidth: .infinity).padding(.vertical, 2)
             if store.editingCoordinates {
-                VStack(spacing: 8) {
+                VStack(spacing: 6) {
                     TextField(L10n.t("名称"), text: $store.name)
                     number(L10n.t("纬度"), $store.lat)
                     number(L10n.t("经度"), $store.lon)
@@ -673,9 +680,9 @@ struct WorkParametersView: View {
                         Text(store.timezone).monospaced().fireSkyFont(size: 12)
                     }
                     Text(L10n.t("时区按经纬度自动计算"))
-                        .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
+                        .fireSkyFont(size: 10.5, relativeTo: .caption).foregroundStyle(.secondary)
                     Button(L10n.t("获取海拔与时区")) { store.lookupMetadata() }
-                        .buttonStyle(.borderless).fireSkyFont(size: 12)
+                        .buttonStyle(.borderless).fireSkyFont(size: 11.5)
                     Toggle(L10n.t("已确认海拔与时区"), isOn: $store.metadataReady)
                         .fireSkyFont(size: 11, relativeTo: .caption)
                 }.textFieldStyle(.roundedBorder)
@@ -691,7 +698,7 @@ struct WorkParametersView: View {
                         .help(L10n.t("关闭"))
                 }
             }
-        }.padding(13).workSurface()
+        }.padding(12).workSurface()
     }
     private func number(_ title: String, _ value: Binding<Double>) -> some View {
         HStack {
@@ -820,31 +827,37 @@ struct WorkStaleResultBanner: View {
 struct WorkAnalysisTabs: View {
     @EnvironmentObject private var store: Store
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var tabIndicator
+
+    private var useGlass: Bool { !reduceTransparency && contrast != .increased }
+
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(["概览", "大气剖面", "诊断与时间窗", "逐时台账"], id: \.self) { tab in
+        HStack(spacing: 3) {
+            ForEach(["概览", "大气剖面", "逐时台账"], id: \.self) { tab in
                 let selected = store.resultTab == tab
                 Button {
                     withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) { store.resultTab = tab }
                 } label: {
                     Text(L10n.t(tab))
-                        .fireSkyFont(size: 12, weight: selected ? .semibold : .regular)
+                        .fireSkyFont(size: 11.5, weight: selected ? .semibold : .regular)
                         .foregroundStyle(selected ? Color.primary : Color.secondary)
-                        .padding(.horizontal, 13).padding(.vertical, 7)
+                        .padding(.horizontal, 13).padding(.vertical, 5.5)
                         .background {
                             if selected {
                                 Capsule()
-                                    .fill(scheme == .dark ? Color.white.opacity(0.11) : Color.white.opacity(0.95))
+                                    .fill(scheme == .dark ? Color.white.opacity(0.16) : Color.white.opacity(0.92))
+                                    .shadow(color: Color.black.opacity(scheme == .dark ? 0.25 : 0.08),
+                                            radius: 3, y: 1)
+                                    .overlay {
+                                        Capsule().strokeBorder(
+                                            scheme == .dark ? Color.white.opacity(0.18) : Color.black.opacity(0.06),
+                                            lineWidth: 0.5
+                                        )
+                                    }
                                     .matchedGeometryEffect(id: "active-tab-pill", in: tabIndicator)
-                            }
-                        }
-                        .overlay(alignment: .bottom) {
-                            if selected {
-                                Capsule().fill(warm).frame(width: 20, height: 2.5)
-                                    .offset(y: -2)
-                                    .matchedGeometryEffect(id: "active-tab-line", in: tabIndicator)
                             }
                         }
                         .contentShape(Capsule())
@@ -854,11 +867,26 @@ struct WorkAnalysisTabs: View {
             }
         }
         .padding(3)
-        .background(
-            Capsule().fill(scheme == .dark ? Color(0x16, 0x1E, 0x2E) : Color(0xEA, 0xF0, 0xF6))
-        )
+        .background {
+            if useGlass {
+                #if compiler(>=6.2)
+                if #available(macOS 26.0, *) {
+                    Color.clear.glassEffect(.regular, in: .capsule)
+                } else {
+                    Capsule().fill(.ultraThinMaterial)
+                }
+                #else
+                Capsule().fill(.ultraThinMaterial)
+                #endif
+            } else {
+                Capsule().fill(scheme == .dark ? Color(0x16, 0x1E, 0x2E) : Color(0xEA, 0xF0, 0xF6))
+            }
+        }
         .overlay {
-            Capsule().strokeBorder(FSDesign.surfaceBorder(role: .grouped, dark: scheme == .dark, emphasized: false), lineWidth: 1)
+            Capsule().strokeBorder(
+                scheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.06),
+                lineWidth: 0.5
+            )
         }
     }
 }
@@ -866,9 +894,9 @@ struct WorkAnalysisTabs: View {
 struct WorkAODValue: View {
     let summary: AODSummary
     var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(summary.source).font(.system(size: 9, weight: .medium)).foregroundStyle(coolAccent)
-            Text(summary.value).font(.system(size: 19, weight: .semibold)).monospacedDigit()
+        VStack(alignment: .leading, spacing: 2) {
+            Text(summary.source).font(.system(size: 9.5, weight: .medium)).foregroundStyle(coolAccent)
+            Text(summary.value).font(.system(size: 16, weight: .semibold)).monospacedDigit()
                 .foregroundStyle(summary.available ? Color.primary : Color.secondary)
                 .lineLimit(1).minimumScaleFactor(0.8)
         }.frame(maxWidth: .infinity, alignment: .leading).help(summary.detail)
@@ -951,7 +979,7 @@ struct WorkSegments: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
     var body: some View {
-        HStack(spacing: 3) {
+        HStack(spacing: 2) {
             ForEach(Array(options.enumerated()), id: \.element) { index, value in
                 let selected = selection == value
                 let label = titles?[index] ?? value
@@ -965,21 +993,25 @@ struct WorkSegments: View {
                         .multilineTextAlignment(.center)
                         .fixedSize(horizontal: false, vertical: true)
                         .frame(maxWidth: .infinity).padding(.vertical, 5)
-                        .frame(minHeight: 28)
+                        .frame(minHeight: 26)
                         .background {
-                            RoundedRectangle(cornerRadius: 6)
-                                .fill(selected
-                                      ? (accented ? warm.opacity(0.14)
-                                         : scheme == .dark ? Color.white.opacity(0.12) : Color.white.opacity(0.88))
-                                      : Color.clear)
+                            if selected {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .fill(accented
+                                          ? warm.opacity(scheme == .dark ? 0.20 : 0.14)
+                                          : scheme == .dark ? Color.white.opacity(0.16) : Color.white.opacity(0.94))
+                                    .shadow(color: Color.black.opacity(scheme == .dark ? 0.25 : 0.08),
+                                            radius: 2.5, y: 1)
+                            }
                         }
                         .overlay {
-                            RoundedRectangle(cornerRadius: 6)
-                                .strokeBorder(
-                                    selected ? warm.opacity(0.35)
-                                             : Color.secondary.opacity(contrast == .increased ? 0.45 : 0.16),
-                                    lineWidth: selected || contrast == .increased ? 1 : 0.5
-                                )
+                            if selected && (accented || contrast == .increased) {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .strokeBorder(
+                                        accented ? warm.opacity(0.32) : Color.primary.opacity(0.35),
+                                        lineWidth: 0.75
+                                    )
+                            }
                         }
                         .contentShape(Rectangle())
                 }.buttonStyle(.plain)
@@ -990,17 +1022,21 @@ struct WorkSegments: View {
                     .accessibilityAddTraits(selected ? .isSelected : [])
             }
         }.padding(3)
-            .background(Color.black.opacity(scheme == .dark ? 0.12 : 0.035), in: RoundedRectangle(cornerRadius: 8))
-            .overlay { RoundedRectangle(cornerRadius: 8).stroke(.secondary.opacity(0.15), lineWidth: 1) }
+            .background(Color.primary.opacity(scheme == .dark ? 0.075 : 0.05), in: RoundedRectangle(cornerRadius: 8))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(Color.primary.opacity(contrast == .increased ? 0.35 : 0.07),
+                                  lineWidth: contrast == .increased ? 1 : 0.5)
+            }
     }
 }
 
 extension View {
     func workSurface(emphasized: Bool = false) -> some View { modifier(WorkSurface(emphasized: emphasized)) }
     func workChip() -> some View {
-        padding(.horizontal, 8).padding(.vertical, 5)
-            .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 6))
-            .overlay { RoundedRectangle(cornerRadius: 6).stroke(.secondary.opacity(0.22), lineWidth: 1) }
+        padding(.horizontal, 6).padding(.vertical, 2)
+            .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 5))
+            .overlay { RoundedRectangle(cornerRadius: 5).stroke(.secondary.opacity(0.22), lineWidth: 1) }
     }
 }
 
