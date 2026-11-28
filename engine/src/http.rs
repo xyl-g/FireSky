@@ -230,15 +230,8 @@ async fn hello(State(app): State<App>) -> ApiResult {
 async fn health() -> Json<Value> {
     Json(json!({"status":"ok","engine":"firesky-rust","python_required":false}))
 }
-fn artifact_directory(app: &App, variable: &str, default: &str) -> PathBuf {
-    let path = std::env::var_os(variable)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(default));
-    if path.is_absolute() {
-        path
-    } else {
-        app.workspace.join(path)
-    }
+fn artifact_directory(app: &App, variable: &str, legacy: &str, visible: &str) -> PathBuf {
+    crate::paths::resolve(&app.workspace, variable, legacy, visible)
 }
 fn artifact_failure(error: String) -> ApiError {
     let status = if error.contains("not found")
@@ -264,7 +257,12 @@ async fn map_frame(
         .get("time")
         .cloned()
         .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "missing time".into()))?;
-    let directory = artifact_directory(&app, "FIRESKY_MAP_CACHE_DIR", ".cache/map-frames");
+    let directory = artifact_directory(
+        &app,
+        "FIRESKY_MAP_CACHE_DIR",
+        ".cache/map-frames",
+        "map-frames",
+    );
     let permit = app.slots.clone().try_acquire_owned().map_err(|_| {
         ApiError(
             StatusCode::TOO_MANY_REQUESTS,
@@ -284,7 +282,7 @@ async fn report_html(
     State(app): State<App>,
     Path(id): Path<String>,
 ) -> Result<Html<String>, ApiError> {
-    let directory = artifact_directory(&app, "FIRESKY_REPORT_DIR", "reports/web");
+    let directory = artifact_directory(&app, "FIRESKY_REPORT_DIR", "reports/web", "reports");
     let permit = app.slots.clone().try_acquire_owned().map_err(|_| {
         ApiError(
             StatusCode::TOO_MANY_REQUESTS,
@@ -1250,7 +1248,8 @@ mod tests {
             .map(|v| format!("{v:02x}"))
             .collect::<String>()
             + ".html";
-        let folder = dir.path().join("reports/web/native-html");
+        // Fresh workspace uses Visible layout (reports/native-html).
+        let folder = dir.path().join("reports/native-html");
         std::fs::create_dir_all(&folder).unwrap();
         std::fs::write(folder.join(&id), html).unwrap();
         let response = app
@@ -1269,6 +1268,28 @@ mod tests {
             .unwrap()
             .starts_with("text/html"));
         assert_eq!(to_bytes(response.into_body(), 4096).await.unwrap(), html);
+        // Legacy workspace (.cache present) resolves to reports/web/native-html.
+        let legacy_dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(legacy_dir.path().join(".cache")).unwrap();
+        let legacy_folder = legacy_dir.path().join("reports/web/native-html");
+        std::fs::create_dir_all(&legacy_folder).unwrap();
+        std::fs::write(legacy_folder.join(&id), html).unwrap();
+        let legacy_runtime = Arc::new(Runtime::new(legacy_dir.path()).unwrap());
+        let legacy_app = router(legacy_dir.path(), legacy_runtime);
+        let legacy_response = legacy_app
+            .oneshot(
+                Request::builder()
+                    .uri(format!("{PREFIX}/reports/{id}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(legacy_response.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(legacy_response.into_body(), 4096).await.unwrap(),
+            html
+        );
         for uri in [
             format!("{PREFIX}/map-frames"),
             format!("{PREFIX}/map-frames?token=../../bad&time=2026-11-11T09:00:00Z"),

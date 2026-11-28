@@ -398,11 +398,29 @@ fn current_cache(
         lats,
         lons: &part_lons,
     });
-    // Wrapped groups share the physical +/-180 boundary column. Collect the
-    // sibling part's newest cached tile per valid time so the seam bridge can
-    // use it; interior coverage still has to come from this part itself.
-    let siblings_by_time =
-        sibling_tiles_for_source(root, area, targets, coverage.is_some(), source)?;
+    // Wrapped groups share the physical +/-180 boundary column. Derive the
+    // wrapped sibling rectangles from model_bbox and collect each sibling's
+    // newest cached tile per valid time so the seam bridge can use it.
+    let sibling_areas = model_bbox
+        .map(|bbox| {
+            let round = |v: f64| (v * 1000.0).round_ties_even() / 1000.0;
+            let padded = [
+                round((bbox[2] + 0.6).min(90.0)),
+                round(bbox[0] - 0.6),
+                round((bbox[3] - 0.6).max(-90.0)),
+                round(bbox[1] + 0.6),
+            ];
+            split_areas(padded).unwrap_or_default()
+        })
+        .unwrap_or_default();
+    let siblings_by_time = sibling_tiles_for_source(
+        root,
+        area,
+        &sibling_areas,
+        targets,
+        coverage.is_some(),
+        source,
+    )?;
     let selected = if exact {
         let mut hits = BTreeMap::new();
         for &target in targets {
@@ -458,6 +476,7 @@ fn current_cache(
 pub(crate) fn sibling_tiles_for_source(
     root: &Path,
     area: &Area,
+    sibling_areas: &[[f64; 4]],
     targets: &[DateTime<Utc>],
     active: bool,
     source: cams_cache::AerosolSource,
@@ -466,8 +485,13 @@ pub(crate) fn sibling_tiles_for_source(
     if !active {
         return Ok(result);
     }
-    let rectangles = split_areas(area.bounds)?;
-    if rectangles.len() < 2 {
+    let sibling_keys: Vec<String> = sibling_areas
+        .iter()
+        .filter(|rect| **rect != area.bounds)
+        .filter_map(|rect| cams_cache::area_key(*rect).ok())
+        .filter(|key| key != &area.key)
+        .collect();
+    if sibling_keys.is_empty() {
         return Ok(result);
     }
     let required: BTreeSet<_> = targets.iter().copied().collect();
@@ -484,16 +508,14 @@ pub(crate) fn sibling_tiles_for_source(
         if name.ends_with(&format!("-{}.{ext}", area.key)) {
             continue;
         }
-        let sibling = rectangles.iter().any(|rect| {
-            *rect != area.bounds
-                && cams_cache::area_key(*rect)
-                    .is_ok_and(|key| name.ends_with(&format!("-{key}.{ext}")))
-        });
-        if !sibling {
+        let Some(matched_key) = sibling_keys
+            .iter()
+            .find(|key| name.ends_with(&format!("-{key}.{ext}")))
+        else {
             continue;
-        }
+        };
         let entry = newest
-            .entry((selection.valid_time, name))
+            .entry((selection.valid_time, matched_key.clone()))
             .or_insert((selection.run_time_utc, path.clone()));
         if selection.run_time_utc > entry.0 {
             *entry = (selection.run_time_utc, path);
@@ -1307,5 +1329,37 @@ mod tests {
             split_areas([20.0, 180.0, -20.0, -170.0]).unwrap(),
             vec![[20.0, -180.0, -20.0, -170.0]]
         );
+    }
+
+    #[test]
+    fn sibling_tiles_for_source_finds_newest_split_sibling_tile() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let wrapped = [70.0, 170.0, 10.0, -170.0];
+        let parts = split_areas(wrapped).unwrap();
+        assert_eq!(parts.len(), 2);
+        let west = Area::from_bounds(parts[0]);
+        let east_key = cams_cache::area_key(parts[1]).unwrap();
+        let target = Utc.with_ymd_and_hms(2026, 11, 26, 12, 0, 0).unwrap();
+        let older = root
+            .join("2026-11-26/00Z")
+            .join(format!("geosfp-optics-v1-2026-11-26-0000-012-{east_key}.fsopt"));
+        let newer = root
+            .join("2026-11-26/06Z")
+            .join(format!("geosfp-optics-v1-2026-11-26-0600-006-{east_key}.fsopt"));
+        fs::create_dir_all(older.parent().unwrap()).unwrap();
+        fs::create_dir_all(newer.parent().unwrap()).unwrap();
+        fs::write(&older, b"old").unwrap();
+        fs::write(&newer, b"new").unwrap();
+        let siblings = sibling_tiles_for_source(
+            root,
+            &west,
+            &parts,
+            &[target],
+            true,
+            cams_cache::AerosolSource::GeosFp,
+        )
+        .unwrap();
+        assert_eq!(siblings.get(&target), Some(&vec![newer]));
     }
 }
