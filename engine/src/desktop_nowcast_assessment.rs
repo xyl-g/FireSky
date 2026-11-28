@@ -577,7 +577,7 @@ fn condensate_presence_opt(feature: &Feature<'_>) -> Option<f64> {
     if total <= 0.0 {
         return Some(0.0);
     }
-    Some(clamp((total.log10() + 8.0) / 3.0))
+    Some(crate::native::condensate_component(total))
 }
 
 // ---------------------------------------------------------------------------

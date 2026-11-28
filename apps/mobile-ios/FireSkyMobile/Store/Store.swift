@@ -280,6 +280,14 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
             if result == nil { resultParams = nil }
             resultVersion += 1
             pointSelectedTime = nil
+            frozenProfileTask?.cancel()
+            frozenProfileTask = nil
+            frozenProfile = nil
+            frozenProfileModel = ""
+            frozenProfileTime = ""
+            frozenProfileState = "idle"
+            frozenProfileError = ""
+            nowcastProfileStep = ""
         }
     }
     @Published var pointSelectedTime: String?
@@ -292,6 +300,14 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     @Published var locationTab = "地图"
     @Published var dateTab = "今天"
     @Published var resultTab = "概览"
+    @Published var showPointDiagnostics = false
+    @Published var showNowcastDiagnostics = false
+    @Published var frozenProfile: JSONObject?
+    @Published var frozenProfileModel = ""
+    @Published var frozenProfileTime = ""
+    @Published var frozenProfileState = "idle"
+    @Published var frozenProfileError = ""
+    @Published var nowcastProfileStep = ""
     @Published var editingCoordinates = false
     @Published var showMapPicker = false
     @Published var showDatePicker = false
@@ -463,6 +479,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     var downloadProbeTask: Task<Void, Never>?
     var terrainTask: Task<Void, Never>?
     var terrainDownloadTask: Task<Void, Never>?
+    var frozenProfileTask: Task<Void, Never>?
     var locationTimeout: Task<Void, Never>?
     var generation = UUID()
     var metadataGeneration = UUID()
@@ -470,6 +487,24 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     var requestPayload: JSONObject = [:]
     var didCheckStartupCredentials = false
     var connecting = false
+
+    static func launchArgument(_ flag: String, in args: [String] = ProcessInfo.processInfo.arguments) -> String? {
+        guard let idx = args.firstIndex(of: flag), args.indices.contains(idx + 1) else { return nil }
+        return args[idx + 1]
+    }
+
+    var hasUITestAuditFlags: Bool {
+        guard isUITestMockMode else { return false }
+        let args = ProcessInfo.processInfo.arguments
+        return args.contains("-UITestMode") || args.contains("-UITestTab")
+            || args.contains("-UITestDiagnostics") || args.contains("-UITestPage")
+    }
+
+    var hasUITestResultSeedFlags: Bool {
+        guard isUITestMockMode else { return false }
+        let args = ProcessInfo.processInfo.arguments
+        return args.contains("-UITestMode") || args.contains("-UITestTab") || args.contains("-UITestDiagnostics")
+    }
 
     override init() {
         let defaults = UserDefaults.standard
@@ -499,6 +534,63 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         favorites = defaults.array(forKey: "favorites") as? [JSONObject] ?? []
         location.delegate = self
         location.desiredAccuracy = kCLLocationAccuracyHundredMeters
+
+        if isUITestMockMode {
+            applyUITestLaunchConfiguration(args: args)
+        }
+    }
+
+    private func applyUITestLaunchConfiguration(args: [String]) {
+        if let theme = Self.launchArgument("-UITestTheme", in: args)?.lowercased(),
+           ["light", "dark", "system"].contains(theme) {
+            appearance = theme
+        }
+        if let pageArg = Self.launchArgument("-UITestPage", in: args)?.lowercased() {
+            switch pageArg {
+            case "workbench", "point": page = .point
+            case "data": page = .data
+            case "history": page = .history
+            case "settings": page = .settings
+            default: break
+            }
+        }
+        if let modeArg = Self.launchArgument("-UITestMode", in: args)?.lowercased(),
+           ["point", "regional", "nowcast"].contains(modeArg) {
+            workbenchMode = modeArg
+        }
+        if let tabArg = Self.launchArgument("-UITestTab", in: args), !tabArg.isEmpty {
+            resultTab = tabArg
+            nowcastResultTab = tabArg
+        }
+        if hasUITestAuditFlags {
+            didCheckStartupCredentials = true
+            showCAMSReminder = false
+        }
+        if hasUITestResultSeedFlags {
+            seedUITestMockResults(args: args)
+        }
+    }
+
+    private func seedUITestMockResults(args: [String]) {
+        let pointParams = payload(for: .point)
+        let regionalParams = payload(for: .regional)
+        let nowcastParams = payload(for: .nowcast)
+        resultsByMode[.point] = (MockTransport.mockForecast, pointParams)
+        resultsByMode[.regional] = (MockTransport.mockRegionalForecast, regionalParams)
+        resultsByMode[.nowcast] = (MockTransport.mockNowcastForecast, nowcastParams)
+
+        let mode = activeWorkbenchMode
+        if let entry = resultsByMode[mode] {
+            adoptResult(entry.result, kind: mode, params: entry.params)
+        }
+        if let diagArg = Self.launchArgument("-UITestDiagnostics", in: args)?.lowercased(),
+           diagArg == "1" || diagArg == "true" {
+            if mode == .nowcast {
+                showNowcastDiagnostics = true
+            } else if mode == .point {
+                showPointDiagnostics = true
+            }
+        }
     }
 
     func setElevationSource(_ value: String) {
@@ -678,6 +770,7 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         publicationTask?.cancel()
         terrainTask?.cancel()
         terrainDownloadTask?.cancel()
+        frozenProfileTask?.cancel()
         engine.stop()
     }
 }

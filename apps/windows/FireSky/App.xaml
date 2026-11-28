@@ -13,8 +13,24 @@
                     <Color x:Key="FireSkyAccentColor">#D25A36</Color>
                     <Color x:Key="FireSkyAccentHoverColor">#B84B2E</Color>
                     <Color x:Key="FireSkyCoolAccentColor">#4F76B8</Color>
+                    <Color x:Key="SystemAccentColor">#D25A36</Color>
+                    <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#C95331"/>
+                    <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#B84B2E"/>
+                    <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#9B401F"/>
+                    <SolidColorBrush x:Key="AccentButtonBackground" Color="#C95331"/>
+                    <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="#B84B2E"/>
+                    <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="#9B401F"/>
+                    <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="#B84B2E"/>
+                    <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="#9B401F"/>
+                    <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="#D25A36"/>
+                    <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="#C95331"/>
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillChecked" Color="#C95331"/>
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPointerOver" Color="#B84B2E"/>
+                    <SolidColorBrush x:Key="ToggleSwitchFillOn" Color="#C95331"/>
+                    <SolidColorBrush x:Key="ToggleSwitchFillOnPointerOver" Color="#B84B2E"/>
                     <SolidColorBrush x:Key="FireSkyAccentBrush" Color="#D25A36"/>
                     <SolidColorBrush x:Key="FireSkyAccentHoverBrush" Color="#B84B2E"/>
+                    <SolidColorBrush x:Key="FireSkyAccentButtonForegroundBrush" Color="#FFFFFF"/>
                     <SolidColorBrush x:Key="FireSkyCoolAccentBrush" Color="#4F76B8"/>
                     <SolidColorBrush x:Key="FireSkyAccentTintBrush" Color="#1AD25A36"/>
                     <SolidColorBrush x:Key="FireSkyCoolTintBrush" Color="#1A4F76B8"/>
@@ -39,19 +55,36 @@
                         <GradientStop Color="#B84B2E" Offset="0.0"/>
                         <GradientStop Color="#9B401F" Offset="1.0"/>
                     </LinearGradientBrush>
-                    <SolidColorBrush x:Key="FireSkyCardBrush" Color="#FCFDFF"/>
-                    <SolidColorBrush x:Key="FireSkyGroupedCardBrush" Color="#F3F6FA"/>
-                    <SolidColorBrush x:Key="FireSkyNavSurfaceBrush" Color="#F5F7FA"/>
-                    <SolidColorBrush x:Key="FireSkyCardBorderBrush" Color="#D9C9D5E1"/>
-                    <SolidColorBrush x:Key="FireSkyGroupedBorderBrush" Color="#D9D8E1EA"/>
-                    <SolidColorBrush x:Key="FireSkyPillTrackBrush" Color="#EAF0F6"/>
+                    <SolidColorBrush x:Key="FireSkyCardBrush" Color="#EBFFFFFF"/>
+                    <SolidColorBrush x:Key="FireSkyGroupedCardBrush" Color="#E0F3F6FA"/>
+                    <SolidColorBrush x:Key="FireSkyNavSurfaceBrush" Color="#E8F5F7FA"/>
+                    <SolidColorBrush x:Key="FireSkyNavPaneBrush" Color="#E6F4F5F7"/>
+                    <SolidColorBrush x:Key="FireSkyCardBorderBrush" Color="#CCCDD8E4"/>
+                    <SolidColorBrush x:Key="FireSkyGroupedBorderBrush" Color="#CCCFE0ED"/>
+                    <SolidColorBrush x:Key="FireSkyPillTrackBrush" Color="#DDE6EEF6"/>
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
                     <Color x:Key="FireSkyAccentColor">#FF9B6A</Color>
                     <Color x:Key="FireSkyAccentHoverColor">#FFC273</Color>
                     <Color x:Key="FireSkyCoolAccentColor">#8EB7FF</Color>
+                    <Color x:Key="SystemAccentColor">#FF9B6A</Color>
+                    <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#C95331"/>
+                    <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#D25A36"/>
+                    <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#B84B2E"/>
+                    <SolidColorBrush x:Key="AccentButtonBackground" Color="#C95331"/>
+                    <SolidColorBrush x:Key="AccentButtonBackgroundPointerOver" Color="#D25A36"/>
+                    <SolidColorBrush x:Key="AccentButtonBackgroundPressed" Color="#B84B2E"/>
+                    <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="#FF9B6A"/>
+                    <SolidColorBrush x:Key="AccentTextFillColorSecondaryBrush" Color="#FFC273"/>
+                    <SolidColorBrush x:Key="AccentTextFillColorTertiaryBrush" Color="#FF9B6A"/>
+                    <SolidColorBrush x:Key="NavigationViewSelectionIndicatorForeground" Color="#FF9B6A"/>
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillChecked" Color="#C95331"/>
+                    <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPointerOver" Color="#D25A36"/>
+                    <SolidColorBrush x:Key="ToggleSwitchFillOn" Color="#C95331"/>
+                    <SolidColorBrush x:Key="ToggleSwitchFillOnPointerOver" Color="#D25A36"/>
                     <SolidColorBrush x:Key="FireSkyAccentBrush" Color="#FF9B6A"/>
                     <SolidColorBrush x:Key="FireSkyAccentHoverBrush" Color="#FFC273"/>
+                    <SolidColorBrush x:Key="FireSkyAccentButtonForegroundBrush" Color="#241810"/>
                     <SolidColorBrush x:Key="FireSkyCoolAccentBrush" Color="#8EB7FF"/>
                     <SolidColorBrush x:Key="FireSkyAccentTintBrush" Color="#26FF9B6A"/>
                     <SolidColorBrush x:Key="FireSkyCoolTintBrush" Color="#268EB7FF"/>
@@ -76,12 +109,13 @@
                         <GradientStop Color="#FF9B6A" Offset="0.0"/>
                         <GradientStop Color="#FFC273" Offset="1.0"/>
                     </LinearGradientBrush>
-                    <SolidColorBrush x:Key="FireSkyCardBrush" Color="#182132"/>
-                    <SolidColorBrush x:Key="FireSkyGroupedCardBrush" Color="#202A3D"/>
-                    <SolidColorBrush x:Key="FireSkyNavSurfaceBrush" Color="#111826"/>
-                    <SolidColorBrush x:Key="FireSkyCardBorderBrush" Color="#8C4B5D78"/>
-                    <SolidColorBrush x:Key="FireSkyGroupedBorderBrush" Color="#7350617B"/>
-                    <SolidColorBrush x:Key="FireSkyPillTrackBrush" Color="#161E2E"/>
+                    <SolidColorBrush x:Key="FireSkyCardBrush" Color="#DC182132"/>
+                    <SolidColorBrush x:Key="FireSkyGroupedCardBrush" Color="#CC202A3D"/>
+                    <SolidColorBrush x:Key="FireSkyNavSurfaceBrush" Color="#E0111826"/>
+                    <SolidColorBrush x:Key="FireSkyNavPaneBrush" Color="#E6101724"/>
+                    <SolidColorBrush x:Key="FireSkyCardBorderBrush" Color="#7A4B5D78"/>
+                    <SolidColorBrush x:Key="FireSkyGroupedBorderBrush" Color="#6650617B"/>
+                    <SolidColorBrush x:Key="FireSkyPillTrackBrush" Color="#B8121928"/>
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
             <Color x:Key="SystemAccentColor">#D25A36</Color>

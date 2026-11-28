@@ -301,4 +301,34 @@ class WorkbenchParityTest {
         assertFalse(isBestTimeWithinFourHours(null, nowMillis = anchor))
         assertFalse(isBestTimeWithinFourHours("not-a-timestamp", nowMillis = anchor))
     }
+
+    @Test
+    fun isStepValidChecksValidFlagAndSelectedRegime() {
+        assertTrue(isStepValid(JSONObject().put("valid", true).put("selected_regime", "burnable_cloud_field")))
+        assertTrue(isStepValid(JSONObject().put("selected_regime", "high-canvas")))
+        assertFalse(isStepValid(JSONObject().put("valid", false).put("selected_regime", "burnable_cloud_field")))
+        assertFalse(isStepValid(JSONObject().put("valid", true).put("selected_regime", "invalid")))
+        assertFalse(isStepValid(JSONObject().put("selected_regime", "invalid")))
+    }
+
+    @Test
+    fun defaultRegionalPresetIsChinaWithFullBounds() {
+        val state = WorkbenchState()
+        assertEquals("china", state.selectedRegionCode)
+        assertEquals("gfs", state.regionalModel)
+        assertEquals(listOf(73.0, 18.0, 136.0, 54.0), state.selectedRegionPreset.bounds)
+    }
+
+    @Test
+    fun historyFiltersMatchIOSAndAllKeepsEveryRecord() {
+        val items = listOf(
+            TaskHistoryItem("a".repeat(64), "network_probe", "done", "2026-11-20T12:00:00Z", false, null, null, false),
+            TaskHistoryItem("b".repeat(64), "forecast", "done", "2026-11-20T11:00:00Z", false, null, null, true),
+            TaskHistoryItem("c".repeat(64), "data_sync", "done", "2026-11-20T10:00:00Z", false, null, null, false),
+        )
+
+        assertEquals(items, filterTaskHistory(items, TaskHistoryFilter.ALL))
+        assertEquals(items.take(2), filterTaskHistory(items, TaskHistoryFilter.ACTIVE))
+        assertEquals(listOf(items.last()), filterTaskHistory(items, TaskHistoryFilter.SYNC))
+    }
 }

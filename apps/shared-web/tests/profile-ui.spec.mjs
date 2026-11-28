@@ -15,6 +15,8 @@ async function fixture(page, satellite) {
         cloud_fraction_percent: [[0, null], [40, 70], [20, 90]],
         temperature_c: [[10, -20], [8, -22], [6, -24]], rh_percent: [[60, 80], [70, 90], [80, 90]],
         cloud_layer_status: [[0, 0], [2, 3], [0, 3]],
+        cloud_path_transmission: [[null, null], [0.9, 0.6], [0.7, 0.99]],
+        cloud_sunlit_fraction: [[null, null], [0.5, 1], [1, 0.25]],
       },
       theoretical_targets: [{
         distance_km: 20, pressure_family_label: "中云", cloud_phase: { label: "mixed" },
@@ -90,6 +92,9 @@ test("model profiles preserve matrix values and fit narrow and wide workspaces i
   await expect(chart.locator(".profile-cell.missing")).toHaveCount(1);
   await expect(chart.locator(".profile-cell").first()).toHaveAccessibleName(/模式云量 0%/);
   await expect(page.locator(".profile .targets")).toContainText("中云 · 混合相 · 20 km");
+  await expect(chart.locator(".attenuation-hatch")).toHaveCount(4);
+  await expect(chart.locator(".profile-cell").nth(3)).toHaveAccessibleName(/T_c 60%/);
+  await expect(page.locator(".profile footer")).toContainText("路径透射 T_c");
   await page.getByRole("group", { name: "结果模式", exact: true }).getByRole("button", { name: "EC", exact: true }).click();
   await expect(page.getByText("暂无可用模式剖面采样", { exact: true })).toBeVisible();
   await page.getByRole("group", { name: "结果模式", exact: true }).getByRole("button", { name: "GFS", exact: true }).click();

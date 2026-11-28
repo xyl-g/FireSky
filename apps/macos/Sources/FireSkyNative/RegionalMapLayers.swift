@@ -159,6 +159,27 @@ struct RegionalMapLayers: @unchecked Sendable {
         )
     }
 
+    /// Return an exact Web-Mercator `MKMapRect` enclosing all non-wrapping areas,
+    /// avoiding MapKit's aspect-ratio distortion when fitting wide countries such as China.
+    static func fitMapRect(areas: [[Double]]) -> MKMapRect? {
+        let bounds = areas.compactMap(GridBounds.init)
+        guard !bounds.isEmpty, bounds.allSatisfy({ $0.east >= $0.west }) else { return nil }
+        let west = max(-180.0, bounds.map(\.west).min()!)
+        let east = min(180.0, bounds.map(\.east).max()!)
+        let south = max(-85.0, bounds.map(\.south).min()!)
+        let north = min(85.0, bounds.map(\.north).max()!)
+        guard east > west, north > south else { return nil }
+        let topLeft = MKMapPoint(CLLocationCoordinate2D(latitude: north, longitude: west))
+        let bottomRight = MKMapPoint(CLLocationCoordinate2D(latitude: south, longitude: east))
+        let rect = MKMapRect(
+            x: min(topLeft.x, bottomRight.x),
+            y: min(topLeft.y, bottomRight.y),
+            width: max(1, abs(bottomRight.x - topLeft.x)),
+            height: max(1, abs(bottomRight.y - topLeft.y))
+        )
+        return rect.isEmpty ? nil : rect
+    }
+
     /// Build a Web-Mercator-aligned bilinearly smoothed heatmap CGImage off the main thread.
     /// Missing cells stay strictly transparent (never fabricated as 0) and antimeridian wraps fall back to polygons.
     private static func buildSmoothOverlay(cells: [RegionalCell]) throws -> RegionalSmoothOverlay? {

@@ -600,7 +600,7 @@ pub fn dispatch(method: &str, params: Value) -> Result<Value, String> {
                         "pressure_levels": derived.levels,
                         "column_fields": derivation::COLUMN_FIELDS,
                         "profile_fields": derivation::PROFILE_FIELDS,
-                        "cloud_backend": "rust-f32-v3",
+                        "cloud_backend": "rust-f32-v4",
                     }),
                 )?;
                 writer.f32(
@@ -687,8 +687,8 @@ pub fn dispatch(method: &str, params: Value) -> Result<Value, String> {
                 metadata["column_fields"] = json!(derivation::COLUMN_FIELDS);
                 metadata["profile_fields"] = json!(derivation::PROFILE_FIELDS);
                 metadata["spacing_degrees"] = json!(spacing);
-                metadata["cloud_proxy"] = json!("ec-basic-tcc-rh-v1");
-                metadata["cloud_backend"] = json!("rust-f32-v3");
+                metadata["cloud_proxy"] = json!("ec-basic-tcc-rh-v2");
+                metadata["cloud_backend"] = json!("rust-f32-v4");
                 let cells = grid.latitudes.len() as u64;
                 let mut writer = BundleWriter::create(
                     Path::new(&params.output_dir),

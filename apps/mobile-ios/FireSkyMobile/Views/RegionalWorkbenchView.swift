@@ -219,15 +219,31 @@ struct RegionalWorkbenchView: View {
             }
 
             if model.cells.isEmpty {
-                VStack(spacing: 8) {
-                    Image(systemName: "map").font(.title2).foregroundStyle(.secondary)
-                    Text(model.available
-                         ? L10n.text("该区域暂无可绘制格点", "No grid cells available")
-                         : L10n.text("运行区域预测后，这里将渲染 0.25° 墨卡托热力分布图。", "Run a regional forecast to render the Mercator heatmap."))
-                        .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                RegionalMercatorHeatmap(
+                    cells: [],
+                    cities: [],
+                    bounds: store.selectedRegionBounds,
+                    selected: nil,
+                    onTapCoordinate: { _, _ in }
+                )
+                .frame(height: sizeClass == .regular ? 320 : 230)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+                .overlay {
+                    VStack(spacing: 8) {
+                        Image(systemName: "map").font(.title2).foregroundStyle(.secondary)
+                        Text(model.available
+                             ? L10n.text("该区域暂无可绘制格点", "No grid cells available")
+                             : L10n.text("运行区域预测后，这里将渲染 0.25° 墨卡托热力分布图。", "Run a regional forecast to render the Mercator heatmap."))
+                            .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+                    }
+                    .padding(14)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .padding(.horizontal, 16)
                 }
-                .frame(maxWidth: .infinity, minHeight: 200)
-                .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(Color.secondary.opacity(0.22), lineWidth: 1)
+                }
             } else {
                 RegionalMercatorHeatmap(
                     cells: model.cells,
@@ -408,13 +424,22 @@ private struct RegionalMercatorHeatmap: View {
         let stepLon: Double
         let stepLat: Double
 
+        let west: Double
+        let south: Double
+        let east: Double
+        let north: Double
+
         init(cells: [RegionalCell], bounds: [Double]?) {
             let lats = cells.map(\.coordinate.lat)
             let lons = cells.map(\.coordinate.lon)
-            let west = bounds?[0] ?? lons.min() ?? 73.0
-            let south = bounds?[1] ?? lats.min() ?? 18.0
-            let east = bounds?[2] ?? lons.max() ?? 135.0
-            let north = bounds?[3] ?? lats.max() ?? 54.0
+            let w = bounds?[0] ?? lons.min() ?? 73.0
+            let s = bounds?[1] ?? lats.min() ?? 18.0
+            let e = bounds?[2] ?? lons.max() ?? 136.0
+            let n = bounds?[3] ?? lats.max() ?? 54.0
+            self.west = w
+            self.south = s
+            self.east = e
+            self.north = n
 
             let sortedLons = Array(Set(lons)).sorted()
             let sortedLats = Array(Set(lats)).sorted()
@@ -423,10 +448,10 @@ private struct RegionalMercatorHeatmap: View {
             self.stepLon = min(5.0, max(0.25, dLon))
             self.stepLat = min(5.0, max(0.25, dLat))
 
-            self.minX = Self.mercX(west - stepLon * 0.5)
-            self.maxX = Self.mercX(east + stepLon * 0.5)
-            self.minY = Self.mercY(south - stepLat * 0.5)
-            self.maxY = Self.mercY(north + stepLat * 0.5)
+            self.minX = Self.mercX(w - stepLon * 0.5)
+            self.maxX = Self.mercX(e + stepLon * 0.5)
+            self.minY = Self.mercY(s - stepLat * 0.5)
+            self.maxY = Self.mercY(n + stepLat * 0.5)
         }
 
         static func mercX(_ lon: Double) -> Double {
@@ -490,19 +515,31 @@ private struct RegionalMercatorHeatmap: View {
                 context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(bg))
 
                 // 经纬参考线
-                for lon in stride(from: 80.0, through: 130.0, by: 10.0) {
-                    let pt = viewport.point(for: GridCoordinate(lat: 35, lon: lon)!, in: size)
-                    var path = Path()
-                    path.move(to: CGPoint(x: pt.x, y: 0))
-                    path.addLine(to: CGPoint(x: pt.x, y: size.height))
-                    context.stroke(path, with: .color(Color.secondary.opacity(0.14)), lineWidth: 0.6)
+                let startLon = ceil(viewport.west / 10.0) * 10.0
+                let endLon = floor(viewport.east / 10.0) * 10.0
+                if startLon <= endLon {
+                    for lon in stride(from: startLon, through: endLon, by: 10.0) {
+                        if let coord = GridCoordinate(lat: (viewport.south + viewport.north) * 0.5, lon: lon) {
+                            let pt = viewport.point(for: coord, in: size)
+                            var path = Path()
+                            path.move(to: CGPoint(x: pt.x, y: 0))
+                            path.addLine(to: CGPoint(x: pt.x, y: size.height))
+                            context.stroke(path, with: .color(Color.secondary.opacity(0.14)), lineWidth: 0.6)
+                        }
+                    }
                 }
-                for lat in stride(from: 20.0, through: 50.0, by: 10.0) {
-                    let pt = viewport.point(for: GridCoordinate(lat: lat, lon: 105)!, in: size)
-                    var path = Path()
-                    path.move(to: CGPoint(x: 0, y: pt.y))
-                    path.addLine(to: CGPoint(x: size.width, y: pt.y))
-                    context.stroke(path, with: .color(Color.secondary.opacity(0.14)), lineWidth: 0.6)
+                let startLat = ceil(viewport.south / 10.0) * 10.0
+                let endLat = floor(viewport.north / 10.0) * 10.0
+                if startLat <= endLat {
+                    for lat in stride(from: startLat, through: endLat, by: 10.0) {
+                        if let coord = GridCoordinate(lat: lat, lon: (viewport.west + viewport.east) * 0.5) {
+                            let pt = viewport.point(for: coord, in: size)
+                            var path = Path()
+                            path.move(to: CGPoint(x: 0, y: pt.y))
+                            path.addLine(to: CGPoint(x: size.width, y: pt.y))
+                            context.stroke(path, with: .color(Color.secondary.opacity(0.14)), lineWidth: 0.6)
+                        }
+                    }
                 }
 
                 // 格点热力块

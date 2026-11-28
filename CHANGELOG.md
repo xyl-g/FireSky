@@ -8,6 +8,20 @@ English: product releases follow SemVer. Since v1.0.0 the product version
 matches the Rust engine crate version (`engine/Cargo.toml`); the legacy
 Python stack (`src/firesky/version.py`) was retired on 2026-11-13.
 
+## v2.2.0 (2026-11-28)
+
+以 macOS 与 iOS 分别作为桌面和移动 UI 基准，完成 Windows/Android 原生界面对齐；刷新单点、区域、实况、历史、数据和设置工作流，并补充大气剖面云层路径诊断显示。
+Aligns the native Windows UI with macOS and Android with iOS; refreshes point, regional, nowcast, history, data and settings workflows, and exposes additional cloud-path diagnostics in atmospheric profiles.
+
+- **Windows 与 Android 跨端 UI 对齐**：统一信息层级、状态含义、主要操作顺序与深浅主题；Windows 保留 WinUI 键盘/桌面习惯，Android 保留 Compose 触控导航，并覆盖窄布局与大字可用性。
+  **Windows and Android UI alignment**: harmonizes information hierarchy, status meaning, primary action order and light/dark themes while keeping WinUI desktop conventions and Compose touch navigation, including narrow layouts and large-text usability.
+- **macOS 与 iOS 工作台和结果视图整理**：优化单点、区域、卫星实况、任务历史、数据管理、设置及预检/错误状态的可读性与操作路径，保留 GFS/EC 独立结果、缺测和失败语义。
+  **macOS and iOS workbench/results refinement**: improves point, regional, satellite-nowcast, task-history, data-management, settings and preflight/error workflows while preserving independent GFS/EC results and explicit missing/failure states.
+- **共享大气剖面诊断补充**：[cross_section.rs](engine/src/cross_section.rs) 输出逐层日照比例和沿太阳方向的云路径透过率；[ecmwf_point.rs](engine/src/ecmwf_point.rs) 补充可供统一界面展示的云层几何字段。
+  **Shared atmospheric-profile diagnostics**: [cross_section.rs](engine/src/cross_section.rs) now returns per-layer sunlit fractions and solar-direction cloud-path transmission; [ecmwf_point.rs](engine/src/ecmwf_point.rs) adds cloud geometry fields for consistent UI presentation.
+- **Android 异步恢复竞态修复**：恢复旧任务期间若用户主动切换模式，延迟到达的恢复结果不再覆盖用户选择。
+  **Android async-restore race fix**: a late task restore no longer overrides a mode selected by the user while restoration is in flight.
+
 ## v2.1.1 (2026-11-27)
 
 修复区域预测（GEOS-FP）预检与准备时间窗不一致、准备阶段旧周期未升级/丢失发布核验问题，并配置 **GitHub Actions Android 正式发布固定签名**（消除后续升级签名冲突）。

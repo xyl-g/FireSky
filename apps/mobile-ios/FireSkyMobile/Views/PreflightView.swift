@@ -4,6 +4,7 @@ import SwiftUI
 struct PreflightView: View {
     @EnvironmentObject private var store: Store
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.dynamicTypeSize) private var typeSize
     private var actions: PreparationActions {
         PreparationActions(ready: store.ready, busy: store.busy, hasSession: store.session != nil)
     }
@@ -16,123 +17,218 @@ struct PreflightView: View {
         return updates.isEmpty ? L10n.t("数据已齐，可开始预测") : L10n.tf("数据已齐，可更新 %@", updates)
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(L10n.t("预测准备")).font(.title2.weight(.semibold))
-                    Text(store.requestKind == .regional ? store.regionalTitle : store.name)
-                        .font(.callout).foregroundStyle(.secondary)
+        Group {
+            if typeSize.isAccessibilitySize {
+                ScrollView {
+                    pageContent
                 }
-                Spacer()
-                Button { store.refreshCheck() } label: {
-                    Image(systemName: "arrow.clockwise").frame(minWidth: 36, minHeight: 36)
-                }
-                .disabled(store.busy)
-                .accessibilityLabel(L10n.t("重新检查"))
-            }.padding(.bottom, 16)
-            ScrollView {
+            } else {
                 VStack(alignment: .leading, spacing: 0) {
-                    if store.rows.isEmpty {
-                        HStack(spacing: 10) {
-                            ProgressView()
-                            Text(L10n.t("正在检查本地数据"))
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 140)
-                    } else {
-                        ForEach(store.rows) { row in
-                            HStack(spacing: 12) {
-                                Image(systemName: row.source == "hsd" ? "antenna.radiowaves.left.and.right" : "externaldrive")
-                                    .font(.title3).foregroundStyle(.secondary).frame(width: 32)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(row.title).font(.body.weight(.medium))
-                                    Text(L10n.status(row.detail)).font(.caption).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                StatusChip(
-                                    status: !row.ready ? "pending" : row.old ? "interrupted" : "done",
-                                    title: L10n.status(row.status)
-                                )
-                            }.frame(minHeight: 64).padding(.vertical, 8)
-                            if row.id != store.rows.last?.id { Divider() }
-                        }
-                        VStack(alignment: .leading, spacing: 4) {
-                            Label(L10n.t("下载前先知道"), systemImage: "info.circle")
-                                .font(.caption.weight(.semibold)).foregroundStyle(.primary)
-                            Text(L10n.t("首次下载耗时取决于本机缺失的数据集与网络。上方只列本次预测所需文件；已下载文件不会重复下载，过程中可取消，失败项会保留并提示重试。"))
-                                .font(.caption).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                            if !store.camsConfigured && !store.usesGeosFP {
-                                Text(L10n.t("CAMS Key 未配置时仍可使用本地缓存；如需气溶胶数据，可在设置中配置后重新预检。"))
-                                    .font(.caption2).foregroundStyle(.secondary)
-                                    .fixedSize(horizontal: false, vertical: true)
-                            }
-                        }
-                        .padding(12)
-                        .background(Color.primary.opacity(scheme == .dark ? 0.06 : 0.04), in: RoundedRectangle(cornerRadius: 10))
-                        .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(warm.opacity(0.22), lineWidth: 1) }
-                        .padding(.top, 10)
+                    header
+                    ScrollView {
+                        preflightContent
                     }
-                    VStack(alignment: .leading, spacing: 8) {
-                        if store.checking {
-                            ProgressView(value: store.percent, total: 100)
-                            Text(store.status).font(.caption).foregroundStyle(.secondary)
-                        } else if !store.error.isEmpty {
-                            HStack(alignment: .top, spacing: 8) {
-                                Text(store.error).font(.callout).foregroundStyle(.red)
-                                    .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                                Spacer(minLength: 4)
-                                Button { store.clearError() } label: {
-                                    Image(systemName: "xmark").font(.caption).foregroundStyle(.secondary)
-                                }.buttonStyle(.borderless)
+                    .frame(maxWidth: .infinity)
+                    actionBar
+                }
+                .padding(20)
+                .frame(maxWidth: 520, maxHeight: .infinity, alignment: .top)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .workPageBackground()
+        .presentationDragIndicator(.visible)
+        .sheet(isPresented: $store.showCycleAgeConfirm) {
+            CycleAgeConfirmSheet()
+                .environmentObject(store)
+        }
+    }
+
+    private var pageContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            header
+            preflightContent
+            actionBar
+        }
+        .padding(20)
+        .frame(maxWidth: 520, alignment: .topLeading)
+    }
+
+    private var header: some View {
+        Group {
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 8) {
+                    headerTitle
+                    HStack {
+                        Spacer()
+                        refreshButton
+                    }
+                }
+            } else {
+                HStack(alignment: .top, spacing: 12) {
+                    headerTitle
+                    Spacer(minLength: 8)
+                    refreshButton
+                }
+            }
+        }
+        .padding(.bottom, 16)
+    }
+
+    private var preflightContent: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if store.rows.isEmpty {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text(L10n.t("正在检查本地数据"))
+                }
+                .frame(maxWidth: .infinity, minHeight: 140)
+            } else {
+                ForEach(store.rows) { row in
+                    Group {
+                        if typeSize.isAccessibilitySize {
+                            VStack(alignment: .leading, spacing: 8) {
+                                dataRowTitle(row)
+                                rowStatus(row)
                             }
                         } else {
-                            HStack {
-                                Label(summary, systemImage: store.ready ? "checkmark.circle" : "arrow.down.circle")
-                                    .fontWeight(.medium)
-                                if store.publicationsPending { ProgressView().controlSize(.mini) }
-                            }.font(.callout).foregroundStyle(.primary)
+                            HStack(alignment: .top, spacing: 12) {
+                                dataRowTitle(row)
+                                Spacer(minLength: 8)
+                                rowStatus(row)
+                            }
                         }
-                    }.frame(minHeight: 38, alignment: .leading).padding(.top, 12)
+                    }
+                    .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+                    .padding(.vertical, 8)
+                    if row.id != store.rows.last?.id { Divider() }
                 }
+                VStack(alignment: .leading, spacing: 4) {
+                    Label(L10n.t("下载前先知道"), systemImage: "info.circle")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.primary)
+                    Text(L10n.t("首次下载耗时取决于本机缺失的数据集与网络。上方只列本次预测所需文件；已下载文件不会重复下载，过程中可取消，失败项会保留并提示重试。"))
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if !store.camsConfigured && !store.usesGeosFP {
+                        Text(L10n.t("CAMS Key 未配置时仍可使用本地缓存；如需气溶胶数据，可在设置中配置后重新预检。"))
+                            .font(.caption2).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(12)
+                .background(Color.primary.opacity(scheme == .dark ? 0.06 : 0.04), in: RoundedRectangle(cornerRadius: 10))
+                .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(warm.opacity(0.22), lineWidth: 1) }
+                .padding(.top, 10)
             }
-            .frame(maxWidth: .infinity)
-            VStack(spacing: 12) {
-                if actions.primary == .download {
-                    AccentButton(title: L10n.t("下载缺失数据"),
-                                 systemImage: "arrow.down.to.line", disabled: !actions.canDownload) { store.prepare() }
+            VStack(alignment: .leading, spacing: 8) {
+                if store.checking {
+                    ProgressView(value: store.percent, total: 100)
+                    Text(store.status).font(.caption).foregroundStyle(.secondary)
+                } else if !store.error.isEmpty {
+                    HStack(alignment: .top, spacing: 8) {
+                        Text(store.error).font(.callout).foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                        Spacer(minLength: 4)
+                        Button { store.clearError() } label: {
+                            Image(systemName: "xmark").font(.caption).foregroundStyle(.secondary)
+                        }.buttonStyle(.borderless)
+                    }
                 } else {
-                    AccentButton(title: L10n.t("确定预测"),
-                                 systemImage: "sparkles", disabled: !actions.canForecast) { store.confirm() }
-                }
-                ViewThatFits(in: .horizontal) {
                     HStack {
-                        cancelButton
-                        Spacer()
-                        if actions.primary != .download { updateButton }
-                    }
-                    VStack(spacing: 8) {
-                        if actions.primary != .download { updateButton }
-                        cancelButton
-                    }
+                        Label(summary, systemImage: store.ready ? "checkmark.circle" : "arrow.down.circle")
+                            .fontWeight(.medium)
+                            .fixedSize(horizontal: false, vertical: true)
+                        if store.publicationsPending { ProgressView().controlSize(.mini) }
+                    }.font(.callout).foregroundStyle(.primary)
                 }
-            }.padding(.top, 14)
-        }.padding(20).frame(maxWidth: 520, maxHeight: .infinity, alignment: .top)
-            .workPageBackground()
-            .presentationDragIndicator(.visible)
-            .sheet(isPresented: $store.showCycleAgeConfirm) {
-                CycleAgeConfirmSheet()
-                    .environmentObject(store)
+            }.frame(minHeight: 38, alignment: .leading).padding(.top, 12)
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    private var actionBar: some View {
+        VStack(spacing: 12) {
+            if actions.primary == .download {
+                AccentButton(title: L10n.t("下载缺失数据"),
+                             systemImage: "arrow.down.to.line", disabled: !actions.canDownload) { store.prepare() }
+            } else {
+                AccentButton(title: L10n.t("确定预测"),
+                             systemImage: "sparkles", disabled: !actions.canForecast) { store.confirm() }
             }
+            if typeSize.isAccessibilitySize {
+                VStack(spacing: 8) {
+                    if actions.primary != .download { updateButton }
+                    cancelButton
+                }
+            } else {
+                HStack {
+                    cancelButton
+                    Spacer()
+                    if actions.primary != .download { updateButton }
+                }
+            }
+        }
+        .padding(.top, 14)
+        .layoutPriority(typeSize.isAccessibilitySize ? 1 : 0)
+        .fixedSize(horizontal: false, vertical: typeSize.isAccessibilitySize)
+    }
+
+    private var headerTitle: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(L10n.t("预测准备"))
+                .font(.title2.weight(.semibold))
+                .fixedSize(horizontal: false, vertical: true)
+            Text(store.requestKind == .regional ? store.regionalTitle : store.name)
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var refreshButton: some View {
+        Button { store.refreshCheck() } label: {
+            Image(systemName: "arrow.clockwise").frame(minWidth: 44, minHeight: 44)
+        }
+        .disabled(store.busy)
+        .accessibilityLabel(L10n.t("重新检查"))
+    }
+
+    private func dataRowTitle(_ row: DataRow) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: row.source == "hsd" ? "antenna.radiowaves.left.and.right" : "externaldrive")
+                .font(.title3).foregroundStyle(.secondary)
+                .frame(width: typeSize.isAccessibilitySize ? nil : 32, alignment: .leading)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(row.title)
+                    .font(.body.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("preflight-row-title-\(row.id)")
+                Text(L10n.status(row.detail))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func rowStatus(_ row: DataRow) -> some View {
+        StatusChip(
+            status: !row.ready ? "pending" : row.old ? "interrupted" : "done",
+            title: L10n.status(row.status)
+        )
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityIdentifier("preflight-row-status-\(row.id)")
     }
 
     private var cancelButton: some View {
         Button(L10n.cancel) { store.closePreflight() }
-            .frame(minHeight: 44)
+            .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil, minHeight: 44)
     }
 
     private var updateButton: some View {
         Button(L10n.t("更新数据"), systemImage: "arrow.down.to.line") { store.prepare() }
-            .frame(minHeight: 44).disabled(!actions.canDownload)
+            .frame(maxWidth: .infinity, minHeight: 44).disabled(!actions.canDownload)
     }
 }
 

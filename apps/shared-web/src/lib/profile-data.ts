@@ -24,6 +24,8 @@ export interface ProfileCell {
   temperature: number | null;
   humidity: number | null;
   status: number | null;
+  pathTransmission: number | null;
+  sunlitFraction: number | null;
   family: "high" | "mid" | "low";
 }
 interface ProfileLevel {
@@ -33,6 +35,8 @@ interface ProfileLevel {
   temperature: number | null;
   humidity: number | null;
   status: number | null;
+  pathTransmission: number | null;
+  sunlitFraction: number | null;
 }
 interface ProfileSample { distance: number; levels: ProfileLevel[] }
 export interface ProfileData {
@@ -131,6 +135,8 @@ function satelliteSamples(profile: RecordValue, bearing: number | null): Profile
         temperature: number(level.temperature_c),
         humidity: percentage(level.rh_percent),
         status: null,
+        pathTransmission: null,
+        sunlitFraction: null,
       }];
     }),
   }));
@@ -156,6 +162,8 @@ function modelSamples(section: RecordValue): ProfileSample[] {
           temperature: number(field("temperature_c", column, row)),
           humidity: percentage(field("rh_percent", column, row)),
           status: number(field("cloud_layer_status", column, row)),
+          pathTransmission: number(field("cloud_path_transmission", column, row)),
+          sunlitFraction: number(field("cloud_sunlit_fraction", column, row)),
         }];
       }),
     }];
@@ -179,7 +187,7 @@ export function profileData(report: RecordValue | null, satellite = false): Prof
     ? satelliteBands.includes("CLOUD_MASK")
       ? "HCAI 官方云掩膜、云相、云顶高度和 COT 产品；GFS 温湿度与高度为模式先验。缺测不代表晴空。"
       : "HSD B07/B13/B15 云概率代理，不发布 COT、云相或官方云高真值；GFS 温湿度与高度为模式先验。缺测不代表晴空。"
-    : "云层橙色状态只表示受光与几何/地形可见候选，未评估云体遮挡；低云压力族仅在近场距离门限内排除。";
+    : "云层候选状态只表示受光与几何/地形可见；斜线与 T_c 估算已采样剖面内的太阳路径消光，剖面范围外云体未知。";
   const pressureLines = [...new Set(cells.map((cell) => cell.pressure).filter((value): value is number => value !== null))]
     .sort((a, b) => b - a).map((pressure) => {
       const levels = samples.map((sample) => sample.levels.find((level) => level.pressure === pressure));
@@ -229,5 +237,7 @@ export function profileData(report: RecordValue | null, satellite = false): Prof
 
 export function profileCellLabel(cell: ProfileCell, satellite: boolean): string {
   const format = (value: number | null, digits = 0) => value === null ? "--" : value.toFixed(digits);
-  return `${cell.distance.toFixed(1)} km · 高度 ${(cell.height / 1000).toFixed(2)} km · ${format(cell.pressure)} hPa · ${satellite ? "云层后验概率" : "模式云量"} ${cell.probability === null ? "缺测" : `${format(cell.probability)}%`} · 温度 ${format(cell.temperature, 1)}°C · 相对湿度 ${format(cell.humidity)}%`;
+  const path = !satellite && cell.sunlitFraction !== null && cell.sunlitFraction > 0 && cell.pathTransmission !== null
+    ? ` · T_c ${format(cell.pathTransmission * 100)}%` : "";
+  return `${cell.distance.toFixed(1)} km · 高度 ${(cell.height / 1000).toFixed(2)} km · ${format(cell.pressure)} hPa · ${satellite ? "云层后验概率" : "模式云量"} ${cell.probability === null ? "缺测" : `${format(cell.probability)}%`} · 温度 ${format(cell.temperature, 1)}°C · 相对湿度 ${format(cell.humidity)}%${path}`;
 }

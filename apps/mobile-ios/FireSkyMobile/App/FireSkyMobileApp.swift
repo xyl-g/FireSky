@@ -4,7 +4,50 @@ import SwiftUI
 @main
 struct FireSkyMobileApp: App {
     @Environment(\.scenePhase) private var scenePhase
-    @StateObject private var store = Store()
+    @StateObject private var store: Store
+
+    init() {
+        let store = Store()
+        Self.applyUITestLaunchOverrides(to: store)
+        _store = StateObject(wrappedValue: store)
+    }
+
+    private static func applyUITestLaunchOverrides(to store: Store) {
+        let args = ProcessInfo.processInfo.arguments
+        guard args.contains("-UITestMockMode") else { return }
+
+        func argValue(_ flag: String) -> String? {
+            guard let idx = args.firstIndex(of: flag), args.indices.contains(idx + 1) else { return nil }
+            return args[idx + 1]
+        }
+
+        if let theme = argValue("-UITestTheme")?.lowercased(),
+           ["light", "dark", "system"].contains(theme) {
+            store.appearance = theme
+        }
+        if let pageArg = argValue("-UITestPage")?.lowercased() {
+            switch pageArg {
+            case "workbench", "point": store.page = .point
+            case "data": store.page = .data
+            case "history": store.page = .history
+            case "settings": store.page = .settings
+            default: break
+            }
+        }
+        if let modeArg = argValue("-UITestMode")?.lowercased(),
+           ["point", "regional", "nowcast"].contains(modeArg) {
+            store.workbenchMode = modeArg
+        }
+        if let tabArg = argValue("-UITestTab"), !tabArg.isEmpty {
+            store.resultTab = tabArg
+            store.nowcastResultTab = tabArg
+        }
+        if let diagArg = argValue("-UITestDiagnostics")?.lowercased() {
+            let open = diagArg == "1" || diagArg == "true"
+            store.showPointDiagnostics = open && store.activeWorkbenchMode == .point
+            store.showNowcastDiagnostics = open && store.activeWorkbenchMode == .nowcast
+        }
+    }
 
     var body: some Scene {
         WindowGroup {

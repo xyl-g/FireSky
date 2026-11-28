@@ -197,13 +197,24 @@ public sealed partial class MainWindow
         if (!double.IsFinite(lat) || !double.IsFinite(lon)) return;
         regionalProfileLat = lat;
         regionalProfileLon = lon;
-        regionalProfileModel = TagOf(ResultModel.SelectedItem) is { Length: > 0 } model
+        regionalProfileModel = TagOf(RegionalModel?.SelectedItem) is { Length: > 0 } model
             && model is "gfs" or "ec" ? model : "gfs";
         RegionalProfileSelection.Text =
             $"{regionalProfileModel.ToUpperInvariant()} · {lat:0.00}°, {lon:0.00}°";
         ShowRegionalCellDetail(row);
         await QueryRegionalProfile(report, regionalProfileModel, lat, lon,
             Text(row, "best_time_local"));
+    }
+
+    private void OnRegionalModelChanged(object sender, SelectionChangedEventArgs args)
+    {
+        if (!initialized || restoringSession || suppressDraftEvents) return;
+        var tag = TagOf(RegionalModel?.SelectedItem) is { Length: > 0 } selected ? selected : "gfs";
+        SetSelectedResultModel(tag, render: false, updateMap: false);
+        ClearRegionalProfile();
+        RenderResult();
+        _ = UpdateMap(forceFit: page == "regional");
+        ScheduleSessionSave();
     }
 
     /// <summary>网格/城市详情弹层（regional-5）：峰值/事件窗质量、压力族、AOD 修正、置信度「未提供」语义。</summary>
@@ -362,6 +373,7 @@ public sealed partial class MainWindow
         });
         RegionalProfileRows.Items.Add(summary);
         RegionalCrossSectionExpand.Visibility = Visibility.Visible;
+        activeRegionalCrossSection = regionalProfile;
         DrawCrossSection(RegionalCrossSection, regionalProfile);
     }
 
@@ -369,6 +381,14 @@ public sealed partial class MainWindow
     {
         RegionalCrossSection.Visibility = RegionalCrossSection.Visibility == Visibility.Visible
             ? Visibility.Collapsed : Visibility.Visible;
+        if (RegionalCrossSection.Visibility == Visibility.Visible && activeRegionalCrossSection != null)
+            DrawCrossSection(RegionalCrossSection, activeRegionalCrossSection);
+    }
+
+    private void OnRegionalCrossSectionSizeChanged(object sender, SizeChangedEventArgs args)
+    {
+        if (RegionalCrossSection.Visibility == Visibility.Visible && activeRegionalCrossSection != null)
+            DrawCrossSection(RegionalCrossSection, activeRegionalCrossSection);
     }
 
     private void ClearRegionalProfile()
@@ -377,6 +397,7 @@ public sealed partial class MainWindow
         profileOperation?.Dispose();
         profileOperation = null;
         regionalProfile = null;
+        activeRegionalCrossSection = null;
         regionalProfileModel = "";
         regionalProfileState = "idle";
         regionalProfileLat = regionalProfileLon = 0;
@@ -418,7 +439,6 @@ public sealed partial class MainWindow
             RenderRegionPresetsChecks();
         }
         finally { suppressDraftEvents = false; }
-        PageSubtitle.Text = page == "regional" ? RegionalTitle() : PageSubtitle.Text;
         ClearError("regional");
         RenderResult();
         ScheduleSessionSave();
@@ -442,7 +462,7 @@ public sealed partial class MainWindow
                     areas.Add((west, south, east, north));
             }
         }
-        if (areas.Count == 0 && selectedRegions.Contains("china"))
+        if (areas.Count == 0 && (selectedRegions.Contains("china") || !customRegion))
         {
             // 引擎连接前立即按完整中国边界自动缩放（西 73°E，南 18°N，东 136°E，北 54°N）。
             areas.Add((73.0, 18.0, 136.0, 54.0));
@@ -563,7 +583,16 @@ public sealed partial class MainWindow
             return L.imageOverlay(canvas.toDataURL('image/png'), [[south, west], [north, east]], { interactive: false });
           }
           window.fireSky.update = function(state) {
-            if (typeof map !== 'undefined' && prevRegional !== !!state.regional) {
+            const legend = document.querySelector('.legend');
+            if (legend) legend.style.display = state.regional ? 'block' : 'none';
+            const mapEl = document.getElementById('map');
+            if (mapEl) {
+              mapEl.style.background = state.dark ? '#111826' : '#EEF3F8';
+              const tiles = mapEl.querySelector('.leaflet-tile-pane');
+              if (tiles) tiles.style.filter = state.dark ? 'invert(0.92) hue-rotate(180deg) brightness(0.92) contrast(0.92)' : '';
+            }
+            const switchedToRegional = typeof map !== 'undefined' && prevRegional !== !!state.regional;
+            if (switchedToRegional) {
               prevRegional = !!state.regional;
               map.invalidateSize(false);
               lastKey = '';
@@ -584,6 +613,10 @@ public sealed partial class MainWindow
                     && Number.isFinite(state.south) && Number.isFinite(state.north) && state.north > state.south) {
                   gridLines(state.west, state.south, state.east, state.north).addTo(grid);
                 }
+                if ((switchedToRegional || state.force_fit) && Number.isFinite(state.west) && Number.isFinite(state.east)
+                    && Number.isFinite(state.south) && Number.isFinite(state.north) && state.north > state.south) {
+                  setTimeout(() => { map.invalidateSize(false); fitWrapped(state.south, state.west, state.north, state.east); }, 80);
+                }
                 return;
               }
             }
@@ -591,6 +624,10 @@ public sealed partial class MainWindow
             if (state.regional && state.show_grid !== false && Number.isFinite(state.west) && Number.isFinite(state.east)
                 && Number.isFinite(state.south) && Number.isFinite(state.north) && state.north > state.south) {
               gridLines(state.west, state.south, state.east, state.north).addTo(grid);
+            }
+            if ((switchedToRegional || state.force_fit) && state.regional && Number.isFinite(state.west) && Number.isFinite(state.east)
+                && Number.isFinite(state.south) && Number.isFinite(state.north) && state.north > state.south) {
+              setTimeout(() => { map.invalidateSize(false); fitWrapped(state.south, state.west, state.north, state.east); }, 80);
             }
           };
         })();

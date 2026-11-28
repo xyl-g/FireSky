@@ -106,7 +106,7 @@ pub(crate) fn append(writer: &mut BundleWriter, context: Context<'_>) -> Result<
         "native_point_core_version":8,"dominant_burnable":dominant,"native_frame_version":103,
         "cloud_source_fields":{
             "total_cloud_cover":"EC surface TCC (%)",
-            "vertical_cloud_proxy":"EC pressure-level RH conditioned by TCC",
+            "vertical_cloud_proxy":"EC pressure-level RH/TCC proxy with pressure-family support v2",
             "cloud_liquid":"unavailable_in_public_basic_contract",
             "cloud_ice":"unavailable_in_public_basic_contract",
             "aggregate_layer_cloud":"unavailable_in_public_basic_contract"},

@@ -132,6 +132,12 @@ data class TaskHistoryItem(
     }
 }
 
+enum class TaskHistoryFilter(val value: String) {
+    ALL("all"),
+    ACTIVE("active"),
+    SYNC("sync"),
+}
+
 /** 任务事件行（同构 NativeTaskEvent）。 */
 data class TaskEventRow(
     val seq: Int,
@@ -361,6 +367,14 @@ data class WorkbenchState(
     val resultKind: String? = null,
     val selectedModel: String = "gfs",
     val resultTab: String = "概览",
+    val openDiagnostics: Boolean = false,
+    // 卫星实况冻结剖面按时次查询
+    val nowcastProfileStep: String = "",
+    val frozenProfileModel: String = "",
+    val frozenProfileState: String = "idle",
+    val frozenProfileTime: String = "",
+    val frozenProfileError: String = "",
+    val frozenProfile: JSONObject? = null,
     // 设置
     val appearance: String = "system",
     val ecmwfSource: String = "ecmwf",
@@ -372,6 +386,12 @@ data class WorkbenchState(
     val camsMessage: String = "",
     val camsSaveFailed: Boolean = false,
     val showCAMSTutorial: Boolean = false,
+    // 下载连通性探测
+    val downloadProbeRows: List<DownloadProbeRow> = DownloadProbeRow.initial(),
+    val probingDownloads: Boolean = false,
+    val cancellingDownloadProbe: Boolean = false,
+    val downloadProbeDate: String? = null,
+    val downloadProbeError: String = "",
     // 后台同步设置
     val dataSyncEnabled: Boolean = false,
     val dataSyncCAMS: Boolean = false,

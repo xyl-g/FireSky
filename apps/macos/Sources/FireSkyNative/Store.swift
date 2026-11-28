@@ -1583,12 +1583,27 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
     }
 
     var regionalTitle: String {
-        let labels = regionDefinitions.compactMap { item -> String? in
-            guard selectedRegions.contains(item["code"] as? String ?? "") else { return nil }
-            return item["label"] as? String ?? item["code"] as? String
-        } + (customRegion ? ["自定义区域"] : [])
+        let byCode: [String: String] = Dictionary(uniqueKeysWithValues: regionDefinitions.compactMap { item in
+            guard let code = item["code"] as? String else { return nil }
+            return (code, item["label"] as? String ?? code)
+        })
+        let labels = selectedRegions.sorted().map { byCode[$0] ?? Self.fallbackRegionLabels[$0] ?? $0 }
+            + (customRegion ? ["自定义区域"] : [])
         return labels.isEmpty ? "请选择区域" : labels.joined(separator: " · ")
     }
+
+    static let fallbackRegionLabels: [String: String] = [
+        "china": "中国",
+        "east-asia": "东亚",
+        "southeast-asia": "东南亚",
+        "south-asia": "南亚",
+        "europe": "欧洲",
+        "north-america": "北美",
+        "south-america": "南美",
+        "oceania": "大洋洲",
+        "africa-middle-east": "非洲及中东",
+        "north-asia": "北亚",
+    ]
 
     func focusRegionalCell(_ coordinate: GridCoordinate) {
         selectedRegionalCoordinate = coordinate
@@ -1759,10 +1774,27 @@ final class Store: NSObject, ObservableObject, @preconcurrency CLLocationManager
         return modelResult?["points"] as? [JSONObject] ?? []
     }
 
+    static let fallbackRegionBounds: [String: [Double]] = [
+        "china": [73.0, 18.0, 136.0, 54.0],
+        "east-asia": [63.0, 12.0, 155.0, 60.0],
+        "southeast-asia": [85.0, -20.0, 155.0, 35.0],
+        "south-asia": [55.0, -5.0, 110.0, 45.0],
+        "europe": [-25.0, 25.0, 50.0, 75.0],
+        "north-america": [-155.0, 5.0, -40.0, 80.0],
+        "south-america": [-90.0, -60.0, -25.0, 20.0],
+        "oceania": [100.0, -60.0, 180.0, 5.0],
+        "africa-middle-east": [-25.0, -40.0, 65.0, 40.0],
+        "north-asia": [20.0, 35.0, 180.0, 82.0],
+    ]
+
     var previewAreas: [[Double]] {
-        var areas = regionDefinitions.compactMap { item -> [Double]? in
-            guard selectedRegions.contains(item["code"] as? String ?? "") else { return nil }
-            return item["bounds"] as? [Double]
+        let byCode: [String: [Double]] = Dictionary(uniqueKeysWithValues: regionDefinitions.compactMap { item in
+            guard let code = item["code"] as? String,
+                  let bounds = item["bounds"] as? [Double] else { return nil }
+            return (code, bounds)
+        })
+        var areas = selectedRegions.sorted().compactMap { code in
+            byCode[code] ?? Self.fallbackRegionBounds[code]
         }
         if customRegion { areas.append([west, south, east, north]) }
         return areas

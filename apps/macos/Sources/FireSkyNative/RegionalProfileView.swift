@@ -20,7 +20,7 @@ struct RegionalProfileView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
                 Text("\(model.uppercased()) 剖面").font(.system(size: 11, weight: .semibold))
                 Spacer()
@@ -53,27 +53,28 @@ struct RegionalProfileView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(9)
+        .padding(8)
         .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 6))
     }
 
     private var ready: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            if let time = section?["valid_time_local"] as? String {
-                Text(time.replacingOccurrences(of: "T", with: " "))
-                    .font(.system(size: 10)).monospacedDigit()
-            }
-            HStack(spacing: 10) {
-                metric("太阳高度", section?["solar_elevation_deg"], suffix: "°")
-                metric("太阳方位", section?["solar_azimuth_deg"], suffix: "°")
-                Text("\(distanceCount) 个距离样本")
-                    .font(.system(size: 9)).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                if let time = section?["valid_time_local"] as? String {
+                    Text(time.replacingOccurrences(of: "T", with: " "))
+                        .font(.system(size: 9.5)).monospacedDigit().foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 4)
+                Text("\(distanceCount) \(L10n.text("距离样本", "samples"))")
+                    .font(.system(size: 9)).foregroundStyle(.secondary).monospacedDigit()
             }
             let cloud = fields["cloud_fraction_percent"] as? [[Any]]
             let temperatures = fields["temperature_c"] as? [[Any]]
-            HStack(spacing: 10) {
-                metric("云量样本", cloud?.reduce(0) { $0 + $1.count } ?? 0, suffix: "")
-                metric("温度样本", temperatures?.reduce(0) { $0 + $1.count } ?? 0, suffix: "")
+            HStack(spacing: 8) {
+                metric("太阳高度", section?["solar_elevation_deg"], suffix: "°")
+                metric("太阳方位", section?["solar_azimuth_deg"], suffix: "°")
+                metric("云量", cloud?.reduce(0) { $0 + $1.count } ?? 0, suffix: "")
+                metric("温度", temperatures?.reduce(0) { $0 + $1.count } ?? 0, suffix: "")
             }
             figureButton
         }
@@ -93,7 +94,7 @@ struct RegionalProfileView: View {
         .help("查看温度、湿度、云层、地形与照明剖面图层")
         .accessibilityLabel("展开 \(model.uppercased()) 网格剖面图层")
         .popover(isPresented: $store.showRegionalProfileFigure, arrowEdge: .trailing) {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
                     Text("\(model.uppercased()) 网格剖面").font(.system(size: 12, weight: .semibold))
                     Spacer()
@@ -106,16 +107,17 @@ struct RegionalProfileView: View {
                     .font(.system(size: 9)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(16)
-            .frame(width: 660, alignment: .topLeading)
+            .padding(12)
+            .frame(width: 740, alignment: .topLeading)
         }
     }
 
     private func metric(_ title: String, _ value: Any?, suffix: String) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.system(size: 8)).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 1) {
+            Text(title).font(.system(size: 8)).foregroundStyle(.secondary).lineLimit(1)
             Text(format(value) + suffix).font(.system(size: 10, weight: .medium)).monospacedDigit()
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func format(_ value: Any?) -> String {

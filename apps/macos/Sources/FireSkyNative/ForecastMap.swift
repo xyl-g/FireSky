@@ -30,10 +30,33 @@ struct ForecastMap: NSViewRepresentable {
             configuration.pointOfInterestFilter = .excludingAll
             map.preferredConfiguration = configuration
         }
-        map.setRegion(MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: store.lat, longitude: store.lon),
-            span: MKCoordinateSpan(latitudeDelta: mini ? 0.025 : 3, longitudeDelta: mini ? 0.035 : 4)
-        ), animated: false)
+        if store.page == .regional {
+            let initialAreas = store.previewAreas.isEmpty ? [[73.0, 18.0, 136.0, 54.0]] : store.previewAreas
+            if let target = store.regionalCamera, target.distance.isFinite, target.distance >= 100 {
+                map.setCamera(MKMapCamera(lookingAtCenter: CLLocationCoordinate2D(latitude: target.lat, longitude: target.lon),
+                                          fromDistance: target.distance, pitch: 0, heading: 0), animated: false)
+            } else if let rect = RegionalMapLayers.fitMapRect(areas: initialAreas) {
+                map.setVisibleMapRect(rect, edgePadding: NSEdgeInsets(top: 24, left: 24, bottom: 24, right: 24), animated: false)
+            } else if let region = RegionalMapLayers.fitRegion(areas: initialAreas, paddingDegrees: 1.0) {
+                map.setRegion(region, animated: false)
+            }
+        } else {
+            map.setRegion(MKCoordinateRegion(
+                center: CLLocationCoordinate2D(latitude: store.lat, longitude: store.lon),
+                span: MKCoordinateSpan(latitudeDelta: mini ? 0.025 : 3, longitudeDelta: mini ? 0.035 : 4)
+            ), animated: false)
+        }
+        let coordinator = context.coordinator
+        map.onLayoutReady = { [weak coordinator, weak map] in
+            guard let coordinator, let map,
+                  coordinator.store.page == .regional,
+                  let pending = coordinator.pendingFitAreas,
+                  map.window != nil, map.bounds.width > 10, map.bounds.height > 10 else { return }
+            coordinator.applyFit(map, areas: pending)
+            coordinator.pendingFitAreas = nil
+            coordinator.cameraReady = true
+            coordinator.publishCamera(map)
+        }
         let click = NSClickGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.click(_:)))
         map.addGestureRecognizer(click)
         map.drawing.onCommit = { [weak store] start, end in
@@ -105,6 +128,7 @@ struct ForecastMap: NSViewRepresentable {
         var selection: GridCoordinate?
         var selectionOverlay: MKPolygon?
         var cameraReady = false
+        var pendingFitAreas: [[Double]]?
         init(_ store: Store) { self.store = store }
 
         @objc func click(_ gesture: NSClickGestureRecognizer) {
@@ -121,21 +145,48 @@ struct ForecastMap: NSViewRepresentable {
             }
         }
 
+        func applyFit(_ map: MKMapView, areas: [[Double]]) {
+            if map.bounds.width > 10, map.bounds.height > 10,
+               let rect = RegionalMapLayers.fitMapRect(areas: areas) {
+                map.setVisibleMapRect(rect, edgePadding: NSEdgeInsets(top: 24, left: 24, bottom: 24, right: 24), animated: false)
+            } else if let region = RegionalMapLayers.fitRegion(areas: areas, paddingDegrees: 1.0) {
+                map.setRegion(region, animated: false)
+            }
+        }
+
         func updateRegional(_ map: MKMapView, areas: [[Double]]) {
             cameraReady = false
-            let bounds = "\(areas)"
+            let effectiveAreas = areas.isEmpty ? [[73.0, 18.0, 136.0, 54.0]] : areas
+            let bounds = "\(effectiveAreas)"
             let first = lastBounds.isEmpty
             if lastBounds != bounds || fitVersion != store.regionalFitVersion {
                 let shouldFit = !first || store.regionalCamera == nil || fitVersion != store.regionalFitVersion
                 lastBounds = bounds
                 fitVersion = store.regionalFitVersion
-                if shouldFit, !areas.isEmpty {
-                    if let region = RegionalMapLayers.fitRegion(areas: areas, paddingDegrees: 0.45) {
-                        map.setRegion(region, animated: false)
+                if shouldFit {
+                    applyFit(map, areas: effectiveAreas)
+                    if map.window != nil && map.bounds.width > 10 && map.bounds.height > 10 {
+                        pendingFitAreas = nil
+                        cameraReady = true
+                        publishCamera(map)
+                    } else {
+                        pendingFitAreas = effectiveAreas
+                        cameraReady = false
                     }
-                    publishCamera(map)
-                } else { applyCamera(map) }
-            } else { applyCamera(map) }
+                } else {
+                    applyCamera(map)
+                    cameraReady = true
+                }
+            } else if let pending = pendingFitAreas,
+                      map.window != nil, map.bounds.width > 10, map.bounds.height > 10 {
+                applyFit(map, areas: pending)
+                pendingFitAreas = nil
+                cameraReady = true
+                publishCamera(map)
+            } else {
+                applyCamera(map)
+                cameraReady = true
+            }
             if focusVersion != store.regionalFocusVersion {
                 focusVersion = store.regionalFocusVersion
                 if let coordinate = store.selectedRegionalCoordinate {
@@ -148,7 +199,9 @@ struct ForecastMap: NSViewRepresentable {
                 selection = store.selectedRegionalCoordinate
                 updateSelection(map)
             }
-            cameraReady = true
+            if pendingFitAreas == nil {
+                cameraReady = true
+            }
             let showGrid = store.showRegionalGrid
             let showSamples = store.showRegionalSamples
             let showSmooth = store.showRegionalSmooth
@@ -214,7 +267,7 @@ struct ForecastMap: NSViewRepresentable {
             map.setCamera(MKMapCamera(lookingAtCenter: CLLocationCoordinate2D(latitude: target.lat, longitude: target.lon),
                                      fromDistance: target.distance, pitch: 0, heading: 0), animated: false)
         }
-        private func publishCamera(_ map: MKMapView) {
+        func publishCamera(_ map: MKMapView) {
             let value = camera(map)
             guard value.distance.isFinite, value.distance >= 100 else { return }
             Task { @MainActor [weak self] in
@@ -284,6 +337,7 @@ struct ForecastMap: NSViewRepresentable {
 final class WheelZoomMapView: MKMapView {
     private var wheelMonitor: Any?
     let drawing = RegionDrawingView()
+    var onLayoutReady: (() -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -300,6 +354,9 @@ final class WheelZoomMapView: MKMapView {
         if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
         wheelMonitor = nil
         guard window != nil else { return }
+        DispatchQueue.main.async { [weak self] in
+            self?.onLayoutReady?()
+        }
         // MapKit's internal views can consume wheel events before the outer map.
         wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
             guard let self, let window = self.window, event.window === window,
@@ -314,6 +371,13 @@ final class WheelZoomMapView: MKMapView {
             if event.scrollingDeltaY != 0 { self.zoom(event, at: location) }
             // Consume vertical and horizontal deltas here so the containing rail stays put.
             return nil
+        }
+    }
+
+    override func layout() {
+        super.layout()
+        if window != nil && bounds.width > 10 && bounds.height > 10 {
+            onLayoutReady?()
         }
     }
 

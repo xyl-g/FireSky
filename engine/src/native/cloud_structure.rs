@@ -142,12 +142,7 @@ fn deep_structure(
 }
 
 fn condensate_presence(value: f32) -> f32 {
-    let value = clean(value).max(0.0);
-    if value > 0.0 {
-        ((value.max(1e-12).log10() + 8.0) / 3.0).clamp(0.0, 1.0)
-    } else {
-        0.0
-    }
+    super::cloud::condensate_component(value)
 }
 
 fn material(strengths: [f32; 3], deep: f32, thickness: f32, code: usize) -> f32 {

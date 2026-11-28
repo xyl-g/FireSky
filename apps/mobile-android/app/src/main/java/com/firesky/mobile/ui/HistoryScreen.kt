@@ -41,9 +41,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -52,15 +54,19 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.firesky.mobile.R
+import com.firesky.mobile.store.TaskHistoryFilter
 import com.firesky.mobile.store.TaskHistoryItem
 import com.firesky.mobile.store.WorkbenchState
 import com.firesky.mobile.store.WorkbenchStore
+import com.firesky.mobile.store.filterTaskHistory
 import org.json.JSONObject
 
 /** 任务历史页（macOS NativeTaskHistoryView 同构）：列表 + 详情（事件时间线），
  *  行内恢复结果 / 恢复参数重查 / 删除记录；删除只删状态与事件。 */
 @Composable
 fun HistoryScreen(store: WorkbenchStore, state: WorkbenchState) {
+    var historyFilter by rememberSaveable { mutableStateOf(TaskHistoryFilter.ALL) }
+    val visibleTasks = filterTaskHistory(state.taskHistory, historyFilter)
     Column(
         Modifier
             .fillMaxSize()
@@ -93,6 +99,22 @@ fun HistoryScreen(store: WorkbenchStore, state: WorkbenchState) {
         val historyError = state.taskHistoryError.ifEmpty { state.errorText("history") }
         if (historyError.isNotEmpty()) {
             DismissibleErrorBanner(historyError, onDismiss = { store.clearError() })
+        }
+        if (state.taskHistory.isNotEmpty()) {
+            Segmented(
+                options = TaskHistoryFilter.entries.map { it.value },
+                titles = listOf(
+                    stringResource(R.string.history_filter_all),
+                    stringResource(R.string.history_filter_active),
+                    stringResource(R.string.history_filter_sync),
+                ),
+                selection = historyFilter.value,
+                onSelect = { value ->
+                    historyFilter = TaskHistoryFilter.entries.firstOrNull { it.value == value }
+                        ?: TaskHistoryFilter.ALL
+                },
+                accent = true,
+            )
         }
         when {
             state.taskHistoryLoading && state.taskHistory.isEmpty() -> {
@@ -131,12 +153,30 @@ fun HistoryScreen(store: WorkbenchStore, state: WorkbenchState) {
                     }
                 }
             }
+            visibleTasks.isEmpty() -> {
+                WorkSurface(Modifier.fillMaxWidth()) {
+                    Column(
+                        Modifier.fillMaxWidth().padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        FireSkyMarkScene(size = 56.dp)
+                        Text(stringResource(R.string.history_filter_empty), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            stringResource(R.string.history_filter_empty_hint),
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.65f),
+                            textAlign = TextAlign.Center,
+                        )
+                    }
+                }
+            }
             else -> LazyColumn(
                 verticalArrangement = Arrangement.spacedBy(10.dp),
                 contentPadding = PaddingValues(bottom = 16.dp),
             ) {
                 // 顶部品牌空态由上方 isEmpty 分支处理；列表分支内为悬浮任务卡片。
-                state.taskHistory.forEach { item ->
+                visibleTasks.forEach { item ->
                     item("row-${item.taskId}") {
                         HistoryRow(store, state, item)
                     }
@@ -174,7 +214,7 @@ fun HistoryScreen(store: WorkbenchStore, state: WorkbenchState) {
 private fun HistoryRow(store: WorkbenchStore, state: WorkbenchState, item: TaskHistoryItem) {
     val selected = state.selectedTaskId == item.taskId
     WorkSurface(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().testTag("history-task-${item.taskId}"),
         emphasized = selected,
         cornerRadius = 14.dp,
     ) {
@@ -188,7 +228,7 @@ private fun HistoryRow(store: WorkbenchStore, state: WorkbenchState, item: TaskH
                 IconBadge(statusIcon(item.status), tint = statusColor(item.status))
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Row(horizontalArrangement = Arrangement.spacedBy(7.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(item.rowTitle, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                        Text(localizedTaskTitle(item), fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                         StatusChip(item.status, statusText(item.statusTitle))
                     }
                     if (item.contextTitle.isNotEmpty()) {
@@ -289,6 +329,28 @@ private fun TaskDetail(state: WorkbenchState, item: TaskHistoryItem) {
             }
         }
     }
+}
+
+@Composable
+private fun localizedTaskTitle(item: TaskHistoryItem): String {
+    val methodResource = when (item.method) {
+        "check" -> R.string.history_method_check
+        "prepare" -> R.string.history_method_prepare
+        "forecast" -> R.string.history_method_forecast
+        "publications" -> R.string.history_method_publications
+        "network_probe" -> R.string.history_method_network_probe
+        "data_sync" -> R.string.history_method_data_sync
+        "terrain_download" -> R.string.history_method_terrain_download
+        else -> R.string.history_method_task
+    }
+    val method = stringResource(methodResource)
+    val kindResource = when (item.retryPayload?.optString("kind")) {
+        "point" -> R.string.history_kind_point
+        "regional" -> R.string.history_kind_regional
+        "nowcast" -> R.string.history_kind_nowcast
+        else -> null
+    } ?: return method
+    return stringResource(R.string.history_task_title_fmt, stringResource(kindResource), method)
 }
 
 private fun statusIcon(status: String) = when (status) {

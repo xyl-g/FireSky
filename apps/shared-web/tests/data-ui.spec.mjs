@@ -212,7 +212,7 @@ test("changing EC source does not mislabel an in-flight probe or retain the old 
   await expect(page.getByRole("button", { name: "准备 / 更新数据" })).toBeDisabled();
   expect(await page.evaluate(() => window.__rpcFixture.requests.filter((request) => request.method === "cancel"))).toHaveLength(0);
   await page.evaluate(() => window.__rpcFixture.finishProbe());
-  await expect(page.getByText("EC 下载源已变更，请重新探测当前来源。", { exact: true })).toBeVisible();
+  await expect(page.getByText("下载源已变更，请重新探测当前来源。", { exact: true })).toBeVisible();
   await expect(page.getByText("下载解码通过", { exact: true })).toHaveCount(0);
   await expect(page.getByText("未探测", { exact: true })).toHaveCount(3);
   await page.getByRole("button", { name: "检查数据", exact: true }).click();

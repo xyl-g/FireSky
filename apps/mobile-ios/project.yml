@@ -7,8 +7,8 @@ options:
 settings:
   base:
     SWIFT_VERSION: "5.0"
-    MARKETING_VERSION: "2.1.1"
-    CURRENT_PROJECT_VERSION: "33"
+    MARKETING_VERSION: "2.2.0"
+    CURRENT_PROJECT_VERSION: "34"
     CODE_SIGN_STYLE: Automatic
     CODE_SIGNING_ALLOWED: "NO"
 targets:

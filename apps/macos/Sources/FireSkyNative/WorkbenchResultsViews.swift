@@ -225,14 +225,21 @@ private struct WorkActionSummaryView: View {
             if snapshots.isEmpty && failedModels.isEmpty && comparison.result == nil {
                 WorkFirstRunGuide()
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(alignment: .center, spacing: 8) {
                         Image(systemName: statusSymbol)
-                            .fireSkyFont(size: 13, weight: .semibold, relativeTo: .caption)
+                            .fireSkyFont(size: 12.5, weight: .semibold, relativeTo: .caption)
                             .foregroundStyle(warm)
                         Text(L10n.t("行动摘要"))
-                            .fireSkyFont(size: 11, weight: .semibold, relativeTo: .caption)
-                            .foregroundStyle(.secondary)
+                            .fireSkyFont(size: 10, weight: .semibold, relativeTo: .caption)
+                            .foregroundStyle(warm)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(warm.opacity(0.12), in: Capsule())
+                        Text(headline)
+                            .fireSkyFont(size: 14, weight: .semibold, relativeTo: .title3)
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityLabel(L10n.tf("结论：%@", headline))
                         Spacer(minLength: 8)
                         if !snapshots.isEmpty {
                             Menu {
@@ -269,51 +276,82 @@ private struct WorkActionSummaryView: View {
                                          : "请先确认海拔与时区，再收藏该地点"))
                         }
                     }
-                    Text(headline)
-                        .fireSkyFont(size: 15, weight: .semibold, relativeTo: .title3)
-                        .foregroundStyle(.primary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityLabel(L10n.tf("结论：%@", headline))
-                    if !timingText.isEmpty {
-                        Text(timingText)
-                            .fireSkyFont(size: 12).monospacedDigit()
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityLabel(L10n.tf("时间与窗口：%@", timingText))
-                    }
-                    if withinNowcastWindow {
-                        Button {
-                            store.page = .nowcast
-                        } label: {
-                            Label(
-                                L10n.text("已进入 4 小时临近窗口 · 切向日葵卫星实况纠偏",
-                                          "Within 4h window · Switch to Satellite Nowcast"),
-                                systemImage: "antenna.radiowaves.left.and.right"
-                            )
-                            .font(.system(size: 11, weight: .medium))
+                    if !timingText.isEmpty || reminderBest != nil || withinNowcastWindow {
+                        ViewThatFits(in: .horizontal) {
+                            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                if !timingText.isEmpty {
+                                    Text(timingText)
+                                        .fireSkyFont(size: 11.5).monospacedDigit()
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .accessibilityLabel(L10n.tf("时间与窗口：%@", timingText))
+                                }
+                                if let reminderBest {
+                                    WorkReminderControl(bestTime: reminderBest.time,
+                                                        model: reminderBest.model,
+                                                        detail: timingText)
+                                }
+                                Spacer(minLength: 0)
+                                if withinNowcastWindow {
+                                    nowcastShortcutButton
+                                }
+                            }
+                            VStack(alignment: .leading, spacing: 4) {
+                                if !timingText.isEmpty {
+                                    Text(timingText)
+                                        .fireSkyFont(size: 11.5).monospacedDigit()
+                                        .foregroundStyle(.secondary)
+                                        .fixedSize(horizontal: false, vertical: true)
+                                        .accessibilityLabel(L10n.tf("时间与窗口：%@", timingText))
+                                }
+                                HStack(spacing: 8) {
+                                    if let reminderBest {
+                                        WorkReminderControl(bestTime: reminderBest.time,
+                                                            model: reminderBest.model,
+                                                            detail: timingText)
+                                    }
+                                    if withinNowcastWindow {
+                                        nowcastShortcutButton
+                                    }
+                                }
+                            }
                         }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                        .tint(coolAccent)
                     }
-                    if let reminderBest {
-                        WorkReminderControl(bestTime: reminderBest.time,
-                                            model: reminderBest.model,
-                                            detail: timingText)
-                    }
-                    ForEach(notes, id: \.self) { note in
-                        Text(note)
-                            .fireSkyFont(size: 11, relativeTo: .caption)
-                            .foregroundStyle(.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityLabel(note)
+                    if !notes.isEmpty {
+                        VStack(alignment: .leading, spacing: 2) {
+                            ForEach(notes, id: \.self) { note in
+                                Text(note)
+                                    .fireSkyFont(size: 10.5, relativeTo: .caption)
+                                    .foregroundStyle(.orange)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .accessibilityLabel(note)
+                            }
+                        }
+                        .padding(.horizontal, 8).padding(.vertical, 4)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.orange.opacity(0.09), in: RoundedRectangle(cornerRadius: 6))
                     }
                 }
-                .padding(14)
+                .padding(.horizontal, 12).padding(.vertical, 9)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .fireSkySurface(role: .content, emphasized: !snapshots.isEmpty)
             }
         }
+    }
+
+    private var nowcastShortcutButton: some View {
+        Button {
+            store.page = .nowcast
+        } label: {
+            Label(
+                L10n.text("4h 临近窗口 · 切卫星实况", "4h window · Satellite Nowcast"),
+                systemImage: "antenna.radiowaves.left.and.right"
+            )
+            .font(.system(size: 10.5, weight: .medium))
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.mini)
+        .tint(coolAccent)
     }
 }
 
@@ -356,11 +394,14 @@ private struct WorkReminderControl: View {
 
     @ViewBuilder
     private func reminderContent(fireDate: Date) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let hintText = String(format: L10n.text("依据 %1$@ 最佳时刻，提前 %2$d 分钟通知；时区 %3$@。可在此取消，也可在系统通知设置中关闭。",
+                                                "Based on %1$@ best time, notify %2$d min earlier; time zone %3$@. Cancel here or in Notification settings."),
+                              model.uppercased(), minutesBefore, store.timezone)
+        VStack(alignment: .leading, spacing: 3) {
             switch reminders.permission {
             case .authorized:
                 if isCurrentScheduled, let scheduled = reminders.scheduled {
-                    HStack(spacing: 8) {
+                    HStack(spacing: 6) {
                         Image(systemName: "bell.badge.fill").foregroundStyle(warm)
                         Text(String(format: L10n.text("已设置提醒 · %1$@ 前 %2$d 分钟",
                                                        "Reminder set · %1$@ · %2$d min before"),
@@ -370,6 +411,7 @@ private struct WorkReminderControl: View {
                             .buttonStyle(.borderless).font(.system(size: 10))
                             .accessibilityLabel(L10n.text("取消提醒", "Cancel reminder"))
                     }
+                    .help(hintText)
                 } else {
                     Button {
                         schedule(fireDate: fireDate)
@@ -382,15 +424,18 @@ private struct WorkReminderControl: View {
                     }
                     .buttonStyle(.borderless)
                     .disabled(action.busy)
+                    .help(hintText)
                 }
             case .denied:
-                Text(L10n.text("通知权限已关闭。可在系统设置中开启后再设置提醒。",
-                               "Notifications are off. Enable them in System Settings to use reminders."))
-                    .font(.system(size: 10)).foregroundStyle(.secondary)
-                Button(L10n.text("打开系统通知设置", "Open notification settings")) {
-                    reminders.openSystemSettings()
+                HStack(spacing: 6) {
+                    Text(L10n.text("通知权限已关闭", "Notifications are off"))
+                        .font(.system(size: 10)).foregroundStyle(.secondary)
+                    Button(L10n.text("打开系统通知设置", "Open notification settings")) {
+                        reminders.openSystemSettings()
+                    }
+                    .buttonStyle(.borderless).font(.system(size: 10))
                 }
-                .buttonStyle(.borderless).font(.system(size: 10))
+                .help(hintText)
             case .unknown, .notDetermined:
                 Button {
                     requestAndSchedule(fireDate: fireDate)
@@ -400,18 +445,13 @@ private struct WorkReminderControl: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(action.busy)
+                .help(hintText)
             }
-            Text(String(format: L10n.text("依据 %1$@ 最佳时刻，提前 %2$d 分钟通知；时区 %3$@。可在此取消，也可在系统通知设置中关闭。",
-                                          "Based on %1$@ best time, notify %2$d min earlier; time zone %3$@. Cancel here or in Notification settings."),
-                         model.uppercased(), minutesBefore, store.timezone))
-                .font(.system(size: 9)).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
             if let message = action.message {
                 Text(message).font(.system(size: 9)).foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .padding(.top, 2)
     }
 
     private var parsedBestTime: Date? {
@@ -468,30 +508,32 @@ struct WorkHeroView: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     private var comparison: ForecastComparison { store.pointComparison }
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             if store.result != nil && store.resultTab != "概览" {
                 analysisContext
             } else {
                 WorkActionSummaryView(comparison: comparison)
                 if store.result != nil {
-                    VStack(alignment: .leading, spacing: 12) {
-                        HStack {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
                             Text(L10n.t("模式结果")).fireSkyFont(size: 12, weight: .semibold)
-                            Spacer()
+                            Text("·").foregroundStyle(.secondary)
+                            // 标题跟随结果原始参数，而不是当前表单。
+                            Text("\(store.resultTitle) \(L10n.t(store.resultPhenomenonLabel))")
+                                .fireSkyFont(size: 11, relativeTo: .caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                            Spacer(minLength: 0)
                         }
-                        // 标题跟随结果原始参数，而不是当前表单。
-                        Text("\(store.resultTitle) \(L10n.t(store.resultPhenomenonLabel))")
-                            .fireSkyFont(size: 11, relativeTo: .caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
                         WorkStaleResultBanner()
-                        HStack(alignment: .top, spacing: 18) {
+                        HStack(alignment: .top, spacing: 14) {
                             summary("gfs").frame(maxWidth: .infinity, alignment: .leading)
                             Divider().opacity(0.5)
                             summary("ec").frame(maxWidth: .infinity, alignment: .leading)
                         }
                     }
-                    .padding(16)
+                    .padding(11)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .workSurface()
                 }
@@ -501,17 +543,18 @@ struct WorkHeroView: View {
     }
 
     private var analysisContext: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 5) {
             Text("\(store.resultTitle) \(L10n.t(store.resultPhenomenonLabel))")
                 .fireSkyFont(size: 11, relativeTo: .caption)
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+                .lineLimit(1)
+                .truncationMode(.tail)
             WorkStaleResultBanner()
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), alignment: .leading),
                                     count: dynamicTypeSize.isAccessibilitySize ? 1 : 2),
-                      alignment: .leading, spacing: 8) {
+                      alignment: .leading, spacing: 6) {
                 ForEach(ForecastComparison.models, id: \.self) { model in
-                    VStack(alignment: .leading, spacing: 4) {
+                    VStack(alignment: .leading, spacing: 3) {
                         HStack(spacing: 8) {
                             Text(model.uppercased()).foregroundStyle(modelColor(model))
                             Text(format(comparison.peak(model), digits: 2) + " / 2.5")
@@ -525,11 +568,11 @@ struct WorkHeroView: View {
                         }
                         .fireSkyFont(size: 12, weight: .semibold)
                         Text(L10n.status(comparison.status(model)))
-                            .fireSkyFont(size: 11, relativeTo: .caption)
+                            .fireSkyFont(size: 10.5, relativeTo: .caption)
                             .foregroundStyle(comparison.error(model) == nil ? Color.secondary : Color.red)
                             .fixedSize(horizontal: false, vertical: true)
                         if let error = comparison.error(model) {
-                            Text(error).fireSkyFont(size: 11, relativeTo: .caption)
+                            Text(error).fireSkyFont(size: 10.5, relativeTo: .caption)
                                 .foregroundStyle(.red).textSelection(.enabled)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -539,7 +582,7 @@ struct WorkHeroView: View {
                 }
             }
         }
-        .padding(12)
+        .padding(.horizontal, 12).padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .workSurface()
     }
@@ -547,70 +590,73 @@ struct WorkHeroView: View {
     private func summary(_ model: String) -> some View {
         let report = comparison.report(model)
         let quality = comparison.peak(model)
-        return VStack(alignment: .leading, spacing: 9) {
+        let sourceNote = modelSourceNote(model, usesGeosFP: store.usesGeosFP)
+        return VStack(alignment: .leading, spacing: 5) {
             HStack {
                 Circle().fill(modelColor(model)).frame(width: 6, height: 6)
-                Text(model.uppercased()).fireSkyFont(size: 12, weight: .semibold)
+                Text(model.uppercased()).fireSkyFont(size: 11.5, weight: .semibold)
                 Spacer(minLength: 4)
                 Text(L10n.status(comparison.status(model)))
-                    .fireSkyFont(size: 11, relativeTo: .caption)
+                    .fireSkyFont(size: 10.5, relativeTo: .caption)
                     .foregroundStyle(comparison.error(model) == nil ? Color.secondary : Color.red)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .lineLimit(1)
             }
-            HStack(alignment: .top, spacing: 12) {
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack(alignment: .firstTextBaseline, spacing: 5) {
-                        Text(format(quality, digits: 2)).fireSkyFont(size: 32, weight: .semibold, relativeTo: .largeTitle)
+            HStack(alignment: .top, spacing: 10) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: 4) {
+                        Text(format(quality, digits: 2)).fireSkyFont(size: 26, weight: .semibold, relativeTo: .title)
                             .monospacedDigit().foregroundStyle(quality == nil ? Color.secondary : modelColor(model))
                             .lineLimit(1).minimumScaleFactor(0.8)
                         Text("/ 2.5").fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
                     }
                     Text(L10n.qualityLevel(report?["peak_quality_level"] as? String
                         ?? report?["quality_level"] as? String ?? L10n.t("峰值质量指数")))
-                        .fireSkyFont(size: 11, relativeTo: .caption)
+                        .fireSkyFont(size: 10.5, relativeTo: .caption)
                         .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(L10n.t("最佳时刻")).fireSkyFont(size: 11, relativeTo: .caption)
+                VStack(alignment: .trailing, spacing: 2) {
+                    Text(L10n.t("最佳时刻")).fireSkyFont(size: 10.5, relativeTo: .caption)
                         .foregroundStyle(.secondary)
                     Text(timeLabel(report?["best_time_local"] as? String))
-                        .fireSkyFont(size: 22, weight: .semibold, relativeTo: .title2).monospacedDigit()
+                        .fireSkyFont(size: 18, weight: .semibold, relativeTo: .title3).monospacedDigit()
                 }
             }
             SkyTimeline(report: report, timezone: store.timezone)
             ViewThatFits(in: .horizontal) {
-                HStack(alignment: .top, spacing: 5) {
+                HStack(alignment: .top, spacing: 4) {
                     if let cycle = cycleLabel(model, report) {
                         Text(L10n.tf("起报 %@", cycle))
-                            .lineLimit(2).fixedSize(horizontal: false, vertical: true).workChip()
+                            .lineLimit(1).workChip()
                     }
                     pressureFamilyChip(model, report)
                     cloudGenusChip(report)
                 }
-                VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 4) {
                     if let cycle = cycleLabel(model, report) {
                         Text(L10n.tf("起报 %@", cycle)).workChip()
                     }
-                    HStack(spacing: 5) {
+                    HStack(spacing: 4) {
                         pressureFamilyChip(model, report)
                         cloudGenusChip(report)
                     }
                 }
             }
-            .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
-            Text(modelSourceNote(model, usesGeosFP: store.usesGeosFP))
-                .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
+            Text(sourceNote)
+                .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help(sourceNote)
             if let message = comparison.error(model) {
-                Text(message).fireSkyFont(size: 11, relativeTo: .caption)
+                Text(message).fireSkyFont(size: 10.5, relativeTo: .caption)
                     .foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                     .help(message).textSelection(.enabled)
             }
         }
-        .frame(maxWidth: .infinity, minHeight: 124, alignment: .topLeading)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
         .fixedSize(horizontal: false, vertical: true)
-            .accessibilityElement(children: .contain).accessibilityLabel(model.uppercased())
+        .accessibilityElement(children: .contain).accessibilityLabel(model.uppercased())
     }
 
     private func pressureFamilyChip(_ model: String, _ report: JSONObject?) -> some View {
@@ -661,118 +707,284 @@ private let metricSpec: [(String, String, String)] = [
     ("convective", "对流风险", "模式对流风险指标 · 非事件概率"),
 ]
 
+private final class ResultsOverlayState: ObservableObject {
+    @Published var showDiagnostics = false
+}
+
 struct WorkResultsView: View {
     @EnvironmentObject private var store: Store
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @StateObject private var overlay = ResultsOverlayState()
     private var comparison: ForecastComparison { store.pointComparison }
     private var report: JSONObject? { comparison.report(store.selectedModel) }
-    private let groups = [("云况与色彩", 0..<4), ("大气光学", 4..<7), ("时效与可靠性", 7..<10)]
     var body: some View {
-        if comparison.result == nil {
-            firstRunEmptyCanvas
+        Group {
+            if comparison.result == nil {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(spacing: 10) {
+                        WorkHeroView()
+                        firstRunEmptyCanvas
+                    }
+                } else {
+                    ScrollView {
+                        VStack(spacing: 10) {
+                            WorkHeroView()
+                            firstRunEmptyCanvas
+                        }
+                        .padding(.trailing, 2)
+                    }
+                    .defaultScrollAnchor(.top)
+                    .scrollIndicators(.hidden)
+                }
+            } else if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 10) {
+                    WorkHeroView()
+                    pinnedTabBar
+                    tabBody
+                }
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10, pinnedViews: [.sectionHeaders]) {
+                        WorkHeroView()
+                        Section {
+                            tabBody
+                        } header: {
+                            pinnedTabBar
+                        }
+                    }
+                    .padding(.trailing, 2)
+                }
+                .defaultScrollAnchor(.top)
+                .scrollIndicators(.hidden)
+            }
+        }
+        .sheet(isPresented: $overlay.showDiagnostics) {
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Text(L10n.t("诊断与时间窗"))
+                        .fireSkyFont(size: 13.5, weight: .semibold)
+                    Spacer()
+                    WorkSegments(options: ForecastComparison.models, titles: ["GFS", "EC"], selection: $store.selectedModel)
+                        .frame(width: 124)
+                    Button(L10n.close) { overlay.showDiagnostics = false }
+                        .buttonStyle(.borderless)
+                        .keyboardShortcut(.cancelAction)
+                }
+                .padding(.horizontal, 16).padding(.vertical, 10)
+                Divider()
+                ScrollView {
+                    if let message = comparison.error(store.selectedModel) {
+                        Text(L10n.tf("%@ 未完成：%@", store.selectedModel.uppercased(), message))
+                            .fireSkyFont(size: 12).foregroundStyle(.red)
+                            .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                            .padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        WorkDiagnosticView(report: report, profile: false)
+                            .padding(14)
+                    }
+                }
+            }
+            .frame(minWidth: 580, minHeight: 520)
+            .tint(warm)
+        }
+    }
+
+    private var pinnedTabBar: some View {
+        HStack(alignment: .center, spacing: 10) {
+            WorkAnalysisTabs()
+            Spacer(minLength: 8)
+            if store.resultTab != "概览" {
+                HStack(spacing: 8) {
+                    Text(L10n.status(comparison.status(store.selectedModel)))
+                        .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
+                    WorkSegments(options: ForecastComparison.models, titles: ["GFS", "EC"], selection: $store.selectedModel)
+                        .frame(width: 124)
+                }
+            }
+            if comparison.result != nil {
+                Button {
+                    overlay.showDiagnostics = true
+                } label: {
+                    Label(L10n.t("诊断"), systemImage: "info.circle")
+                        .fireSkyFont(size: 11, weight: .medium, relativeTo: .caption)
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(Color.primary.opacity(scheme == .dark ? 0.08 : 0.055), in: Capsule())
+                        .overlay {
+                            Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                        }
+                }
+                .buttonStyle(.plain)
+                .help(L10n.t("查看技术诊断与时间窗元数据"))
+            }
+        }
+        .padding(.vertical, 6)
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .fireSkySurface(role: .navigation, cornerRadius: 12)
+    }
+
+    @ViewBuilder
+    private var tabBody: some View {
+        if store.resultTab == "概览" {
+            VStack(spacing: 10) {
+                panelCloudAndColor
+                panelAtmosphericAndReliability
+                WorkSpectralAndRadarRow(comparison: comparison, selectedModel: $store.selectedModel)
+                WorkQualityBreakdownView(comparison: comparison)
+                WorkComparisonCurveView(comparison: comparison, timezone: store.timezone)
+            }
+        } else if let message = comparison.error(store.selectedModel) {
+            Text(L10n.tf("%@ 未完成：%@", store.selectedModel.uppercased(), message))
+                .fireSkyFont(size: 12).foregroundStyle(.red)
+                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+                .padding(16).frame(maxWidth: .infinity, alignment: .leading).workSurface()
+        } else if report == nil, comparison.result != nil {
+            Text(L10n.tf("%@ 暂无结果", store.selectedModel.uppercased()))
+                .fireSkyFont(size: 12)
+                .foregroundStyle(.secondary).padding(24)
+        } else if store.resultTab == "逐时台账" {
+            WorkLedgerView(report: report,
+                           bestTime: report?["best_time_local"] as? String,
+                           selectedTime: $store.pointSelectedTime)
+        } else if store.resultTab == "大气剖面" {
+            WorkProfileTabView(report: report)
         } else {
-            VStack(spacing: 12) {
-                HStack(alignment: .center, spacing: 12) {
-                    WorkAnalysisTabs()
-                    Spacer(minLength: 8)
-                    if store.resultTab != "概览" {
-                        HStack(spacing: 8) {
-                            Text(L10n.status(comparison.status(store.selectedModel)))
-                                .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
-                            WorkSegments(options: ForecastComparison.models, titles: ["GFS", "EC"], selection: $store.selectedModel)
-                                .frame(width: 132)
+            WorkDiagnosticView(report: report, profile: false)
+        }
+    }
+
+    private var panelCloudAndColor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(L10n.t("云况与色彩"))
+                .fireSkyFont(size: 10.5, weight: .semibold, relativeTo: .caption)
+                .foregroundStyle(.secondary)
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 0) {
+                    ForEach(0..<4, id: \.self) { offset in
+                        if offset > 0 { Divider().opacity(0.45) }
+                        metricCell(metricSpec[offset])
+                            .padding(.leading, offset == 0 ? 0 : 10)
+                            .padding(.trailing, offset == 3 ? 0 : 10)
+                            .frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                }
+                .frame(minWidth: 740)
+
+                VStack(spacing: 8) {
+                    HStack(alignment: .top, spacing: 0) {
+                        metricCell(metricSpec[0]).padding(.trailing, 10).frame(maxWidth: .infinity, alignment: .topLeading)
+                        Divider().opacity(0.45)
+                        metricCell(metricSpec[1]).padding(.leading, 10).frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                    Divider().opacity(0.45)
+                    HStack(alignment: .top, spacing: 0) {
+                        metricCell(metricSpec[2]).padding(.trailing, 10).frame(maxWidth: .infinity, alignment: .topLeading)
+                        Divider().opacity(0.45)
+                        metricCell(metricSpec[3]).padding(.leading, 10).frame(maxWidth: .infinity, alignment: .topLeading)
+                    }
+                }
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .workSurface()
+    }
+
+    private var panelAtmosphericAndReliability: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .top, spacing: 10) {
+                threeColumnGroupCard(title: "大气光学", range: 4..<7)
+                    .frame(minWidth: 410, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                threeColumnGroupCard(title: "时效与可靠性", range: 7..<10)
+                    .frame(minWidth: 410, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            }
+            VStack(spacing: 8) {
+                threeColumnGroupCard(title: "大气光学", range: 4..<7)
+                threeColumnGroupCard(title: "时效与可靠性", range: 7..<10)
+            }
+        }
+    }
+
+    private func threeColumnGroupCard(title: String, range: Range<Int>) -> some View {
+        let specs = Array(metricSpec[range])
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(L10n.t(title))
+                .fireSkyFont(size: 10.5, weight: .semibold, relativeTo: .caption)
+                .foregroundStyle(.secondary)
+            HStack(alignment: .top, spacing: 0) {
+                ForEach(Array(specs.enumerated()), id: \.element.0) { idx, spec in
+                    if idx > 0 { Divider().opacity(0.45) }
+                    metricCell(spec)
+                        .padding(.leading, idx == 0 ? 0 : 10)
+                        .padding(.trailing, idx == specs.count - 1 ? 0 : 10)
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .workSurface()
+    }
+
+    private func metricCell(_ spec: (String, String, String)) -> some View {
+        let captionText = L10n.t(spec.0 == "aod" ? comparison.aod.caption : spec.2)
+        return VStack(alignment: .leading, spacing: 4) {
+            Text(L10n.t(spec.1))
+                .fireSkyFont(size: 11, weight: .medium, relativeTo: .caption)
+                .foregroundStyle(.primary.opacity(0.84))
+                .lineLimit(1)
+            if spec.0 == "aod" {
+                WorkAODValue(summary: comparison.aod)
+            } else if spec.0 == "cloud_layer" {
+                VStack(alignment: .leading, spacing: 2.5) {
+                    ForEach(ForecastComparison.models, id: \.self) { model in
+                        let modelReport = comparison.report(model)
+                        let genus = cloudGenusBrief(modelReport?["cloud_genus_proxy"] as? JSONObject)
+                        HStack(alignment: .firstTextBaseline, spacing: 4) {
+                            Text(model.uppercased())
+                                .fireSkyFont(size: 9.5, weight: .semibold, relativeTo: .caption)
+                                .foregroundStyle(modelColor(model))
+                                .frame(width: 24, alignment: .leading)
+                            Text(metricValue(spec.0, modelReport))
+                                .fireSkyFont(size: 12.5, weight: .semibold)
+                                .monospacedDigit()
+                                .lineLimit(1).minimumScaleFactor(0.75)
+                            if let genus {
+                                Text(genus)
+                                    .fireSkyFont(size: 9.5, relativeTo: .caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                            }
                         }
                     }
                 }
-                ScrollView {
-                    VStack(spacing: 12) {
-                        if store.resultTab == "概览" {
-                            ForEach(groups, id: \.0) { title, range in
-                                VStack(alignment: .leading, spacing: 7) {
-                                    Text(L10n.t(title))
-                                        .fireSkyFont(size: 11, weight: .medium, relativeTo: .caption)
-                                        .foregroundStyle(.secondary)
-                                    // 自适应列数：宽屏多列，窄窗口自动降列，不靠继续缩小字号。
-                                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 165), spacing: 10)],
-                                              alignment: .leading, spacing: 10) {
-                                        ForEach(Array(metricSpec[range]), id: \.0) { spec in
-                                            VStack(alignment: .leading, spacing: 7) {
-                                                Text(L10n.t(spec.1)).fireSkyFont(size: 12)
-                                                    .foregroundStyle(.primary.opacity(0.8))
-                                                    .fixedSize(horizontal: false, vertical: true)
-                                                if spec.0 == "aod" {
-                                                    WorkAODValue(summary: comparison.aod)
-                                                } else if spec.0 == "cloud_layer" {
-                                                    VStack(alignment: .leading, spacing: 4) {
-                                                        ForEach(ForecastComparison.models, id: \.self) { model in
-                                                            let modelReport = comparison.report(model)
-                                                            let genus = cloudGenusBrief(modelReport?["cloud_genus_proxy"] as? JSONObject)
-                                                            VStack(alignment: .leading, spacing: 1) {
-                                                                HStack(spacing: 5) {
-                                                                    Text(model.uppercased())
-                                                                        .fireSkyFont(size: 10, weight: .medium, relativeTo: .caption)
-                                                                        .foregroundStyle(modelColor(model)).frame(width: 25, alignment: .leading)
-                                                                    Text(metricValue(spec.0, modelReport))
-                                                                        .fireSkyFont(size: 14, weight: .semibold).monospacedDigit()
-                                                                        .lineLimit(1).minimumScaleFactor(0.65)
-                                                                }
-                                                                if let genus {
-                                                                    Text(genus)
-                                                                        .fireSkyFont(size: 10, relativeTo: .caption)
-                                                                        .foregroundStyle(.secondary)
-                                                                        .padding(.leading, 30)
-                                                                        .lineLimit(1)
-                                                                }
-                                                            }
-                                                        }
-                                                    }.frame(maxWidth: .infinity, alignment: .leading)
-                                                } else {
-                                                    HStack(spacing: 10) {
-                                                        ForEach(ForecastComparison.models, id: \.self) { model in
-                                                            VStack(alignment: .leading, spacing: 3) {
-                                                                Text(model.uppercased())
-                                                                    .fireSkyFont(size: 10, weight: .medium, relativeTo: .caption)
-                                                                    .foregroundStyle(modelColor(model))
-                                                                Text(metricValue(spec.0, comparison.report(model)))
-                                                                    .fireSkyFont(size: 19, weight: .semibold, relativeTo: .title3).monospacedDigit()
-                                                                    .foregroundStyle(comparison.report(model) == nil ? Color.secondary : Color.primary)
-                                                                    .lineLimit(1).minimumScaleFactor(0.8)
-                                                            }.frame(maxWidth: .infinity, alignment: .leading)
-                                                        }
-                                                    }
-                                                }
-                                                Text(L10n.t(spec.0 == "aod" ? comparison.aod.caption : spec.2))
-                                                    .fireSkyFont(size: 10, relativeTo: .caption)
-                                                    .foregroundStyle(.secondary)
-                                                    .fixedSize(horizontal: false, vertical: true)
-                                            }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
-                                                .frame(minHeight: 116, alignment: .topLeading).workSurface()
-                                        }
-                                    }
-                                }
-                            }
-                            WorkSpectralAndRadarRow(comparison: comparison, selectedModel: $store.selectedModel)
-                            WorkQualityBreakdownView(comparison: comparison)
-                            WorkComparisonCurveView(comparison: comparison, timezone: store.timezone)
-                        } else if let message = comparison.error(store.selectedModel) {
-                            Text(L10n.tf("%@ 未完成：%@", store.selectedModel.uppercased(), message))
-                                .fireSkyFont(size: 12).foregroundStyle(.red)
-                                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
-                                .padding(18).frame(maxWidth: .infinity, alignment: .leading).workSurface()
-                        } else if report == nil, comparison.result != nil {
-                            Text(L10n.tf("%@ 暂无结果", store.selectedModel.uppercased()))
-                                .fireSkyFont(size: 12)
-                                .foregroundStyle(.secondary).padding(30)
-                        } else if store.resultTab == "逐时台账" {
-                            WorkLedgerView(report: report,
-                                           bestTime: report?["best_time_local"] as? String,
-                                           selectedTime: $store.pointSelectedTime)
-                        } else {
-                            WorkDiagnosticView(report: report, profile: store.resultTab == "大气剖面")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(spacing: 8) {
+                    ForEach(ForecastComparison.models, id: \.self) { model in
+                        VStack(alignment: .leading, spacing: 1.5) {
+                            Text(model.uppercased())
+                                .fireSkyFont(size: 9.5, weight: .semibold, relativeTo: .caption)
+                                .foregroundStyle(modelColor(model))
+                            Text(metricValue(spec.0, comparison.report(model)))
+                                .fireSkyFont(size: 16, weight: .semibold, relativeTo: .title3)
+                                .monospacedDigit()
+                                .foregroundStyle(comparison.report(model) == nil ? Color.secondary : Color.primary)
+                                .lineLimit(1).minimumScaleFactor(0.8)
                         }
-                    }.padding(.trailing, 2)
-                }.defaultScrollAnchor(.top).scrollIndicators(.hidden)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
             }
+            Text(captionText)
+                .fireSkyFont(size: 9.5, relativeTo: .caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.82)
+                .help(captionText)
         }
     }
 
@@ -917,8 +1129,21 @@ private struct WorkSpectralAndRadarRow: View {
     }
 
     var body: some View {
-        if hasSpectral || hasRadar {
-            VStack(spacing: 12) {
+        if hasSpectral && hasRadar {
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .top, spacing: 10) {
+                    SpectralColorBannerView(comparison: comparison, selectedModel: $selectedModel)
+                        .frame(minWidth: 340, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    AzimuthRadarView(comparison: comparison, selectedModel: $selectedModel)
+                        .frame(minWidth: 380, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                }
+                VStack(spacing: 10) {
+                    SpectralColorBannerView(comparison: comparison, selectedModel: $selectedModel)
+                    AzimuthRadarView(comparison: comparison, selectedModel: $selectedModel)
+                }
+            }
+        } else if hasSpectral || hasRadar {
+            VStack(spacing: 10) {
                 if hasSpectral {
                     SpectralColorBannerView(comparison: comparison, selectedModel: $selectedModel)
                 }
@@ -961,10 +1186,10 @@ private struct SpectralColorBannerView: View {
             let peakTime = spectralHHMM(spectral["peak_time_local"] as? String)
                 ?? spectralHHMM(comparison.report(activeModel)?["best_time_local"] as? String)
 
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .center, spacing: 8) {
                     Text(L10n.text("光谱预测云色 · CIE 1931", "Spectral Glow Palette · CIE 1931"))
-                        .fireSkyFont(size: 13, weight: .semibold)
+                        .fireSkyFont(size: 12.5, weight: .semibold)
                     Spacer()
                     InlineModelSwitcher(
                         available: availableModels,
@@ -973,25 +1198,25 @@ private struct SpectralColorBannerView: View {
                     )
                 }
 
-                HStack(alignment: .top, spacing: 14) {
+                HStack(alignment: .center, spacing: 11) {
                     skyProfileSwatch(gradientColors: gradientColors, fallback: peakColor)
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack(alignment: .center, spacing: 7) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack(alignment: .center, spacing: 6) {
                             RoundedRectangle(cornerRadius: 4)
                                 .fill(peakColor)
-                                .frame(width: 13, height: 13)
+                                .frame(width: 12, height: 12)
                                 .overlay {
                                     RoundedRectangle(cornerRadius: 4)
                                         .strokeBorder(.white.opacity(0.45), lineWidth: 0.8)
                                 }
                             Text(peakLabel.isEmpty ? peakHex : peakLabel)
-                                .fireSkyFont(size: 13, weight: .semibold)
+                                .fireSkyFont(size: 12.5, weight: .semibold)
                             Text(peakHex)
                                 .fireSkyFont(size: 10, weight: .medium, relativeTo: .caption)
                                 .monospacedDigit()
                                 .foregroundStyle(.secondary)
-                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .padding(.horizontal, 6).padding(.vertical, 1.5)
                                 .background(Color.primary.opacity(0.06), in: Capsule())
                             Spacer(minLength: 4)
                             if let peakTime {
@@ -1011,7 +1236,7 @@ private struct SpectralColorBannerView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(14)
+            .padding(11)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .workSurface()
         }
@@ -1038,12 +1263,12 @@ private struct SpectralColorBannerView: View {
             }
             .padding(.vertical, 7)
         }
-        .frame(width: 72, height: 112)
+        .frame(width: 60, height: 108)
     }
 
     private func spectralTimelineSection(steps: [JSONObject], peakColor: Color) -> some View {
         let peakIdx = steps.firstIndex(where: { ($0["is_peak"] as? NSNumber)?.boolValue == true }) ?? (steps.count / 2)
-        return VStack(alignment: .leading, spacing: 5) {
+        return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 1) {
                 ForEach(Array(steps.enumerated()), id: \.offset) { idx, step in
                     let hex = step["hex"] as? String ?? "#E25822"
@@ -1051,7 +1276,7 @@ private struct SpectralColorBannerView: View {
                     let isPeak = idx == peakIdx
                     Rectangle()
                         .fill(cellColor)
-                        .frame(maxWidth: .infinity, minHeight: 22, maxHeight: 22)
+                        .frame(maxWidth: .infinity, minHeight: 18, maxHeight: 18)
                         .overlay {
                             if isPeak {
                                 Rectangle()
@@ -1166,10 +1391,10 @@ private struct AzimuthRadarView: View {
             let recommendation = L10n.text(radar["recommendation_zh"] as? String ?? "", radar["recommendation_en"] as? String ?? "")
             let topThree = Array(bearings.sorted { $0.score > $1.score }.prefix(3))
 
-            VStack(alignment: .leading, spacing: 12) {
+            VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .center, spacing: 8) {
                     Text(L10n.text("16 方位火烧云观测雷达", "16-Direction Azimuth Glow Radar"))
-                        .fireSkyFont(size: 13, weight: .semibold)
+                        .fireSkyFont(size: 12.5, weight: .semibold)
                     Spacer()
                     InlineModelSwitcher(
                         available: availableModels,
@@ -1178,37 +1403,37 @@ private struct AzimuthRadarView: View {
                     )
                 }
 
-                HStack(alignment: .center, spacing: 16) {
+                HStack(alignment: .center, spacing: 12) {
                     radarCompass(bearings: bearings, solarAz: solarAz, bestAz: bestAz, bestScore: bestScore)
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        HStack(spacing: 8) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 6) {
                             Label {
                                 Text(String(format: L10n.text("推荐 %@ (%.0f°)", "Best %@ (%.0f°)"), bestDir, bestAz))
-                                    .fireSkyFont(size: 13, weight: .semibold).monospacedDigit()
+                                    .fireSkyFont(size: 12.5, weight: .semibold).monospacedDigit()
                             } icon: {
-                                Circle().fill(Color(red: 0.88, green: 0.31, blue: 0.15)).frame(width: 8, height: 8)
+                                Circle().fill(Color(red: 0.88, green: 0.31, blue: 0.15)).frame(width: 7, height: 7)
                             }
                             Text(String(format: "%.0f%%", bestScore * 100.0))
-                                .fireSkyFont(size: 11, weight: .semibold, relativeTo: .caption).monospacedDigit()
+                                .fireSkyFont(size: 10.5, weight: .semibold, relativeTo: .caption).monospacedDigit()
                                 .foregroundStyle(.orange)
-                                .padding(.horizontal, 6).padding(.vertical, 2)
+                                .padding(.horizontal, 6).padding(.vertical, 1.5)
                                 .background(Color.orange.opacity(0.14), in: Capsule())
                         }
 
                         Label {
                             Text(String(format: L10n.text("太阳方位角 %.0f°", "Solar azimuth %.0f°"), solarAz))
-                                .fireSkyFont(size: 11, relativeTo: .caption).foregroundStyle(.secondary).monospacedDigit()
+                                .fireSkyFont(size: 10.5, relativeTo: .caption).foregroundStyle(.secondary).monospacedDigit()
                         } icon: {
                             Circle()
                                 .fill(Color(red: 0.96, green: 0.65, blue: 0.14))
                                 .overlay(Circle().strokeBorder(.white.opacity(0.8), lineWidth: 0.8))
-                                .frame(width: 8, height: 8)
+                                .frame(width: 7, height: 7)
                         }
 
                         if !recommendation.isEmpty {
                             Text(recommendation)
-                                .fireSkyFont(size: 11, relativeTo: .caption)
+                                .fireSkyFont(size: 10.5, relativeTo: .caption)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
@@ -1220,7 +1445,7 @@ private struct AzimuthRadarView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
-            .padding(14)
+            .padding(11)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             .workSurface()
         }
@@ -1305,31 +1530,31 @@ private struct AzimuthRadarView: View {
                 ctx.fill(Path(ellipseIn: sunDot), with: .color(Color(red: 0.96, green: 0.65, blue: 0.14)))
                 ctx.stroke(Path(ellipseIn: sunDot), with: .color(.white.opacity(0.95)), lineWidth: 1.2)
             }
-            .frame(width: 180, height: 180)
+            .frame(width: 146, height: 146)
 
             VStack {
-                Text("N").fireSkyFont(size: 10, weight: .semibold).foregroundStyle(.secondary)
+                Text("N").fireSkyFont(size: 9.5, weight: .semibold).foregroundStyle(.secondary)
                 Spacer()
-                Text("S").fireSkyFont(size: 10, weight: .semibold).foregroundStyle(.secondary)
+                Text("S").fireSkyFont(size: 9.5, weight: .semibold).foregroundStyle(.secondary)
             }
             HStack {
-                Text("W").fireSkyFont(size: 10, weight: .semibold).foregroundStyle(.secondary)
+                Text("W").fireSkyFont(size: 9.5, weight: .semibold).foregroundStyle(.secondary)
                 Spacer()
-                Text("E").fireSkyFont(size: 10, weight: .semibold).foregroundStyle(.secondary)
+                Text("E").fireSkyFont(size: 9.5, weight: .semibold).foregroundStyle(.secondary)
             }
         }
-        .frame(width: 184, height: 184)
+        .frame(width: 150, height: 150)
     }
 
     private func topBearingsList(_ items: [BearingItem]) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+        VStack(alignment: .leading, spacing: 5) {
             ForEach(items) { item in
-                VStack(alignment: .leading, spacing: 2.5) {
-                    HStack(spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(spacing: 6) {
                         Text(item.label)
-                            .fireSkyFont(size: 11, weight: .semibold, relativeTo: .caption)
+                            .fireSkyFont(size: 10.5, weight: .semibold, relativeTo: .caption)
                             .lineLimit(1)
-                            .frame(width: 54, alignment: .leading)
+                            .frame(width: 50, alignment: .leading)
                         GeometryReader { geo in
                             ZStack(alignment: .leading) {
                                 Capsule().fill(Color.primary.opacity(0.08))
@@ -1337,7 +1562,7 @@ private struct AzimuthRadarView: View {
                                     .frame(width: max(4, geo.size.width * item.score))
                             }
                         }
-                        .frame(minWidth: 96, maxWidth: 168, minHeight: 6, maxHeight: 6)
+                        .frame(minWidth: 72, maxWidth: 136, minHeight: 5, maxHeight: 5)
                         Text(String(format: "%.0f%%", item.score * 100.0))
                             .fireSkyFont(size: 11, weight: .medium, relativeTo: .caption)
                             .monospacedDigit()
@@ -1356,123 +1581,278 @@ private struct AzimuthRadarView: View {
     }
 }
 
-/// Read-only score composition panel (plan item point-3). Every value is read from the
-/// backend report (quality_components / report fields); nothing is recomputed in SwiftUI.
+private final class BreakdownDisclosureState: ObservableObject {
+    @Published var expanded = false
+}
+
+/// Read-only unified GFS vs EC score composition panel. Every value is read directly
+/// from the backend report (quality_components / report fields); nothing is recomputed.
 private struct WorkQualityBreakdownView: View {
     let comparison: ForecastComparison
+    @StateObject private var disclosure = BreakdownDisclosureState()
+
+    private struct CellContent {
+        let primary: String
+        let detail: String
+        let primaryColor: Color
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
-                Text(L10n.t("评分组成")).fireSkyFont(size: 13, weight: .semibold)
-                Text(L10n.t("只读展示后端计算值 · 不在客户端重算"))
-                    .fireSkyFont(size: 9, relativeTo: .caption).foregroundStyle(.secondary)
-                Spacer()
+        VStack(alignment: .leading, spacing: 8) {
+            headerBar
+            Divider().opacity(0.45)
+            comparisonTable
+            if let limitSummary = limitingFactorSummary {
+                Text(limitSummary)
+                    .fireSkyFont(size: 10, relativeTo: .caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 1)
+            }
+            if disclosure.expanded {
+                Divider().opacity(0.45)
+                expandedDetails
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .workSurface()
+    }
+
+    private var headerBar: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 10) {
+                Text(L10n.t("评分组成")).fireSkyFont(size: 12.5, weight: .semibold)
+                HStack(spacing: 10) {
+                    ForEach(ForecastComparison.models, id: \.self) { model in
+                        modelSummaryBadge(model)
+                    }
+                }
+                Spacer(minLength: 8)
+                disclosureButton
+            }
+            VStack(alignment: .leading, spacing: 5) {
+                HStack {
+                    Text(L10n.t("评分组成")).fireSkyFont(size: 12.5, weight: .semibold)
+                    Spacer()
+                    disclosureButton
+                }
+                HStack(spacing: 10) {
+                    ForEach(ForecastComparison.models, id: \.self) { model in
+                        modelSummaryBadge(model)
+                    }
+                }
+            }
+        }
+    }
+
+    private var disclosureButton: some View {
+        Button {
+            disclosure.expanded.toggle()
+        } label: {
+            Label(L10n.t("详情与口径"), systemImage: disclosure.expanded ? "chevron.up" : "chevron.down")
+                .fireSkyFont(size: 10, weight: .medium, relativeTo: .caption)
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.borderless)
+    }
+
+    @ViewBuilder
+    private func modelSummaryBadge(_ model: String) -> some View {
+        if let report = comparison.report(model) {
+            HStack(spacing: 5) {
+                Circle().fill(modelColor(model)).frame(width: 6, height: 6)
+                Text(model.uppercased()).fireSkyFont(size: 10.5, weight: .semibold)
+                Text("\(format(report["quality_index"], digits: 3)) / 2.5")
+                    .fireSkyFont(size: 11, weight: .semibold).monospacedDigit()
+                    .foregroundStyle(modelColor(model))
+                if let level = report["quality_level"] as? String, !level.isEmpty {
+                    Text(L10n.qualityLevel(level))
+                        .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            }
+        } else if comparison.error(model) != nil {
+            HStack(spacing: 4) {
+                Circle().fill(Color.red.opacity(0.8)).frame(width: 6, height: 6)
+                Text(L10n.tf("%@ 未完成", model.uppercased()))
+                    .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.red)
+            }
+        } else {
+            HStack(spacing: 4) {
+                Circle().fill(Color.secondary.opacity(0.5)).frame(width: 6, height: 6)
+                Text(L10n.tf("%@ 暂无结果", model.uppercased()))
+                    .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var comparisonTable: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Text(L10n.t("评分项"))
+                    .frame(width: 98, alignment: .leading)
+                ForEach(ForecastComparison.models, id: \.self) { model in
+                    HStack(spacing: 4) {
+                        Circle().fill(modelColor(model)).frame(width: 5, height: 5)
+                        Text(model.uppercased())
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .fireSkyFont(size: 10, weight: .semibold, relativeTo: .caption)
+            .foregroundStyle(.secondary)
+            .padding(.bottom, 5)
+
+            ForEach(0..<6, id: \.self) { idx in
+                Divider().opacity(0.38)
+                metricRow(idx)
+            }
+        }
+    }
+
+    private func rowTitle(_ idx: Int) -> String {
+        switch idx {
+        case 0: return L10n.t("云量基础分")
+        case 1: return L10n.t("可烧云占比")
+        case 2: return L10n.t("入射遮挡")
+        case 3: return L10n.t("持续时间修正")
+        case 4: return L10n.t("入射 AOD 修正")
+        default: return L10n.t("观测 AOD 修正")
+        }
+    }
+
+    private func metricRow(_ idx: Int) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Text(rowTitle(idx))
+                .fireSkyFont(size: 10.5, relativeTo: .caption)
+                .foregroundStyle(.secondary)
+                .frame(width: 98, alignment: .leading)
+            ForEach(ForecastComparison.models, id: \.self) { model in
+                modelMetricCell(idx: idx, report: comparison.report(model))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.vertical, 5)
+    }
+
+    @ViewBuilder
+    private func modelMetricCell(idx: Int, report: JSONObject?) -> some View {
+        if let report {
+            let content = cellContent(idx: idx, report: report)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(content.primary)
+                    .fireSkyFont(size: 11, weight: .semibold)
+                    .monospacedDigit()
+                    .foregroundStyle(content.primaryColor)
+                    .frame(minWidth: 46, alignment: .leading)
+                Text(content.detail)
+                    .fireSkyFont(size: 10, relativeTo: .caption)
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.82)
+            }
+        } else {
+            Text("—")
+                .fireSkyFont(size: 10.5)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func cellContent(idx: Int, report: JSONObject) -> CellContent {
+        let c = report["quality_components"] as? JSONObject ?? [:]
+        switch idx {
+        case 0:
+            let delta = signedDelta(c["coverage_base_score"] ?? c["coverage_score"])
+            let load = format(c["forward_burnable_cloud_load_effective"] ?? c["forward_burnable_cloud_load_peak"], digits: 2)
+            return CellContent(
+                primary: delta ?? "—",
+                detail: "有效 \(ratioText(c["burnable_cloud_coverage_effective"])) · 载荷 \(load)",
+                primaryColor: deltaColor(delta)
+            )
+        case 1:
+            return CellContent(
+                primary: ratioText(c["forward_burnable_cloud_ratio_peak"]),
+                detail: "前方可烧 \(ratioText(c["forward_burnable_cloud_field_amount_peak"])) / 总云 \(ratioText(c["forward_view_cloud_field_amount_peak"]))",
+                primaryColor: .primary
+            )
+        case 2:
+            return CellContent(
+                primary: ratioText(c["solar_incoming_block_risk_at_best_cloud"] ?? c["solar_incoming_block_risk_mean"]),
+                detail: L10n.t("已计入可烧量"),
+                primaryColor: .primary
+            )
+        case 3:
+            let delta = signedDelta(c["duration_adjustment"])
+            let mins = format(report["duration_minutes"] ?? c["duration_minutes"], digits: 0)
+            return CellContent(
+                primary: delta ?? "—",
+                detail: "\(mins) 分 · ×\(format(c["duration_factor"], digits: 3))",
+                primaryColor: deltaColor(delta)
+            )
+        case 4:
+            let delta = signedDelta(c["incoming_aod_adjustment"])
+            return CellContent(
+                primary: delta ?? "—",
+                detail: "AOD \(format(c["quality_aod550"], digits: 3)) · ×\(format(c["incoming_aod_illumination_factor"], digits: 3))",
+                primaryColor: deltaColor(delta)
+            )
+        default:
+            let delta = signedDelta(c["observer_aod_adjustment"])
+            return CellContent(
+                primary: delta ?? "—",
+                detail: "对比 ×\(format(c["observer_aod_contrast_factor"], digits: 3))",
+                primaryColor: deltaColor(delta)
+            )
+        }
+    }
+
+    private var limitingFactorSummary: String? {
+        let gfs = ((comparison.report("gfs")?["quality_components"] as? JSONObject)?["quality_limiting_factor"] as? String)
+            .flatMap { $0.isEmpty ? nil : L10n.qualityLimit($0) }
+        let ec = ((comparison.report("ec")?["quality_components"] as? JSONObject)?["quality_limiting_factor"] as? String)
+            .flatMap { $0.isEmpty ? nil : L10n.qualityLimit($0) }
+        switch (gfs, ec) {
+        case (nil, nil): return nil
+        case let (g?, e?) where g == e: return "当前限制因素：\(g)"
+        case let (g?, e?): return "限制因素 · GFS：\(g) · EC：\(e)"
+        case let (g?, nil): return "GFS 限制因素：\(g)"
+        case let (nil, e?): return "EC 限制因素：\(e)"
+        }
+    }
+
+    private var expandedDetails: some View {
+        let sample = comparison.report("gfs") ?? comparison.report("ec")
+        let sampleComp = sample?["quality_components"] as? JSONObject ?? [:]
+        let radius = valueSuffix(sampleComp["forward_field_radius_km"] ?? sample?["analysis_radius_km"], " km", digits: 0)
+        let sector = valueSuffix(sampleComp["forward_sector_half_angle_deg"], "°", digits: 0, sign: "±")
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 12) {
+                Text("分析范围 \(radius) · 太阳方向扇区 \(sector)")
+                    .fireSkyFont(size: 10, weight: .medium, relativeTo: .caption).foregroundStyle(.secondary)
+                    .monospacedDigit()
             }
             ForEach(ForecastComparison.models, id: \.self) { model in
-                if let report = comparison.report(model) {
-                    breakdown(model: model, report: report)
-                } else if let message = comparison.error(model) {
-                    Text("\(model.uppercased()) 未完成：\(message)")
-                        .font(.system(size: 10)).foregroundStyle(.red).lineLimit(2)
-                } else {
-                    Text(L10n.tf("%@ 暂无结果", model.uppercased()))
-                        .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary)
+                if let r = comparison.report(model) {
+                    let c = r["quality_components"] as? JSONObject ?? [:]
+                    let src = (r["model_source"] as? String ?? model) == "ec" ? "EC TCC + PL-RH 代理" : "GFS 全量云场"
+                    HStack(spacing: 8) {
+                        Text(model.uppercased())
+                            .fireSkyFont(size: 10, weight: .semibold).foregroundStyle(modelColor(model))
+                            .frame(width: 28, alignment: .leading)
+                        Text("原始分 \(format(c["raw_quality_index"], digits: 3)) · \(src) · 观测回程 τ \(format(c["observer_return_optical_depth_mean"], digits: 3)) · T \(format(c["observer_return_transmission_mean"], digits: 3))")
+                            .fireSkyFont(size: 10, relativeTo: .caption).foregroundStyle(.secondary).monospacedDigit()
+                            .lineLimit(1).minimumScaleFactor(0.8)
+                    }
                 }
             }
-        }.padding(16).frame(maxWidth: .infinity, alignment: .leading).workSurface()
-    }
-
-    private func breakdown(model: String, report: JSONObject) -> some View {
-        let components = report["quality_components"] as? JSONObject ?? [:]
-        let modelSource = report["model_source"] as? String ?? model
-        return VStack(alignment: .leading, spacing: 9) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Circle().fill(modelColor(model)).frame(width: 6, height: 6)
-                Text(model.uppercased()).font(.system(size: 11, weight: .semibold))
-                Text("\(format(report["quality_index"], digits: 3)) / 2.5")
-                    .font(.system(size: 12, weight: .semibold)).monospacedDigit()
-                    .foregroundStyle(modelColor(model))
-                Text(report["quality_level"] as? String ?? "")
-                    .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1)
-                Spacer()
-                if let limiting = components["quality_limiting_factor"] as? String, !limiting.isEmpty {
-                    Text("当前限制因素 \(limiting)")
-                        .font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(1).help(limiting)
-                }
-            }
-            HStack(alignment: .top, spacing: 14) {
-                VStack(spacing: 0) {
-                    adjustmentRow("云量基础分",
-                                  "有效可烧 \(ratioText(components["burnable_cloud_coverage_effective"])) · 可烧载荷 \(format(components["forward_burnable_cloud_load_effective"] ?? components["forward_burnable_cloud_load_peak"], digits: 2)) · 前方总云场 \(ratioText(components["forward_view_cloud_field_amount_peak"]))",
-                                  signedDelta(components["coverage_base_score"] ?? components["coverage_score"]))
-                    Divider().opacity(0.5)
-                    adjustmentRow("可烧云比例",
-                                  "可烧/总云量 \(ratioText(components["forward_burnable_cloud_ratio_peak"])) · 前方可烧云量 \(ratioText(components["forward_burnable_cloud_field_amount_peak"]))",
-                                  nil)
-                    Divider().opacity(0.5)
-                    adjustmentRow("几何遮挡（已计入可烧量）",
-                                  "最佳云入射遮挡 \(ratioText(components["solar_incoming_block_risk_at_best_cloud"] ?? components["solar_incoming_block_risk_mean"])) · 不重复扣分",
-                                  nil)
-                    Divider().opacity(0.5)
-                    adjustmentRow("持续时间修正",
-                                  "\(format(report["duration_minutes"] ?? components["duration_minutes"], digits: 0)) 分钟 · ×\(format(components["duration_factor"], digits: 3))",
-                                  signedDelta(components["duration_adjustment"]))
-                    Divider().opacity(0.5)
-                    adjustmentRow("入射 AOD 修正",
-                                  "本地 AOD \(format(components["quality_aod550"], digits: 3)) · 入射因子 ×\(format(components["incoming_aod_illumination_factor"], digits: 3))",
-                                  signedDelta(components["incoming_aod_adjustment"]))
-                    Divider().opacity(0.5)
-                    adjustmentRow("观测 AOD 修正",
-                                  "观测对比因子 ×\(format(components["observer_aod_contrast_factor"], digits: 3))",
-                                  signedDelta(components["observer_aod_adjustment"]))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                VStack(alignment: .leading, spacing: 6) {
-                    capRow("修正后原始分", format(components["raw_quality_index"], digits: 3))
-                    capRow("云量基础分", format(components["coverage_base_score"] ?? components["coverage_score"], digits: 3))
-                    capRow("分析范围", valueSuffix(components["forward_field_radius_km"] ?? report["analysis_radius_km"], " km", digits: 0))
-                    capRow("太阳方向扇区", valueSuffix(components["forward_sector_half_angle_deg"], "°", digits: 0, sign: "±"))
-                    capRow("总云场来源", modelSource == "ec" ? "EC TCC + PL-RH 云柱代理" : "GFS 全量云场")
-                    capRow("可烧量来源", text(components["quality_coverage_source"]) ?? "前方全量云场")
-                    capRow("持续时间修正系数", "×\(format(components["duration_factor"], digits: 3))")
-                    capRow("入射 / 观测回程因子",
-                           "×\(format(components["incoming_aod_illumination_factor"], digits: 3)) / ×\(format(components["observer_aod_contrast_factor"], digits: 3))")
-                    capRow("观测回程光学量",
-                           "τ \(format(components["observer_return_optical_depth_mean"], digits: 3)) · T \(format(components["observer_return_transmission_mean"], digits: 3))")
-                }.frame(width: 208, alignment: .leading)
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                Text("几何遮挡已包含在可烧云量中，不再重复扣分；持续时间和 AOD 各修正一次。低 AOD 小幅加分，高 AOD 有符号扣分。")
-                Text("可烧量只包含既受太阳入射照亮、又能被地面观测者看到的云底面积；同一视线按距离由近到远合成，先遇到的低云会遮住其后的中高云。")
-                Text("摄影焦段、Top-K、代表云和云边界不进入主评分。")
-            }.font(.system(size: 9)).foregroundStyle(.secondary)
+            Text("几何遮挡已包含在可烧云量中，不再重复扣分；同一视线由近及远合成（低云遮挡其后中高云）。摄影焦段、Top-K、代表云与云边界不进入主评分。")
+                .fireSkyFont(size: 9.5, relativeTo: .caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.top, 4)
-    }
-
-    private func adjustmentRow(_ title: String, _ measured: String, _ delta: String?) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(title).font(.system(size: 10)).foregroundStyle(.secondary)
-                .frame(width: 150, alignment: .leading)
-            Text(measured).font(.system(size: 10)).monospacedDigit()
-                .frame(maxWidth: .infinity, alignment: .leading).lineLimit(2)
-            Text(delta ?? "—")
-                .font(.system(size: 11, weight: .medium)).monospacedDigit()
-                .foregroundStyle(deltaColor(delta))
-                .frame(width: 56, alignment: .trailing)
-                .accessibilityLabel(delta == nil ? "\(title)，无独立修正量" : "\(title)，修正量 \(delta!)")
-        }.padding(.vertical, 6)
-    }
-
-    private func capRow(_ title: String, _ value: String) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            Text(title).font(.system(size: 9)).foregroundStyle(.secondary)
-            Spacer(minLength: 6)
-            Text(value).font(.system(size: 9, weight: .medium)).monospacedDigit()
-                .multilineTextAlignment(.trailing).lineLimit(2)
-        }
+        .padding(.top, 2)
     }
 
     private func signedDelta(_ value: Any?) -> String? {
@@ -1490,11 +1870,6 @@ private struct WorkQualityBreakdownView: View {
     private func valueSuffix(_ value: Any?, _ suffix: String, digits: Int, sign: String = "") -> String {
         guard let number = value as? NSNumber, number.doubleValue.isFinite else { return "—" }
         return "\(sign)\(String(format: "%.\(digits)f", number.doubleValue))\(suffix)"
-    }
-
-    private func text(_ value: Any?) -> String? {
-        guard let value = value as? String, !value.isEmpty else { return nil }
-        return value
     }
 }
 /// 图表悬停读数的瞬态容器。本机工具链仅含 CommandLineTools（无 Xcode），
@@ -1517,10 +1892,10 @@ struct WorkComparisonCurveView: View {
         let aod = comparison.aodCurve(timezone: timezone)
         let peak = points.max { $0.quality < $1.quality }
         let selectedDate = Self.time(points, matching: store.pointSelectedTime)
-        return VStack(alignment: .leading, spacing: 12) {
+        return VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .firstTextBaseline) {
-                Text("霞光质量与大气趋势").font(.system(size: 13, weight: .semibold))
-                Text("质量轴固定 0–2.5 · 比例轴 0–100% · 缺测断线不补零")
+                Text("霞光质量与大气趋势").font(.system(size: 12.5, weight: .semibold))
+                Text(L10n.text("GFS 实线 · EC 虚线 · 有效太阳窗内绘制", "GFS solid · EC dashed · plotted in solar window"))
                     .font(.system(size: 9)).foregroundStyle(.secondary)
                 Spacer()
                 HStack(spacing: 10) {
@@ -1533,18 +1908,24 @@ struct WorkComparisonCurveView: View {
             ratioChart(ratios)
             aodChart(aod)
             timelineStrip(peakLocal: peak?.local)
-        }.padding(16).workSurface()
+        }.padding(11).workSurface()
     }
 
     private func summaryChips(points: [ForecastCurvePoint], peak: ForecastCurvePoint?) -> some View {
         let aodValues = comparison.aodCurve(timezone: timezone).map(\.quality)
-        let steps = comparison.report(store.selectedModel)?["steps"] as? [JSONObject] ?? []
-        let validCount = steps.filter { $0["valid"] as? Bool != false }.count
-        return HStack(spacing: 18) {
+        let modelValidityText: String = {
+            let parts: [String] = ForecastComparison.models.compactMap { m in
+                let steps = comparison.report(m)?["steps"] as? [JSONObject] ?? []
+                guard !steps.isEmpty else { return nil }
+                let validCount = steps.filter(ForecastComparison.isStepValid).count
+                return "\(m.uppercased()) \(validCount)/\(steps.count)"
+            }
+            return parts.isEmpty ? "—" : parts.joined(separator: " · ")
+        }()
+        return HStack(spacing: 14) {
             summaryChip("峰值质量", peak.map { String(format: "%.3f / 2.5", $0.quality) } ?? "—")
             summaryChip("峰值时刻", peak.map { ObservationDate.timeLabel($0.time, timezone: timezone) } ?? "—")
-            summaryChip("有效时次（\(store.selectedModel.uppercased())）",
-                        steps.isEmpty ? "—" : "\(validCount) 有效 · 共 \(steps.count) 时次")
+            summaryChip("有效时次", modelValidityText)
             summaryChip("AOD 550 范围",
                         aodValues.isEmpty ? "—" : String(format: "%.3f–%.3f", aodValues.min() ?? 0, aodValues.max() ?? 0))
         }
@@ -1790,7 +2171,7 @@ struct WorkComparisonCurveView: View {
     /// (never the map). Keyboard focusable buttons with VoiceOver labels.
     private func timelineStrip(peakLocal: String?) -> some View {
         let steps = comparison.report(store.selectedModel)?["steps"] as? [JSONObject] ?? []
-        let validSteps = steps.filter { $0["valid"] as? Bool != false }
+        let validSteps = steps.filter(ForecastComparison.isStepValid)
         return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 Text("事件时间轴（\(store.selectedModel.uppercased())）")
@@ -1807,7 +2188,7 @@ struct WorkComparisonCurveView: View {
             } else {
                 HStack(alignment: .bottom, spacing: 3) {
                     ForEach(Array(steps.enumerated()), id: \.offset) { _, step in
-                        let valid = step["valid"] as? Bool != false
+                        let valid = ForecastComparison.isStepValid(step)
                         let local = step["valid_time_local"] as? String ?? ""
                         if valid {
                             let selected = store.pointSelectedTime == local
@@ -1874,10 +2255,10 @@ struct WorkLedgerView: View {
     @Binding var selectedTime: String?
     private var allSteps: [JSONObject] { report?["steps"] as? [JSONObject] ?? [] }
     private var visibleSteps: [JSONObject] {
-        filter.showInvalid ? allSteps : allSteps.filter { $0["valid"] as? Bool != false }
+        filter.showInvalid ? allSteps : allSteps.filter(ForecastComparison.isStepValid)
     }
     private var hiddenInvalidCount: Int {
-        allSteps.filter { $0["valid"] as? Bool == false }.count
+        allSteps.filter { !ForecastComparison.isStepValid($0) }.count
     }
     var body: some View {
         VStack(spacing: 0) {
@@ -1944,12 +2325,12 @@ struct WorkLedgerView: View {
         }
         .font(.system(size: 10, weight: .semibold))
         .foregroundStyle(.secondary)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
     }
 
     private func row(_ item: JSONObject) -> some View {
-        let valid = item["valid"] as? Bool != false
+        let valid = ForecastComparison.isStepValid(item)
         let burnable = item["physically_burnable"] as? Bool
         let base = item["dominant_burnable_cloud_base_agl_mean_m"]
         let top = item["dominant_burnable_cloud_top_agl_mean_m"]
@@ -1974,8 +2355,9 @@ struct WorkLedgerView: View {
                 .frame(width: 88, alignment: .leading)
                 Text(valid ? format(item["instant_quality_index"], digits: 3) : "—")
                     .frame(width: 68, alignment: .leading)
-                Text(valid ? item["instant_quality_level"] as? String ?? "—" : "缺测")
+                Text(valid ? item["instant_quality_level"] as? String ?? "—" : L10n.t("外推窗外/未判断"))
                     .frame(width: 92, alignment: .leading)
+                    .foregroundStyle(valid ? Color.primary : Color.secondary)
                 Image(systemName: !valid || burnable == nil ? "minus"
                       : burnable == true ? "checkmark" : "xmark")
                     .foregroundStyle(!valid || burnable == nil ? Color.secondary : burnable == true ? coolAccent : Color.orange)
@@ -2007,8 +2389,8 @@ struct WorkLedgerView: View {
             }
             .font(.system(size: 11))
             .monospacedDigit()
-            .padding(.vertical, 12)
-            .padding(.horizontal, 14)
+            .padding(.vertical, 7)
+            .padding(.horizontal, 10)
             .contentShape(Rectangle())
             .background(selected ? warm.opacity(0.10) : Color.clear, in: RoundedRectangle(cornerRadius: 6))
         }
@@ -2028,6 +2410,52 @@ struct WorkLedgerView: View {
     private func cloudLayerLabel(base: Any?, top: Any?) -> String {
         guard let base = base as? NSNumber, let top = top as? NSNumber else { return "—" }
         return "\(Int(base.doubleValue.rounded()))–\(Int(top.doubleValue.rounded())) m"
+    }
+}
+
+private struct WorkProfileTabView: View {
+    let report: JSONObject?
+    @EnvironmentObject private var store: Store
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let report {
+                let section = report["cross_section"] as? JSONObject
+                let source = report["profile_source"] as? JSONObject
+                let sourceAvailable = source?["available"] as? Bool == true
+                let model = source?["model_source"] as? String ?? store.selectedModel
+                HStack(alignment: .center, spacing: 8) {
+                    Text(L10n.t("太阳方向大气剖面"))
+                        .fireSkyFont(size: 12.5, weight: .semibold)
+                    Spacer(minLength: 8)
+                    if sourceAvailable {
+                        Button {
+                            store.queryPointProfile()
+                        } label: {
+                            Label(L10n.t("刷新冻结剖面"), systemImage: "waveform.path.ecg")
+                                .fireSkyFont(size: 10.5, weight: .medium, relativeTo: .caption)
+                        }
+                        .buttonStyle(.borderless)
+                        .disabled(store.busy)
+                        .help(L10n.text("从已发布结果的冻结源重新读取太阳方向剖面", "Reload solar-path cross section from the frozen source"))
+                    }
+                }
+                WorkCrossSectionView(
+                    section: section,
+                    genusProxy: report["cloud_genus_proxy"] as? JSONObject
+                )
+                if sourceAvailable && ((store.frozenProfileModel == model && store.frozenProfileState != "idle") || section == nil) {
+                    FrozenProfileView(model: model) { store.queryPointProfile() }
+                }
+            } else {
+                Text(L10n.t("等待预测"))
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 160)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .workSurface()
     }
 }
 
@@ -2157,6 +2585,8 @@ private struct CrossSectionData {
     let fractions: [[Double?]]
     let familyCodes: [[Int]]
     let statuses: [[Int]]
+    let pathTransmission: [[Double?]]
+    let sunlitFractions: [[Double?]]
     let layerBases: [[Double?]]
     let layerTops: [[Double?]]
     let terrain: [Double]
@@ -2187,6 +2617,8 @@ private struct CrossSectionData {
         self.fractions = grid("cloud_fraction_percent")
         self.familyCodes = ints("pressure_family_code")
         self.statuses = ints("cloud_layer_status")
+        self.pathTransmission = grid("cloud_path_transmission")
+        self.sunlitFractions = grid("cloud_sunlit_fraction")
         self.layerBases = grid("cloud_layer_base_asl_m")
         self.layerTops = grid("cloud_layer_top_asl_m")
         self.terrain = (section["terrain_elevation_asl_m"] as? [Any])?.compactMap(number) ?? []
@@ -2214,14 +2646,16 @@ private struct WorkCrossSectionView: View {
     }
 }
 
-/// 剖面缩放状态容器；本机 CommandLineTools 无 SwiftUIMacros，使用 ObservableObject 代替 @State。
+/// 剖面缩放与交互状态容器；本机 CommandLineTools 无 SwiftUIMacros，使用 ObservableObject 代替 @State。
 private final class CrossSectionZoomState: ObservableObject {
     @Published var scale = 1.0
+    @Published var showIsobars = false
+    @Published var hoverDistanceKM: Double? = nil
 }
 
 /// 距离×高度剖面图层组件（regional-7，区域/单点共用，方案 :123-124）。
-/// 图层：温度层线、RH/云量色块（压力族配色）、地形填充、云层状态描边、
-/// 理论照明基准与理论目标云底/云顶；缺测层不绘制、不解释成晴空。
+/// 图层：暮光天空渐变、地影区与受光走廊、连续平滑云层轮廓与火烧云受光云底辉光、
+/// 可选温度/等压线、地形轮廓、观测点与主可烧云底视线；缺测层不绘制、不解释成晴空。
 struct CrossSectionFigureView: View {
     let section: JSONObject
     let genusProxy: JSONObject?
@@ -2238,101 +2672,375 @@ struct CrossSectionFigureView: View {
     }
 
     private let plotAspectRatio: CGFloat = 2.45
+    private let plotLeftMargin: Double = 44
+    private let plotTopMargin: Double = 14
+    private let plotBottomOffset: Double = 24
+
+    private var plotRightMargin: Double { zoom.showIsobars ? 46 : 16 }
 
     private var data: CrossSectionData? { CrossSectionData(section: section) }
 
+    private struct ColumnStratum {
+        let baseASL: Double
+        let topASL: Double
+        let amount: Double
+        let status: Int
+        let pathTransmission: Double?
+    }
+
+    private struct CloudRunPoint {
+        let sampleIndex: Int
+        let cx: Double
+        let topY: Double
+        let bottomY: Double
+        let stratum: ColumnStratum
+    }
+
+    private struct BurnableTargetFocus {
+        let distanceKM: Double
+        let baseASL: Double
+    }
+
+    private struct TakeawaySummary {
+        let text: String
+        let status: Int // 3 = lit & visible, 2 = occluded, 0 = none
+    }
+
     private var canvasAccessibilityLabel: String {
-        guard let data else { return "大气剖面图不可用" }
+        guard let data else { return L10n.text("大气剖面图不可用", "Atmospheric cross-section unavailable") }
         let low = Int(data.terrain.min() ?? 0)
         let high = Int(data.terrain.max() ?? 0)
-        return "大气剖面图，\(data.distances.count) 个距离采样点，\(data.levels.count) 个气压层，地形高度 \(low) 至 \(high) 米，\(data.targets.count) 个目标云层标记"
+        return L10n.text(
+            "大气剖面图，\(data.distances.count) 个距离采样点，\(data.levels.count) 个气压层，地形高度 \(low) 至 \(high) 米，\(data.targets.count) 个目标云层标记",
+            "Atmospheric cross-section, \(data.distances.count) distance samples, \(data.levels.count) pressure levels, terrain \(low)–\(high) m, \(data.targets.count) target markers"
+        )
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 7) {
             if let data {
+                takeawayBanner(for: data)
                 plotControls
                 GeometryReader { geometry in
                     let plotWidth = geometry.size.width * CGFloat(zoomScale)
-                    ScrollView(.horizontal) {
-                        Canvas { context, size in
-                            draw(context: context, size: size, data: data, scale: zoomScale)
+                    let plotHeight = geometry.size.height
+                    ZStack(alignment: .topLeading) {
+                        ScrollView(.horizontal) {
+                            Canvas { context, size in
+                                draw(context: context,
+                                     size: size,
+                                     data: data,
+                                     scale: zoomScale,
+                                     showIsobars: zoom.showIsobars,
+                                     hoverDistanceKM: zoom.hoverDistanceKM)
+                            }
+                            .frame(width: plotWidth, height: plotHeight)
+                            .contentShape(Rectangle())
+                            .onContinuousHover { phase in
+                                switch phase {
+                                case .active(let location):
+                                    let left = plotLeftMargin
+                                    let right = Double(plotWidth) - plotRightMargin
+                                    let top = plotTopMargin
+                                    let bottom = Double(plotHeight) - plotBottomOffset
+                                    guard right > left + 10,
+                                          Double(location.x) >= left, Double(location.x) <= right,
+                                          Double(location.y) >= top, Double(location.y) <= bottom else {
+                                        zoom.hoverDistanceKM = nil
+                                        return
+                                    }
+                                    let ratio = Swift.min(1.0, Swift.max(0.0, (Double(location.x) - left) / (right - left)))
+                                    let maxDist = Swift.max(1.0, data.distances.last ?? 1.0)
+                                    zoom.hoverDistanceKM = ratio * maxDist
+                                case .ended:
+                                    zoom.hoverDistanceKM = nil
+                                @unknown default:
+                                    zoom.hoverDistanceKM = nil
+                                }
+                            }
                         }
-                        .frame(width: plotWidth, height: geometry.size.height)
+                        .frame(height: plotHeight)
+                        .scrollIndicators(zoomScale > 1 ? .automatic : .hidden)
+
+                        if let hoverDistance = zoom.hoverDistanceKM {
+                            hoverOverlayCard(data: data, distanceKM: hoverDistance)
+                                .padding(.leading, plotLeftMargin + 8)
+                                .padding(.top, plotTopMargin + 8)
+                                .allowsHitTesting(false)
+                        }
                     }
-                    .frame(height: geometry.size.height)
-                    .scrollIndicators(zoomScale > 1 ? .automatic : .hidden)
                 }
                 .aspectRatio(plotAspectRatio / CGFloat(zoomScale), contentMode: .fit)
                 .accessibilityLabel(canvasAccessibilityLabel)
-                .accessibilityHint("使用放大和缩小按钮查看细节，或选择适配窗口恢复完整剖面。")
+                .accessibilityHint(L10n.text("使用放大和缩小按钮查看细节，或选择适配窗口恢复完整剖面。",
+                                             "Use zoom buttons for detail or reset to fit the full cross-section."))
                 .accessibilityAdjustableAction { direction in
                     switch direction {
-                    case .increment: zoomScale = min(2.5, zoomScale + 0.25)
-                    case .decrement: zoomScale = max(1, zoomScale - 0.25)
+                    case .increment: zoomScale = Swift.min(2.5, zoomScale + 0.25)
+                    case .decrement: zoomScale = Swift.max(1, zoomScale - 0.25)
                     @unknown default: break
                     }
                 }
                 .accessibilityValue("\(Int((zoomScale * 100).rounded()))%")
                 legend
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 112), alignment: .leading)],
-                          alignment: .leading, spacing: 8) {
-                    diagnosticChip("太阳高度", section["solar_elevation_deg"], suffix: "°")
-                    diagnosticChip("太阳方位", section["solar_azimuth_deg"], suffix: "°")
-                    diagnosticChip("剖面范围", section["analysis_radius_km"], suffix: " km")
-                    diagnosticChip("相对时刻", offsetLabel(section["offset_minutes"]))
-                    diagnosticChip("有效时次", timeLabel(section["valid_time_local"] as? String))
-                    diagnosticChip("采样", section["spatial_sampling"])
-                }
                 genusSummary
                 targetStrip(data.targets)
             } else {
-                Text("后端未返回可绘制的剖面字段；可在诊断中查看理论目标与照明基准。")
+                Text(L10n.text("后端未返回可绘制的剖面字段；可在诊断中查看理论目标与照明基准。",
+                               "No cross-section grid returned; inspect theoretical targets and illumination baseline in diagnostics."))
                     .font(.system(size: 10)).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, minHeight: 120, alignment: .center)
             }
         }
     }
 
-    private var plotControls: some View {
-        HStack(spacing: 7) {
-            Text("沿光路高度 · 海拔口径")
+    // MARK: takeaway & controls
+
+    private func takeawayBanner(for data: CrossSectionData) -> some View {
+        let summary = buildTakeaway(for: data)
+        let accent: Color = summary.status == 3
+            ? Color(red: 0.96, green: 0.42, blue: 0.18)
+            : summary.status == 2
+                ? Color(red: 0.86, green: 0.56, blue: 0.20)
+                : .secondary
+        let iconName = summary.status == 3 ? "sun.horizon.fill"
+            : summary.status == 2 ? "cloud.sun" : "sun.min"
+        return HStack(spacing: 6) {
+            Image(systemName: iconName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(accent)
+            Text(summary.text)
                 .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .background(
+            accent.opacity(summary.status == 0 ? 0.06 : (scheme == .dark ? 0.14 : 0.09)),
+            in: RoundedRectangle(cornerRadius: 7)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .stroke(accent.opacity(summary.status == 0 ? 0.18 : 0.36), lineWidth: 0.9)
+        }
+        .accessibilityElement(children: .combine)
+    }
+
+    private func buildTakeaway(for data: CrossSectionData) -> TakeawaySummary {
+        let azText = number(section["solar_azimuth_deg"]).map { String(format: "%.0f°", $0) } ?? "—"
+        let elText = number(section["solar_elevation_deg"]).map { String(format: "%.1f°", $0) } ?? "—"
+        let solarPrefix = L10n.text("太阳方位 \(azText) · 仰角 \(elText)", "Sun Az \(azText) · El \(elText)")
+
+        var litDistances: [Double] = []
+        var litBasesM: [Double] = []
+        var litFamilies = Set<Int>()
+        var hasOccluded = false
+
+        for i in data.distances.indices {
+            for family in 1...3 {
+                guard let stratum = columnStratum(data: data, sample: i, family: family) else { continue }
+                if stratum.status == 3 {
+                    litDistances.append(data.distances[i])
+                    litBasesM.append(stratum.baseASL)
+                    litFamilies.insert(family)
+                } else if stratum.status == 2 {
+                    hasOccluded = true
+                }
+            }
+        }
+
+        if !litDistances.isEmpty,
+           let minDist = litDistances.min(), let maxDist = litDistances.max(),
+           let minBase = litBasesM.min(), let maxBase = litBasesM.max() {
+            let familyNamesZh = [3, 2, 1].filter { litFamilies.contains($0) }.map { familyShortZh($0) }.joined(separator: "/")
+            let familyNamesEn = [3, 2, 1].filter { litFamilies.contains($0) }.map { familyShortEn($0) }.joined(separator: "/")
+            let distText = abs(maxDist - minDist) < 1
+                ? String(format: "%.0f", minDist)
+                : String(format: "%.0f–%.0f", minDist, maxDist)
+            let baseText = abs(maxBase - minBase) < 150
+                ? String(format: "%.1f", minBase / 1000)
+                : String(format: "%.1f–%.1f", minBase / 1000, maxBase / 1000)
+            let detail = L10n.text(
+                "约 \(distText) km 处\(familyNamesZh)云底（\(baseText) km）进入受光区且通视",
+                "\(familyNamesEn) cloud base at ~\(distText) km (\(baseText) km ASL) is sunlit & visible"
+            )
+            return TakeawaySummary(text: "\(solarPrefix) · \(detail)", status: 3)
+        } else if hasOccluded {
+            let detail = L10n.text(
+                "远场云层达到受光高度，但观测视线受前段云层或地形遮挡",
+                "Far-field clouds reach sunlit altitude, but sightline is occluded by foreground clouds or terrain"
+            )
+            return TakeawaySummary(text: "\(solarPrefix) · \(detail)", status: 2)
+        } else {
+            let detail = L10n.text(
+                "沿太阳光路暂无同时满足受光高度与通视条件的云层",
+                "No cloud layers along the solar path meet both sunlit and line-of-sight criteria"
+            )
+            return TakeawaySummary(text: "\(solarPrefix) · \(detail)", status: 0)
+        }
+    }
+
+    private var plotControls: some View {
+        let elevation = diagnosticValue(section["solar_elevation_deg"], digits: 1, suffix: "°")
+        let azimuth = diagnosticValue(section["solar_azimuth_deg"], digits: 1, suffix: "°")
+        let radius = diagnosticValue(section["analysis_radius_km"], digits: 1, suffix: " km")
+        let validTime = timeLabel(section["valid_time_local"] as? String)
+        return HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                telemetryPill(L10n.text("仰角", "El"), elevation)
+                telemetryPill(L10n.text("方位", "Az"), azimuth)
+                telemetryPill(L10n.text("范围", "Range"), radius)
+                telemetryPill(L10n.text("时次", "Time"), validTime)
+            }
+            .lineLimit(1)
+            Spacer(minLength: 6)
+            Button {
+                zoom.showIsobars.toggle()
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "waveform.path")
+                        .font(.system(size: 10, weight: .medium))
+                    Text(L10n.text("等压线", "Isobars"))
+                        .font(.system(size: 10.5, weight: .medium))
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 3.5)
+                .foregroundStyle(zoom.showIsobars ? coolAccent : Color.secondary)
+                .background(
+                    zoom.showIsobars ? coolAccent.opacity(scheme == .dark ? 0.22 : 0.14) : Color.secondary.opacity(0.08),
+                    in: Capsule()
+                )
+                .overlay {
+                    Capsule().stroke(
+                        zoom.showIsobars ? coolAccent.opacity(0.50) : Color.secondary.opacity(0.22),
+                        lineWidth: 0.9
+                    )
+                }
+            }
+            .buttonStyle(.borderless)
+            .help(L10n.text("显示或隐藏等压/温度参考线", "Toggle pressure/temperature reference lines"))
+            .accessibilityLabel(L10n.text("等压线", "Isobars"))
+            .accessibilityValue(zoom.showIsobars ? L10n.text("已开启", "On") : L10n.text("已关闭", "Off"))
+
+            HStack(spacing: 2) {
+                Text("\(Int((zoomScale * 100).rounded()))%")
+                    .font(.system(size: 10.5, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .frame(width: 36, alignment: .trailing)
+                    .accessibilityLabel(L10n.text("剖面缩放", "Cross-section zoom"))
+                    .accessibilityValue("\(Int((zoomScale * 100).rounded()))%")
+                Button {
+                    zoomScale = Swift.max(1, zoomScale - 0.25)
+                } label: {
+                    Image(systemName: "minus.magnifyingglass").frame(width: 22, height: 22)
+                }
+                .buttonStyle(.borderless)
+                .help(L10n.text("缩小剖面", "Zoom out"))
+                .accessibilityLabel(L10n.text("缩小剖面", "Zoom out"))
+                .disabled(zoomScale <= 1)
+                Button {
+                    zoomScale = Swift.min(2.5, zoomScale + 0.25)
+                } label: {
+                    Image(systemName: "plus.magnifyingglass").frame(width: 22, height: 22)
+                }
+                .buttonStyle(.borderless)
+                .help(L10n.text("放大剖面", "Zoom in"))
+                .accessibilityLabel(L10n.text("放大剖面", "Zoom in"))
+                .disabled(zoomScale >= 2.5)
+                Button {
+                    zoomScale = 1
+                } label: {
+                    Image(systemName: "arrow.counterclockwise").frame(width: 22, height: 22)
+                }
+                .buttonStyle(.borderless)
+                .help(L10n.text("适配窗口", "Reset zoom"))
+                .accessibilityLabel(L10n.text("适配窗口", "Reset zoom"))
+                .disabled(zoomScale == 1)
+            }
+        }
+    }
+
+    private func telemetryPill(_ label: String, _ value: String) -> some View {
+        HStack(spacing: 3) {
+            Text(label)
+                .font(.system(size: 9.5))
                 .foregroundStyle(.secondary)
-            Spacer(minLength: 8)
-            Text("\(Int((zoomScale * 100).rounded()))%")
-                .font(.system(size: 11, weight: .medium).monospacedDigit())
-                .foregroundStyle(.secondary)
-                .frame(width: 38, alignment: .trailing)
-                .accessibilityLabel("剖面缩放")
-                .accessibilityValue("\(Int((zoomScale * 100).rounded()))%")
-            Button {
-                zoomScale = max(1, zoomScale - 0.25)
-            } label: {
-                Image(systemName: "minus.magnifyingglass").frame(width: 24, height: 24)
+            Text(value)
+                .font(.system(size: 10, weight: .medium))
+                .monospacedDigit()
+                .foregroundStyle(.primary)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 3)
+        .background(.quaternary.opacity(0.40), in: Capsule())
+        .overlay { Capsule().stroke(.secondary.opacity(0.18), lineWidth: 0.7) }
+    }
+
+    @ViewBuilder
+    private func hoverOverlayCard(data: CrossSectionData, distanceKM: Double) -> some View {
+        if let nearestIndex = data.distances.indices.min(by: {
+            abs(data.distances[$0] - distanceKM) < abs(data.distances[$1] - distanceKM)
+        }) {
+            let sampleDist = data.distances[nearestIndex]
+            let terrainText = data.terrain.indices.contains(nearestIndex)
+                ? String(format: "%.0f m", data.terrain[nearestIndex]) : "—"
+            let reqText = data.requiredASL.indices.contains(nearestIndex)
+                ? String(format: "%.1f km", data.requiredASL[nearestIndex] / 1000) : "—"
+            let presentStrata: [(Int, ColumnStratum)] = [1, 2, 3].compactMap { fam in
+                guard let s = columnStratum(data: data, sample: nearestIndex, family: fam) else { return nil }
+                return (fam, s)
             }
-            .buttonStyle(.borderless)
-            .help("缩小剖面")
-            .accessibilityLabel("缩小剖面")
-            .disabled(zoomScale <= 1)
-            Button {
-                zoomScale = min(2.5, zoomScale + 0.25)
-            } label: {
-                Image(systemName: "plus.magnifyingglass").frame(width: 24, height: 24)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 8) {
+                    Text(String(format: "%.0f km", sampleDist))
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .monospacedDigit()
+                    Text("\(L10n.text("地形", "Terrain")) \(terrainText)")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                    Text("\(L10n.text("受光基准", "Sunlit base")) \(reqText)")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(Color(red: 0.90, green: 0.58, blue: 0.20))
+                        .monospacedDigit()
+                }
+                if presentStrata.isEmpty {
+                    Text(L10n.text("该列无显著模式云层（缺测或低于阈值）", "No significant clouds (missing or below threshold)"))
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(presentStrata, id: \.0) { fam, stratum in
+                        let statusText = stratum.status == 3
+                            ? L10n.text("受光可烧", "Sunlit & visible")
+                            : stratum.status == 2
+                                ? L10n.text("达到受光但被遮挡", "Lit but occluded")
+                                : L10n.text("地影区内", "In Earth shadow")
+                        let statusColor: Color = stratum.status == 3
+                            ? Color(red: 0.96, green: 0.42, blue: 0.18)
+                            : stratum.status == 2
+                                ? Color(red: 0.88, green: 0.58, blue: 0.20)
+                                : .secondary
+                        let transmissionText = stratum.pathTransmission.map {
+                            " · T_c \(Int(($0 * 100).rounded()))%"
+                        } ?? ""
+                        HStack(spacing: 5) {
+                            Circle().fill(statusColor).frame(width: 5.5, height: 5.5)
+                            Text("\(familyShortZh(fam)) \(String(format: "%.1f–%.1f km", stratum.baseASL / 1000, stratum.topASL / 1000))")
+                                .font(.system(size: 9.5, weight: .medium))
+                                .monospacedDigit()
+                            Text("· \(statusText)\(transmissionText)")
+                                .font(.system(size: 9.5))
+                                .foregroundStyle(statusColor)
+                        }
+                    }
+                }
             }
-            .buttonStyle(.borderless)
-            .help("放大剖面")
-            .accessibilityLabel("放大剖面")
-            .disabled(zoomScale >= 2.5)
-            Button {
-                zoomScale = 1
-            } label: {
-                Image(systemName: "arrow.counterclockwise").frame(width: 24, height: 24)
-            }
-            .buttonStyle(.borderless)
-            .help("适配窗口")
-            .accessibilityLabel("适配窗口")
-            .disabled(zoomScale == 1)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 6)
+            .fireSkySurface(role: .overlay, cornerRadius: 8)
         }
     }
 
@@ -2343,41 +3051,34 @@ struct CrossSectionFigureView: View {
             let compatible = (genusProxy["compatible_genera"] as? [String] ?? [])
                 .map(genusLabel).joined(separator: "、")
             let candidates = genusCandidates(genusProxy["candidate_scores"])
-            HStack(alignment: .top, spacing: 8) {
-                Image(systemName: "cloud").foregroundStyle(coolAccent)
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text("云属候选（代理）").font(.system(size: 10, weight: .semibold))
-                        if label != "unknown" {
-                            Text(genusLabel(label)).font(.system(size: 10, weight: .semibold))
-                        } else {
-                            Text(compatible.isEmpty ? "未定" : "兼容：\(compatible)")
-                                .font(.system(size: 10, weight: .medium))
-                        }
-                        Spacer(minLength: 4)
-                        if let confidence = genusProxy["confidence"] as? NSNumber,
-                           confidence.doubleValue.isFinite {
-                            Text("\(Int((confidence.doubleValue * 100).rounded()))%")
-                                .font(.system(size: 9, weight: .medium).monospacedDigit())
-                                .foregroundStyle(.secondary)
-                        }
-                    }
-                    if let candidates {
-                        Text("候选：\(candidates)")
-                            .font(.system(size: 9))
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Text("依据压力层、相态与云层几何的模型代理，不代表卫星或人工云属观测。")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+            let confText: String = {
+                guard let confidence = genusProxy["confidence"] as? NSNumber,
+                      confidence.doubleValue.isFinite else { return "" }
+                return " \(Int((confidence.doubleValue * 100).rounded()))%"
+            }()
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: "cloud").foregroundStyle(coolAccent).font(.system(size: 10.5))
+                Text("云属代理").font(.system(size: 10, weight: .semibold))
+                if label != "unknown" {
+                    Text("\(genusLabel(label))\(confText)").font(.system(size: 10, weight: .semibold))
+                } else {
+                    Text(compatible.isEmpty ? "未定" : "兼容：\(compatible)")
+                        .font(.system(size: 10, weight: .medium))
                 }
+                if let candidates {
+                    Text("· 候选：\(candidates)")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                Spacer(minLength: 0)
             }
             .padding(.horizontal, 9)
-            .padding(.vertical, 7)
+            .padding(.vertical, 5)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.secondary.opacity(0.055), in: RoundedRectangle(cornerRadius: 6))
+            .help("依据压力层、相态与云层几何的模型代理，不代表卫星或人工云属观测。")
             .accessibilityElement(children: .combine)
         }
     }
@@ -2394,288 +3095,645 @@ struct CrossSectionFigureView: View {
         return labels.isEmpty ? nil : labels.joined(separator: " · ")
     }
 
+    // MARK: stratum & geometry helpers
+
+    private func scalar(_ grid: [[Double?]], _ sample: Int, _ level: Int) -> Double? {
+        guard grid.indices.contains(sample), grid[sample].indices.contains(level) else { return nil }
+        return grid[sample][level]
+    }
+
+    private func integer(_ grid: [[Int]], _ sample: Int, _ level: Int) -> Int? {
+        guard grid.indices.contains(sample), grid[sample].indices.contains(level) else { return nil }
+        return grid[sample][level]
+    }
+
+    private func columnStratum(data: CrossSectionData, sample: Int, family: Int) -> ColumnStratum? {
+        let cloudyLevels = data.levels.indices.filter { level in
+            guard integer(data.familyCodes, sample, level) == family else { return false }
+            let amount = scalar(data.amounts, sample, level)
+                ?? Swift.max(scalar(data.presence, sample, level) ?? 0,
+                             (scalar(data.fractions, sample, level) ?? 0) / 100)
+            return amount >= 0.06
+        }
+        guard !cloudyLevels.isEmpty else { return nil }
+
+        let bases = cloudyLevels.compactMap { scalar(data.layerBases, sample, $0) }
+        let tops = cloudyLevels.compactMap { scalar(data.layerTops, sample, $0) }
+        let heights = cloudyLevels.compactMap { scalar(data.heights, sample, $0) }
+        guard let layerBase = bases.min() ?? heights.min().map({ $0 - 700 }),
+              let layerTop = tops.max() ?? heights.max().map({ $0 + 700 }),
+              layerTop > layerBase else { return nil }
+
+        let amountMax = cloudyLevels.compactMap {
+            scalar(data.amounts, sample, $0)
+                ?? Swift.max(scalar(data.presence, sample, $0) ?? 0,
+                             (scalar(data.fractions, sample, $0) ?? 0) / 100)
+        }.max() ?? 0.2
+        let status = cloudyLevels.compactMap { integer(data.statuses, sample, $0) }.max() ?? 0
+        var transmissionTotal = 0.0
+        var transmissionWeight = 0.0
+        for level in cloudyLevels {
+            guard let lit = scalar(data.sunlitFractions, sample, level), lit > 0,
+                  let transmission = scalar(data.pathTransmission, sample, level) else { continue }
+            let amount = scalar(data.amounts, sample, level)
+                ?? Swift.max(scalar(data.presence, sample, level) ?? 0,
+                             (scalar(data.fractions, sample, level) ?? 0) / 100)
+            let weight = Swift.max(0.06, amount) * lit
+            transmissionTotal += transmission * weight
+            transmissionWeight += weight
+        }
+        let pathTransmission = transmissionWeight > 0 ? transmissionTotal / transmissionWeight : nil
+        return ColumnStratum(baseASL: layerBase, topASL: layerTop, amount: amountMax,
+                             status: status, pathTransmission: pathTransmission)
+    }
+
+    private func familyShortZh(_ family: Int) -> String {
+        switch family {
+        case 1: return "高"
+        case 2: return "中"
+        default: return "低"
+        }
+    }
+
+    private func familyShortEn(_ family: Int) -> String {
+        switch family {
+        case 1: return "High"
+        case 2: return "Mid"
+        default: return "Low"
+        }
+    }
+
+    private func midpoint(_ a: CGPoint, _ b: CGPoint) -> CGPoint {
+        CGPoint(x: (a.x + b.x) * 0.5, y: (a.y + b.y) * 0.5)
+    }
+
+    private func smoothOpenCurve(points: [CGPoint]) -> Path {
+        var path = Path()
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        guard points.count > 1 else { return path }
+        if points.count == 2 {
+            path.addLine(to: points[1])
+            return path
+        }
+        path.addLine(to: midpoint(points[0], points[1]))
+        for idx in 1 ..< (points.count - 1) {
+            path.addQuadCurve(to: midpoint(points[idx], points[idx + 1]), control: points[idx])
+        }
+        path.addLine(to: points[points.count - 1])
+        return path
+    }
+
+    private func appendSmoothSegment(to path: inout Path, points: [CGPoint]) {
+        guard points.count > 1 else { return }
+        if points.count == 2 {
+            path.addLine(to: points[1])
+            return
+        }
+        path.addLine(to: midpoint(points[0], points[1]))
+        for idx in 1 ..< (points.count - 1) {
+            path.addQuadCurve(to: midpoint(points[idx], points[idx + 1]), control: points[idx])
+        }
+        path.addLine(to: points[points.count - 1])
+    }
+
+    private func cloudSilhouettePath(run: [CloudRunPoint], left: Double, right: Double, columnSpan: Double) -> (closed: Path, topEdge: Path, bottomEdge: Path, leftX: Double, rightX: Double) {
+        let taper = Swift.min(columnSpan * 0.45, (right - left) * 0.06)
+        let first = run[0]
+        let last = run[run.count - 1]
+        let leftX = Swift.max(left, first.cx - taper)
+        let rightX = Swift.min(right, last.cx + taper)
+        let leftMidY = (first.topY + first.bottomY) * 0.5
+        let rightMidY = (last.topY + last.bottomY) * 0.5
+
+        var topPts: [CGPoint] = [CGPoint(x: leftX, y: leftMidY)]
+        for p in run { topPts.append(CGPoint(x: p.cx, y: p.topY)) }
+        topPts.append(CGPoint(x: rightX, y: rightMidY))
+
+        var botPts: [CGPoint] = [CGPoint(x: rightX, y: rightMidY)]
+        for p in run.reversed() { botPts.append(CGPoint(x: p.cx, y: p.bottomY)) }
+        botPts.append(CGPoint(x: leftX, y: leftMidY))
+
+        var closed = Path()
+        closed.move(to: topPts[0])
+        appendSmoothSegment(to: &closed, points: topPts)
+        appendSmoothSegment(to: &closed, points: botPts)
+        closed.closeSubpath()
+
+        let topEdge = smoothOpenCurve(points: topPts)
+        let bottomEdge = smoothOpenCurve(points: botPts.reversed())
+        return (closed, topEdge, bottomEdge, leftX, rightX)
+    }
+
     // MARK: drawing
 
-    private func draw(context: GraphicsContext, size: CGSize, data: CrossSectionData, scale: Double) {
-        let top = 10.0, bottom = size.height - 24
-        guard bottom > top + 20 else { return }
+    private func draw(context: GraphicsContext, size: CGSize, data: CrossSectionData,
+                      scale: Double, showIsobars: Bool, hoverDistanceKM: Double?) {
+        let left = plotLeftMargin
+        let right = size.width - (showIsobars ? 46.0 : 16.0)
+        let top = plotTopMargin
+        let bottom = size.height - plotBottomOffset
+        guard bottom > top + 20, right > left + 20 else { return }
+
         let maxHeight = 18_000.0
-        let labelSize = CGFloat(min(14, max(10, 10 * scale)))
         let strokeScale = CGFloat(scale)
-        let targetAltitudeStep = maxHeight * 34 / Double(bottom - top)
-        let altitudeStep = [1000.0, 1500, 2000, 3000, 5000, 7500, 10_000]
-            .first(where: { $0 >= targetAltitudeStep }) ?? maxHeight
-        let altitudes = Array(stride(from: 0.0, through: maxHeight, by: altitudeStep))
-        func altitudeLabel(_ altitude: Double) -> Text {
-            let label = altitude.truncatingRemainder(dividingBy: 1000) == 0
-                ? "\(Int(altitude / 1000))km" : String(format: "%.1fkm", altitude / 1000)
-            return Text(label).font(.system(size: labelSize)).foregroundStyle(.secondary)
-        }
-        // Fractional altitude ticks widen at higher zoom levels.
-        let labelWidth = altitudes.map {
-            context.resolve(altitudeLabel($0)).measure(in: size).width
-        }.max() ?? 0
-        let left = max(40, ceil(labelWidth) + 8), right = size.width - 12
-        guard right > left + 20 else { return }
-        let maxDistance = max(1, data.distances.last ?? 1)
-        let x = { (distance: Double) in left + distance / maxDistance * (right - left) }
-        let y = { (height: Double) in top + (1 - min(max(height, 0), maxHeight) / maxHeight) * (bottom - top) }
+        let labelSize = CGFloat(Swift.min(13, Swift.max(9.5, 9.5 * scale)))
+        let maxDistance = Swift.max(1, data.distances.last ?? 1)
+        let x = { (distance: Double) in left + Swift.min(Swift.max(distance, 0), maxDistance) / maxDistance * (right - left) }
+        let y = { (height: Double) in top + (1 - Swift.min(Swift.max(height, 0), maxHeight) / maxHeight) * (bottom - top) }
 
-        // Atmospheric sky gradient backdrop inside the plot frame
         let plotRect = CGRect(x: left, y: top, width: right - left, height: bottom - top)
-        let plotPath = Path(roundedRect: plotRect, cornerRadius: 8 * strokeScale)
-        let skyGradient = Gradient(colors: scheme == .dark
-            ? [Color(red: 0.09, green: 0.13, blue: 0.22).opacity(0.75),
-               Color(red: 0.14, green: 0.19, blue: 0.28).opacity(0.45),
-               Color(red: 0.28, green: 0.20, blue: 0.19).opacity(0.32)]
-            : [Color(red: 0.85, green: 0.91, blue: 0.97).opacity(0.72),
-               Color(red: 0.94, green: 0.95, blue: 0.98).opacity(0.52),
-               Color(red: 0.99, green: 0.93, blue: 0.87).opacity(0.55)])
-        context.fill(
-            plotPath,
-            with: .linearGradient(skyGradient,
-                                  startPoint: CGPoint(x: left, y: top),
-                                  endPoint: CGPoint(x: left, y: bottom))
-        )
-        context.stroke(plotPath, with: .color(Color.secondary.opacity(scheme == .dark ? 0.28 : 0.22)),
-                       lineWidth: 0.9 * strokeScale)
+        let plotPath = Path(roundedRect: plotRect, cornerRadius: 10)
+        let hasRequired = data.requiredASL.count == data.distances.count
+        let reqPoints: [CGPoint] = hasRequired
+            ? data.distances.indices.map { CGPoint(x: x(data.distances[$0]), y: y(data.requiredASL[$0])) }
+            : []
 
-        // Subtle golden-amber solar illumination corridor above requiredASL
-        if data.requiredASL.count == data.distances.count {
-            var sunlit = Path()
-            sunlit.move(to: CGPoint(x: left, y: top))
-            sunlit.addLine(to: CGPoint(x: right, y: top))
-            for index in data.distances.indices.reversed() {
-                sunlit.addLine(to: CGPoint(x: x(data.distances[index]), y: y(data.requiredASL[index])))
-            }
-            sunlit.closeSubpath()
-            let sunGrad = Gradient(colors: [
-                Color(red: 0.98, green: 0.69, blue: 0.30).opacity(scheme == .dark ? 0.03 : 0.04),
-                Color(red: 0.96, green: 0.57, blue: 0.22).opacity(scheme == .dark ? 0.14 : 0.13),
-            ])
-            context.fill(
-                sunlit,
-                with: .linearGradient(sunGrad,
+        context.drawLayer { layer in
+            layer.clip(to: plotPath)
+
+            // Layer 1 — Twilight sky backdrop (vertical twilight + horizontal warming toward solar horizon on right)
+            let verticalSky = Gradient(colors: scheme == .dark
+                ? [Color(red: 0.06, green: 0.10, blue: 0.19),
+                   Color(red: 0.12, green: 0.17, blue: 0.27),
+                   Color(red: 0.22, green: 0.19, blue: 0.22)]
+                : [Color(red: 0.80, green: 0.88, blue: 0.96),
+                   Color(red: 0.91, green: 0.94, blue: 0.98),
+                   Color(red: 0.98, green: 0.92, blue: 0.86)])
+            layer.fill(
+                plotPath,
+                with: .linearGradient(verticalSky,
                                       startPoint: CGPoint(x: left, y: top),
                                       endPoint: CGPoint(x: left, y: bottom))
             )
-        }
-
-        for altitude in altitudes {
-            let lineY = y(altitude)
-            var grid = Path()
-            grid.move(to: CGPoint(x: left, y: lineY))
-            grid.addLine(to: CGPoint(x: right, y: lineY))
-            context.stroke(grid, with: .color(Color.secondary.opacity(0.18)), lineWidth: 0.6 * strokeScale)
-            context.draw(altitudeLabel(altitude),
-                         at: CGPoint(x: left - 5, y: lineY), anchor: .trailing)
-        }
-        // distance grid every 4th sample
-        for (index, distance) in data.distances.enumerated() where index % 4 == 0 {
-            let lineX = x(distance)
-            var grid = Path()
-            grid.move(to: CGPoint(x: lineX, y: top))
-            grid.addLine(to: CGPoint(x: lineX, y: bottom))
-            context.stroke(grid, with: .color(Color.secondary.opacity(0.14)),
-                           style: StrokeStyle(lineWidth: 0.6 * strokeScale, dash: [3 * strokeScale, 4 * strokeScale]))
-            context.draw(Text("\(Int(distance))km").font(.system(size: labelSize)).foregroundStyle(.secondary),
-                         at: CGPoint(x: lineX, y: bottom + 10),
-                         anchor: distance == maxDistance ? .trailing : .center)
-        }
-
-        // terrain fill (vertical earth-slate gradient) + crisp ridge line + observer badge
-        if data.terrain.count == data.distances.count {
-            var fill = Path()
-            fill.move(to: CGPoint(x: x(data.distances[0]), y: y(data.terrain[0])))
-            for index in data.distances.indices.dropFirst() {
-                fill.addLine(to: CGPoint(x: x(data.distances[index]), y: y(data.terrain[index])))
-            }
-            fill.addLine(to: CGPoint(x: right, y: bottom))
-            fill.addLine(to: CGPoint(x: left, y: bottom))
-            fill.closeSubpath()
-            let terrainMinY = data.terrain.map { y($0) }.min() ?? bottom
-            let terrainGrad = Gradient(colors: scheme == .dark
-                ? [Color(red: 0.36, green: 0.42, blue: 0.44).opacity(0.62),
-                   Color(red: 0.20, green: 0.24, blue: 0.28).opacity(0.85)]
-                : [Color(red: 0.46, green: 0.51, blue: 0.49).opacity(0.38),
-                   Color(red: 0.32, green: 0.37, blue: 0.36).opacity(0.58)])
-            context.fill(
-                fill,
-                with: .linearGradient(terrainGrad,
-                                      startPoint: CGPoint(x: left, y: terrainMinY),
-                                      endPoint: CGPoint(x: left, y: bottom))
+            let horizonGlow = Gradient(colors: [
+                Color.clear,
+                Color(red: 0.98, green: 0.63, blue: 0.34).opacity(scheme == .dark ? 0.18 : 0.20)
+            ])
+            layer.fill(
+                plotPath,
+                with: .linearGradient(horizonGlow,
+                                      startPoint: CGPoint(x: left + (right - left) * 0.38, y: top + (bottom - top) * 0.25),
+                                      endPoint: CGPoint(x: right, y: bottom))
             )
-            var line = Path()
-            line.move(to: CGPoint(x: x(data.distances[0]), y: y(data.terrain[0])))
-            for index in data.distances.indices.dropFirst() {
-                line.addLine(to: CGPoint(x: x(data.distances[index]), y: y(data.terrain[index])))
+
+            // Layer 2 — Earth Shadow (below requiredASL) & Sunlit Corridor (above requiredASL) + subtle rays
+            if reqPoints.count > 1 {
+                var shadowPath = Path()
+                shadowPath.move(to: reqPoints[0])
+                appendSmoothSegment(to: &shadowPath, points: reqPoints)
+                shadowPath.addLine(to: CGPoint(x: right, y: bottom))
+                shadowPath.addLine(to: CGPoint(x: left, y: bottom))
+                shadowPath.closeSubpath()
+                let shadowColor = scheme == .dark
+                    ? Color(red: 0.03, green: 0.06, blue: 0.13).opacity(0.28)
+                    : Color(red: 0.24, green: 0.32, blue: 0.45).opacity(0.12)
+                layer.fill(shadowPath, with: .color(shadowColor))
+
+                var sunlitPath = Path()
+                sunlitPath.move(to: CGPoint(x: left, y: top))
+                sunlitPath.addLine(to: CGPoint(x: right, y: top))
+                sunlitPath.addLine(to: reqPoints[reqPoints.count - 1])
+                appendSmoothSegment(to: &sunlitPath, points: reqPoints.reversed())
+                sunlitPath.closeSubpath()
+
+                let sunlitGrad = Gradient(colors: [
+                    Color(red: 0.98, green: 0.68, blue: 0.30).opacity(0.02),
+                    Color(red: 0.98, green: 0.60, blue: 0.24).opacity(scheme == .dark ? 0.16 : 0.15)
+                ])
+                layer.fill(
+                    sunlitPath,
+                    with: .linearGradient(sunlitGrad,
+                                          startPoint: CGPoint(x: left, y: top),
+                                          endPoint: CGPoint(x: right, y: bottom))
+                )
+
+                layer.drawLayer { rayLayer in
+                    rayLayer.clip(to: sunlitPath)
+                    let width = right - left
+                    let height = bottom - top
+                    for idx in 0..<4 {
+                        let offset = Double(idx) * 0.19
+                        let xTop = right - width * (0.04 + offset)
+                        let rayW = width * 0.065
+                        let slant = width * 0.34
+                        var ray = Path()
+                        ray.move(to: CGPoint(x: xTop, y: top - 4))
+                        ray.addLine(to: CGPoint(x: xTop + rayW, y: top - 4))
+                        ray.addLine(to: CGPoint(x: xTop + rayW - slant, y: bottom + 4))
+                        ray.addLine(to: CGPoint(x: xTop - slant, y: bottom + 4))
+                        ray.closeSubpath()
+                        rayLayer.fill(
+                            ray,
+                            with: .linearGradient(
+                                Gradient(colors: [
+                                    Color(red: 1.0, green: 0.84, blue: 0.56).opacity(0.07),
+                                    Color(red: 1.0, green: 0.72, blue: 0.38).opacity(0.0)
+                                ]),
+                                startPoint: CGPoint(x: right, y: top),
+                                endPoint: CGPoint(x: left, y: top + height * 0.85)
+                            )
+                        )
+                    }
+                }
             }
-            context.stroke(line, with: .color(Color(red: 0.41, green: 0.46, blue: 0.45)),
-                           lineWidth: 1.8 * strokeScale)
-            let observer = CGPoint(x: x(data.distances[0]), y: y(data.terrain[0]))
-            let haloSize = 15 * strokeScale
-            let halo = CGRect(x: observer.x - haloSize / 2, y: observer.y - haloSize / 2,
-                              width: haloSize, height: haloSize)
-            context.fill(Path(ellipseIn: halo), with: .color(Color(red: 0.95, green: 0.49, blue: 0.26).opacity(0.24)))
-            let dotSize = 9 * strokeScale
-            let dot = CGRect(x: observer.x - dotSize / 2, y: observer.y - dotSize / 2,
-                             width: dotSize, height: dotSize)
-            context.fill(Path(ellipseIn: dot), with: .color(Color(red: 0.95, green: 0.49, blue: 0.26)))
-            context.stroke(Path(ellipseIn: dot), with: .color(.white.opacity(0.9)), lineWidth: 1.4 * strokeScale)
-            context.draw(Text("观测点").font(.system(size: labelSize, weight: .semibold)).foregroundStyle(.primary),
-                         at: CGPoint(x: observer.x + dotSize * 1.1, y: observer.y - 9 * strokeScale), anchor: .leading)
-        }
 
-        // Use the model's cloud base/top envelope for each pressure family with rounded strata shading.
-        let sampleCount = Swift.max(1, data.distances.count - 1)
-        let columnSpan = (right - left) / Double(sampleCount)
-        let cellWidth = Swift.max(6.0, columnSpan * 0.92)
-        func scalar(_ grid: [[Double?]], _ sample: Int, _ level: Int) -> Double? {
-            guard grid.indices.contains(sample), grid[sample].indices.contains(level) else { return nil }
-            return grid[sample][level]
-        }
-        func integer(_ grid: [[Int]], _ sample: Int, _ level: Int) -> Int? {
-            guard grid.indices.contains(sample), grid[sample].indices.contains(level) else { return nil }
-            return grid[sample][level]
-        }
-        for i in data.distances.indices {
-            for family in 1...3 {
-                let cloudyLevels = data.levels.indices.filter { level in
-                    guard integer(data.familyCodes, i, level) == family else { return false }
-                    let amount = scalar(data.amounts, i, level)
-                        ?? max(scalar(data.presence, i, level) ?? 0,
-                               (scalar(data.fractions, i, level) ?? 0) / 100)
-                    return amount >= 0.06
+            // Layer 3 — Altitude & dashed distance gridlines (+ optional Isobars)
+            for km in stride(from: 0.0, through: 18_000.0, by: 3000.0) {
+                let lineY = y(km)
+                var grid = Path()
+                grid.move(to: CGPoint(x: left, y: lineY))
+                grid.addLine(to: CGPoint(x: right, y: lineY))
+                layer.stroke(grid, with: .color(Color.secondary.opacity(km == 0 ? 0.08 : 0.15)), lineWidth: 0.6)
+            }
+            let distStep = maxDistance <= 120 ? 25.0 : maxDistance <= 250 ? 50.0 : 100.0
+            for dist in stride(from: 0.0, through: maxDistance, by: distStep) where dist > 0 {
+                let lineX = x(dist)
+                var grid = Path()
+                grid.move(to: CGPoint(x: lineX, y: top))
+                grid.addLine(to: CGPoint(x: lineX, y: bottom))
+                layer.stroke(grid, with: .color(Color.secondary.opacity(0.12)),
+                             style: StrokeStyle(lineWidth: 0.6, dash: [3, 4]))
+            }
+
+            if showIsobars {
+                for l in data.levels.indices {
+                    var pts: [CGPoint] = []
+                    var temps: [Double] = []
+                    for i in data.distances.indices {
+                        guard let h = scalar(data.heights, i, l) else { continue }
+                        pts.append(CGPoint(x: x(data.distances[i]), y: y(h)))
+                        if let temp = scalar(data.temps, i, l) { temps.append(temp) }
+                    }
+                    guard pts.count > 1 else { continue }
+                    let isoPath = smoothOpenCurve(points: pts)
+                    let avg = temps.isEmpty ? 0 : temps.reduce(0, +) / Double(temps.count)
+                    let isoColor = avg < -30 ? Color(red: 0.48, green: 0.56, blue: 0.72)
+                        : avg < 0 ? Color(red: 0.68, green: 0.50, blue: 0.46)
+                        : Color(red: 0.80, green: 0.42, blue: 0.30)
+                    layer.stroke(isoPath, with: .color(isoColor.opacity(0.35)), lineWidth: 1.0)
                 }
-                guard !cloudyLevels.isEmpty else { continue }
+            }
 
-                let bases = cloudyLevels.compactMap { scalar(data.layerBases, i, $0) }
-                let tops = cloudyLevels.compactMap { scalar(data.layerTops, i, $0) }
-                let heights = cloudyLevels.compactMap { scalar(data.heights, i, $0) }
-                let layerBase = bases.min() ?? heights.min().map { $0 - 700 }
-                let layerTop = tops.max() ?? heights.max().map { $0 + 700 }
-                guard let layerBase, let layerTop, layerTop > layerBase else { continue }
+            // Layer 4 — Continuous organic cloud strata (low 3 -> mid 2 -> high 1)
+            let sampleCount = Swift.max(1, data.distances.count - 1)
+            let columnSpan = (right - left) / Double(sampleCount)
 
-                let amounts = cloudyLevels.compactMap {
-                    scalar(data.amounts, i, $0)
-                        ?? max(scalar(data.presence, i, $0) ?? 0,
-                               (scalar(data.fractions, i, $0) ?? 0) / 100)
+            for family in [3, 2, 1] {
+                var runs: [[CloudRunPoint]] = []
+                var currentRun: [CloudRunPoint] = []
+
+                for i in data.distances.indices {
+                    if let stratum = columnStratum(data: data, sample: i, family: family) {
+                        let cx = x(data.distances[i])
+                        let terrainY = data.terrain.indices.contains(i) ? y(data.terrain[i]) : bottom
+                        var botY = Swift.min(terrainY - 1, y(stratum.baseASL))
+                        var topY = Swift.max(top + 2, y(stratum.topASL))
+                        if topY > botY - 2 {
+                            let mid = Swift.min(Swift.max((topY + botY) * 0.5, top + 3), bottom - 3)
+                            topY = mid - 1.5
+                            botY = mid + 1.5
+                        }
+                        currentRun.append(CloudRunPoint(sampleIndex: i, cx: cx, topY: topY, bottomY: botY, stratum: stratum))
+                    } else if !currentRun.isEmpty {
+                        runs.append(currentRun)
+                        currentRun = []
+                    }
                 }
-                let presence = cloudyLevels.compactMap { scalar(data.presence, i, $0) }.max()
-                let humidity = cloudyLevels.compactMap { scalar(data.rh, i, $0) }.max()
-                let fraction = cloudyLevels.compactMap { scalar(data.fractions, i, $0) }.max()
-                let status = cloudyLevels.compactMap { integer(data.statuses, i, $0) }.max() ?? 0
+                if !currentRun.isEmpty { runs.append(currentRun) }
 
-                let centerX = x(data.distances[i])
-                let rectLeft = max(left, centerX - cellWidth / 2)
-                let rectRight = min(right, centerX + cellWidth / 2)
-                let terrainY = data.terrain.indices.contains(i) ? y(data.terrain[i]) : bottom
-                let rectTop = max(top, y(layerTop))
-                let rectBottom = min(terrainY, y(layerBase))
-                guard rectRight > rectLeft, rectBottom > rectTop else { continue }
-                let rect = CGRect(x: rectLeft, y: rectTop,
-                                  width: rectRight - rectLeft, height: rectBottom - rectTop)
-                let radius = min(4.5 * strokeScale, min(rect.width, rect.height) * 0.35)
-                let shape = Path(roundedRect: rect, cornerRadius: radius)
-                if let fill = cloudCellFill(amount: amounts.max(), presence: presence,
-                                            rh: humidity, fraction: fraction, family: family) {
-                    let topColor = fill.opacity(0.82)
-                    let bottomColor = status == 3
-                        ? Color(red: 0.97, green: 0.52, blue: 0.28).opacity(0.62)
-                        : fill
-                    context.fill(
-                        shape,
-                        with: .linearGradient(Gradient(colors: [topColor, bottomColor]),
-                                              startPoint: CGPoint(x: rect.midX, y: rect.minY),
-                                              endPoint: CGPoint(x: rect.midX, y: rect.maxY))
+                for run in runs {
+                    let shape = cloudSilhouettePath(run: run, left: left, right: right, columnSpan: columnSpan)
+                    let avgAmount = run.map(\.stratum.amount).reduce(0, +) / Double(run.count)
+                    let alpha = Swift.min(0.86, 0.42 + avgAmount * 0.48)
+
+                    let topColor: Color
+                    let botColor: Color
+                    switch family {
+                    case 1:
+                        topColor = (scheme == .dark ? Color(red: 0.78, green: 0.88, blue: 0.97) : Color(red: 0.92, green: 0.96, blue: 1.00)).opacity(alpha)
+                        botColor = (scheme == .dark ? Color(red: 0.54, green: 0.70, blue: 0.87) : Color(red: 0.64, green: 0.78, blue: 0.92)).opacity(alpha * 0.92)
+                    case 2:
+                        topColor = (scheme == .dark ? Color(red: 0.56, green: 0.79, blue: 0.82) : Color(red: 0.68, green: 0.86, blue: 0.88)).opacity(alpha)
+                        botColor = (scheme == .dark ? Color(red: 0.36, green: 0.60, blue: 0.65) : Color(red: 0.44, green: 0.67, blue: 0.72)).opacity(alpha * 0.94)
+                    default:
+                        topColor = (scheme == .dark ? Color(red: 0.50, green: 0.55, blue: 0.61) : Color(red: 0.62, green: 0.67, blue: 0.72)).opacity(alpha)
+                        botColor = (scheme == .dark ? Color(red: 0.33, green: 0.38, blue: 0.44) : Color(red: 0.44, green: 0.49, blue: 0.54)).opacity(alpha * 0.96)
+                    }
+
+                    let minTopY = run.map(\.topY).min() ?? top
+                    let maxBotY = run.map(\.bottomY).max() ?? bottom
+                    layer.fill(
+                        shape.closed,
+                        with: .linearGradient(Gradient(colors: [topColor, botColor]),
+                                              startPoint: CGPoint(x: shape.leftX, y: minTopY),
+                                              endPoint: CGPoint(x: shape.leftX, y: maxBotY))
                     )
+                    layer.stroke(shape.topEdge,
+                                 with: .color(Color.white.opacity(scheme == .dark ? 0.25 : 0.45)),
+                                 lineWidth: 1.0)
+
+                    var hatchStart = 0
+                    while hatchStart < run.count {
+                        let attenuated = run[hatchStart].stratum.status == 3
+                            && (run[hatchStart].stratum.pathTransmission ?? 1.0) < 0.995
+                        var hatchEnd = hatchStart
+                        while hatchEnd + 1 < run.count {
+                            let next = run[hatchEnd + 1].stratum.status == 3
+                                && (run[hatchEnd + 1].stratum.pathTransmission ?? 1.0) < 0.995
+                            guard next == attenuated else { break }
+                            hatchEnd += 1
+                        }
+                        if attenuated {
+                            let hatchLeft = hatchStart == 0 ? shape.leftX : (run[hatchStart - 1].cx + run[hatchStart].cx) * 0.5
+                            let hatchRight = hatchEnd == run.count - 1 ? shape.rightX : (run[hatchEnd].cx + run[hatchEnd + 1].cx) * 0.5
+                            var hatch = Path()
+                            let hatchHeight = bottom - top
+                            for startX in stride(from: hatchLeft - hatchHeight, through: hatchRight, by: 9) {
+                                hatch.move(to: CGPoint(x: startX, y: bottom))
+                                hatch.addLine(to: CGPoint(x: startX + hatchHeight, y: top))
+                            }
+                            layer.drawLayer { hatchLayer in
+                                hatchLayer.clip(to: shape.closed)
+                                hatchLayer.clip(to: Path(CGRect(x: hatchLeft, y: top,
+                                                              width: Swift.max(1, hatchRight - hatchLeft),
+                                                              height: hatchHeight)))
+                                hatchLayer.stroke(hatch,
+                                                  with: .color(Color(red: 0.98, green: 0.79, blue: 0.52)
+                                                    .opacity(scheme == .dark ? 0.34 : 0.42)),
+                                                  lineWidth: 0.8)
+                            }
+                        }
+                        hatchStart = hatchEnd + 1
+                    }
+
+                    // Fire-sky illuminated base underglow (status == 3) & lit-but-occluded (status == 2)
+                    var subStart = 0
+                    while subStart < run.count {
+                        let st = run[subStart].stratum.status
+                        var subEnd = subStart
+                        while subEnd + 1 < run.count && run[subEnd + 1].stratum.status == st {
+                            subEnd += 1
+                        }
+                        if st == 3 || st == 2 {
+                            let subLeft = subStart == 0 ? shape.leftX : (run[subStart - 1].cx + run[subStart].cx) * 0.5
+                            let subRight = subEnd == run.count - 1 ? shape.rightX : (run[subEnd].cx + run[subEnd + 1].cx) * 0.5
+                            let subRun = Array(run[subStart...subEnd])
+                            let subMinTop = subRun.map(\.topY).min() ?? minTopY
+                            let subMaxBot = subRun.map(\.bottomY).max() ?? maxBotY
+
+                            var subBotPts: [CGPoint] = []
+                            if subStart == 0 {
+                                subBotPts.append(CGPoint(x: shape.leftX, y: (run[0].topY + run[0].bottomY) * 0.5))
+                            } else {
+                                subBotPts.append(CGPoint(x: subLeft, y: (run[subStart - 1].bottomY + run[subStart].bottomY) * 0.5))
+                            }
+                            for p in subRun { subBotPts.append(CGPoint(x: p.cx, y: p.bottomY)) }
+                            if subEnd == run.count - 1 {
+                                subBotPts.append(CGPoint(x: shape.rightX, y: (run[subEnd].topY + run[subEnd].bottomY) * 0.5))
+                            } else {
+                                subBotPts.append(CGPoint(x: subRight, y: (run[subEnd].bottomY + run[subEnd + 1].bottomY) * 0.5))
+                            }
+                            let subBotCurve = smoothOpenCurve(points: subBotPts)
+
+                            layer.drawLayer { cloudLayer in
+                                cloudLayer.clip(to: shape.closed)
+                                let bandRect = CGRect(x: subLeft, y: top, width: Swift.max(1, subRight - subLeft), height: bottom - top)
+                                if st == 3 {
+                                    let fireGlow = Gradient(stops: [
+                                        .init(color: Color.clear, location: 0.0),
+                                        .init(color: Color(red: 1.0, green: 0.620, blue: 0.267).opacity(0.42), location: 0.55),
+                                        .init(color: Color(red: 0.961, green: 0.365, blue: 0.157).opacity(0.86), location: 1.0)
+                                    ])
+                                    cloudLayer.fill(
+                                        Path(bandRect),
+                                        with: .linearGradient(fireGlow,
+                                                              startPoint: CGPoint(x: bandRect.midX, y: subMinTop),
+                                                              endPoint: CGPoint(x: bandRect.midX, y: subMaxBot))
+                                    )
+                                } else {
+                                    cloudLayer.fill(
+                                        Path(bandRect),
+                                        with: .color(Color(red: 0.90, green: 0.60, blue: 0.22).opacity(0.16))
+                                    )
+                                }
+                            }
+
+                            if st == 3 {
+                                layer.stroke(subBotCurve,
+                                             with: .color(Color(red: 0.98, green: 0.45, blue: 0.18).opacity(0.30)),
+                                             style: StrokeStyle(lineWidth: 5.0 * Swift.min(1.3, strokeScale), lineCap: .round, lineJoin: .round))
+                                layer.stroke(subBotCurve,
+                                             with: .color(Color(red: 1.0, green: 0.54, blue: 0.20)),
+                                             style: StrokeStyle(lineWidth: 2.2, lineCap: .round, lineJoin: .round))
+                            } else {
+                                layer.stroke(subBotCurve,
+                                             with: .color(Color(red: 0.88, green: 0.58, blue: 0.20).opacity(0.88)),
+                                             style: StrokeStyle(lineWidth: 1.2, lineCap: .round, dash: [4, 3]))
+                            }
+                        }
+                        subStart = subEnd + 1
+                    }
                 }
-                if status == 3 {
-                    context.stroke(shape, with: .color(Color(red: 0.96, green: 0.43, blue: 0.20)),
-                                   lineWidth: 1.9 * strokeScale)
-                } else if status == 2 {
-                    context.stroke(shape, with: .color(Color(red: 0.85, green: 0.56, blue: 0.22)),
-                                   style: StrokeStyle(lineWidth: 1.4 * strokeScale,
-                                                      dash: [4 * strokeScale, 3 * strokeScale]))
+            }
+
+            // Layer 5 — Smooth requiredASL illumination threshold curve + inline pill
+            if reqPoints.count > 1 {
+                let reqCurve = smoothOpenCurve(points: reqPoints)
+                layer.stroke(reqCurve,
+                             with: .color(Color(red: 0.96, green: 0.66, blue: 0.24).opacity(0.20)),
+                             lineWidth: 5.0)
+                layer.stroke(reqCurve,
+                             with: .color(Color(red: 0.92, green: 0.59, blue: 0.19)),
+                             style: StrokeStyle(lineWidth: 1.8, lineCap: .round, dash: [7, 4]))
+
+                let pillIdx = Swift.min(reqPoints.count - 1, Swift.max(0, Int(Double(reqPoints.count) * 0.72)))
+                let anchorPt = reqPoints[pillIdx]
+                let pillText = Text(L10n.text("受光高度线", "Sunlit Base"))
+                    .font(.system(size: 8.5, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.96, green: 0.72, blue: 0.34))
+                let pillResolved = layer.resolve(pillText)
+                let pillTextSize = pillResolved.measure(in: size)
+                let pillW = pillTextSize.width + 10
+                let pillH = pillTextSize.height + 4
+                let pillX = Swift.min(right - pillW - 6, Swift.max(left + 6, anchorPt.x - pillW * 0.5))
+                let pillY = Swift.max(top + 6, Swift.min(bottom - pillH - 6, anchorPt.y - pillH - 6))
+                let pillRect = CGRect(x: pillX, y: pillY, width: pillW, height: pillH)
+                layer.fill(Path(roundedRect: pillRect, cornerRadius: pillH * 0.5),
+                           with: .color((scheme == .dark ? Color.black : Color.white).opacity(0.55)))
+                layer.stroke(Path(roundedRect: pillRect, cornerRadius: pillH * 0.5),
+                             with: .color(Color(red: 0.92, green: 0.59, blue: 0.19).opacity(0.45)),
+                             lineWidth: 0.7)
+                layer.draw(pillResolved, at: CGPoint(x: pillRect.midX, y: pillRect.midY), anchor: .center)
+            }
+
+            // Layer 6 — Smooth mountain/terrain silhouette
+            if data.terrain.count == data.distances.count {
+                let terrainPts = data.distances.indices.map { CGPoint(x: x(data.distances[$0]), y: y(data.terrain[$0])) }
+                var fillPath = Path()
+                if let firstT = terrainPts.first {
+                    fillPath.move(to: firstT)
+                    appendSmoothSegment(to: &fillPath, points: terrainPts)
+                    fillPath.addLine(to: CGPoint(x: right, y: bottom))
+                    fillPath.addLine(to: CGPoint(x: left, y: bottom))
+                    fillPath.closeSubpath()
                 }
+                let terrainMinY = terrainPts.map(\.y).min() ?? CGFloat(bottom)
+                let terrainGrad = Gradient(colors: scheme == .dark
+                    ? [Color(red: 0.34, green: 0.40, blue: 0.42).opacity(0.76),
+                       Color(red: 0.15, green: 0.18, blue: 0.22).opacity(0.92)]
+                    : [Color(red: 0.44, green: 0.49, blue: 0.46).opacity(0.48),
+                       Color(red: 0.28, green: 0.33, blue: 0.32).opacity(0.68)])
+                layer.fill(fillPath,
+                           with: .linearGradient(terrainGrad,
+                                                 startPoint: CGPoint(x: left, y: terrainMinY),
+                                                 endPoint: CGPoint(x: left, y: bottom)))
+                let ridgeCurve = smoothOpenCurve(points: terrainPts)
+                layer.stroke(ridgeCurve,
+                             with: .color(Color(red: 0.45, green: 0.51, blue: 0.49)),
+                             lineWidth: 1.6)
+            }
+
+            // Layer 7 — Observer beacon, right-edge sun cue, & observer sightline to primary burnable target
+            let observerY = data.terrain.isEmpty ? bottom : y(data.terrain[0])
+            let observer = CGPoint(x: x(0), y: Swift.min(bottom - 5, Swift.max(top + 10, observerY)))
+
+            if let targetFocus = primaryBurnableFocus(data: data) {
+                let targetPt = CGPoint(x: x(targetFocus.distanceKM), y: y(targetFocus.baseASL))
+                var sightline = Path()
+                sightline.move(to: observer)
+                sightline.addLine(to: targetPt)
+                layer.stroke(sightline,
+                             with: .color(Color(red: 0.99, green: 0.62, blue: 0.28).opacity(0.62)),
+                             style: StrokeStyle(lineWidth: 1.3, dash: [5, 4]))
+
+                let ringOuter = CGRect(x: targetPt.x - 8, y: targetPt.y - 8, width: 16, height: 16)
+                layer.fill(Path(ellipseIn: ringOuter), with: .color(Color(red: 0.98, green: 0.45, blue: 0.18).opacity(0.28)))
+                let ringInner = CGRect(x: targetPt.x - 4.2, y: targetPt.y - 4.2, width: 8.4, height: 8.4)
+                layer.fill(Path(ellipseIn: ringInner), with: .color(Color(red: 1.0, green: 0.56, blue: 0.22)))
+                layer.stroke(Path(ellipseIn: ringInner), with: .color(.white.opacity(0.95)), lineWidth: 1.3)
+
+                let baseKM = targetFocus.baseASL / 1000
+                let targetText = Text(L10n.text(String(format: "可烧云底 %.1fkm", baseKM),
+                                                String(format: "Lit base %.1fkm", baseKM)))
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(.white)
+                let resolvedTarget = layer.resolve(targetText)
+                let tSize = resolvedTarget.measure(in: size)
+                let tW = tSize.width + 10
+                let tH = tSize.height + 4
+                let tX = Swift.min(right - tW - 6, Swift.max(left + 6, targetPt.x - tW * 0.5))
+                let tY = targetPt.y - tH - 10 >= top + 6 ? targetPt.y - tH - 10 : Swift.min(bottom - tH - 6, targetPt.y + 10)
+                let tRect = CGRect(x: tX, y: tY, width: tW, height: tH)
+                layer.fill(Path(roundedRect: tRect, cornerRadius: tH * 0.5),
+                           with: .color(Color(red: 0.92, green: 0.36, blue: 0.16).opacity(0.88)))
+                layer.draw(resolvedTarget, at: CGPoint(x: tRect.midX, y: tRect.midY), anchor: .center)
+            }
+
+            let haloRect = CGRect(x: observer.x - 8, y: observer.y - 8, width: 16, height: 16)
+            layer.fill(Path(ellipseIn: haloRect), with: .color(Color(red: 0.96, green: 0.48, blue: 0.24).opacity(0.28)))
+            let dotRect = CGRect(x: observer.x - 4.5, y: observer.y - 4.5, width: 9, height: 9)
+            layer.fill(Path(ellipseIn: dotRect), with: .color(Color(red: 0.96, green: 0.48, blue: 0.24)))
+            layer.stroke(Path(ellipseIn: dotRect), with: .color(.white.opacity(0.92)), lineWidth: 1.4)
+            layer.draw(
+                Text(L10n.text("观测点", "Observer"))
+                    .font(.system(size: labelSize, weight: .semibold))
+                    .foregroundStyle(.primary),
+                at: CGPoint(x: observer.x + 10, y: Swift.max(top + 10, observer.y - 9)),
+                anchor: .leading
+            )
+
+            let sunCueText: String = {
+                if let az = number(section["solar_azimuth_deg"]) {
+                    return L10n.text(String(format: "☀ 太阳方向 %.0f°", az), String(format: "☀ Sun %.0f°", az))
+                }
+                return L10n.text("☀ 太阳方向", "☀ Sun")
+            }()
+            layer.draw(
+                Text(sunCueText)
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.98, green: 0.72, blue: 0.34)),
+                at: CGPoint(x: right - 10, y: top + 12),
+                anchor: .trailing
+            )
+
+            // Layer 8 — Vertical hover crosshair
+            if let hoverDistanceKM {
+                let hx = x(hoverDistanceKM)
+                var crosshair = Path()
+                crosshair.move(to: CGPoint(x: hx, y: top))
+                crosshair.addLine(to: CGPoint(x: hx, y: bottom))
+                layer.stroke(crosshair,
+                             with: .color(Color.primary.opacity(0.45)),
+                             style: StrokeStyle(lineWidth: 1.0, dash: [3, 3]))
             }
         }
 
-        // temperature layer lines colored by level average temperature
-        for l in data.levels.indices {
-            var points: [CGPoint] = []
-            var temps: [Double] = []
-            for i in data.distances.indices {
-                guard let height = data.heights[i][l] else { continue }
-                points.append(CGPoint(x: x(data.distances[i]), y: y(height)))
-                if let temp = data.temps[i][l] { temps.append(temp) }
-            }
-            guard points.count > 1 else { continue }
-            var line = Path()
-            line.move(to: points[0])
-            points.dropFirst().forEach { line.addLine(to: $0) }
-            let average = temps.isEmpty ? 0 : temps.reduce(0, +) / Double(temps.count)
-            let color = average < -30 ? Color(red: 0.55, green: 0.40, blue: 0.45)
-                : average < 0 ? Color(red: 0.69, green: 0.42, blue: 0.36)
-                : Color(red: 0.78, green: 0.31, blue: 0.22)
-            context.stroke(line, with: .color(color.opacity(0.62)), lineWidth: 1.1 * strokeScale)
-            if l % 2 == 0, l < data.levels.count, let last = points.last {
-                context.draw(Text("\(data.levels[l])hPa").font(.system(size: labelSize)).foregroundStyle(.secondary),
-                             at: CGPoint(x: last.x - 5 * strokeScale, y: last.y - 6 * strokeScale),
-                             anchor: .trailing)
-            }
+        // Crisp rounded plot border
+        context.stroke(plotPath,
+                       with: .color(Color.secondary.opacity(scheme == .dark ? 0.28 : 0.22)),
+                       lineWidth: 0.9)
+
+        // Outside axis labels: Altitude (left)
+        for km in stride(from: 0.0, through: 18_000.0, by: 3000.0) {
+            context.draw(
+                Text("\(Int(km / 1000))km").font(.system(size: labelSize)).foregroundStyle(.secondary),
+                at: CGPoint(x: left - 6, y: y(km)),
+                anchor: .trailing
+            )
         }
 
-        // required illumination threshold (ASL), dashed amber
-        if data.requiredASL.count == data.distances.count {
-            var line = Path()
-            line.move(to: CGPoint(x: x(data.distances[0]), y: y(data.requiredASL[0])))
-            for index in data.distances.indices.dropFirst() {
-                line.addLine(to: CGPoint(x: x(data.distances[index]), y: y(data.requiredASL[index])))
-            }
-            context.stroke(line, with: .color(Color(red: 0.83, green: 0.55, blue: 0.22)),
-                           style: StrokeStyle(lineWidth: 2.2 * strokeScale,
-                                              dash: [7 * strokeScale, 5 * strokeScale]))
+        // Outside axis labels: Distance (bottom, skip 0km)
+        let distStep = maxDistance <= 120 ? 25.0 : maxDistance <= 250 ? 50.0 : 100.0
+        for dist in stride(from: 0.0, through: maxDistance, by: distStep) where dist > 0 {
+            let lx = x(dist)
+            context.draw(
+                Text("\(Int(dist))km").font(.system(size: labelSize)).foregroundStyle(.secondary),
+                at: CGPoint(x: lx, y: bottom + 10),
+                anchor: dist >= maxDistance - distStep * 0.25 ? .trailing : .center
+            )
         }
 
-        // theoretical target cloud base / top markers
-        for target in data.targets {
-            guard let distance = number(target["distance_km"]),
-                  let base = number(target["cloud_base_asl_m"]) else { continue }
-            let basePoint = CGPoint(x: x(distance), y: y(base))
-            let markerSize = 8 * strokeScale
-            context.fill(Path(ellipseIn: CGRect(x: basePoint.x - markerSize / 2,
-                                                y: basePoint.y - markerSize / 2,
-                                                width: markerSize, height: markerSize)),
-                         with: .color(warm))
-            if let top = number(target["cloud_top_asl_m"]) {
-                let topPoint = CGPoint(x: x(distance), y: y(top))
-                context.fill(Path(ellipseIn: CGRect(x: topPoint.x - markerSize / 2,
-                                                    y: topPoint.y - markerSize / 2,
-                                                    width: markerSize, height: markerSize)),
-                             with: .color(coolAccent))
+        // Outside axis labels: Isobars (right)
+        if showIsobars {
+            var lastLabelY = -Double.infinity
+            for l in data.levels.indices {
+                let heightsForLevel = data.distances.indices.compactMap { scalar(data.heights, $0, l) }
+                guard let lastH = heightsForLevel.last else { continue }
+                let lineY = y(lastH)
+                guard lineY >= top + 4, lineY <= bottom - 4, abs(lineY - lastLabelY) >= 13 else { continue }
+                lastLabelY = lineY
+                context.draw(
+                    Text("\(data.levels[l])hPa")
+                        .font(.system(size: Swift.max(8.5, labelSize - 0.5)))
+                        .foregroundStyle(.secondary),
+                    at: CGPoint(x: right + 5, y: lineY),
+                    anchor: .leading
+                )
             }
         }
     }
 
-    /// Port of the Web cloudFill (NationalCrossSection.svelte): cloud amount over
-    /// presence/fraction fallback, humidity tint below the cloud threshold, family colors.
-    private func cloudCellFill(amount: Double?, presence: Double?, rh: Double?,
-                               fraction: Double?, family: Int) -> Color? {
-        let cloudAmount = amount ?? Swift.max(presence ?? 0, (fraction ?? 0) / 100)
-        let humidity = Swift.max(0, (rh ?? 0) - 55) / 45
-        if cloudAmount < 0.06 {
-            if let fraction, fraction <= 0 { return nil }
-            if humidity < 0.06 { return nil }
-            return Color(red: 112 / 255, green: 151 / 255, blue: 126 / 255)
-                .opacity(min(0.34, 0.04 + humidity * 0.26))
+    private func primaryBurnableFocus(data: CrossSectionData) -> BurnableTargetFocus? {
+        for target in data.targets where target["status"] as? String == "burnable" {
+            if let dist = number(target["distance_km"]),
+               let base = number(target["cloud_base_asl_m"]) {
+                return BurnableTargetFocus(distanceKM: dist, baseASL: base)
+            }
         }
-        let alpha = min(0.82, 0.10 + cloudAmount * 0.68)
-        switch family {
-        case 1: return Color(red: 116 / 255, green: 157 / 255, blue: 194 / 255).opacity(alpha)
-        case 2: return Color(red: 105 / 255, green: 154 / 255, blue: 142 / 255).opacity(alpha)
-        default: return Color(red: 126 / 255, green: 136 / 255, blue: 145 / 255).opacity(alpha)
+        // Fallback: midpoint of the strongest status == 3 base
+        var litPoints: [(dist: Double, base: Double, amount: Double)] = []
+        for i in data.distances.indices {
+            for family in 1...3 {
+                if let s = columnStratum(data: data, sample: i, family: family), s.status == 3 {
+                    litPoints.append((data.distances[i], s.baseASL, s.amount))
+                }
+            }
         }
+        guard !litPoints.isEmpty else { return nil }
+        let sorted = litPoints.sorted { $0.dist < $1.dist }
+        let mid = sorted[sorted.count / 2]
+        return BurnableTargetFocus(distanceKM: mid.dist, baseASL: mid.base)
     }
 
     private func offsetLabel(_ value: Any?) -> String {
@@ -2687,56 +3745,97 @@ struct CrossSectionFigureView: View {
     // MARK: legend & target diagnosis
 
     private var legend: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 160), alignment: .leading)],
-                      alignment: .leading, spacing: 8) {
-                legendChip("高云压力族", Color(red: 116 / 255, green: 157 / 255, blue: 194 / 255))
-                legendChip("中云压力族", Color(red: 105 / 255, green: 154 / 255, blue: 142 / 255))
-                legendChip("低云压力族", Color(red: 126 / 255, green: 136 / 255, blue: 145 / 255))
-                legendChip("湿润未饱和", Color(red: 112 / 255, green: 151 / 255, blue: 126 / 255))
-                legendLine("温度层线", Color(red: 0.69, green: 0.42, blue: 0.36), dashed: false)
-                legendLine("地形", Color(red: 0.41, green: 0.45, blue: 0.44), dashed: false)
-                legendDot("云底", warm)
-                legendDot("云顶", coolAccent)
-                legendLine("理论照明基准（ASL）", Color(red: 0.83, green: 0.55, blue: 0.22), dashed: true)
-                legendFrame("受光且可见候选（未评估云遮挡）", Color(red: 0.94, green: 0.42, blue: 0.21), dashed: false)
-                legendFrame("达到受光阈值但不可见", Color(red: 0.83, green: 0.55, blue: 0.22), dashed: true)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 12) {
+                legendFireBase(L10n.text("火烧云受光云底", "Lit fire-sky base"))
+                legendCloudStrata(L10n.text("高/中/低云层", "High/Mid/Low clouds"))
+                legendCorridor(L10n.text("受光区/地影区", "Sunlit / Shadow"))
+                legendLine(L10n.text("受光高度线", "Sunlit threshold"),
+                           Color(red: 0.92, green: 0.59, blue: 0.19), dashed: true)
+                legendLine(L10n.text("受光被遮挡", "Lit but occluded"),
+                           Color(red: 0.88, green: 0.58, blue: 0.20), dashed: true)
+                legendTerrainSight(L10n.text("地形与视线", "Terrain & sightline"))
+                legendPathTransmission(L10n.text("路径透射 T_c", "Path transmission T_c"))
             }
-            Text("图层数值为对应模式（GFS/EC）各自的场；未着色不代表晴空（缺测或低于阈值），低云压力族仅在近场距离门限内排除；橙色状态未评估云体遮挡。")
-                .font(.system(size: 9)).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            .font(.system(size: 9.5))
+            .foregroundStyle(.secondary)
+            .padding(.vertical, 2)
         }
-        .font(.system(size: 9)).foregroundStyle(.secondary)
+        .help(L10n.text("未着色不代表晴空；缺测层不绘制", "Unshaded does not imply clear sky; missing layers are omitted"))
     }
 
-    private func legendChip(_ title: String, _ color: Color) -> some View {
+    private func legendFireBase(_ title: String) -> some View {
         HStack(spacing: 4) {
-            Rectangle().fill(color).frame(width: 12, height: 7).cornerRadius(1.5)
+            RoundedRectangle(cornerRadius: 2)
+                .fill(LinearGradient(colors: [Color(red: 0.72, green: 0.84, blue: 0.94),
+                                              Color(red: 0.961, green: 0.365, blue: 0.157)],
+                                     startPoint: .top, endPoint: .bottom))
+                .frame(width: 13, height: 8)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Color(red: 1.0, green: 0.54, blue: 0.20)).frame(height: 1.8)
+                }
+            Text(title)
+        }
+    }
+
+    private func legendCloudStrata(_ title: String) -> some View {
+        HStack(spacing: 3) {
+            Capsule().fill(Color(red: 0.72, green: 0.85, blue: 0.96)).frame(width: 6, height: 7)
+            Capsule().fill(Color(red: 0.48, green: 0.74, blue: 0.78)).frame(width: 6, height: 7)
+            Capsule().fill(Color(red: 0.46, green: 0.51, blue: 0.57)).frame(width: 6, height: 7)
+            Text(title)
+        }
+    }
+
+    private func legendCorridor(_ title: String) -> some View {
+        HStack(spacing: 4) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(LinearGradient(colors: [Color(red: 0.98, green: 0.65, blue: 0.26).opacity(0.35),
+                                              Color(red: 0.12, green: 0.18, blue: 0.30).opacity(0.45)],
+                                     startPoint: .top, endPoint: .bottom))
+                .frame(width: 13, height: 8)
+            Text(title)
+        }
+    }
+
+    private func legendTerrainSight(_ title: String) -> some View {
+        HStack(spacing: 4) {
+            ZStack(alignment: .bottomLeading) {
+                Rectangle().fill(Color(red: 0.41, green: 0.46, blue: 0.45).opacity(0.7)).frame(width: 13, height: 4)
+                Path { p in
+                    p.move(to: CGPoint(x: 1, y: 6))
+                    p.addLine(to: CGPoint(x: 12, y: 1))
+                }
+                .stroke(Color(red: 0.99, green: 0.62, blue: 0.28), style: StrokeStyle(lineWidth: 1.2, dash: [2.5, 2]))
+            }
+            .frame(width: 13, height: 8)
+            Text(title)
+        }
+    }
+
+    private func legendPathTransmission(_ title: String) -> some View {
+        HStack(spacing: 4) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 1.5)
+                    .fill(Color(red: 0.36, green: 0.48, blue: 0.55).opacity(0.42))
+                Path { path in
+                    path.move(to: CGPoint(x: 1, y: 8))
+                    path.addLine(to: CGPoint(x: 8, y: 1))
+                    path.move(to: CGPoint(x: 7, y: 8))
+                    path.addLine(to: CGPoint(x: 14, y: 1))
+                }
+                .stroke(Color(red: 0.98, green: 0.79, blue: 0.52).opacity(0.9), lineWidth: 0.8)
+            }
+            .frame(width: 15, height: 9)
             Text(title)
         }
     }
 
     private func legendLine(_ title: String, _ color: Color, dashed: Bool) -> some View {
         HStack(spacing: 4) {
-            Rectangle().fill(Color.clear).frame(width: 12, height: 0)
-                .overlay { Rectangle().stroke(color, style: StrokeStyle(lineWidth: 1.6, dash: dashed ? [4, 3] : [])) }
+            Rectangle().fill(Color.clear).frame(width: 13, height: 0)
+                .overlay { Rectangle().stroke(color, style: StrokeStyle(lineWidth: 1.5, dash: dashed ? [3.5, 2.5] : [])) }
                 .frame(height: 7)
-            Text(title)
-        }
-    }
-
-    private func legendDot(_ title: String, _ color: Color) -> some View {
-        HStack(spacing: 4) {
-            Circle().fill(color).frame(width: 7, height: 7)
-            Text(title)
-        }
-    }
-
-    private func legendFrame(_ title: String, _ color: Color, dashed: Bool) -> some View {
-        HStack(spacing: 4) {
-            Rectangle().fill(Color.clear)
-                .overlay { Rectangle().stroke(color, style: StrokeStyle(lineWidth: 1.4, dash: dashed ? [4, 3] : [])) }
-                .frame(width: 11, height: 7)
             Text(title)
         }
     }
@@ -2747,7 +3846,8 @@ struct CrossSectionFigureView: View {
         return Group {
             if !targets.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("受光与几何/地形可见候选（未评估云遮挡）")
+                    Text(L10n.text("受光与几何/地形可见候选（候选状态未计路径消光）",
+                                   "Sunlit & terrain-visible candidates (path extinction shown separately)"))
                         .font(.system(size: 10, weight: .medium)).foregroundStyle(.primary)
                     if !burnable.isEmpty {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 232), spacing: 6)], spacing: 6) {
@@ -2788,15 +3888,6 @@ struct CrossSectionFigureView: View {
         case "middle": return "中云压力族"
         case "low": return "低云压力族"
         default: return target["pressure_family_label"] as? String ?? "云层"
-        }
-    }
-
-    private func diagnosticChip(_ title: String, _ value: Any?, suffix: String = "") -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.system(size: 8)).foregroundStyle(.secondary)
-            Text(title == "有效时次" ? (value as? String ?? "—")
-                 : diagnosticValue(value, digits: 1, suffix: suffix))
-                .font(.system(size: 10, weight: .medium)).monospacedDigit()
         }
     }
 }
@@ -2925,7 +4016,7 @@ struct SkyTimeline: View {
             let endDate = pointDate(end % 1440, start: start)
             let inWindow = now >= startDate && now <= endDate
             let bestDate = best.map { pointDate($0, start: start) }
-            VStack(alignment: .leading, spacing: 5) {
+            VStack(alignment: .leading, spacing: 4) {
                 GeometryReader { geo in
                     ZStack(alignment: .leading) {
                         Capsule().fill(.quaternary.opacity(0.5))
@@ -2936,13 +4027,13 @@ struct SkyTimeline: View {
                         if let best {
                             Circle()
                                 .fill(Color.white)
-                                .frame(width: 9, height: 9)
+                                .frame(width: 8, height: 8)
                                 .overlay { Circle().strokeBorder(FSDesign.chipForeground("done", dark: scheme == .dark), lineWidth: 1.5) }
-                                .offset(x: geo.size.width * CGFloat((best - start <= 0 ? best + 1440 : best) - start) / CGFloat(span) - 4.5)
+                                .offset(x: geo.size.width * CGFloat((best - start <= 0 ? best + 1440 : best) - start) / CGFloat(span) - 4.0)
                         }
                     }
                 }
-                .frame(height: 10)
+                .frame(height: 8)
                 HStack {
                     Text(startRaw).monospacedDigit()
                     Spacer()

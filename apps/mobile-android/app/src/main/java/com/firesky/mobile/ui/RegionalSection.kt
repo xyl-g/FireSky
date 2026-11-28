@@ -334,27 +334,10 @@ private fun RegionalHeatmapCard(
     bounds: List<Double>,
 ) {
     val dark = LocalFireSkyDark.current
-    val west = bounds.getOrElse(0) { 73.0 }
-    val south = bounds.getOrElse(1) { 18.0 }
-    val east = bounds.getOrElse(2) { 136.0 }
-    val north = bounds.getOrElse(3) { 54.0 }
     val mapBg = if (dark) Color(0xFF0E1728) else Color(0xFFE9EFF6)
-    val gridLineColor = if (dark) Color.White.copy(alpha = 0.09f) else Color(0xFF2A3C58).copy(alpha = 0.12f)
-    val missingColor = if (dark) Color.White.copy(alpha = 0.08f) else Color.Black.copy(alpha = 0.06f)
-    val selectedColor = if (dark) Color(0xFFFFE082) else Color(0xFF1A237E)
-
     val allCells = model.cells
-    val minLat = allCells.minOfOrNull { it.lat }?.let { min(it - 0.5, south) } ?: south
-    val maxLat = allCells.maxOfOrNull { it.lat }?.let { max(it + 0.5, north) } ?: north
-    val minLon = allCells.minOfOrNull { it.lon }?.let { min(it - 0.5, west) } ?: west
-    val maxLon = allCells.maxOfOrNull { it.lon }?.let { max(it + 0.5, east) } ?: east
 
-    val yMin = mercatorY(maxLat.coerceIn(-85.0, 85.0))
-    val yMax = mercatorY(minLat.coerceIn(-85.0, 85.0))
-    val ySpan = (yMax - yMin).coerceAtLeast(1e-6)
-    val xSpan = (maxLon - minLon).coerceAtLeast(1e-6)
-
-    // 计算网格实际步长用于渲染矩形块大小
+    // 计算网格实际步长用于判定点按命中阈值
     val latStep = remember(allCells) {
         val lats = allCells.map { it.lat }.distinct().sorted()
         lats.zipWithNext { a, b -> b - a }.filter { it > 0.05 }.minOrNull() ?: max(0.25, model.spacingDeg)

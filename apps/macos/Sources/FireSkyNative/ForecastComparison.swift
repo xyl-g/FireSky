@@ -148,6 +148,12 @@ struct ForecastComparison {
             .sorted { $0.time < $1.time }
     }
 
+    static func isStepValid(_ step: [String: Any]) -> Bool {
+        if step["valid"] as? Bool == false { return false }
+        if (step["selected_regime"] as? String) == "invalid" { return false }
+        return true
+    }
+
     static func curve(report: [String: Any]?, model: String, timezone: String) -> [ForecastCurvePoint] {
         let iso = ISO8601DateFormatter()
         let fractional = ISO8601DateFormatter()
@@ -162,7 +168,7 @@ struct ForecastComparison {
         var seen: Set<Date> = []
         for step in report?["steps"] as? [[String: Any]] ?? [] {
             let time = Self.stepDate(step, iso: iso, fractional: fractional, local: local)
-            guard let time, step["valid"] as? Bool != false,
+            guard let time, Self.isStepValid(step),
                   let quality = step["instant_quality_index"] as? NSNumber,
                   quality.doubleValue.isFinite else {
                 // Keep invalid samples as breaks rather than joining across them.
@@ -194,7 +200,7 @@ struct ForecastComparison {
             var seen: Set<Date> = []
             for step in report?["steps"] as? [[String: Any]] ?? [] {
                 let time = Self.stepDate(step, iso: iso, fractional: fractional, local: local)
-                guard let time, step["valid"] as? Bool != false,
+                guard let time, Self.isStepValid(step),
                       let value = step[key] as? NSNumber, value.doubleValue.isFinite else {
                     segment += 1
                     continue
@@ -219,7 +225,7 @@ struct ForecastComparison {
         var seen: Set<Date> = []
         for step in report?["steps"] as? [[String: Any]] ?? [] {
             let time = Self.stepDate(step, iso: iso, fractional: fractional, local: local)
-            guard let time, step["valid"] as? Bool != false,
+            guard let time, Self.isStepValid(step),
                   let aod = step["quality_aod550"] as? NSNumber,
                   aod.doubleValue.isFinite, aod.doubleValue >= 0 else {
                 segment += 1

@@ -121,6 +121,45 @@ class MockEngineChainTest {
     }
 
     @Test
+    fun mockNetworkProbeStreamsIOSRowsAndSharedResultShape() {
+        val client = EngineClient(MockTransport())
+        client.start(JSONObject())
+        try {
+            runBlocking {
+                val hello = withTimeout(10_000) { client.call("hello") }
+                val capabilities = hello.optJSONArray("capabilities")
+                assertTrue((0 until (capabilities?.length() ?: 0)).any { capabilities?.optString(it) == "network_probe" })
+
+                val progress = java.util.Collections.synchronizedList(mutableListOf<JSONObject>())
+                val response = withTimeout(10_000) {
+                    client.call(
+                        "network_probe",
+                        JSONObject().put("ecmwf_source", "aws").put("aerosol_source", "geos-fp"),
+                    ) { event -> progress += event }
+                }
+                assertTrue(response.optBoolean("all_passed"))
+                assertTrue(response.optString("checked_at").isNotEmpty())
+                val rows = response.optJSONArray("datasets")
+                assertEquals(3, rows?.length())
+                assertEquals(listOf("gfs", "ec", "cams"), (0 until (rows?.length() ?: 0)).map { rows!!.getJSONObject(it).optString("source") })
+                assertEquals("GEOS-FP · NASA OPeNDAP", rows?.getJSONObject(2)?.optString("title"))
+                for (index in 0 until (rows?.length() ?: 0)) {
+                    val row = rows!!.getJSONObject(index)
+                    assertEquals("passed", row.optString("state"))
+                    assertTrue(row.optString("host").isNotEmpty())
+                    assertTrue(row.optInt("bytes_received") > 0)
+                    assertTrue(row.optInt("elapsed_ms") > 0)
+                }
+                assertEquals(6, progress.size)
+                assertEquals(3, progress.count { it.optJSONObject("probe")?.optString("state") == "testing" })
+                assertEquals(3, progress.count { it.optJSONObject("probe")?.optString("state") == "passed" })
+            }
+        } finally {
+            client.stop()
+        }
+    }
+
+    @Test
     fun mockRegionalAndNowcastChains() {
         val client = EngineClient(MockTransport())
         client.start(JSONObject())

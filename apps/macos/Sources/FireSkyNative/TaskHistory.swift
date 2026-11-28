@@ -176,7 +176,7 @@ private final class HistoryRestoreConfirmation: ObservableObject {
     @Published var taskID: String?
 }
 
-/// 任务历史独立侧栏页面：左侧列表 + 右侧详情区，支持类型/状态筛选。
+/// 任务历史独立侧栏页面：原生 macOS Master-Detail 分栏布局，支持类型/状态筛选。
 struct NativeTaskHistoryView: View {
     @EnvironmentObject private var store: Store
     @StateObject private var filters = HistoryFilterState()
@@ -245,7 +245,9 @@ struct NativeTaskHistoryView: View {
             Text(title).font(.system(size: 13, weight: .medium))
             Text(message).font(.caption).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
+                .frame(maxWidth: 340)
         }
+        .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
     }
 
@@ -273,7 +275,9 @@ struct NativeTaskHistoryView: View {
             }.help(L10n.text("刷新任务历史", "Refresh task history"))
                 .accessibilityLabel(L10n.text("刷新任务历史", "Refresh task history"))
                 .disabled(!store.online || store.taskHistoryLoading)
-        }.padding(.horizontal, 20).padding(.vertical, 10)
+        }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 10)
     }
 
     private var listColumn: some View {
@@ -283,7 +287,8 @@ struct NativeTaskHistoryView: View {
                     .textSelection(.enabled).padding(20)
             }
             if store.taskHistoryLoading && store.taskHistory.isEmpty {
-                ProgressView(L10n.text("正在读取任务记录…", "Loading task records…")).frame(maxWidth: .infinity, minHeight: 140)
+                ProgressView(L10n.text("正在读取任务记录…", "Loading task records…"))
+                    .frame(maxWidth: .infinity, minHeight: 140)
             } else if visibleHistory.isEmpty {
                 emptyState(
                     title: store.taskHistory.isEmpty
@@ -331,71 +336,85 @@ struct NativeTaskHistoryView: View {
                 Label(L10n.text("引擎未连接，显示的是上次读取的记录。", "Engine offline; showing previously loaded records."), systemImage: "wifi.slash")
                     .font(.caption).foregroundStyle(.secondary).padding(20)
             }
-        }.frame(minWidth: 420)
+        }
+        .frame(minWidth: 420)
     }
 
     /// 右侧详情区：任务摘要 + 事件时间线；固定宽度，随选中项刷新。
     private var detailColumn: some View {
         Group {
             if let selected = store.taskHistory.first(where: { $0.taskID == store.selectedTaskHistoryID }) {
-                VStack(alignment: .leading, spacing: 12) {
-                    HStack(alignment: .top) {
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(selected.rowTitle).font(.headline)
-                            if !selected.contextTitle.isEmpty {
-                                Text(selected.contextTitle).font(.callout).foregroundStyle(.secondary)
-                            }
-                        }
-                        Spacer()
-                        Button { store.clearTaskHistorySelection() } label: {
-                            Image(systemName: "xmark")
-                        }.help(L10n.text("关闭详情", "Close details"))
-                            .accessibilityLabel(L10n.text("关闭详情", "Close details"))
-                            .buttonStyle(.borderless)
-                    }
-                    summaryCard(selected)
-                    if selected.canRestoreResult || fullReportPath(for: selected) != nil {
-                        VStack(alignment: .leading, spacing: 7) {
-                            HStack(spacing: 8) {
-                                if selected.canRestoreResult {
-                                    Button {
-                                        restoreConfirmation.taskID = selected.taskID
-                                    } label: {
-                                        Label(L10n.text("查看该次结果", "View this result"),
-                                              systemImage: "arrow.right.circle.fill")
-                                            .frame(maxWidth: .infinity)
-                                    }
-                                    .buttonStyle(.borderedProminent)
-                                    .controlSize(.small)
-                                    .disabled(store.busy || store.restoringTaskHistoryID != nil)
-                                    .help(L10n.text("从已发布快照恢复结果，不修改当前参数、不重新检查数据。", "Restore the published result without changing current parameters or re-checking data."))
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack(alignment: .top, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 5) {
+                                HStack(spacing: 8) {
+                                    Text(selected.rowTitle).font(.headline)
+                                    StatusChip(status: selected.status, title: L10n.status(selected.statusTitle))
                                 }
-                                if let path = fullReportPath(for: selected) {
-                                    Button {
-                                        openFullReport(path)
-                                    } label: {
-                                        Label(L10n.text("完整报告", "Full report"), systemImage: "doc.text")
-                                    }
-                                    .buttonStyle(.borderless)
-                                    .controlSize(.small)
-                                    .help(L10n.text("打开该次预测的 HTML 报告。", "Open this forecast's HTML report."))
+                                if !selected.contextTitle.isEmpty {
+                                    Text(selected.contextTitle).font(.callout).foregroundStyle(.secondary)
                                 }
                             }
-                            Text(L10n.text("恢复结果只回到已发布快照；「恢复参数并重新检查数据」仍在任务动作菜单中。", "Restoring returns to the published snapshot; restore-and-re-check stays in task actions."))
-                                .font(.caption2).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer()
+                            Button { store.clearTaskHistorySelection() } label: {
+                                Image(systemName: "xmark")
+                            }.help(L10n.text("关闭详情", "Close details"))
+                                .accessibilityLabel(L10n.text("关闭详情", "Close details"))
+                                .buttonStyle(.borderless)
                         }
-                    }
-                    if selected.method == "forecast", selected.status == "done" {
+
+                        summaryCard(selected)
+
+                        if selected.canRestoreResult || fullReportPath(for: selected) != nil {
+                            VStack(alignment: .leading, spacing: 7) {
+                                HStack(spacing: 8) {
+                                    if selected.canRestoreResult {
+                                        Button {
+                                            restoreConfirmation.taskID = selected.taskID
+                                        } label: {
+                                            Label(L10n.text("查看该次结果", "View this result"),
+                                                  systemImage: "arrow.right.circle.fill")
+                                                .frame(maxWidth: .infinity)
+                                        }
+                                        .buttonStyle(.borderedProminent)
+                                        .controlSize(.small)
+                                        .disabled(store.busy || store.restoringTaskHistoryID != nil)
+                                        .help(L10n.text("从已发布快照恢复结果，不修改当前参数、不重新检查数据。", "Restore the published result without changing current parameters or re-checking data."))
+                                    }
+                                    if let path = fullReportPath(for: selected) {
+                                        Button {
+                                            openFullReport(path)
+                                        } label: {
+                                            Label(L10n.text("完整报告", "Full report"), systemImage: "doc.text")
+                                        }
+                                        .buttonStyle(.borderless)
+                                        .controlSize(.small)
+                                        .help(L10n.text("打开该次预测的 HTML 报告。", "Open this forecast's HTML report."))
+                                    }
+                                }
+                                Text(L10n.text("恢复结果只回到已发布快照；「恢复参数并重新检查数据」仍在任务动作菜单中。", "Restoring returns to the published snapshot; restore-and-re-check stays in task actions."))
+                                    .font(.caption2).foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+
+                        if selected.method == "forecast", selected.status == "done" {
+                            Divider()
+                            forecastResultCard(selected)
+                        }
+
                         Divider()
-                        forecastResultCard(selected)
+                        eventsCard(selected)
                     }
-                    Divider()
-                    eventsCard(selected)
-                }.padding(20).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(18)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
             }
-        }.background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
-            .frame(width: 360)
+        }
+        .background(Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .frame(width: 360)
+        .frame(maxHeight: .infinity, alignment: .top)
     }
 
     /// 已选任务的 HTML 报告路径只从已加载快照读取，不在 SwiftUI 重新计算。
@@ -436,8 +455,9 @@ struct NativeTaskHistoryView: View {
                 summaryRow(L10n.text("重试", "Retry"), L10n.text("可恢复参数并重新检查数据", "Parameters can be restored and re-checked"))
             }
             summaryRow(L10n.text("删除记录", "Delete record"), L10n.text("只删除状态和事件，不影响报告与天气数据", "Only status and events are removed; reports and weather data are unaffected"))
-        }.padding(12)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
     }
 
     private func summaryRow(_ title: String, _ value: String, help: String? = nil) -> some View {
@@ -474,8 +494,9 @@ struct NativeTaskHistoryView: View {
                     }
                 }
             }
-        }.padding(12)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
+        }
+        .padding(12)
+        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 8))
     }
 
     @ViewBuilder
@@ -563,22 +584,32 @@ struct NativeTaskHistoryView: View {
                 if store.taskHistoryEventsTruncated {
                     Text(L10n.text("较早事件已超出保留上限。", "Older events exceed the retention limit.")).font(.caption).foregroundStyle(.secondary)
                 }
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        ForEach(store.taskHistoryEvents) { event in
-                            HStack(alignment: .firstTextBaseline, spacing: 9) {
-                                Text(historyTimeText(event.atUTC)).font(.caption2).monospacedDigit()
-                                    .foregroundStyle(.secondary)
-                                    .help("UTC：\(event.atUTC)")
-                                Text(event.title).font(.caption.weight(.medium))
-                                Text(event.detail).font(.caption2).foregroundStyle(.secondary)
-                                Spacer()
-                            }.padding(.vertical, 3)
-                        }
+                LazyVStack(alignment: .leading, spacing: 0) {
+                    ForEach(store.taskHistoryEvents) { event in
+                        HStack(alignment: .firstTextBaseline, spacing: 9) {
+                            Text(historyTimeText(event.atUTC)).font(.caption2).monospacedDigit()
+                                .foregroundStyle(.secondary)
+                                .help("UTC：\(event.atUTC)")
+                            Text(event.title).font(.caption.weight(.medium))
+                            Text(event.detail).font(.caption2).foregroundStyle(.secondary)
+                            Spacer(minLength: 0)
+                        }.padding(.vertical, 3)
                     }
                 }
             }
-        }.frame(maxHeight: .infinity, alignment: .top)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func modelSummary(for item: NativeTaskHistoryItem) -> String? {
+        guard let payload = item.retryRequest?.payload else { return nil }
+        if let model = payload["model_source"] as? String, !model.isEmpty {
+            return model.uppercased()
+        }
+        if let models = payload["models"] as? [String], !models.isEmpty {
+            return models.map { $0.uppercased() }.joined(separator: "/")
+        }
+        return nil
     }
 
     private func historyRow(_ item: NativeTaskHistoryItem) -> some View {
@@ -594,6 +625,14 @@ struct NativeTaskHistoryView: View {
                         Text(item.rowTitle)
                             .font(.callout.weight(.medium))
                         StatusChip(status: item.status, title: L10n.status(item.statusTitle))
+                        if let model = modelSummary(for: item) {
+                            Text(model)
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 1.5)
+                                .background(Color.primary.opacity(0.06), in: Capsule())
+                        }
                     }
                     if !item.contextTitle.isEmpty {
                         Text(item.contextTitle).font(.caption).foregroundStyle(.secondary)
