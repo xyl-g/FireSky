@@ -185,7 +185,11 @@
                                                     Background="{ThemeResource FireSkyGroupedCardBrush}"
                                                     BorderBrush="{ThemeResource FireSkyGroupedBorderBrush}" BorderThickness="1">
                                                 <StackPanel Spacing="6">
-                                                    <Grid>
+                                                    <Grid ColumnSpacing="8">
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*"/>
+                                                            <ColumnDefinition Width="Auto"/>
+                                                        </Grid.ColumnDefinitions>
                                                         <StackPanel Spacing="2">
                                                             <TextBlock x:Name="RegionalProfileSelection"
                                                                        Text="选择网格后读取冻结剖面"
@@ -193,17 +197,50 @@
                                                             <TextBlock x:Name="RegionalProfileStatus"
                                                                        Text="未选择网格" TextWrapping="Wrap" FontSize="11" Opacity=".8"/>
                                                         </StackPanel>
-                                                        <Button x:Name="RegionalCrossSectionExpand"
-                                                                Content="展开剖面图层" Padding="8,4"
-                                                                HorizontalAlignment="Right"
-                                                                VerticalAlignment="Top"
-                                                                Visibility="Collapsed"
-                                                                Click="OnToggleRegionalCrossSection"/>
+                                                        <StackPanel Grid.Column="1" Orientation="Horizontal"
+                                                                    Spacing="4" VerticalAlignment="Top">
+                                                            <StackPanel x:Name="RegionalProfileZoomControls"
+                                                                        Orientation="Horizontal" Spacing="2"
+                                                                        Visibility="Collapsed">
+                                                                <Button x:Name="RegionalProfileZoomOutButton" Width="26" Height="26" Padding="0"
+                                                                        Click="OnRegionalProfileZoomOut"
+                                                                        ToolTipService.ToolTip="缩小剖面"
+                                                                        AutomationProperties.Name="缩小剖面">
+                                                                    <SymbolIcon Symbol="ZoomOut" Width="14" Height="14"/>
+                                                                </Button>
+                                                                <TextBlock x:Name="RegionalProfileZoomText" Text="100%"
+                                                                           Width="38" VerticalAlignment="Center"
+                                                                           TextAlignment="Center"
+                                                                           FontSize="10" FontFamily="Consolas"/>
+                                                                <Button x:Name="RegionalProfileZoomInButton" Width="26" Height="26" Padding="0"
+                                                                        Click="OnRegionalProfileZoomIn"
+                                                                        ToolTipService.ToolTip="放大剖面"
+                                                                        AutomationProperties.Name="放大剖面">
+                                                                    <SymbolIcon Symbol="ZoomIn" Width="14" Height="14"/>
+                                                                </Button>
+                                                                <Button x:Name="RegionalProfileZoomResetButton" Width="26" Height="26" Padding="0"
+                                                                        Click="OnRegionalProfileZoomReset"
+                                                                        ToolTipService.ToolTip="适配窗口"
+                                                                        AutomationProperties.Name="适配窗口">
+                                                                    <SymbolIcon Symbol="Refresh" Width="14" Height="14"/>
+                                                                </Button>
+                                                            </StackPanel>
+                                                            <Button x:Name="RegionalCrossSectionExpand"
+                                                                    Content="展开剖面图层" Padding="8,4"
+                                                                    Visibility="Collapsed"
+                                                                    Click="OnToggleRegionalCrossSection"/>
+                                                        </StackPanel>
                                                     </Grid>
-                                                    <Canvas x:Name="RegionalCrossSection" Height="250"
-                                                            Visibility="Collapsed"
-                                                            SizeChanged="OnRegionalCrossSectionSizeChanged"
-                                                            Background="Transparent"/>
+                                                    <ScrollViewer x:Name="RegionalCrossSectionScrollViewer" Height="250"
+                                                                  HorizontalScrollMode="Enabled"
+                                                                  HorizontalScrollBarVisibility="Auto"
+                                                                  VerticalScrollBarVisibility="Disabled"
+                                                                  SizeChanged="OnRegionalCrossSectionSizeChanged"
+                                                                  Visibility="Collapsed">
+                                                        <Canvas x:Name="RegionalCrossSection" Height="250"
+                                                                HorizontalAlignment="Left"
+                                                                Background="Transparent"/>
+                                                    </ScrollViewer>
                                                     <ListView x:Name="RegionalProfileRows"
                                                               SelectionMode="None" MaxHeight="180"/>
                                                 </StackPanel>
@@ -323,27 +360,61 @@
                                                                        MaxLines="1"/>
                                                         </StackPanel>
                                                     </Border>
-                                                    <Grid x:Name="ProfileControlsBar" Visibility="Collapsed" ColumnSpacing="8">
-                                                        <Grid.ColumnDefinitions>
-                                                            <ColumnDefinition Width="*"/>
-                                                            <ColumnDefinition Width="Auto"/>
-                                                        </Grid.ColumnDefinitions>
-                                                        <StackPanel x:Name="ProfileTelemetryPills" Orientation="Horizontal" Spacing="6"/>
-                                                        <ToggleButton x:Name="ProfileIsobarsToggle" Grid.Column="1"
-                                                                      IsChecked="False" Padding="9,3" CornerRadius="12"
-                                                                      Click="OnProfileIsobarsToggled"
-                                                                      ToolTipService.ToolTip="显示或隐藏等压参考线 (hPa)">
-                                                            <StackPanel Orientation="Horizontal" Spacing="5">
-                                                                <FontIcon Glyph="&#xE9D9;" FontSize="11"/>
-                                                                <TextBlock Text="等压线" FontSize="11"/>
-                                                            </StackPanel>
-                                                        </ToggleButton>
-                                                    </Grid>
+                                                    <StackPanel x:Name="ProfileControlsBar" Visibility="Collapsed" Spacing="5">
+                                                        <Grid ColumnSpacing="8">
+                                                            <Grid.ColumnDefinitions>
+                                                                <ColumnDefinition Width="*"/>
+                                                                <ColumnDefinition Width="Auto"/>
+                                                            </Grid.ColumnDefinitions>
+                                                            <StackPanel x:Name="ProfileTelemetryPills"
+                                                                        Orientation="Horizontal" Spacing="6"/>
+                                                            <ToggleButton x:Name="ProfileIsobarsToggle" Grid.Column="1"
+                                                                          IsChecked="False" Padding="9,3" CornerRadius="12"
+                                                                          Click="OnProfileIsobarsToggled"
+                                                                          ToolTipService.ToolTip="显示或隐藏等压参考线 (hPa)">
+                                                                <StackPanel Orientation="Horizontal" Spacing="5">
+                                                                    <FontIcon Glyph="&#xE9D9;" FontSize="11"/>
+                                                                    <TextBlock Text="等压线" FontSize="11"/>
+                                                                </StackPanel>
+                                                            </ToggleButton>
+                                                        </Grid>
+                                                        <StackPanel x:Name="ProfileZoomControls" Orientation="Horizontal"
+                                                                    HorizontalAlignment="Right" Spacing="2">
+                                                            <Button x:Name="ProfileZoomOutButton" Width="26" Height="26" Padding="0"
+                                                                    Click="OnProfileZoomOut"
+                                                                    ToolTipService.ToolTip="缩小剖面"
+                                                                    AutomationProperties.Name="缩小剖面">
+                                                                <SymbolIcon Symbol="ZoomOut" Width="14" Height="14"/>
+                                                            </Button>
+                                                            <TextBlock x:Name="ProfileZoomText" Text="100%" Width="38"
+                                                                       VerticalAlignment="Center" TextAlignment="Center"
+                                                                       FontSize="10" FontFamily="Consolas"/>
+                                                            <Button x:Name="ProfileZoomInButton" Width="26" Height="26" Padding="0"
+                                                                    Click="OnProfileZoomIn"
+                                                                    ToolTipService.ToolTip="放大剖面"
+                                                                    AutomationProperties.Name="放大剖面">
+                                                                <SymbolIcon Symbol="ZoomIn" Width="14" Height="14"/>
+                                                            </Button>
+                                                            <Button x:Name="ProfileZoomResetButton" Width="26" Height="26" Padding="0"
+                                                                    Click="OnProfileZoomReset"
+                                                                    ToolTipService.ToolTip="适配窗口"
+                                                                    AutomationProperties.Name="适配窗口">
+                                                                <SymbolIcon Symbol="Refresh" Width="14" Height="14"/>
+                                                            </Button>
+                                                        </StackPanel>
+                                                    </StackPanel>
                                                     <Grid x:Name="PointCrossSectionContainer" Height="284"
                                                           SizeChanged="OnCrossSectionSizeChanged"
                                                           PointerMoved="OnCrossSectionPointerMoved"
                                                           PointerExited="OnCrossSectionPointerExited">
-                                                        <Canvas x:Name="PointCrossSection" Visibility="Collapsed"/>
+                                                        <ScrollViewer x:Name="PointCrossSectionScrollViewer"
+                                                                      HorizontalScrollMode="Enabled"
+                                                                      HorizontalScrollBarVisibility="Auto"
+                                                                      VerticalScrollBarVisibility="Disabled">
+                                                            <Canvas x:Name="PointCrossSection" Visibility="Collapsed"
+                                                                    HorizontalAlignment="Left"
+                                                                    VerticalAlignment="Top"/>
+                                                        </ScrollViewer>
                                                         <Line x:Name="CrossSectionCrosshair" Visibility="Collapsed"
                                                               IsHitTestVisible="False" StrokeThickness="1"
                                                               StrokeDashArray="3,3"
@@ -448,10 +519,20 @@
                                                     <FontIcon Glyph="&#xE81D;" FontSize="13"/>
                                                 </Button>
                                             </Grid>
-                                            <Border x:Name="MiniMapHost" Height="114" CornerRadius="10"
-                                                    BorderBrush="{ThemeResource FireSkyGroupedBorderBrush}" BorderThickness="1">
-                                                <controls:WebView2 x:Name="Map"/>
-                                            </Border>
+                                            <Grid Height="114">
+                                                <Border x:Name="MiniMapHost" Height="114" CornerRadius="10"
+                                                        BorderBrush="{ThemeResource FireSkyGroupedBorderBrush}" BorderThickness="1">
+                                                    <controls:WebView2 x:Name="Map"/>
+                                                </Border>
+                                                <Button x:Name="ExpandMapButton" Width="32" Height="32" Padding="0"
+                                                        HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                                                        Margin="0,0,8,8" Click="OnOpenMapPicker"
+                                                        Background="{ThemeResource AcrylicBackgroundFillColorDefaultBrush}"
+                                                        ToolTipService.ToolTip="打开大地图选点"
+                                                        AutomationProperties.Name="打开大地图选点">
+                                                    <FontIcon Glyph="&#xE740;" FontSize="13"/>
+                                                </Button>
+                                            </Grid>
                                             <Border x:Name="FavoritesPanel" Visibility="Collapsed" Padding="8" CornerRadius="10"
                                                     Background="{ThemeResource FireSkyGroupedCardBrush}"
                                                     BorderBrush="{ThemeResource FireSkyGroupedBorderBrush}" BorderThickness="1">

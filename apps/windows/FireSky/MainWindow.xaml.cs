@@ -29,6 +29,7 @@ public sealed partial class MainWindow : Window
     private bool busy, searching, locating, savingCams, savingRetention, savingSync;
     private bool probingDownloads, cancellingProbe, dataSyncRunning;
     private bool initialized, mapReady, online;
+    private bool mapPickerDialogOpen;
     private bool restoringSession, suppressDraftEvents;
     private string page = "point", resultKind = "";
     private string settingsCategory = "data";
@@ -796,6 +797,9 @@ public sealed partial class MainWindow : Window
         SettingsPage.Visibility = page == "settings" ? Visibility.Visible : Visibility.Collapsed;
         PointFields.Visibility = page == "regional" ? Visibility.Collapsed : Visibility.Visible;
         RegionFields.Visibility = page == "regional" ? Visibility.Visible : Visibility.Collapsed;
+        if (ExpandMapButton != null)
+            ExpandMapButton.Visibility = page == "regional" || locationViewMode == "favorites"
+                ? Visibility.Collapsed : Visibility.Visible;
         if (LocationViewPillTrack != null)
             LocationViewPillTrack.Visibility = page == "regional" ? Visibility.Collapsed : Visibility.Visible;
         SourcesLabel.Text = page == "nowcast" ? L10n.T("GFS · CAMS · 卫星帧") : "GFS + EC";
@@ -898,6 +902,63 @@ public sealed partial class MainWindow : Window
     }
 
     // ---------- 地图 ----------
+
+    private async void OnOpenMapPicker(object sender, RoutedEventArgs args)
+    {
+        if (mapPickerDialogOpen || Root?.XamlRoot == null || !mapReady
+            || MiniMapHost?.Child != Map)
+            return;
+
+        mapPickerDialogOpen = true;
+        var mapFrame = new Border
+        {
+            Width = 900,
+            Height = 560,
+            CornerRadius = new CornerRadius(8),
+            BorderThickness = new Thickness(1),
+        };
+        ContentDialog? dialog = null;
+        try
+        {
+            MiniMapHost.Child = null;
+            mapFrame.Child = Map;
+            dialog = new ContentDialog
+            {
+                Title = L10n.T("地图选点"),
+                CloseButtonText = L10n.T("完成"),
+                DefaultButton = ContentDialogButton.Close,
+                XamlRoot = Root.XamlRoot,
+                FullSizeDesired = true,
+                Width = 940,
+                Height = 640,
+                MinWidth = 920,
+                MaxWidth = 960,
+                MaxHeight = 700,
+                Content = mapFrame,
+            };
+            await dialog.ShowAsync();
+        }
+        catch (Exception error)
+        {
+            Fail(error);
+        }
+        finally
+        {
+            if (dialog != null) dialog.Content = null;
+            mapFrame.Child = null;
+            MiniMapHost.Child = Map;
+            mapPickerDialogOpen = false;
+            if (mapReady)
+            {
+                try
+                {
+                    await Map.ExecuteScriptAsync("window.dispatchEvent(new Event('resize'))");
+                    await UpdateMap();
+                }
+                catch (Exception error) { Fail(error); }
+            }
+        }
+    }
 
     private void ApplyMapThemeBackground()
     {
@@ -1124,6 +1185,9 @@ public sealed partial class MainWindow : Window
         UpdateSegmentedPills(LocationViewPills, locationViewMode);
         var showFavs = locationViewMode == "favorites" && page != "regional";
         if (MiniMapHost != null) MiniMapHost.Visibility = showFavs ? Visibility.Collapsed : Visibility.Visible;
+        if (ExpandMapButton != null)
+            ExpandMapButton.Visibility = showFavs || page == "regional"
+                ? Visibility.Collapsed : Visibility.Visible;
         if (FavoritesPanel != null) FavoritesPanel.Visibility = showFavs ? Visibility.Visible : Visibility.Collapsed;
         if (!showFavs && updateMap) _ = UpdateMap();
     }
@@ -1826,6 +1890,12 @@ public sealed partial class MainWindow : Window
     {
         foreach (var node in Descendants(Root))
         {
+            if (ToolTipService.GetToolTip(node) is string toolTip && !string.IsNullOrEmpty(toolTip))
+                ToolTipService.SetToolTip(node, L10n.Translate(toolTip));
+            var automationName = Microsoft.UI.Xaml.Automation.AutomationProperties.GetName(node);
+            if (!string.IsNullOrEmpty(automationName))
+                Microsoft.UI.Xaml.Automation.AutomationProperties.SetName(node, L10n.Translate(automationName));
+
             switch (node)
             {
                 case TextBlock text when !string.IsNullOrEmpty(text.Text):

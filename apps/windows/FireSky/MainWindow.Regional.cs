@@ -13,6 +13,8 @@ namespace FireSky;
 /// </summary>
 public sealed partial class MainWindow
 {
+    private double regionalCrossSectionZoomScale = 1.0;
+
     internal sealed class ProfileQuerySpec
     {
         internal required JsonObject Payload { get; init; }
@@ -88,7 +90,7 @@ public sealed partial class MainWindow
         {
             RegionalGridSummary.Text = L10n.T("当前模式没有可用区域结果。");
             RegionalProfileStatus.Text = L10n.T("当前模式没有可读取的冻结剖面。");
-            RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
+            CollapseRegionalCrossSection();
             return;
         }
         var points = (report["points"] as JsonArray ?? [])
@@ -343,18 +345,16 @@ public sealed partial class MainWindow
     private void RenderProfileSection()
     {
         RegionalProfileRows.Items.Clear();
-        RegionalCrossSection.Visibility = Visibility.Collapsed;
+        CollapseRegionalCrossSection();
         if (regionalProfileState == "loading")
         {
             RegionalProfileStatus.Text = L10n.T("正在读取所选网格的冻结剖面…");
-            RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
             return;
         }
         if (regionalProfileState != "ready" || regionalProfile == null)
         {
             if (regionalProfileState == "idle")
                 RegionalProfileStatus.Text = L10n.T("未选择网格。");
-            RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
             return;
         }
         var fields = regionalProfile["fields"] as JsonObject;
@@ -372,23 +372,88 @@ public sealed partial class MainWindow
             FontSize = 11, Opacity = .8,
         });
         RegionalProfileRows.Items.Add(summary);
+        UpdateRegionalCrossSectionZoomControls();
         RegionalCrossSectionExpand.Visibility = Visibility.Visible;
         activeRegionalCrossSection = regionalProfile;
-        DrawCrossSection(RegionalCrossSection, regionalProfile);
+    }
+
+    private void CollapseRegionalCrossSection()
+    {
+        activeRegionalCrossSection = null;
+        if (RegionalCrossSectionScrollViewer != null)
+            RegionalCrossSectionScrollViewer.Visibility = Visibility.Collapsed;
+        if (RegionalCrossSection != null)
+            RegionalCrossSection.Visibility = Visibility.Collapsed;
+        if (RegionalProfileZoomControls != null)
+            RegionalProfileZoomControls.Visibility = Visibility.Collapsed;
+        if (RegionalCrossSectionExpand != null)
+        {
+            RegionalCrossSectionExpand.Content = L10n.T("展开剖面图层");
+            RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void OnToggleRegionalCrossSection(object sender, RoutedEventArgs args)
     {
-        RegionalCrossSection.Visibility = RegionalCrossSection.Visibility == Visibility.Visible
-            ? Visibility.Collapsed : Visibility.Visible;
-        if (RegionalCrossSection.Visibility == Visibility.Visible && activeRegionalCrossSection != null)
+        var expanded = RegionalCrossSectionScrollViewer.Visibility != Visibility.Visible;
+        RegionalCrossSectionScrollViewer.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+        RegionalCrossSection.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+        RegionalProfileZoomControls.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+        RegionalCrossSectionExpand.Content = L10n.T(expanded ? "收起剖面图层" : "展开剖面图层");
+        if (expanded && activeRegionalCrossSection != null)
+        {
+            ResizeRegionalCrossSectionChart(resetScroll: true);
             DrawCrossSection(RegionalCrossSection, activeRegionalCrossSection);
+        }
     }
 
     private void OnRegionalCrossSectionSizeChanged(object sender, SizeChangedEventArgs args)
     {
-        if (RegionalCrossSection.Visibility == Visibility.Visible && activeRegionalCrossSection != null)
+        if (RegionalCrossSectionScrollViewer.Visibility == Visibility.Visible && activeRegionalCrossSection != null)
+        {
+            ResizeRegionalCrossSectionChart();
             DrawCrossSection(RegionalCrossSection, activeRegionalCrossSection);
+        }
+    }
+
+    private void OnRegionalProfileZoomOut(object sender, RoutedEventArgs args) =>
+        SetRegionalCrossSectionZoom(regionalCrossSectionZoomScale - 0.25);
+
+    private void OnRegionalProfileZoomIn(object sender, RoutedEventArgs args) =>
+        SetRegionalCrossSectionZoom(regionalCrossSectionZoomScale + 0.25);
+
+    private void OnRegionalProfileZoomReset(object sender, RoutedEventArgs args) =>
+        SetRegionalCrossSectionZoom(1.0, resetScroll: true);
+
+    private void SetRegionalCrossSectionZoom(double scale, bool resetScroll = false)
+    {
+        regionalCrossSectionZoomScale = Math.Clamp(Math.Round(scale * 4) / 4, 1.0, 2.5);
+        UpdateRegionalCrossSectionZoomControls();
+        ResizeRegionalCrossSectionChart(resetScroll || regionalCrossSectionZoomScale == 1.0);
+        if (activeRegionalCrossSection != null
+            && RegionalCrossSectionScrollViewer.Visibility == Visibility.Visible)
+            DrawCrossSection(RegionalCrossSection, activeRegionalCrossSection);
+    }
+
+    private void UpdateRegionalCrossSectionZoomControls()
+    {
+        if (RegionalProfileZoomText == null) return;
+        RegionalProfileZoomText.Text = $"{(int)Math.Round(regionalCrossSectionZoomScale * 100)}%";
+        RegionalProfileZoomOutButton.IsEnabled = regionalCrossSectionZoomScale > 1.0;
+        RegionalProfileZoomInButton.IsEnabled = regionalCrossSectionZoomScale < 2.5;
+        RegionalProfileZoomResetButton.IsEnabled = regionalCrossSectionZoomScale > 1.0;
+    }
+
+    private void ResizeRegionalCrossSectionChart(bool resetScroll = false)
+    {
+        if (RegionalCrossSectionScrollViewer == null || RegionalCrossSection == null) return;
+        var viewportWidth = RegionalCrossSectionScrollViewer.ActualWidth;
+        var viewportHeight = RegionalCrossSectionScrollViewer.ActualHeight;
+        if (viewportWidth <= 120 || viewportHeight <= 120) return;
+
+        RegionalCrossSection.Width = Math.Max(220, viewportWidth * regionalCrossSectionZoomScale);
+        RegionalCrossSection.Height = Math.Max(180, viewportHeight);
+        if (resetScroll) RegionalCrossSectionScrollViewer.ChangeView(0, null, null, true);
     }
 
     private void ClearRegionalProfile()
@@ -407,10 +472,9 @@ public sealed partial class MainWindow
             RegionalProfileStatus.Text = L10n.T("未选择网格");
         if (RegionalProfileRows != null)
             RegionalProfileRows.Items.Clear();
-        if (RegionalCrossSection != null)
-            RegionalCrossSection.Visibility = Visibility.Collapsed;
-        if (RegionalCrossSectionExpand != null)
-            RegionalCrossSectionExpand.Visibility = Visibility.Collapsed;
+        regionalCrossSectionZoomScale = 1.0;
+        UpdateRegionalCrossSectionZoomControls();
+        CollapseRegionalCrossSection();
     }
 
     private void OnSetDefaultRegion(object sender, RoutedEventArgs args)

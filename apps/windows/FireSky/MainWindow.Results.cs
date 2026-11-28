@@ -38,6 +38,7 @@ public sealed partial class MainWindow
     private bool diagnosticsDialogOpen;
     private bool pointShowIsobars;
     private bool crossSectionShowIsobars;
+    private double crossSectionZoomScale = 1.0;
     private JsonObject? activeCrossSection;
     private bool activeCrossSectionIsNowcast;
     private JsonObject? activeRegionalCrossSection;
@@ -2274,6 +2275,8 @@ public sealed partial class MainWindow
     {
         activeCrossSection = null;
         activeCrossSectionIsNowcast = false;
+        crossSectionZoomScale = 1.0;
+        UpdateCrossSectionZoomControls();
         if (ProfileTitleText != null) ProfileTitleText.Text = L10n.T("太阳方向大气剖面");
         if (ProfileStatus != null) ProfileStatus.Text = L10n.T("等待预测");
         if (FrozenProfileButton != null) FrozenProfileButton.Visibility = Visibility.Collapsed;
@@ -2387,6 +2390,7 @@ public sealed partial class MainWindow
         AddTelemetryPill(ProfileTelemetryPills, L10n.T("方位"), NumText(section["solar_azimuth_deg"], 1, "°"));
         AddTelemetryPill(ProfileTelemetryPills, L10n.T("范围"), NumText(section["analysis_radius_km"], 1, " km"));
         AddTelemetryPill(ProfileTelemetryPills, L10n.T("时次"), TimeLabel(Text(section, "valid_time_local")));
+        UpdateCrossSectionZoomControls();
         if (ProfileIsobarsToggle != null)
         {
             ProfileIsobarsToggle.Visibility = parsed.Levels.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -2395,6 +2399,7 @@ public sealed partial class MainWindow
 
         // 3. 主画布
         PointCrossSection.Visibility = Visibility.Visible;
+        ResizePointCrossSectionChart();
         DrawCrossSection(PointCrossSection, section, crossSectionShowIsobars);
 
         // 4. 单行图例
@@ -2648,10 +2653,55 @@ public sealed partial class MainWindow
             DrawCrossSection(PointCrossSection, activeCrossSection, crossSectionShowIsobars);
     }
 
+    private void OnProfileZoomOut(object sender, RoutedEventArgs args) =>
+        SetCrossSectionZoom(crossSectionZoomScale - 0.25);
+
+    private void OnProfileZoomIn(object sender, RoutedEventArgs args) =>
+        SetCrossSectionZoom(crossSectionZoomScale + 0.25);
+
+    private void OnProfileZoomReset(object sender, RoutedEventArgs args) =>
+        SetCrossSectionZoom(1.0, resetScroll: true);
+
+    private void SetCrossSectionZoom(double scale, bool resetScroll = false)
+    {
+        crossSectionZoomScale = Math.Clamp(Math.Round(scale * 4) / 4, 1.0, 2.5);
+        UpdateCrossSectionZoomControls();
+        ResizePointCrossSectionChart(resetScroll || crossSectionZoomScale == 1.0);
+        if (CrossSectionCrosshair != null) CrossSectionCrosshair.Visibility = Visibility.Collapsed;
+        if (CrossSectionHoverCard != null) CrossSectionHoverCard.Visibility = Visibility.Collapsed;
+        if (activeCrossSection == null || PointCrossSection?.Visibility != Visibility.Visible) return;
+        if (activeCrossSectionIsNowcast)
+            DrawNowcastProfileHeatmap(activeCrossSection, crossSectionShowIsobars);
+        else
+            DrawCrossSection(PointCrossSection, activeCrossSection, crossSectionShowIsobars);
+    }
+
+    private void UpdateCrossSectionZoomControls()
+    {
+        if (ProfileZoomText == null) return;
+        ProfileZoomText.Text = $"{(int)Math.Round(crossSectionZoomScale * 100)}%";
+        ProfileZoomOutButton.IsEnabled = crossSectionZoomScale > 1.0;
+        ProfileZoomInButton.IsEnabled = crossSectionZoomScale < 2.5;
+        ProfileZoomResetButton.IsEnabled = crossSectionZoomScale > 1.0;
+    }
+
+    private void ResizePointCrossSectionChart(bool resetScroll = false)
+    {
+        if (PointCrossSectionScrollViewer == null || PointCrossSection == null) return;
+        var viewportWidth = PointCrossSectionScrollViewer.ActualWidth;
+        var viewportHeight = PointCrossSectionScrollViewer.ActualHeight;
+        if (viewportWidth <= 120 || viewportHeight <= 120) return;
+
+        PointCrossSection.Width = Math.Max(220, viewportWidth * crossSectionZoomScale);
+        PointCrossSection.Height = Math.Max(180, viewportHeight);
+        if (resetScroll) PointCrossSectionScrollViewer.ChangeView(0, null, null, true);
+    }
+
     private void OnCrossSectionSizeChanged(object sender, SizeChangedEventArgs args)
     {
         if (activeCrossSection == null || PointCrossSection == null || PointCrossSection.Visibility != Visibility.Visible)
             return;
+        ResizePointCrossSectionChart();
         if (activeCrossSectionIsNowcast)
             DrawNowcastProfileHeatmap(activeCrossSection, crossSectionShowIsobars);
         else
@@ -2667,22 +2717,29 @@ public sealed partial class MainWindow
             if (CrossSectionHoverCard != null) CrossSectionHoverCard.Visibility = Visibility.Collapsed;
             return;
         }
-        var pos = args.GetCurrentPoint(PointCrossSectionContainer).Position;
-        var width = Math.Max(120, PointCrossSectionContainer.ActualWidth);
+        var viewportPos = args.GetCurrentPoint(PointCrossSectionContainer).Position;
+        var contentPos = new Windows.Foundation.Point(
+            viewportPos.X + PointCrossSectionScrollViewer.HorizontalOffset, viewportPos.Y);
+        var viewportWidth = Math.Max(120, PointCrossSectionScrollViewer.ActualWidth);
+        var width = Math.Max(120, PointCrossSection.Width is > 120 and var canvasWidth
+            ? canvasWidth : PointCrossSection.ActualWidth);
         var height = Math.Max(120, PointCrossSectionContainer.ActualHeight);
         double left = 44;
         double right = width - (crossSectionShowIsobars ? 48.0 : 16.0);
         double top = 14;
         double bottom = height - 24;
-        if (right <= left + 10 || bottom <= top + 10 || pos.X < left || pos.X > right || pos.Y < top || pos.Y > bottom)
+        if (right <= left + 10 || bottom <= top + 10
+            || viewportPos.X < 0 || viewportPos.X > viewportWidth
+            || contentPos.X < left || contentPos.X > right
+            || contentPos.Y < top || contentPos.Y > bottom)
         {
             CrossSectionCrosshair.Visibility = Visibility.Collapsed;
             CrossSectionHoverCard.Visibility = Visibility.Collapsed;
             return;
         }
 
-        CrossSectionCrosshair.X1 = pos.X;
-        CrossSectionCrosshair.X2 = pos.X;
+        CrossSectionCrosshair.X1 = viewportPos.X;
+        CrossSectionCrosshair.X2 = viewportPos.X;
         CrossSectionCrosshair.Y1 = top;
         CrossSectionCrosshair.Y2 = bottom;
         CrossSectionCrosshair.Visibility = Visibility.Visible;
@@ -2690,11 +2747,11 @@ public sealed partial class MainWindow
         CrossSectionHoverHost.Children.Clear();
         if (activeCrossSectionIsNowcast)
         {
-            PopulateNowcastHoverCard(activeCrossSection, pos, left, right, top, bottom);
+            PopulateNowcastHoverCard(activeCrossSection, contentPos, left, right, top, bottom);
         }
         else
         {
-            PopulatePointHoverCard(activeCrossSection, (pos.X - left) / (right - left));
+            PopulatePointHoverCard(activeCrossSection, (contentPos.X - left) / (right - left));
         }
         CrossSectionHoverCard.Visibility = CrossSectionHoverHost.Children.Count > 0
             ? Visibility.Visible : Visibility.Collapsed;
@@ -2966,8 +3023,10 @@ public sealed partial class MainWindow
         if (data == null) return;
 
         var isDark = canvas.ActualTheme == ElementTheme.Dark;
-        var width = Math.Max(220, canvas.ActualWidth is > 120 and var w ? w : 680);
-        var height = Math.Max(180, canvas.ActualHeight is > 120 and var h ? h : 340);
+        var width = Math.Max(220, canvas.Width is > 120 and var w
+            ? w : canvas.ActualWidth is > 120 and var actualWidth ? actualWidth : 680);
+        var height = Math.Max(180, canvas.Height is > 120 and var h
+            ? h : canvas.ActualHeight is > 120 and var actualHeight ? actualHeight : 340);
         double left = 44;
         double right = width - (showIsobars ? 48.0 : 16.0);
         double top = 14;

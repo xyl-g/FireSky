@@ -524,6 +524,7 @@ public sealed partial class MainWindow
             AddTelemetryPill(ProfileTelemetryPills, L10n.T("未知样本"), $"{unknownCount.Value}");
 
         crossSectionShowIsobars = nowcastShowIsobars;
+        UpdateCrossSectionZoomControls();
         if (ProfileIsobarsToggle != null)
         {
             ProfileIsobarsToggle.Visibility = rows.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -537,6 +538,7 @@ public sealed partial class MainWindow
         activeCrossSection = profileForRender;
         activeCrossSectionIsNowcast = true;
         PointCrossSection.Visibility = Visibility.Visible;
+        ResizePointCrossSectionChart();
         DrawNowcastProfileHeatmap(profileForRender, crossSectionShowIsobars);
 
         // 图例
@@ -662,8 +664,10 @@ public sealed partial class MainWindow
         if (cells.Count == 0) return;
 
         var isDark = PointCrossSection.ActualTheme == ElementTheme.Dark;
-        var width = Math.Max(220, PointCrossSection.ActualWidth is > 120 and var w ? w : 680);
-        var height = Math.Max(180, PointCrossSection.ActualHeight is > 120 and var h ? h : 340);
+        var width = Math.Max(220, PointCrossSection.Width is > 120 and var w
+            ? w : PointCrossSection.ActualWidth is > 120 and var actualWidth ? actualWidth : 680);
+        var height = Math.Max(180, PointCrossSection.Height is > 120 and var h
+            ? h : PointCrossSection.ActualHeight is > 120 and var actualHeight ? actualHeight : 340);
         var showRightAxis = showIsobars && rows.Count > 0;
         double left = 44;
         double right = width - (showRightAxis ? 48.0 : 16.0);
